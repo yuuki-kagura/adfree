@@ -1,0 +1,7 @@
+{
+  "name": "AdGuard Ultra",
+  "description": "Ultra high-performance ad blocker and network filter with low battery consumption and intelligent threat analysis.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
+
