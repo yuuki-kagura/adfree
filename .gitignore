@@ -1,18 +1,25 @@
-*.iml
-.gradle
-.kotlin
-/local.properties
-/.idea/caches
-/.idea/libraries
-/.idea/modules.xml
-/.idea/workspace.xml
-/.idea/navEditor.xml
-/.idea/assetWizardSettings.xml
-.DS_Store
-/build
-/captures
-.externalNativeBuild
-.cxx
+# Gradle
+.gradle/
+build/
 local.properties
+
+# Rust build artifacts. They are produced by :app:buildRust (cargo-ndk) and are
+# never committed: the crate source in rust/ is the single source of truth.
+rust/target/
+app/src/main/jniLibs/
+*.so
+
+# IDE
+.idea/
+*.iml
+.DS_Store
+
+# Signing material
+*.jks
+*.keystore
 .env
-debug.keystore
+
+# Android
+captures/
+.externalNativeBuild/
+.cxx/

@@ -1,7 +1,6 @@
 {
-  "name": "AdGuard Ultra",
-  "description": "Ultra high-performance ad blocker and network filter with low battery consumption and intelligent threat analysis.",
+  "name": "AdFree",
+  "description": "High performance DNS-level ad blocker: Rust core (adblock-rust) + Kotlin/Compose UI, real AdGuard filter lists, no cloud dependency.",
   "requestFramePermissions": [],
-  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+  "majorCapabilities": []
 }
-

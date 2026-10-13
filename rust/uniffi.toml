@@ -1,0 +1,15 @@
+# Global config for `uniffi-bindgen`.
+#
+# The per-crate section is what sets the Kotlin package, the native library name
+# and the Android-specific tweaks (the built-in cleaner would otherwise call
+# hidden `android.system.SystemCleaner` APIs that an app cannot link against).
+
+[defaults]
+
+[crates.adfree_core]
+
+[crates.adfree_core.bindings.kotlin]
+package_name = "com.example.core"
+cdylib_name = "adfree_core"
+disable_java_cleaner = true
+android_cleaner = false

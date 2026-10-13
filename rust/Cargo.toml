@@ -1,0 +1,41 @@
+[package]
+name = "adfree-core"
+version = "1.0.0"
+edition = "2021"
+description = "AdFree filtering core: packet/DNS engine + AdGuard filter engine, exposed to Kotlin through uniffi"
+license = "Apache-2.0"
+
+[lib]
+name = "adfree_core"
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+# The real AdGuard / Brave filtering engine: every AdGuard, EasyList, uBO and
+# hosts-list rule is parsed and matched by the code these projects use.
+# `single-thread` is disabled on purpose: it makes the engine !Send/!Sync.
+adblock = { version = "0.13.3", default-features = false, features = [
+  "full-regex-handling",
+  "embedded-domain-resolver",
+] }
+# Typed, checked Kotlin <-> Rust bridging (no hand written JNI).
+uniffi = { version = "0.32.2", default-features = false }
+# Direct syscall access for the TUN loop (poll/read/write). std's `File` would
+# allocate and lock per call.
+libc = "0.2"
+# MITM stage: local CA, leaf certs on the fly, TLS termination.
+rcgen = "0.13"
+ring = "0.17"
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12", "logging"] }
+rustls-pemfile = "2"
+# rcgen needs a wall-clock type for validity windows.
+time = { version = "0.3", default-features = false, features = ["std"] }
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+panic = "abort"
+#  would drop the uniffi metadata block that the bindings
+# generator needs, so only debug info is stripped.
+strip = "debuginfo"
+incremental = false
