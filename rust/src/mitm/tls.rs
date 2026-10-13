@@ -18,10 +18,17 @@
 //!   plaintext ever appears;
 //! * rustls' `Connection` is an *enum* in 0.23, not a trait, so helpers are
 //!   generated per direction rather than written generically.
+//!
+//! The leaf certificate is chosen by [`SniCertResolver`] when the ClientHello
+//! arrives, which is the only moment the SNI is known — that avoids parsing the
+//! handshake by hand.
 
 use std::io::{Read, Write};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
+use rustls::pki_types::CertificateDer;
+use rustls::server::{ClientHello, ResolvesServerCert};
+use rustls::sign::CertifiedKey;
 use rustls::{ClientConfig, ClientConnection, ServerConfig, ServerConnection};
 
 /// ALPN we offer: HTTP/1.1 first. HTTP/2 support is a later stage.
@@ -31,6 +38,61 @@ pub const ALPN_H1: &[u8] = b"http/1.1";
 pub struct TlsSession {
     pub server: ServerConnection,
     pub client: ClientConnection,
+}
+
+/// Resolves the leaf for whatever SNI the client asked for.
+///
+/// We only learn the hostname when the ClientHello lands, so the resolver is the
+/// right place to mint a certificate: rustls asks for it at exactly that moment.
+pub struct SniCertResolver {
+    ca: Arc<crate::mitm::ca::CertificateAuthority>,
+    /// Hosts minted so far, for the UI's "certificates issued" counter.
+    issued: Mutex<Vec<String>>,
+}
+
+impl SniCertResolver {
+    pub fn new(ca: Arc<crate::mitm::ca::CertificateAuthority>) -> Self {
+        SniCertResolver {
+            ca,
+            issued: Mutex::new(Vec::new()),
+        }
+    }
+
+    /// Hosts this resolver has signed a leaf for.
+    pub fn issued_hosts(&self) -> Vec<String> {
+        self.issued.lock().unwrap().clone()
+    }
+}
+
+impl std::fmt::Debug for SniCertResolver {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("SniCertResolver")
+    }
+}
+
+impl ResolvesServerCert for SniCertResolver {
+    fn resolve(&self, client_hello: ClientHello<'_>) -> Option<Arc<CertifiedKey>> {
+        let name = client_hello.server_name()?;
+        let host: String = name.to_string();
+        let issued = self.ca.issue(&host).ok()?;
+        let chain = self.ca.chain_for(&issued);
+        let key = crate::mitm::ca::private_key_der(&issued);
+
+        let signing_key = rustls::crypto::ring::sign::any_supported_type(&key).ok()?;
+        let certified = Arc::new(CertifiedKey::new(
+            chain
+                .into_iter()
+                .map(CertificateDer::from)
+                .collect::<Vec<_>>(),
+            signing_key,
+        ));
+        if let Ok(mut issued) = self.issued.lock() {
+            if !issued.iter().any(|h| h == &host) {
+                issued.push(host);
+            }
+        }
+        Some(certified)
+    }
 }
 
 /// Loads the device's CA roots from disk.
@@ -54,7 +116,7 @@ pub fn system_root_store() -> rustls::RootCertStore {
             for cert in rustls_pemfile::read_all(&mut std::io::Cursor::new(&bytes)).flatten() {
                 if let rustls_pemfile::Item::X509Certificate(der) = cert {
                     store
-                        .add(rustls::pki_types::CertificateDer::from(der.to_vec()))
+                        .add(CertificateDer::from(der.to_vec()))
                         .ok();
                 }
             }
@@ -78,33 +140,19 @@ pub fn client_config() -> Arc<ClientConfig> {
         .clone()
 }
 
-/// Server config presenting a leaf signed by our CA.
-pub fn server_config(chain: Vec<Vec<u8>>, key: Vec<u8>) -> Result<Arc<ServerConfig>, String> {
-    let certs: Vec<rustls::pki_types::CertificateDer<'static>> = chain
-        .into_iter()
-        .map(rustls::pki_types::CertificateDer::from)
-        .collect();
-    let key = rustls::pki_types::PrivateKeyDer::Pkcs8(
-        rustls::pki_types::PrivatePkcs8KeyDer::from(key),
-    );
-    let mut config = rustls::ServerConfig::builder()
+/// Server config that asks [`SniCertResolver`] for the leaf per connection.
+pub fn server_config(resolver: Arc<SniCertResolver>) -> Arc<ServerConfig> {
+    let mut config = ServerConfig::builder()
         .with_no_client_auth()
-        .with_single_cert(certs, key)
-        .map_err(|e| format!("server config: {e}"))?;
+        .with_cert_resolver(resolver);
     config.alpn_protocols = vec![ALPN_H1.to_vec()];
-    Ok(Arc::new(config))
+    Arc::new(config)
 }
 
-/// Opens both halves for `server_name` (SNI seen from the client) connecting on
-/// to `real_server` (what we connect to).
-pub fn open_session(
-    ca: &crate::mitm::ca::CertificateAuthority,
-    server_name: &str,
-    real_server: &str,
-) -> Result<TlsSession, String> {
-    let issued = ca.issue(server_name)?;
-    let sconfig = server_config(ca.chain_for(&issued), issued.key.clone())?;
-    let server = ServerConnection::new(sconfig).map_err(|e| format!("server conn: {e}"))?;
+/// Opens both halves for a flow towards `real_server`.
+pub fn open_session(resolver: &Arc<SniCertResolver>, real_server: &str) -> Result<TlsSession, String> {
+    let server = ServerConnection::new(server_config(Arc::clone(resolver)))
+        .map_err(|e| format!("server conn: {e}"))?;
 
     let name = rustls::pki_types::ServerName::try_from(real_server.to_string())
         .map_err(|e| format!("server name: {e}"))?;
@@ -127,7 +175,7 @@ macro_rules! connection_helpers {
                 }
                 out.extend_from_slice(&buf[..n]);
                 if out.len() > 1024 * 1024 {
-                    break; // bound memory: the app is not a data plane
+                    break; // bound memory: this is a filter, not a data plane
                 }
             }
             out
@@ -164,8 +212,8 @@ pub fn feed_server(connection: &mut ServerConnection, chunk: &[u8]) -> Result<Ve
     Ok(drain_server_plain(connection))
 }
 
-/// Encrypts `plaintext` on `ClientConnection` and returns the bytes to send to
-/// the real server.
+/// Encrypts `plaintext` on `ClientConnection` and returns the wire bytes to send
+/// to the real server.
 pub fn feed_client(
     connection: &mut ClientConnection,
     plaintext: &[u8],
@@ -178,6 +226,21 @@ pub fn feed_client(
         .write_all(plaintext)
         .map_err(|e| format!("write plaintext: {e}"))?;
     Ok(take_client_outbound(connection))
+}
+
+/// Re-encrypts (possibly edited) plaintext on `ServerConnection` for the client.
+pub fn send_to_client(
+    connection: &mut ServerConnection,
+    plaintext: &[u8],
+) -> Result<Vec<u8>, String> {
+    if plaintext.is_empty() {
+        return Ok(Vec::new());
+    }
+    connection
+        .writer()
+        .write_all(plaintext)
+        .map_err(|e| format!("write plaintext: {e}"))?;
+    Ok(take_server_outbound(connection))
 }
 
 /// Is the server half still handshaking?
@@ -194,3 +257,4 @@ pub fn client_handshaking(connection: &ClientConnection) -> bool {
 pub fn server_alpn(connection: &ServerConnection) -> Option<Vec<u8>> {
     connection.alpn_protocol().map(|p| p.to_vec())
 }
+

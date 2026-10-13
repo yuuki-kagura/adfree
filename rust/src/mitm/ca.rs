@@ -200,6 +200,13 @@ fn decode_cert_pem(pem: &str) -> Result<Vec<u8>, String> {
     found.ok_or_else(|| "ca pem: no certificate".to_string())
 }
 
+/// Private key of a leaf in the form rustls wants.
+pub fn private_key_der(issued: &IssuedCert) -> rustls::pki_types::PrivateKeyDer<'static> {
+    rustls::pki_types::PrivateKeyDer::Pkcs8(
+        rustls::pki_types::PrivatePkcs8KeyDer::from(issued.key.clone()),
+    )
+}
+
 /// Base64-encode a DER block as PEM (no external crate needed).
 fn pem_encode(label: &str, contents: &[u8]) -> String {
     use std::fmt::Write;

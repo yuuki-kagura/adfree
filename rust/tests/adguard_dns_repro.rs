@@ -27,6 +27,9 @@ fn real_adguard_dns_list_blocks_known_hosts() {
     let engine = build(&path);
     let hosts = [
         "doubleclick.net",
+        "zz1.adnxs.com",
+        "zz2.adnxs.com",
+        "uv.adnxs.com",
         "googleads.g.doubleclick.net",
         "app-measurement.com",
         "sdk.appsflyer.com",
