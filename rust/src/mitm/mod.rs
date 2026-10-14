@@ -2,24 +2,31 @@
 //!
 //! The pieces below are deliberately independent and unit-tested in isolation:
 //! the CA can mint leaves, the HTTP layer can splice scripts, the TCP layer can
-//! translate a handshake, and the TLS layer can terminate a real conversation.
-//! Wiring them into the packet engine is the next step; the seams exist so it
-//! can be done incrementally.
+//! translate a handshake, the TLS layer can terminate a real conversation, and
+//! the relay decides where each byte of an intercepted connection goes.
+//!
+//! The remaining step is the packet-engine hook-up, which carries the client's
+//! payload across the userspace TCP relay into the splice.
 
 pub mod ca;
 pub mod http;
+pub mod proxy;
+pub mod relay;
 pub mod script;
+pub mod segment;
 pub mod tcp;
 pub mod tls;
 
-/// Where the MITM stage stands: everything is ready except the packet-engine
-/// hook-up, which needs the userspace TCP relay to carry the payload.
+#[cfg(test)]
+mod proxy_tests;
+
+/// Where the MITM stage stands.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Stage {
-    /// Packets are inspected and dropped/reset, nothing is terminated.
-    ObserveOnly,
-    /// The CA and scripts exist; connections are still not terminated.
+    /// Every piece exists and is tested; connections are not terminated yet.
     Armed,
+    /// Connections to the MITM port are terminated and spliced.
+    Live,
 }
 
 pub const CURRENT_STAGE: Stage = Stage::Armed;
@@ -28,11 +35,8 @@ impl Stage {
     /// Stable string for the UI.
     pub fn label(self) -> &'static str {
         match self {
-            Stage::ObserveOnly => "observe",
             Stage::Armed => "armed",
+            Stage::Live => "live",
         }
     }
 }
-pub mod proxy;
-#[cfg(test)]
-mod proxy_tests;

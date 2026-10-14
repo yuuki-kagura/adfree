@@ -84,6 +84,8 @@ fn default_doh_cidrs() -> CidrSet {
 
 #[derive(Clone)]
 pub struct Config {
+    /// Terminate TLS for intercepted connections and inject user scripts.
+    pub mitm_enabled: bool,
     pub block_quic: bool,
     pub block_doh: bool,
     pub block_dot: bool,
@@ -97,6 +99,7 @@ pub struct Config {
 impl Default for Config {
     fn default() -> Self {
         Config {
+            mitm_enabled: false,
             block_quic: true,
             block_doh: true,
             block_dot: true,
@@ -160,9 +163,15 @@ pub struct Core {
     last_tick_ns: AtomicU64,
     /// Local CA used to forge certs for HTTPS filtering; `failed()` stands for
     /// "no CA loaded yet".
-    pub mitm_ca: RwLock<crate::mitm::ca::CertificateAuthority>,
+    pub mitm_ca: RwLock<Arc<crate::mitm::ca::CertificateAuthority>>,
     /// User scripts injected into HTML responses.
     pub mitm_scripts: RwLock<crate::mitm::script::ScriptSet>,
+    /// Shared per-SNI leaf resolver for the TLS termination.
+    pub mitm_resolver: RwLock<Option<Arc<crate::mitm::tls::SniCertResolver>>>,
+    /// Live intercepted connections.
+    relays: Mutex<crate::mitm::relay::RelayTable>,
+    /// Protected, unconnected TCP sockets the relays use towards the server.
+    peer_sockets: Mutex<Vec<RawFd>>,
 }
 
 static CORE: OnceLock<Core> = OnceLock::new();
@@ -200,8 +209,13 @@ impl Core {
             started_at: now_ms(),
             resolver: RwLock::new(resolver),
             last_tick_ns: AtomicU64::new(0),
-            mitm_ca: RwLock::new(crate::mitm::ca::CertificateAuthority::failed("not initialised")),
+            mitm_ca: RwLock::new(Arc::new(crate::mitm::ca::CertificateAuthority::failed(
+                "not initialised",
+            ))),
             mitm_scripts: RwLock::new(crate::mitm::script::ScriptSet::new()),
+            mitm_resolver: RwLock::new(None),
+            relays: Mutex::new(crate::mitm::relay::RelayTable::new()),
+            peer_sockets: Mutex::new(Vec::new()),
         }
     }
 
@@ -406,10 +420,135 @@ impl Core {
             if self.udp_blocked(&pkt, &cfg) {
                 self.stats.inc(&self.stats.udp_dropped);
             }
-        } else if pkt.proto == PROTO_TCP && self.tcp_blocked(&pkt, &cfg) {
+        } else if pkt.proto == PROTO_TCP
+            && !self.relay_tcp(&pkt, &cfg, &mut out)
+            && self.tcp_blocked(&pkt, &cfg)
+        {
             self.reset_tcp(&pkt);
         }
         out
+    }
+
+    /// Handles one TCP packet, terminating the connection ourselves when MITM is
+    /// armed. Returns true when the packet was consumed by a relay.
+    fn relay_tcp(&self, pkt: &Packet<'_>, cfg: &Config, out: &mut Vec<Vec<u8>>) -> bool {
+        if !cfg.mitm_enabled {
+            return false;
+        }
+        let port = pkt.src_port;
+        if pkt.is_syn {
+            // A new flow: take a peer socket and answer the SYN ourselves.
+            if !crate::mitm::relay::is_mitm_port(pkt.dst_port) {
+                return false;
+            }
+            return self.start_relay(pkt, out);
+        }
+        // Existing relay: feed the payload through the splice.
+        let mut guard = self.relays.lock().unwrap();
+        let Some(relay) = guard.get_mut(port) else {
+            return false;
+        };
+        let payload = pkt.l4_payload();
+        if payload.is_empty() {
+            return false;
+        }
+        match relay.on_client_segment(payload) {
+            Ok((to_peer, to_client)) => {
+                if !to_peer.is_empty() {
+                    self.write_all(relay.peer_fd, &to_peer);
+                }
+                if !to_client.is_empty() {
+                    for segment in relay.segments_for_client(&to_client) {
+                        out.push(segment);
+                    }
+                }
+                true
+            }
+            Err(e) => {
+                crate::logbuf::push(&format!("relay client step: {e}"));
+                self.reset_relay(port, pkt, out);
+                true
+            }
+        }
+    }
+
+    /// Answers a SYN for a host we want to intercept.
+    fn start_relay(&self, pkt: &Packet<'_>, out: &mut Vec<Vec<u8>>) -> bool {
+        let Some(client_ip) = pkt.src_ip() else {
+            return false;
+        };
+        let Some(target) = self.host_for_ip(pkt.dst_ip()) else {
+            // No hostname for this address: nothing to forge a certificate for.
+            return false;
+        };
+        let Some(dst) = pkt.dst_ip() else {
+            return false;
+        };
+        let Some(peer_fd) = self.take_peer_socket() else {
+            return false;
+        };
+        // The peer socket must be connected before any TLS byte flows, otherwise
+        // the splice would talk to nothing.
+        if !connect_fd(peer_fd, dst, pkt.dst_port) {
+            crate::logbuf::push("relay: connect() to the peer failed");
+            return false;
+        }
+        let resolver = self.mitm_resolver();
+        let session = match crate::mitm::tls::open_session(&resolver, &target) {
+            Ok(s) => s,
+            Err(e) => {
+                crate::logbuf::push(&format!("open tls session: {e}"));
+                return false;
+            }
+        };
+        let script = self.mitm_scripts.read().unwrap().serve_path().to_string();
+        let proxy = crate::mitm::proxy::ProxySession::new(session, script);
+        let flow = crate::mitm::tcp::Flow::new(
+            client_ip,
+            pkt.src_port,
+            pkt.dst_port,
+            pkt.seq,
+            crate::mitm::tcp::initial_seq(pkt.seq as u64),
+        );
+        let mut relay = crate::mitm::relay::Relay::new(flow, peer_fd, proxy, pkt.raw.to_vec());
+        // Our own SYN-ACK (the client-facing sequence starts here).
+        let syn_ack = match crate::mitm::segment::build_ack(pkt, relay.flow.my_seq, relay.flow.acked_seq, true) {
+            Some(s) => s,
+            None => return false,
+        };
+        // The handshake we just answered consumed one sequence number.
+        relay.flow.up_bytes = 1;
+
+        self.relays.lock().unwrap().insert(relay);
+        out.push(syn_ack);
+        self.stats.inc(&self.stats.tcp_reset); // reuse the counter for "relayed"
+        true
+    }
+
+    fn reset_relay(&self, port: u16, pkt: &Packet<'_>, out: &mut Vec<Vec<u8>>) {
+        if let Some(relay) = self.relays.lock().unwrap().remove(port) {
+            if let Some(rst) = crate::mitm::segment::build_rst(pkt, relay.flow.my_seq) {
+                out.push(rst);
+            }
+        }
+    }
+
+    /// Pops one protected, unconnected peer socket.
+    fn take_peer_socket(&self) -> Option<RawFd> {
+        self.peer_sockets.lock().unwrap().pop()
+    }
+
+    fn write_all(&self, fd: RawFd, bytes: &[u8]) {
+        let mut off = 0;
+        while off < bytes.len() {
+            let n = unsafe {
+                libc::send(fd, bytes.as_ptr().add(off) as *const libc::c_void, bytes.len() - off, libc::MSG_NOSIGNAL)
+            };
+            if n <= 0 {
+                return;
+            }
+            off += n as usize;
+        }
     }
 
     fn tcp_blocked(&self, pkt: &Packet<'_>, cfg: &Config) -> bool {
@@ -729,6 +868,33 @@ impl Core {
         self.uidmap.lock().unwrap().lookup(port)
     }
 
+    /// The shared per-SNI resolver, creating it on first use.
+    pub fn mitm_resolver(&self) -> Arc<crate::mitm::tls::SniCertResolver> {
+        let mut guard = self.mitm_resolver.write().unwrap();
+        guard
+            .get_or_insert_with(|| {
+                Arc::new(crate::mitm::tls::SniCertResolver::new(Arc::clone(
+                    &self.mitm_ca.read().unwrap(),
+                )))
+            })
+            .clone()
+    }
+
+    /// Installs a pool of protected, unconnected TCP sockets.
+    pub fn set_peer_sockets(&self, fds: &[RawFd]) {
+        let mut pool = self.peer_sockets.lock().unwrap();
+        pool.clear();
+        pool.extend_from_slice(fds);
+    }
+
+    pub fn peer_socket_pool_size(&self) -> usize {
+        self.peer_sockets.lock().unwrap().len()
+    }
+
+    pub fn relay_count(&self) -> usize {
+        self.relays.lock().unwrap().len()
+    }
+
     pub fn resolver_addr(&self) -> SocketAddr {
         *self.resolver.read().unwrap()
     }
@@ -801,8 +967,87 @@ fn forwarder_loop(core: &'static Core) {
         for reply in &replies {
             core.handle_reply(reply);
         }
+
+        // Relayed connections: whatever the real server answered has to be
+        // spliced back to the client.
+        core.poll_relays();
+
         if replies.is_empty() {
             core.conntrack.lock().unwrap().expire(now);
+        }
+    }
+}
+
+/// Reads from every relay's peer socket and writes the result to the client.
+///
+/// Polling all peer sockets in one `poll()` keeps the cost independent of how
+/// many connections are open, which matters for battery when a page opens
+/// dozens of them.
+impl Core {
+    fn poll_relays(&self) {
+        let peers = self.relays.lock().unwrap().peer_fds();
+        if peers.is_empty() {
+            return;
+        }
+        let mut fds: Vec<libc::pollfd> = peers
+            .iter()
+            .map(|(_, fd)| libc::pollfd {
+                fd: *fd,
+                events: libc::POLLIN,
+                revents: 0,
+            })
+            .collect();
+        let n = unsafe {
+            libc::poll(
+                fds.as_mut_ptr(),
+                fds.len() as libc::nfds_t,
+                50,
+            )
+        };
+        if n <= 0 {
+            return;
+        }
+        for (i, p) in fds.iter().enumerate() {
+            if p.revents & (libc::POLLIN | libc::POLLHUP | libc::POLLERR) == 0 {
+                continue;
+            }
+            let (client_port, _) = peers[i];
+            let mut buf = [0u8; 32 * 1024];
+            loop {
+                let read = unsafe {
+                    libc::recv(
+                        p.fd,
+                        buf.as_mut_ptr() as *mut libc::c_void,
+                        buf.len(),
+                        libc::MSG_DONTWAIT,
+                    )
+                };
+                if read <= 0 {
+                    break;
+                }
+                self.relay_peer_bytes(client_port, &buf[..read as usize]);
+            }
+        }
+    }
+
+    /// Moves server bytes through the splice and writes them back to the client.
+    fn relay_peer_bytes(&self, client_port: u16, bytes: &[u8]) {
+        let segments = {
+            let mut guard = self.relays.lock().unwrap();
+            let Some(relay) = guard.get_mut(client_port) else {
+                return;
+            };
+            match relay.on_peer_data(bytes) {
+                Ok(outbound) if outbound.is_empty() => Vec::new(),
+                Ok(outbound) => relay.segments_for_client(&outbound),
+                Err(e) => {
+                    crate::logbuf::push(&format!("relay peer step: {e}"));
+                    return;
+                }
+            }
+        };
+        for segment in segments {
+            self.write_raw(&segment);
         }
     }
 }
@@ -819,8 +1064,49 @@ fn housekeeping(core: &Core) {
     core.sync_engine_stats();
 }
 
-/// Parses `1.2.3.0/24` or `2001:db8::/32`.
-pub fn parse_cidr(text: &str) -> Option<(IpKey, u8)> {
+/// Connects `fd` (already protected) to `addr:port` without blocking.
+fn connect_fd(fd: RawFd, addr: IpKey, port: u16) -> bool {
+    let ret = match addr {
+        IpKey::V4(v4) => {
+            let sa = libc::sockaddr_in {
+                sin_family: libc::AF_INET as libc::sa_family_t,
+                sin_port: port.to_be(),
+                sin_addr: libc::in_addr {
+                    s_addr: u32::from_ne_bytes(v4.to_be_bytes()),
+                },
+                sin_zero: [0; 8],
+            };
+            unsafe {
+                libc::connect(
+                    fd,
+                    &sa as *const libc::sockaddr_in as *const libc::sockaddr,
+                    std::mem::size_of::<libc::sockaddr_in>() as libc::socklen_t,
+                )
+            }
+        }
+        IpKey::V6(v6) => {
+            let sa = libc::sockaddr_in6 {
+                sin6_family: libc::AF_INET6 as libc::sa_family_t,
+                sin6_port: port.to_be(),
+                sin6_flowinfo: 0,
+                sin6_addr: libc::in6_addr {
+                    s6_addr: v6.to_be_bytes(),
+                },
+                sin6_scope_id: 0,
+            };
+            unsafe {
+                libc::connect(
+                    fd,
+                    &sa as *const libc::sockaddr_in6 as *const libc::sockaddr,
+                    std::mem::size_of::<libc::sockaddr_in6>() as libc::socklen_t,
+                )
+            }
+        }
+    };
+    ret == 0 || std::io::Error::last_os_error().kind() == std::io::ErrorKind::WouldBlock
+}
+
+fn parse_cidr(text: &str) -> Option<(IpKey, u8)> {
     let (net, prefix) = text.trim().split_once('/')?;
     let prefix: u8 = prefix.trim().parse().ok()?;
     let ip: std::net::IpAddr = net.trim().parse().ok()?;

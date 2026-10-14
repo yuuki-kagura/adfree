@@ -61,6 +61,26 @@ class CoreEngine {
         com.example.core.coreProtectSockets(fds)
     }
 
+    /**
+     * `protect()`s a socket, then hands back a duplicate of its fd.
+     *
+     * The order matters: protect() first (otherwise the relay's traffic would
+     * re-enter our own tunnel), then dup so the Rust side owns a descriptor that
+     * outlives the Java wrapper.
+     */
+    private fun protectAndDupFd(
+        vpnService: android.net.VpnService,
+        socket: java.net.Socket,
+    ): Int? = runCatching {
+        vpnService.protect(socket)
+        val pfd = android.os.ParcelFileDescriptor.fromSocket(socket)
+        val dup = pfd.dup() ?: return null
+        val fd = dup.fd
+        runCatching { pfd.close() }
+        runCatching { socket.close() }
+        fd
+    }.getOrNull()
+
     private fun closeUpstreamSockets() {
         upstreamSockets.forEach { runCatching { it.close() } }
         upstreamSockets.clear()
@@ -99,6 +119,7 @@ class CoreEngine {
     }
 
     fun configure(
+        mitmEnabled: Boolean,
         blockQuic: Boolean,
         blockDoh: Boolean,
         blockMode: DnsBlockMode,
@@ -106,6 +127,7 @@ class CoreEngine {
         ecoMode: Boolean,
     ) {
         val config = com.example.core.EngineConfig(
+            mitmEnabled = mitmEnabled,
             blockQuic = blockQuic,
             blockDoh = blockDoh,
             blockDot = true,
@@ -206,6 +228,32 @@ class CoreEngine {
         val dir = File(filesRoot(), "filters").apply { mkdirs() }
         return File(dir, "${sanitizeId(list.id)}.txt")
     }
+
+    /**
+     * Creates a pool of protected, unconnected TCP sockets for the TLS relay.
+     *
+     * The relays `connect()` these towards the real server themselves, so this is
+     * only handing over spare descriptors: a CA is useless without something to
+     * connect with.
+     */
+    fun preparePeerSockets(vpnService: android.net.VpnService, count: Int = PEER_SOCKET_POOL) {
+        peerSockets.forEach { runCatching { it.close() } }
+        peerSockets.clear()
+        repeat(count) {
+            runCatching { java.net.Socket().apply { reuseAddress = true } }
+                .onSuccess { peerSockets += it }
+        }
+        val fds = peerSockets.mapNotNull { socket -> protectAndDupFd(vpnService, socket) }
+        Log.i(tag, "peer sockets protected: ${fds.size}/$count")
+        if (fds.isNotEmpty()) {
+            runCatching { com.example.core.coreSetPeerSockets(fds) }
+        }
+    }
+
+    private val peerSockets = mutableListOf<java.net.Socket>()
+
+    /** Number of live relays, for the settings screen. */
+    fun relayCount(): Int = runCatching { com.example.core.coreRelayCount().toInt() }.getOrDefault(0)
 
     // ------------------------------------------------------------------- MITM
 
@@ -347,6 +395,7 @@ class CoreEngine {
     companion object {
         private const val TAG = "AdFreeCore"
         private const val SOCKET_COUNT = 4
+        private const val PEER_SOCKET_POOL = 16
         private const val USER_AGENT = "AdFree/1.0 (Android)"
         private var pendingStart = true
 

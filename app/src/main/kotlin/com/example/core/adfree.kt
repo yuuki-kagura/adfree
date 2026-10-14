@@ -700,6 +700,8 @@ internal object IntegrityCheckingUniffiLib {
     ): Int
     external fun uniffi_adfree_core_checksum_func_core_protect_sockets(
     ): Int
+    external fun uniffi_adfree_core_checksum_func_core_relay_count(
+    ): Int
     external fun uniffi_adfree_core_checksum_func_core_reset_stats(
     ): Int
     external fun uniffi_adfree_core_checksum_func_core_restore_ca(
@@ -709,6 +711,8 @@ internal object IntegrityCheckingUniffiLib {
     external fun uniffi_adfree_core_checksum_func_core_set_lists(
     ): Int
     external fun uniffi_adfree_core_checksum_func_core_set_lists_async(
+    ): Int
+    external fun uniffi_adfree_core_checksum_func_core_set_peer_sockets(
     ): Int
     external fun uniffi_adfree_core_checksum_func_core_set_resolver(
     ): Int
@@ -769,6 +773,8 @@ internal object UniffiLib {
     ): RustBuffer.ByValue
     external fun uniffi_adfree_core_fn_func_core_protect_sockets(`fds`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): Unit
+    external fun uniffi_adfree_core_fn_func_core_relay_count(uniffi_out_err: UniffiRustCallStatus, 
+    ): Int
     external fun uniffi_adfree_core_fn_func_core_reset_stats(uniffi_out_err: UniffiRustCallStatus, 
     ): Unit
     external fun uniffi_adfree_core_fn_func_core_restore_ca(`certPem`: RustBuffer.ByValue,`keyPem`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
@@ -778,6 +784,8 @@ internal object UniffiLib {
     external fun uniffi_adfree_core_fn_func_core_set_lists(`lists`: RustBuffer.ByValue,`userRules`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): Byte
     external fun uniffi_adfree_core_fn_func_core_set_lists_async(`lists`: RustBuffer.ByValue,`userRules`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    ): Byte
+    external fun uniffi_adfree_core_fn_func_core_set_peer_sockets(`fds`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): Byte
     external fun uniffi_adfree_core_fn_func_core_set_resolver(`host`: RustBuffer.ByValue,`port`: Short,uniffi_out_err: UniffiRustCallStatus, 
     ): Unit
@@ -955,6 +963,9 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
     if ((lib.uniffi_adfree_core_checksum_func_core_protect_sockets() and 0xFFFF) != 13156) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
+    if ((lib.uniffi_adfree_core_checksum_func_core_relay_count() and 0xFFFF) != 38928) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
     if ((lib.uniffi_adfree_core_checksum_func_core_reset_stats() and 0xFFFF) != 20945) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
@@ -968,6 +979,9 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if ((lib.uniffi_adfree_core_checksum_func_core_set_lists_async() and 0xFFFF) != 27928) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if ((lib.uniffi_adfree_core_checksum_func_core_set_peer_sockets() and 0xFFFF) != 32109) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if ((lib.uniffi_adfree_core_checksum_func_core_set_resolver() and 0xFFFF) != 2771) {
@@ -1272,6 +1286,11 @@ public object FfiConverterString: FfiConverter<String, RustBuffer.ByValue> {
  * Runtime knobs, mirrored from the app's `ProtectionSettings`.
  */
 data class EngineConfig (
+    /**
+     * Terminate TLS for intercepted connections and inject scripts.
+     */
+    var `mitmEnabled`: kotlin.Boolean
+    , 
     var `blockQuic`: kotlin.Boolean
     , 
     var `blockDoh`: kotlin.Boolean
@@ -1305,6 +1324,7 @@ public object FfiConverterTypeEngineConfig: FfiConverterRustBuffer<EngineConfig>
             FfiConverterBoolean.read(buf),
             FfiConverterBoolean.read(buf),
             FfiConverterBoolean.read(buf),
+            FfiConverterBoolean.read(buf),
             FfiConverterInt.read(buf),
             FfiConverterBoolean.read(buf),
             FfiConverterBoolean.read(buf),
@@ -1312,6 +1332,7 @@ public object FfiConverterTypeEngineConfig: FfiConverterRustBuffer<EngineConfig>
     }
 
     override fun allocationSize(value: EngineConfig) = (
+            FfiConverterBoolean.allocationSize(value.`mitmEnabled`) +
             FfiConverterBoolean.allocationSize(value.`blockQuic`) +
             FfiConverterBoolean.allocationSize(value.`blockDoh`) +
             FfiConverterBoolean.allocationSize(value.`blockDot`) +
@@ -1321,6 +1342,7 @@ public object FfiConverterTypeEngineConfig: FfiConverterRustBuffer<EngineConfig>
     )
 
     override fun write(value: EngineConfig, buf: ByteBuffer) {
+            FfiConverterBoolean.write(value.`mitmEnabled`, buf)
             FfiConverterBoolean.write(value.`blockQuic`, buf)
             FfiConverterBoolean.write(value.`blockDoh`, buf)
             FfiConverterBoolean.write(value.`blockDot`, buf)
@@ -2143,6 +2165,19 @@ public object FfiConverterSequenceTypeScriptBinding: FfiConverterRustBuffer<List
 }
     
     
+
+        /**
+         * Number of relays currently alive (for the UI).
+         */ fun `coreRelayCount`(): kotlin.UInt {
+            return FfiConverterUInt.lift(
+    uniffiRustCall() { _status ->
+    UniffiLib.uniffi_adfree_core_fn_func_core_relay_count(
+    
+        _status)
+}
+    )
+    }
+    
  fun `coreResetStats`()
         = 
     uniffiRustCall() { _status ->
@@ -2206,6 +2241,23 @@ public object FfiConverterSequenceTypeScriptBinding: FfiConverterRustBuffer<List
         
         FfiConverterSequenceTypeFilterListBinding.lower(`lists`),
         FfiConverterSequenceString.lower(`userRules`),_status)
+}
+    )
+    }
+    
+
+        /**
+         * Installs a pool of protected, unconnected TCP sockets for the relay.
+         *
+         * The relays `connect()` these towards the real server themselves, so this is
+         * just handing over spare descriptors.
+         */ fun `coreSetPeerSockets`(`fds`: List<kotlin.Int>): kotlin.Boolean {
+            return FfiConverterBoolean.lift(
+    uniffiRustCall() { _status ->
+    UniffiLib.uniffi_adfree_core_fn_func_core_set_peer_sockets(
+    
+        
+        FfiConverterSequenceInt.lower(`fds`),_status)
 }
     )
     }

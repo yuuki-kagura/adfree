@@ -16,6 +16,7 @@
 use crate::engine::{Config, VpnStats};
 use crate::events;
 use crate::filter::{FilterListInfo, ListFormat};
+use std::sync::Arc;
 
 /// Everything the UI needs about the engine, in one atomic read.
 #[derive(uniffi::Record, Clone, Copy, Default, Debug)]
@@ -188,6 +189,8 @@ impl From<&events::Event> for LogEvent {
 /// Runtime knobs, mirrored from the app's `ProtectionSettings`.
 #[derive(uniffi::Record, Clone, Copy, Debug)]
 pub struct EngineConfig {
+    /// Terminate TLS for intercepted connections and inject scripts.
+    pub mitm_enabled: bool,
     pub block_quic: bool,
     pub block_doh: bool,
     pub block_dot: bool,
@@ -200,6 +203,7 @@ pub struct EngineConfig {
 impl From<EngineConfig> for Config {
     fn from(c: EngineConfig) -> Self {
         Config {
+            mitm_enabled: c.mitm_enabled,
             block_quic: c.block_quic,
             block_doh: c.block_doh,
             block_dot: c.block_dot,
@@ -395,6 +399,25 @@ pub struct MitmStatus {
     pub stage: String,
 }
 
+
+/// Installs a pool of protected, unconnected TCP sockets for the relay.
+///
+/// The relays `connect()` these towards the real server themselves, so this is
+/// just handing over spare descriptors.
+#[uniffi::export]
+pub fn core_set_peer_sockets(fds: Vec<i32>) -> bool {
+    guard(false, || {
+        crate::core().set_peer_sockets(&fds);
+        crate::core().peer_socket_pool_size() > 0
+    })
+}
+
+/// Number of relays currently alive (for the UI).
+#[uniffi::export]
+pub fn core_relay_count() -> u32 {
+    guard(0, || crate::core().relay_count() as u32)
+}
+
 /// Creates (or replaces) the local CA.
 ///
 /// The returned PEM is what the user has to install in the system trust store
@@ -410,7 +433,7 @@ pub fn core_generate_ca() -> String {
             }
         };
         let pem = ca.cert_pem();
-        *crate::core().mitm_ca.write().unwrap() = ca;
+        *crate::core().mitm_ca.write().unwrap() = Arc::new(ca);
         pem
     })
 }
@@ -426,7 +449,7 @@ pub fn core_restore_ca(cert_pem: String, key_pem: String) -> bool {
                 if cert.is_empty() || key.is_empty() {
                     return false;
                 }
-                *crate::core().mitm_ca.write().unwrap() = ca;
+                *crate::core().mitm_ca.write().unwrap() = Arc::new(ca);
                 true
             }
             Err(e) => {
@@ -511,6 +534,7 @@ mod tests {
     #[test]
     fn config_round_trips() {
         let cfg = EngineConfig {
+            mitm_enabled: false,
             block_quic: true,
             block_doh: false,
             block_dot: true,
@@ -519,6 +543,7 @@ mod tests {
             eco_mode: false,
         };
         let native: Config = cfg.into();
+        assert!(!native.mitm_enabled, "MITM must stay off until asked");
         assert!(native.block_quic);
         assert!(!native.block_doh);
         assert!(matches!(native.block_mode, crate::dns::BlockMode::ZeroIp));
