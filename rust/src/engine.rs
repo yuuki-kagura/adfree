@@ -31,12 +31,17 @@ use crate::util::{now_ms, now_ns};
 use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
 use std::os::unix::io::RawFd;
 use std::sync::atomic::{AtomicBool, AtomicI32, AtomicU64, Ordering};
-use std::sync::{Arc, Mutex, OnceLock, RwLock};
+use std::sync::{Arc, Condvar, Mutex, OnceLock, RwLock};
 
 /// Read size for the TUN descriptor.
 const TUN_BUF_BYTES: usize = 64 * 1024;
 /// How long a single poll waits before re-checking the shutdown flag.
 const POLL_TIMEOUT_MS: i32 = 250;
+
+/// How long the DNS forwarder waits for work when nothing is in flight. It
+/// sleeps on a condvar with the upstream lock *released*, so a UI thread
+/// changing the resolver is never made to wait for this.
+const DNS_IDLE_MS: std::time::Duration = std::time::Duration::from_millis(250);
 
 /// Rough upstream cost of one blocked request; only used for the "data saved"
 /// figure shown in the UI.
@@ -149,6 +154,9 @@ pub struct Core {
     lists: RwLock<Vec<FilterListInfo>>,
     user_rules: RwLock<Vec<String>>,
     upstream: Mutex<Upstream>,
+    /// Signalled when a query is queued, so the forwarder can wait without
+    /// holding `upstream` for the whole wait.
+    dns_wake: Condvar,
     conntrack: Mutex<ConnTable>,
     doh_ips: RwLock<CidrSet>,
     stats: Stats,
@@ -197,6 +205,7 @@ impl Core {
             lists: RwLock::new(Vec::new()),
             user_rules: RwLock::new(Vec::new()),
             upstream: Mutex::new(Upstream::new(resolver)),
+            dns_wake: Condvar::new(),
             conntrack: Mutex::new(ConnTable::new()),
             doh_ips: RwLock::new(default_doh_cidrs()),
             stats: Stats::new(),
@@ -555,7 +564,7 @@ impl Core {
         let Some(dst) = pkt.dst_ip() else {
             return false;
         };
-        if cfg.block_doh && self.doh_ips.read().unwrap().contains_key(dst) {
+        if cfg.block_doh && self.is_encrypted_dns_elsewhere(dst) {
             return true;
         }
         let conn = self.conntrack.lock().unwrap();
@@ -566,7 +575,7 @@ impl Core {
         let Some(dst) = pkt.dst_ip() else {
             return false;
         };
-        if cfg.block_doh && self.doh_ips.read().unwrap().contains_key(dst) {
+        if cfg.block_doh && self.is_encrypted_dns_elsewhere(dst) {
             return true;
         }
         let conn = self.conntrack.lock().unwrap();
@@ -670,7 +679,10 @@ impl Core {
             }
             return;
         };
-        let mut payload = query.body.to_vec();
+        // The whole IP packet travels with the query, not just the DNS message:
+        // `handle_reply` rewrites this packet to answer the client. The
+        // transaction id is patched inside it, and `Upstream::send` strips the
+        // headers for the wire.
         let host = query.qname.as_str();
         // Spread queries over the socket pool deterministically, so a host keeps
         // using the same socket (friendlier to the kernel's flow cache).
@@ -678,31 +690,69 @@ impl Core {
         let mut upstream = self.upstream.lock().unwrap();
         if !upstream.is_ready() {
             self.stats.inc(&self.stats.dns_timeouts);
+            crate::logbuf::push("dns forward: upstream not ready");
             if let Some(err) = dns::synthesize_error(pkt, Some(query), dns::RCODE_SERVFAIL) {
                 self.write_raw(&err);
             }
             return;
         }
         let txid = upstream.alloc_txid();
-        dns::patch_txid(&mut payload, txid);
+        let mut packet = pkt.raw.to_vec();
+        let off = pkt.l4_payload_offset();
+        packet[off] = (txid >> 8) as u8;
+        packet[off + 1] = (txid & 0xff) as u8;
         self.stats.inc(&self.stats.dns_queries);
-        if upstream
-            .send(socket, &payload, query.id, txid, now_ms())
-            .is_none()
-        {
+        let sent = upstream.send(socket, &packet, query.id, txid, now_ms());
+        drop(upstream);
+        if sent.is_none() {
             self.stats.inc(&self.stats.dns_timeouts);
-            if let Some(err) =
-                dns::synthesize_error(pkt, Some(query), dns::RCODE_SERVFAIL)
-            {
+            crate::logbuf::push(&format!(
+                "dns forward: {host} to {} dropped (slot {socket})",
+                self.resolver_addr()
+            ));
+            if let Some(err) = dns::synthesize_error(pkt, Some(query), dns::RCODE_SERVFAIL) {
                 self.write_raw(&err);
             }
         } else {
             self.stats.inc(&self.stats.packets_forwarded);
+            // Wake the forwarder so the answer is picked up at once instead of
+            // after its idle wait. The lock is already dropped, so the forwarder
+            // can act on the signal immediately.
+            self.dns_wake.notify_all();
         }
     }
 
     /// Handles one upstream answer: rewrite it for the client, learn the address
     /// mapping and write it back through the tunnel.
+    /// Test-only entry point for the reply path (normally driven by the
+    /// `adfree-dns` thread).
+    #[doc(hidden)]
+    pub fn handle_reply_for_test(&self, reply: &crate::upstream::Reply) {
+        self.handle_reply(reply);
+    }
+
+    /// Test-only: runs one iteration of the upstream poller and delivers what it
+    /// finds, which is what the `adfree-dns` thread does continuously.
+    #[doc(hidden)]
+    pub fn poll_upstream_once_for_test(&self) -> usize {
+        let mut replies: Vec<crate::upstream::Reply> = Vec::new();
+        let n = {
+            let mut upstream = self.upstream.lock().unwrap();
+            upstream.poll(&mut replies, 0)
+        };
+        for reply in &replies {
+            self.handle_reply(reply);
+        }
+        n
+    }
+
+    /// Test-only: installs a TUN descriptor (a pipe write end works) so replies
+    /// can be captured.
+    #[doc(hidden)]
+    pub fn set_tun_fd_for_test(&self, fd: RawFd) {
+        self.tun_fd.store(fd, Ordering::SeqCst);
+    }
+
     fn handle_reply(&self, reply: &crate::upstream::Reply) {
         let Some(client_packet) = Packet::parse(&reply.pending.packet) else {
             return;
@@ -736,6 +786,17 @@ impl Core {
         for record in records {
             conn.learn(&record, host.as_str(), blocked, now);
         }
+    }
+
+    /// Is this address an encrypted-DNS provider we should block?
+    ///
+    /// The configured upstream is deliberately *not* exempt: blocking DoT/DoH
+    /// towards it is what forces the platform resolver back onto plain UDP:53,
+    /// which is the only transport we can filter and forward. Our own upstream
+    /// traffic travels on protected sockets outside the tunnel, so it is
+    /// unaffected by this.
+    pub fn is_encrypted_dns_elsewhere(&self, dst: IpKey) -> bool {
+        self.doh_ips.read().unwrap().contains_key(dst)
     }
 
     fn host_for_ip(&self, ip: Option<IpKey>) -> Option<String> {
@@ -961,7 +1022,20 @@ fn forwarder_loop(core: &'static Core) {
         let now = now_ms();
         {
             let mut upstream = core.upstream.lock().unwrap();
-            upstream.poll(&mut replies);
+            if upstream.pending_len() == 0 {
+                // Nothing is in flight. Waiting here rather than inside `poll`
+                // matters: the lock is released while we wait, so a UI thread
+                // calling `set_resolver` is not blocked for a whole second.
+                let (guard, _) = core
+                    .dns_wake
+                    .wait_timeout(upstream, DNS_IDLE_MS)
+                    .unwrap_or_else(|e| e.into_inner());
+                upstream = guard;
+            }
+            // Never block for long here: 100ms is enough to catch an answer that
+            // is already on the wire, and the loop comes back immediately after.
+            let timeout = if upstream.pending_len() == 0 { 0 } else { 100 };
+            upstream.poll(&mut replies, timeout);
             upstream.expire(now);
         }
         for reply in &replies {

@@ -56,6 +56,14 @@ impl IpKey {
     }
 }
 
+/// Converts a `std` address into the packed key used by the tables.
+pub fn ip_key_from(addr: std::net::IpAddr) -> IpKey {
+    match addr {
+        std::net::IpAddr::V4(v4) => IpKey::V4(u32::from_be_bytes(v4.octets())),
+        std::net::IpAddr::V6(v6) => IpKey::V6(u128::from_be_bytes(v6.octets())),
+    }
+}
+
 pub fn ip_key_from_bytes(bytes: &[u8]) -> Option<IpKey> {
     match bytes.len() {
         4 => {

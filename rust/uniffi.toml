@@ -9,7 +9,7 @@
 [crates.adfree_core]
 
 [crates.adfree_core.bindings.kotlin]
-package_name = "com.example.core"
+package_name = "git.shin.adfree.core"
 cdylib_name = "adfree_core"
 disable_java_cleaner = true
 android_cleaner = false

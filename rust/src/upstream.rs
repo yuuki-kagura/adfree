@@ -82,8 +82,7 @@ impl Upstream {
     }
 
     pub fn pending_len(&self) -> usize {
-        self.pending.len()
-    }
+        self.pending.len()    }
 
     pub fn timeouts(&self) -> u64 {
         self.timeouts
@@ -117,10 +116,29 @@ impl Upstream {
         }
     }
 
-    /// Sends one query. `packet` is the DNS message (transaction id already
-    /// replaced with our unique one). Returns the key used to match the reply,
-    /// or `None` when no socket is usable.
+    /// Sends one query. `socket` is the preferred pool slot (chosen by the
+    /// caller so a host keeps using the same socket); if that slot has no
+    /// descriptor the first usable one is taken instead, so a partially
+    /// populated pool still works. Returns the key used to match the reply, or
+    /// `None` when no socket is usable.
     pub fn send(
+        &mut self,
+        socket: usize,
+        packet: &[u8],
+        client_txid: u16,
+        txid: u16,
+        now_ms: u64,
+    ) -> Option<u32> {
+        // `self.fds.get(socket)` covers both "out of range" and "slot empty".
+        if self.fds.get(socket).is_some_and(|fd| *fd > 0) {
+            self.send_on(socket, packet, client_txid, txid, now_ms)
+        } else {
+            let fallback = self.fds.iter().position(|fd| *fd > 0)?;
+            self.send_on(fallback, packet, client_txid, txid, now_ms)
+        }
+    }
+
+    fn send_on(
         &mut self,
         socket: usize,
         packet: &[u8],
@@ -132,19 +150,29 @@ impl Upstream {
         if fd <= 0 {
             return None;
         }
-        if packet.len() > MAX_MESSAGE {
+        if packet.len() > MAX_MESSAGE + 40 {
             return None;
         }
+        // `packet` is the client's IP packet; only its DNS payload goes on the
+        // wire, so strip the IP and UDP headers.
+        let Some(payload) = dns_payload(packet) else {
+            crate::logbuf::push(&format!(
+                "dns forward: no payload in a {}-byte packet",
+                packet.len()
+            ));
+            return None;
+        };
         // One place builds the sockaddr (byte order covered by a unit test).
         let sent = match self.resolver {
-            SocketAddr::V4(_) => sendto(
-                fd,
-                packet,
-                Self::sockaddr_for(&self.resolver),
-            ),
-            SocketAddr::V6(a) => sendto6(fd, packet, a),
+            SocketAddr::V4(_) => sendto(fd, payload, Self::sockaddr_for(&self.resolver)),
+            SocketAddr::V6(a) => sendto6(fd, payload, a),
         };
         if sent < 0 {
+            let err = std::io::Error::last_os_error();
+            crate::logbuf::push(&format!(
+                "dns forward: sendto {} on fd {} (slot {socket}) failed: {}",
+                self.resolver, fd, err
+            ));
             return None;
         }
 
@@ -162,7 +190,11 @@ impl Upstream {
     }
 
     /// Waits for answers, reusing `out` to avoid allocating per wakeup.
-    pub fn poll(&mut self, out: &mut Vec<Reply>) -> usize {
+    ///
+    /// `timeout_ms` is explicit so a caller can wait for a long while only when
+    /// it holds no lock a UI thread might need. Holding the upstream lock
+    /// across a long `poll()` stalls `set_resolver` for that whole time.
+    pub fn poll(&mut self, out: &mut Vec<Reply>, timeout_ms: libc::c_int) -> usize {
         let mut fds: [libc::pollfd; SOCKET_POOL] = unsafe { std::mem::zeroed() };
         for (i, fd) in self.fds.iter().enumerate() {
             fds[i] = libc::pollfd {
@@ -171,7 +203,6 @@ impl Upstream {
                 revents: 0,
             };
         }
-        let timeout_ms: libc::c_int = if self.pending.is_empty() { 1_000 } else { 100 };
         let rc = unsafe { libc::poll(fds.as_mut_ptr(), SOCKET_POOL as libc::nfds_t, timeout_ms) };
         if rc <= 0 {
             return 0;
@@ -242,6 +273,19 @@ impl Upstream {
     pub fn clear(&mut self) {
         self.pending.clear();
     }
+}
+
+/// Returns the DNS message inside a client IP packet.
+fn dns_payload(packet: &[u8]) -> Option<&[u8]> {
+    let parsed = crate::packet::Packet::parse(packet)?;
+    if parsed.proto != crate::packet::PROTO_UDP {
+        return None;
+    }
+    let start = parsed.l4_payload_offset();
+    if start >= packet.len() {
+        return None;
+    }
+    Some(&packet[start..parsed.total_len.min(packet.len())])
 }
 
 #[inline]
@@ -368,6 +412,6 @@ mod tests {
         let mut u = upstream();
         let mut out = Vec::new();
         // Sockets are `-1`: poll must not hang or crash.
-        assert_eq!(u.poll(&mut out), 0);
+        assert_eq!(u.poll(&mut out, 0), 0);
     }
 }

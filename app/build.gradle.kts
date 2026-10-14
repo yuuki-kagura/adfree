@@ -20,7 +20,7 @@ plugins {
 // Where cargo puts its build artifacts. Kept outside the project directory so
 // `git status` stays clean and incremental rebuilds survive `./gradlew clean`.
 android {
-    namespace = "com.example"
+    namespace = "git.shin.adfree"
     compileSdk { version = release(36) { minorApiLevel = 1 } }
 
     defaultConfig {
@@ -178,6 +178,8 @@ val ndkDir: String = sequenceOf(
     "${System.getenv("ANDROID_HOME")}/ndk/27.3.13750724",
     "${System.getenv("HOME")}/Android/Sdk/ndk/27.3.13750724",
     "/opt/android-sdk/ndk/27.3.13750724",
+    "${System.getenv("HOME")}/android-sdk/ndk/28.2.13676358",
+    "${System.getenv("HOME")}/Android/Sdk/ndk/27.3.13750724",
 ).firstOrNull { it != null && file(it).isDirectory } ?: ""
 
 val jniLibsDir: Directory = layout.projectDirectory.dir("src/main/jniLibs")

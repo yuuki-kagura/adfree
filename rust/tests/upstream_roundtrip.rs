@@ -1,27 +1,47 @@
-//! End-to-end test of the upstream DNS forwarder.
+//! Round-trip test of the upstream DNS forwarder.
 //!
-//! Mirrors the real device path: `sendto()` to the resolver, `poll()` on the
+//! Mirrors the real device path: a full IP packet goes in, `poll()` on the
 //! socket, `recv()` the answer, and match it against the waiting query. This is
-//! exactly where the byte-order bug broke `s_addr` (sendto returned EINVAL).
+//! exactly where the byte-order bug broke `s_addr` (sendto returned EINVAL), and
+//! where handing over a bare DNS message instead of the IP packet made the reply
+//! impossible to rewrite.
 
+use adfree_core::packet;
 use adfree_core::upstream::Upstream;
 use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
 use std::os::unix::io::AsRawFd;
 use std::time::{Duration, Instant};
 
-/// A bare DNS `A example.com` query, no IP packet.
-fn query_named(name: &str, txid: u16) -> Vec<u8> {
+/// A bare DNS `A example.com` query.
+fn query_named(txid: u16) -> Vec<u8> {
     let mut v = Vec::new();
     v.extend_from_slice(&txid.to_be_bytes());
     v.extend_from_slice(&[0x01, 0x00]); // recursion desired
     v.extend_from_slice(&[0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00]);
-    for label in name.split('.') {
+    for label in ["example", "com"] {
         v.push(label.len() as u8);
         v.extend_from_slice(label.as_bytes());
     }
     v.push(0);
     v.extend_from_slice(&[0x00, 0x01, 0x00, 0x01]);
     v
+}
+
+/// Wraps a DNS message into a minimal IPv4/UDP packet.
+fn wrap_in_ip_packet(dns: &[u8]) -> Vec<u8> {
+    let mut p = Vec::new();
+    p.extend_from_slice(&[0x45, 0x00]);
+    p.extend_from_slice(&((20 + 8 + dns.len()) as u16).to_be_bytes());
+    p.extend_from_slice(&[0x00, 0x00, 0x00, 0x00, 64, 17, 0, 0]);
+    p.extend_from_slice(&[10, 111, 42, 1]);
+    p.extend_from_slice(&[127, 0, 0, 1]);
+    p.extend_from_slice(&40000u16.to_be_bytes());
+    p.extend_from_slice(&53u16.to_be_bytes());
+    p.extend_from_slice(&((8 + dns.len()) as u16).to_be_bytes());
+    p.extend_from_slice(&[0, 0]);
+    p.extend_from_slice(dns);
+    packet::fix_ipv4_checksum(&mut p);
+    p
 }
 
 #[test]
@@ -33,7 +53,6 @@ fn sends_to_the_configured_resolver_and_matches_the_reply() {
     )))
     .expect("bind responder");
     let responder_addr = responder.local_addr().expect("responder addr");
-
     let client = std::net::UdpSocket::bind(SocketAddr::V4(SocketAddrV4::new(
         Ipv4Addr::LOCALHOST,
         0,
@@ -58,26 +77,23 @@ fn sends_to_the_configured_resolver_and_matches_the_reply() {
     let mut upstream = Upstream::new(responder_addr);
     upstream.set_socket_fds(&[client.as_raw_fd()]);
 
-    let payload = query_named("example.com", 0x1234);
     let our_txid = upstream.alloc_txid();
-    let mut patched = payload.clone();
-    patched[0] = (our_txid >> 8) as u8;
-    patched[1] = (our_txid & 0xff) as u8;
+    let patched = wrap_in_ip_packet(&query_named(our_txid));
 
-    let key = upstream
+    upstream
         .send(0, &patched, 0x1234, our_txid, 0)
-        .expect("send must succeed: lỗi ở đây đồng nghĩa sockaddr sai");
+        .expect("send must succeed: an error here means the sockaddr is wrong");
     assert_eq!(upstream.pending_len(), 1);
 
     let deadline = Instant::now() + Duration::from_secs(2);
     let mut replies = Vec::new();
     while replies.is_empty() && Instant::now() < deadline {
         replies.clear();
-        upstream.poll(&mut replies);
+        upstream.poll(&mut replies, 200);
     }
     responder_handle.join().expect("responder thread");
 
-    assert_eq!(_key_eq(key, replies.len()), 1);
+    assert_eq!(replies.len(), 1);
     let reply = &replies[0];
     // The reply carries the txid we sent (matched via pending), and pending keeps
     // the client's original txid so the engine can rewrite it.
@@ -87,15 +103,26 @@ fn sends_to_the_configured_resolver_and_matches_the_reply() {
     );
     assert_eq!(reply.pending.client_txid, 0x1234);
     // The question must survive unchanged.
-    assert_eq!(&reply.message[12..], &payload[12..]);
+    assert_eq!(&reply.message[12..], &query_named(0)[12..]);
     // The QR bit must be set.
     assert_eq!(reply.message[2] & 0x80, 0x80);
-    assert_eq!(upstream.pending_len(), 0, "khớp xong thì pending phải rỗng");
+    assert_eq!(upstream.pending_len(), 0, "matched, so pending must be empty");
 
     drop(client);
 }
 
-fn _key_eq(key: u32, replies: usize) -> usize {
-    let _ = key;
-    replies
+#[test]
+fn a_non_dns_packet_is_rejected() {
+    let mut upstream = Upstream::new(SocketAddr::V4(SocketAddrV4::new(
+        Ipv4Addr::LOCALHOST,
+        53,
+    )));
+    // Any IP packet that does not carry UDP cannot be forwarded.
+    let mut tcp_packet = wrap_in_ip_packet(&query_named(1));
+    tcp_packet[9] = crate::PROTO_TCP_PLACEHOLDER;
+    assert!(upstream.send(0, &tcp_packet, 1, 1, 0).is_none());
 }
+
+/// Protocol number used by the test above.
+#[allow(dead_code)]
+pub const PROTO_TCP_PLACEHOLDER: u8 = 6;
