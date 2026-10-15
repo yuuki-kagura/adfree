@@ -94,14 +94,13 @@ fun SettingsScreen(
             .padding(horizontal = 16.dp, vertical = 12.dp)
     ) {
         Text(
-            text = "CÀI ĐẶT & TỐI ƯU PIN",
-            fontSize = 18.sp,
-            fontWeight = FontWeight.Black,
+            text = "Cài đặt",
+            fontSize = 19.sp,
+            fontWeight = FontWeight.Bold,
             color = AdGuardTextPrimary,
-            letterSpacing = 1.sp
         )
         Text(
-            text = "DNS mã hóa, Chế độ tàng hình & Bộ lọc tiết kiệm năng lượng",
+            text = "Chặn DNS mã hóa, chế độ tàng hình và lọc HTTPS",
             fontSize = 12.sp,
             color = AdGuardTextMuted
         )
@@ -290,7 +289,7 @@ private fun HttpsFilterSection(viewModel: AdGuardViewModel) {
 
     Column {
         Text(
-            text = "LỌC HTTPS (MITM)",
+            text = "Lọc HTTPS",
             fontSize = 14.sp,
             fontWeight = FontWeight.Bold,
             color = AdGuardTextPrimary
@@ -501,11 +500,10 @@ private fun EngineInfoSection(buildMs: Long) {
     ) {
         Column(modifier = Modifier.padding(14.dp)) {
             Text(
-                text = "ENGINE",
+                text = "Trạng thái engine",
                 fontSize = 11.sp,
                 fontWeight = FontWeight.Bold,
                 color = AdGuardTextSecondary,
-                letterSpacing = 1.sp
             )
             Spacer(modifier = Modifier.height(6.dp))
             Text(

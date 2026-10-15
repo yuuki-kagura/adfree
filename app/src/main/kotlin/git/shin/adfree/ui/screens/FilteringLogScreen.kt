@@ -19,17 +19,11 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Block
-import androidx.compose.material.icons.filled.Layers
-import androidx.compose.material.icons.filled.Bolt
-import androidx.compose.material.icons.filled.Speed
 import androidx.compose.material.icons.filled.Check
-import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Clear
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.DeleteSweep
 import androidx.compose.material.icons.filled.FilterList
-import androidx.compose.material.icons.filled.Psychology
-import androidx.compose.material.icons.filled.Science
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Shield
 import androidx.compose.material3.Button
@@ -106,14 +100,13 @@ fun FilteringLogScreen(
         ) {
             Column {
                 Text(
-                    text = "NHẬT KÝ LỌC",
-                    fontSize = 18.sp,
-                    fontWeight = FontWeight.Black,
-                    color = AdGuardTextPrimary,
-                    letterSpacing = 1.sp
+                    text = "Nhật ký",
+                    fontSize = 19.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = AdGuardTextPrimary
                 )
                 Text(
-                    text = "Bắt gói tin mạng trực tiếp (Packet Inspector)",
+                    text = "Các truy vấn mạng gần đây của thiết bị",
                     fontSize = 12.sp,
                     color = AdGuardTextMuted
                 )
@@ -131,42 +124,7 @@ fun FilteringLogScreen(
             }
         }
 
-        Spacer(modifier = Modifier.height(10.dp))
-
-        // Engine telemetry (real): the two numbers that decide the battery cost.
-        Card(
-            modifier = Modifier.fillMaxWidth(),
-            shape = RoundedCornerShape(12.dp),
-            colors = CardDefaults.cardColors(containerColor = AdGuardDarkSurface)
-        ) {
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 14.dp, vertical = 10.dp),
-                horizontalArrangement = Arrangement.SpaceBetween
-            ) {
-                EngineMetric(
-                    label = "Độ trễ quyết định",
-                    value = "${state.stats.engineLatencyNs / 1000} us",
-                    icon = Icons.Default.Speed,
-                    tint = AdGuardGreenLight,
-                )
-                EngineMetric(
-                    label = "Cache đúng",
-                    value = "%.0f%%".format(state.stats.cacheHitRatio),
-                    icon = Icons.Default.Bolt,
-                    tint = AdGuardBlueDns,
-                )
-                EngineMetric(
-                    label = "Gói tin",
-                    value = "${state.stats.packetsTotal}",
-                    icon = Icons.Default.Layers,
-                    tint = AdGuardTextSecondary,
-                )
-            }
-        }
-
-        Spacer(modifier = Modifier.height(10.dp))
+        Spacer(modifier = Modifier.height(12.dp))
 
         // Search Bar
         OutlinedTextField(
@@ -403,41 +361,39 @@ fun LogItemCard(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.SpaceBetween
         ) {
-            Row(
-                modifier = Modifier.weight(1f),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                // Status Indicator Pill
-                Box(
-                    modifier = Modifier
-                        .size(10.dp)
-                        .clip(CircleShape)
-                        .background(statusColor)
-                )
+            Column(modifier = Modifier.weight(1f)) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Box(
+                        modifier = Modifier
+                            .size(8.dp)
+                            .clip(CircleShape)
+                            .background(statusColor)
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(
+                        text = log.domain,
+                        fontSize = 14.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        color = AdGuardTextPrimary,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f, fill = false)
+                    )
+                }
 
-                Spacer(modifier = Modifier.width(12.dp))
+                Spacer(modifier = Modifier.height(4.dp))
 
-                Column(modifier = Modifier.weight(1f)) {
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        Text(
-                            text = log.domain,
-                            fontSize = 11.sp,
-                            fontWeight = FontWeight.Bold,
-                            color = AdGuardTextSecondary
-                        )
-                        Text(
-                            text = "•",
-                            fontSize = 11.sp,
-                            color = AdGuardTextMuted
-                        )
-                        Text(
-                            text = timeStr,
-                            fontSize = 11.sp,
-                            color = AdGuardTextMuted
-                        )
+                // What the user can act on: why it was blocked, and when.
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    Text(
+                        text = timeStr,
+                        fontSize = 11.sp,
+                        color = AdGuardTextMuted
+                    )
+                    if (log.protocol.name.isNotEmpty()) {
                         Text(
                             text = "•",
                             fontSize = 11.sp,
@@ -445,31 +401,23 @@ fun LogItemCard(
                         )
                         Text(
                             text = log.protocol.name,
-                            fontSize = 9.sp,
-                            fontFamily = FontFamily.Monospace,
-                            color = AdGuardBlueDns
+                            fontSize = 11.sp,
+                            color = AdGuardTextSecondary
                         )
                     }
-
-                    Spacer(modifier = Modifier.height(2.dp))
-
-                    Text(
-                        text = log.domain,
-                        fontSize = 14.sp,
-                        fontWeight = FontWeight.SemiBold,
-                        fontFamily = FontFamily.Monospace,
-                        color = AdGuardTextPrimary,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis
-                    )
-
                     if (log.matchedRule != null) {
                         Text(
-                            text = "Quy tắc: ${log.matchedRule}",
+                            text = "•",
                             fontSize = 11.sp,
-                            color = AdGuardRedBlocked,
+                            color = AdGuardTextMuted
+                        )
+                        Text(
+                            text = log.matchedRule,
+                            fontSize = 11.sp,
+                            color = AdGuardTextSecondary,
                             maxLines = 1,
-                            overflow = TextOverflow.Ellipsis
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.weight(1f, fill = false)
                         )
                     }
                 }
@@ -477,28 +425,22 @@ fun LogItemCard(
 
             Spacer(modifier = Modifier.width(8.dp))
 
-            Column(horizontalAlignment = Alignment.End) {
-                Box(
-                    modifier = Modifier
-                        .clip(RoundedCornerShape(6.dp))
-                        .background(statusColor.copy(alpha = 0.15f))
-                        .padding(horizontal = 8.dp, vertical = 3.dp)
-                ) {
-                    Text(
-                        text = if (log.status == FilterStatus.BLOCKED) "ĐÃ CHẶN" else if (log.status == FilterStatus.ALLOWED) "CHO PHÉP" else "TRẮNG",
-                        fontSize = 10.sp,
-                        fontWeight = FontWeight.ExtraBold,
-                        color = statusColor
-                    )
-                }
-
-                Spacer(modifier = Modifier.height(4.dp))
-
+            // Status only: the latency belonged to the engine, not to the user.
+            Box(
+                modifier = Modifier
+                    .clip(RoundedCornerShape(6.dp))
+                    .background(statusColor.copy(alpha = 0.15f))
+                    .padding(horizontal = 8.dp, vertical = 3.dp)
+            ) {
                 Text(
-                    text = "${log.latencyMicros} µs",
+                    text = when (log.status) {
+                        FilterStatus.BLOCKED -> "Đã chặn"
+                        FilterStatus.ALLOWED -> "Cho phép"
+                        FilterStatus.WHITELISTED -> "Trắng"
+                    },
                     fontSize = 10.sp,
-                    fontFamily = FontFamily.Monospace,
-                    color = AdGuardTextMuted
+                    fontWeight = FontWeight.Bold,
+                    color = statusColor
                 )
             }
         }
@@ -524,10 +466,9 @@ fun PacketInspectionSheetContent(
             verticalAlignment = Alignment.CenterVertically
         ) {
             Text(
-                text = "CHI TIẾT TRUY VẤN (PACKET INSPECTION)",
-                fontSize = 15.sp,
-                fontWeight = FontWeight.Black,
-                letterSpacing = 1.sp,
+                text = "Chi tiết truy vấn",
+                fontSize = 17.sp,
+                fontWeight = FontWeight.Bold,
                 color = AdGuardTextPrimary
             )
             IconButton(onClick = onClose) {
@@ -570,10 +511,16 @@ fun PacketInspectionSheetContent(
 
         // Detailed Metadata Grid
         Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            DetailRow(label = "Ứng dụng nguồn", value = "${log.domain} (${log.domain})")
-            DetailRow(label = "Quyết định xử lý", value = if (log.status == FilterStatus.BLOCKED) "CHẶN GÓI TIN" else "CHO PHÉP")
+            DetailRow(label = "Tên miền", value = log.domain)
+            DetailRow(
+                label = "Quyết định xử lý",
+                value = when (log.status) {
+                    FilterStatus.BLOCKED -> "Đã chặn"
+                    FilterStatus.ALLOWED -> "Cho phép"
+                    FilterStatus.WHITELISTED -> "Trong danh sách trắng"
+                }
+            )
             DetailRow(label = "Phân loại", value = log.category.label)
-            DetailRow(label = "Độ trễ khớp Rust Trie", value = "${log.latencyMicros} vi giây (µs)")
             if (log.matchedRule != null) {
                 DetailRow(label = "Quy tắc kích hoạt", value = log.matchedRule)
             }
@@ -625,9 +572,9 @@ fun PacketInspectionSheetContent(
             shape = RoundedCornerShape(10.dp),
             colors = ButtonDefaults.buttonColors(containerColor = AdGuardPurpleAI)
         ) {
-            Icon(Icons.Default.Psychology, contentDescription = null, tint = Color.Black)
+            Icon(Icons.Default.Search, contentDescription = null, tint = Color.Black)
             Spacer(modifier = Modifier.width(8.dp))
-            Text("Phân tích an toàn với AI Threat Lab", color = Color.Black, fontWeight = FontWeight.Bold)
+            Text("Kiểm tra an toàn", color = Color.Black, fontWeight = FontWeight.Bold)
         }
 
         Spacer(modifier = Modifier.height(16.dp))
@@ -648,24 +595,5 @@ fun DetailRow(label: String, value: String) {
             color = AdGuardTextPrimary,
             fontFamily = FontFamily.Monospace
         )
-    }
-}
-
-@Composable
-private fun EngineMetric(label: String, value: String, icon: ImageVector, tint: Color) {
-    Column(horizontalAlignment = Alignment.CenterHorizontally) {
-        Icon(
-            imageVector = icon,
-            contentDescription = label,
-            tint = tint,
-            modifier = Modifier.size(18.dp)
-        )
-        Text(
-            text = value,
-            fontSize = 13.sp,
-            fontWeight = FontWeight.Bold,
-            color = AdGuardTextPrimary
-        )
-        Text(text = label, fontSize = 9.sp, color = AdGuardTextMuted)
     }
 }

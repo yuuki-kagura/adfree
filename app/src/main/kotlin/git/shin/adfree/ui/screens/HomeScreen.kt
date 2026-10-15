@@ -113,11 +113,11 @@ fun HomeScreen(
                 onCardClick = { viewModel.onIntent(AdGuardIntent.SelectTab(AdGuardTab.ACTIVITY)) }
             )
 
-            Spacer(modifier = Modifier.height(24.dp))
+            Spacer(modifier = Modifier.height(16.dp))
 
             SectionTitle("Mô-đun bảo vệ")
 
-            Spacer(modifier = Modifier.height(10.dp))
+            Spacer(modifier = Modifier.height(8.dp))
 
             ModuleToggleCard(
                 title = "Chặn quảng cáo",
@@ -161,7 +161,7 @@ fun HomeScreen(
                 accentColor = AdGuardGreenLight
             )
 
-            Spacer(modifier = Modifier.height(24.dp))
+            Spacer(modifier = Modifier.height(16.dp))
         }
     }
 }
@@ -172,7 +172,7 @@ private fun HomeHeader(isActive: Boolean) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(horizontal = 16.dp, vertical = 12.dp),
+            .padding(horizontal = 16.dp, vertical = 10.dp),
         horizontalArrangement = Arrangement.SpaceBetween,
         verticalAlignment = Alignment.CenterVertically
     ) {
@@ -231,7 +231,7 @@ private fun ModuleRow() {
     HorizontalDivider(
         color = AdGuardDarkOutline.copy(alpha = 0.5f),
         thickness = 0.5.dp,
-        modifier = Modifier.padding(top = 10.dp, bottom = 10.dp)
+        modifier = Modifier.padding(top = 7.dp, bottom = 7.dp)
     )
 }
 
@@ -264,7 +264,7 @@ fun AdGuardShieldHero(
         Box(
             contentAlignment = Alignment.Center,
             modifier = Modifier
-                .size(160.dp)
+                .size(108.dp)
                 .clickable { onToggle() }
                 .testTag("shield_power_toggle")
         ) {
@@ -279,7 +279,7 @@ fun AdGuardShieldHero(
             Box(
                 contentAlignment = Alignment.Center,
                 modifier = Modifier
-                    .size(116.dp)
+                    .size(76.dp)
                     .clip(CircleShape)
                     .background(
                         Brush.radialGradient(
@@ -304,7 +304,7 @@ fun AdGuardShieldHero(
                     imageVector = Icons.Default.PowerSettingsNew,
                     contentDescription = "Bật hoặc tắt lọc",
                     tint = if (isActive) Color.Black else Color(0xFF8B9DAF),
-                    modifier = Modifier.size(52.dp)
+                    modifier = Modifier.size(44.dp)
                 )
             }
         }
@@ -399,7 +399,7 @@ private fun StatCard(
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(12.dp)
+                .padding(10.dp)
         ) {
             Icon(
                 imageVector = icon,
@@ -407,7 +407,7 @@ private fun StatCard(
                 tint = accentColor,
                 modifier = Modifier.size(18.dp)
             )
-            Spacer(modifier = Modifier.height(6.dp))
+            Spacer(modifier = Modifier.height(4.dp))
             Text(
                 text = value,
                 fontSize = 18.sp,
@@ -443,7 +443,7 @@ private fun ModuleToggleCard(
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(vertical = 12.dp),
+                .padding(vertical = 9.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
             Box(

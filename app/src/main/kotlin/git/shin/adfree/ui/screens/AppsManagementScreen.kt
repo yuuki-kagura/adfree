@@ -105,14 +105,13 @@ fun AppsManagementScreen(
         ) {
             Column {
                 Text(
-                    text = "QUẢN LÝ ỨNG DỤNG & TƯỜNG LỬA",
-                    fontSize = 17.sp,
-                    fontWeight = FontWeight.Black,
-                    color = AdGuardTextPrimary,
-                    letterSpacing = 1.sp
+                    text = "Ứng dụng",
+                    fontSize = 19.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = AdGuardTextPrimary
                 )
                 Text(
-                    text = "${state.appFirewallRules.size} ứng dụng • Kiểm soát truy cập mạng & lọc AdGuard",
+                    text = "${state.appFirewallRules.size} ứng dụng • chọn app nào được lọc",
                     fontSize = 12.sp,
                     color = AdGuardTextMuted
                 )
@@ -516,7 +515,6 @@ fun AppDetailsFirewallSheet(
             fontSize = 11.sp,
             fontWeight = FontWeight.Bold,
             color = AdGuardTextMuted,
-            letterSpacing = 0.5.sp
         )
 
         Spacer(modifier = Modifier.height(8.dp))
@@ -614,7 +612,7 @@ fun AppDetailsFirewallSheet(
                     .padding(12.dp)
             ) {
                 Column {
-                    Text("LƯU LƯỢNG HÔM NAY", fontSize = 10.sp, color = AdGuardTextMuted)
+                    Text("Dữ liệu hôm nay", fontSize = 11.sp, color = AdGuardTextSecondary)
                     Spacer(modifier = Modifier.height(2.dp))
                     Text("${app.dataTransferredBytes / (1024 * 1024)} MB", fontSize = 16.sp, fontWeight = FontWeight.Bold, color = AdGuardTextPrimary)
                 }
@@ -628,7 +626,7 @@ fun AppDetailsFirewallSheet(
                     .padding(12.dp)
             ) {
                 Column {
-                    Text("YÊU CẦU ĐÃ CHẶN", fontSize = 10.sp, color = AdGuardTextMuted)
+                    Text("Truy vấn đã chặn", fontSize = 11.sp, color = AdGuardTextSecondary)
                     Spacer(modifier = Modifier.height(2.dp))
                     Text("${app.blockedRequestsToday}", fontSize = 16.sp, fontWeight = FontWeight.Bold, color = AdGuardRedBlocked)
                 }
@@ -667,7 +665,7 @@ fun AppDetailsFirewallSheet(
         if (appLogs.isNotEmpty()) {
             Spacer(modifier = Modifier.height(16.dp))
             Text(
-                text = "YÊU CẦU MẠNG GẦN ĐÂY CỦA ỨNG DỤNG",
+                text = "Truy vấn mạng gần đây",
                 fontSize = 11.sp,
                 fontWeight = FontWeight.Bold,
                 color = AdGuardTextMuted

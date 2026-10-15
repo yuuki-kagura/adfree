@@ -106,15 +106,14 @@ fun SecurityLabScreen(
             Spacer(modifier = Modifier.width(8.dp))
             Column {
                 Text(
-                    text = "AI THREAT & SCIENCE LAB",
-                    fontSize = 17.sp,
-                    fontWeight = FontWeight.Black,
-                    color = AdGuardTextPrimary,
-                    letterSpacing = 1.sp
+                    text = "Kiểm tra an toàn",
+                    fontSize = 19.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = AdGuardTextPrimary
                 )
                 Text(
-                    text = "Phân tích mối đe dọa mạng & Tối ưu hóa regex tiết kiệm pin",
-                    fontSize = 11.sp,
+                    text = "Quét một tên miền để xem nó bị chặn vì sao",
+                    fontSize = 12.sp,
                     color = AdGuardTextMuted
                 )
             }
@@ -141,14 +140,14 @@ fun SecurityLabScreen(
                 Spacer(modifier = Modifier.width(8.dp))
                 Column {
                     Text(
-                        text = "Phân tích offline bằng Rust core",
+                        text = "Quét ngay trên thiết bị, không gửi đi đâu",
                         fontSize = 12.sp,
                         fontWeight = FontWeight.Bold,
                         color = AdGuardTextPrimary,
                     )
                     Text(
-                        text = "Chấm điểm rủi ro từ cấu trúc host + từ khoá ad/tracker, " +
-                            "rồi đối chiếu với toàn bộ quy tắc đang tải. Không mạng, không API key.",
+                        text = "Chấm điểm từ cấu trúc tên miền và các quy tắc đang tải. " +
+                            "Không cần mạng.",
                         fontSize = 10.sp,
                         color = AdGuardTextMuted,
                     )
@@ -254,7 +253,7 @@ fun SecurityLabScreen(
                         )
                         Spacer(modifier = Modifier.height(6.dp))
                         Text(
-                            text = "Đang tính toán độ phức tạp Regex & trạng thái ngủ modem radio...",
+                            text = "Đang phân tích…",
                             fontSize = 11.sp,
                             color = AdGuardTextMuted
                         )
@@ -304,7 +303,7 @@ fun ScienceLabIntroCard() {
                 Icon(Icons.Default.Lightbulb, contentDescription = null, tint = AdGuardGreenLight, modifier = Modifier.size(20.dp))
                 Spacer(modifier = Modifier.width(8.dp))
                 Text(
-                    text = "Khả năng phân tích khoa học mạng",
+                    text = "Cách hoạt động",
                     fontSize = 14.sp,
                     fontWeight = FontWeight.Bold,
                     color = AdGuardTextPrimary
@@ -314,8 +313,10 @@ fun ScienceLabIntroCard() {
             Spacer(modifier = Modifier.height(10.dp))
 
             Text(
-                text = "• Google Search Grounding: Tra cứu trực tiếp cơ sở dữ liệu mối đe dọa toàn cầu, danh sách CVE và báo cáo theo dõi quyền riêng tư qua gemini-3.5-flash.\n\n" +
-                    "• High Thinking Forensics: Kiểm tra nguy cơ Catastrophic Backtracking của biểu thức chính quy (Regex), tính toán độ trễ bộ nhớ Rust Trie vi giây và tự động tạo quy tắc tiết kiệm pin qua gemini-3.1-pro-preview với thinkingLevel HIGH.",
+                text = "• Đối chiếu tên miền với bộ lọc quảng cáo và tracker đang tải, " +
+                    "đánh giá theo cấu trúc tên miền.\n\n" +
+                    "• Kiểm tra xem quy tắc khớp đến từ danh sách nào, và ước lượng " +
+                    "dữ liệu tiết kiệm được nếu chặn.",
                 fontSize = 12.sp,
                 color = AdGuardTextSecondary,
                 lineHeight = 18.sp
@@ -392,11 +393,10 @@ fun ThreatResultCard(
 
             // Summary Explanation
             Text(
-                text = "ĐÁNH GIÁ KHOA HỌC & TÁC ĐỘNG TIÊU THỤ PIN",
+                text = "Đánh giá",
                 fontSize = 10.sp,
                 fontWeight = FontWeight.Bold,
                 color = AdGuardTextMuted,
-                letterSpacing = 0.5.sp
             )
 
             Spacer(modifier = Modifier.height(6.dp))
@@ -434,11 +434,10 @@ fun ThreatResultCard(
             if (result.suggestedRules.isNotEmpty()) {
                 Spacer(modifier = Modifier.height(14.dp))
                 Text(
-                    text = "QUY TẮC ĐƯỢC TỔNG HỢP (ZERO-OVERHEAD)",
+                    text = "Cách tính điểm",
                     fontSize = 10.sp,
                     fontWeight = FontWeight.Bold,
                     color = AdGuardTextMuted,
-                    letterSpacing = 0.5.sp
                 )
 
                 Spacer(modifier = Modifier.height(6.dp))

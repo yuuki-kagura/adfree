@@ -67,6 +67,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import git.shin.adfree.model.FilterList
@@ -112,14 +113,13 @@ fun FiltersScreen(
             ) {
                 Column {
                     Text(
-                        text = "QUẢN LÝ BỘ LỌC",
-                        fontSize = 18.sp,
-                        fontWeight = FontWeight.Black,
-                        color = AdGuardTextPrimary,
-                        letterSpacing = 1.sp
+                        text = "Bộ lọc",
+                        fontSize = 19.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = AdGuardTextPrimary
                     )
                     Text(
-                        text = "Bộ lọc tích hợp & Nguồn đăng ký online",
+                        text = "Bật hoặc tắt từng danh sách chặn",
                         fontSize = 12.sp,
                         color = AdGuardTextMuted
                     )
@@ -180,7 +180,7 @@ fun FiltersScreen(
                 ) {
                     Column {
                         Text(
-                            text = "TỔNG QUY TẮC ĐANG LỌC",
+                            text = "Quy tắc đang lọc",
                             fontSize = 11.sp,
                             fontWeight = FontWeight.Bold,
                             color = AdGuardTextSecondary
@@ -221,11 +221,10 @@ fun FiltersScreen(
 
             // Subscriptions list
             Text(
-                text = "DANH SÁCH BỘ LỌC HIỆN CÓ",
+                text = "Danh sách bộ lọc",
                 fontSize = 12.sp,
                 fontWeight = FontWeight.Bold,
                 color = AdGuardTextSecondary,
-                letterSpacing = 1.sp
             )
 
             Spacer(modifier = Modifier.height(10.dp))
@@ -355,11 +354,15 @@ fun FilterListCard(
 
                     if (list.isOnlineSubscription && list.subscriptionUrl != null) {
                         Spacer(modifier = Modifier.height(4.dp))
+                        // The source, not a labelled field: a raw URL with an
+                        // "URL:" prefix is debug output, not a setting.
                         Text(
-                            text = "URL: ${list.subscriptionUrl}",
+                            text = list.subscriptionUrl,
                             fontSize = 10.sp,
                             fontFamily = FontFamily.Monospace,
-                            color = AdGuardBlueDns
+                            color = AdGuardBlueDns,
+                            maxLines = 2,
+                            overflow = TextOverflow.Ellipsis
                         )
                     }
                 }
@@ -587,11 +590,10 @@ fun FriendlyCustomRuleEditorSheet(
         ) {
             Column {
                 Text(
-                    text = "SOẠN THẢO QUY TẮC TÙY CHỈNH",
+                    text = "Quy tắc của bạn",
                     fontSize = 16.sp,
                     fontWeight = FontWeight.Black,
                     color = AdGuardTextPrimary,
-                    letterSpacing = 1.sp
                 )
                 Text(
                     text = "${rulesList.size} quy tắc người dùng đang lưu trong bộ nhớ",
