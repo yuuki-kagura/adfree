@@ -277,8 +277,12 @@ fun AdGuardShieldHero(
                     val radius = base + (size.minDimension * 0.055f) * pulseScale
                     drawCircle(color = Color(0x1A00D06C), radius = radius)
                     drawCircle(color = Color(0x2800D06C), radius = radius * 0.88f)
+                }
             }
 
+            // The button itself, always drawn: it used to sit inside the
+            // `isActive` block, so it vanished from the screen whenever the
+            // protection was off and left only the caption behind.
             Box(
                 contentAlignment = Alignment.Center,
                 modifier = Modifier
@@ -309,7 +313,6 @@ fun AdGuardShieldHero(
                     tint = if (isActive) Color.Black else Color(0xFF8B9DAF),
                     modifier = Modifier.size(44.dp)
                 )
-            }
             }
         }
 
