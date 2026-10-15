@@ -120,6 +120,12 @@ class AdGuardVpnService : VpnService() {
         runCatching { builder.addDisallowedApplication(packageName) }
             .onFailure { Log.w(TAG, "cannot exclude own package", it) }
 
+        // adbd runs as the `shell` user. Without this the tunnel swallows its
+        // traffic to the host and every tool loses the device the moment the
+        // VPN goes up — which makes the whole thing impossible to debug.
+        runCatching { builder.addDisallowedApplication(SHELL_PACKAGE) }
+            .onFailure { Log.w(TAG, "cannot exclude the shell package", it) }
+
         // Exclude the apps that must not be filtered (from the real firewall).
         container.repository.excludedPackages()
             .take(MAX_EXCLUDED_PACKAGES)
@@ -227,6 +233,8 @@ class AdGuardVpnService : VpnService() {
         const val ACTION_START_VPN = "com.adfree.START_VPN"
         const val ACTION_STOP_VPN = "com.adfree.STOP_VPN"
         private const val TAG = "AdGuardVpnService"
+        /** adbd's package: kept out of the tunnel so tooling survives. */
+        private const val SHELL_PACKAGE = "com.android.shell"
         private const val NOTIFICATION_CHANNEL_ID = "adfree_status"
         private const val NOTIFICATION_ID = 1001
         private const val TUN_ADDRESS = "10.111.42.1"
