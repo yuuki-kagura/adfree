@@ -86,125 +86,134 @@ fun SettingsScreen(
     val state by viewModel.uiState.collectAsState()
     val scrollState = rememberScrollState()
 
+    // The header lives outside the scrolling column on purpose: it describes
+    // where you are, and should not slide away as soon as the list moves.
     Column(
         modifier = modifier
             .fillMaxSize()
             .background(AdGuardDarkBg)
-            .verticalScroll(scrollState)
-            .padding(horizontal = 16.dp, vertical = 12.dp)
     ) {
-        Text(
-            text = "Cài đặt",
-            fontSize = 19.sp,
-            fontWeight = FontWeight.Bold,
-            color = AdGuardTextPrimary,
-        )
-        Text(
-            text = "Chặn DNS mã hóa, chế độ tàng hình và lọc HTTPS",
-            fontSize = 12.sp,
-            color = AdGuardTextMuted
-        )
-
-        Spacer(modifier = Modifier.height(20.dp))
-
-        SettingsSwitch(
-            icon = Icons.Default.Bolt,
-            title = "Chặn QUIC / UDP 443",
-            subtitle = "Buộc client quay về TCP để engine thấy được hostname",
-            checked = state.settings.blockQuic,
-            onCheckedChange = { viewModel.onIntent(AdGuardIntent.ToggleBlockQuic(it)) }
-        )
-
-        Spacer(modifier = Modifier.height(10.dp))
-
-        SettingsSwitch(
-            icon = Icons.Default.Lock,
-            title = "Chặn DNS mã hóa (DoH/DoT)",
-            subtitle = "Chặn IP của nhà cung cấp encrypted DNS để tránh bypass filter",
-            checked = state.settings.blockDoh,
-            onCheckedChange = { viewModel.onIntent(AdGuardIntent.ToggleBlockDoh(it)) }
-        )
-
-        Spacer(modifier = Modifier.height(10.dp))
-
-        SettingsSwitch(
-            icon = Icons.Default.Visibility,
-            title = "Ghi log cả request hợp lệ",
-            subtitle = "Tắt để tiết kiệm CPU: chỉ ghi lại những gì bị chặn",
-            checked = state.settings.logAllowedRequests,
-            onCheckedChange = { viewModel.onIntent(AdGuardIntent.ToggleLogAllowed(it)) }
-        )
-
-        Spacer(modifier = Modifier.height(10.dp))
-
-        Text(
-            text = "Trả lời khi chặn",
-            fontSize = 12.sp,
-            fontWeight = FontWeight.Bold,
-            color = AdGuardTextSecondary,
-            modifier = Modifier.padding(bottom = 6.dp)
-        )
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            git.shin.adfree.model.DnsBlockMode.entries.forEach { mode ->
-                FilterChip(
-                    selected = state.settings.blockMode == mode,
-                    onClick = { viewModel.onIntent(AdGuardIntent.SetBlockMode(mode)) },
-                    label = { Text(mode.label, fontSize = 11.sp) },
-                    colors = FilterChipDefaults.filterChipColors(
-                        selectedContainerColor = AdGuardGreenPrimary,
-                        selectedLabelColor = Color.Black,
-                    ),
-                )
-            }
+        Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp)) {
+            Text(
+                text = "Cài đặt",
+                fontSize = 19.sp,
+                fontWeight = FontWeight.Bold,
+                color = AdGuardTextPrimary,
+            )
+            Text(
+                text = "Chặn DNS mã hóa, chế độ tàng hình và lọc HTTPS",
+                fontSize = 12.sp,
+                color = AdGuardTextMuted
+            )
         }
 
-        Spacer(modifier = Modifier.height(24.dp))
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .verticalScroll(scrollState)
+                .padding(horizontal = 16.dp)
+        ) {
+        Spacer(modifier = Modifier.height(8.dp))
 
-        HttpsFilterSection(viewModel)
+            SettingsSwitch(
+                icon = Icons.Default.Bolt,
+                title = "Chặn QUIC / UDP 443",
+                subtitle = "Buộc client quay về TCP để engine thấy được hostname",
+                checked = state.settings.blockQuic,
+                onCheckedChange = { viewModel.onIntent(AdGuardIntent.ToggleBlockQuic(it)) }
+            )
 
-        Spacer(modifier = Modifier.height(24.dp))
+            Spacer(modifier = Modifier.height(10.dp))
 
-        Text(
-            text = "Chế độ tàng hình",
-            fontSize = 14.sp,
-            fontWeight = FontWeight.Bold,
-            color = AdGuardTextPrimary
-        )
-        Spacer(modifier = Modifier.height(10.dp))
-        StealthToggleRow(
-            title = "Xoá tham số tracking (utm_*, fbclid)",
-            subtitle = "Chỉ áp dụng khi bật lọc HTTPS",
-            isChecked = state.settings.stripUtmTracking,
-            onCheckedChange = { viewModel.onIntent(AdGuardIntent.UpdateStealth(stripUtm = it)) }
-        )
-        StealthToggleRow(
-            title = "Chặn rò rỉ WebRTC",
-            subtitle = "Ngăn WebRTC leak IP thật",
-            isChecked = state.settings.blockWebRtcLeaks,
-            onCheckedChange = { viewModel.onIntent(AdGuardIntent.UpdateStealth(blockWebRtc = it)) }
-        )
-        StealthToggleRow(
-            title = "Chặn cookie bên thứ ba",
-            subtitle = "Giảm theo dõi chéo giữa các site",
-            isChecked = state.settings.blockThirdPartyCookies,
-            onCheckedChange = { viewModel.onIntent(AdGuardIntent.UpdateStealth(blockCookies = it)) }
-        )
+            SettingsSwitch(
+                icon = Icons.Default.Lock,
+                title = "Chặn DNS mã hóa (DoH/DoT)",
+                subtitle = "Chặn IP của nhà cung cấp encrypted DNS để tránh bypass filter",
+                checked = state.settings.blockDoh,
+                onCheckedChange = { viewModel.onIntent(AdGuardIntent.ToggleBlockDoh(it)) }
+            )
 
-        Spacer(modifier = Modifier.height(24.dp))
+            Spacer(modifier = Modifier.height(10.dp))
 
-        EngineInfoSection(state.stats.filterBuildMs)
+            SettingsSwitch(
+                icon = Icons.Default.Visibility,
+                title = "Ghi log cả request hợp lệ",
+                subtitle = "Tắt để tiết kiệm CPU: chỉ ghi lại những gì bị chặn",
+                checked = state.settings.logAllowedRequests,
+                onCheckedChange = { viewModel.onIntent(AdGuardIntent.ToggleLogAllowed(it)) }
+            )
 
-        Spacer(modifier = Modifier.height(24.dp))
+            Spacer(modifier = Modifier.height(10.dp))
 
-        // A diagnostic screen rather than a daily tab: reachable from here.
-        SettingsLink(
-            icon = Icons.Default.Science,
-            title = "Phòng thí nghiệm bảo mật",
-            subtitle = "Quét một tên miền qua engine để xem luồng phân tích",
-            onClick = { viewModel.onIntent(AdGuardIntent.SelectTab(AdGuardTab.AI_LAB)) }
-        )
+            Text(
+                text = "Trả lời khi chặn",
+                fontSize = 12.sp,
+                fontWeight = FontWeight.Bold,
+                color = AdGuardTextSecondary,
+                modifier = Modifier.padding(bottom = 6.dp)
+            )
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                git.shin.adfree.model.DnsBlockMode.entries.forEach { mode ->
+                    FilterChip(
+                        selected = state.settings.blockMode == mode,
+                        onClick = { viewModel.onIntent(AdGuardIntent.SetBlockMode(mode)) },
+                        label = { Text(mode.label, fontSize = 11.sp) },
+                        colors = FilterChipDefaults.filterChipColors(
+                            selectedContainerColor = AdGuardGreenPrimary,
+                            selectedLabelColor = Color.Black,
+                        ),
+                    )
+                }
+            }
 
-        Spacer(modifier = Modifier.height(72.dp))
+            Spacer(modifier = Modifier.height(24.dp))
+
+            HttpsFilterSection(viewModel)
+
+            Spacer(modifier = Modifier.height(24.dp))
+
+            Text(
+                text = "Chế độ tàng hình",
+                fontSize = 14.sp,
+                fontWeight = FontWeight.Bold,
+                color = AdGuardTextPrimary
+            )
+            Spacer(modifier = Modifier.height(10.dp))
+            StealthToggleRow(
+                title = "Xoá tham số tracking (utm_*, fbclid)",
+                subtitle = "Chỉ áp dụng khi bật lọc HTTPS",
+                isChecked = state.settings.stripUtmTracking,
+                onCheckedChange = { viewModel.onIntent(AdGuardIntent.UpdateStealth(stripUtm = it)) }
+            )
+            StealthToggleRow(
+                title = "Chặn rò rỉ WebRTC",
+                subtitle = "Ngăn WebRTC leak IP thật",
+                isChecked = state.settings.blockWebRtcLeaks,
+                onCheckedChange = { viewModel.onIntent(AdGuardIntent.UpdateStealth(blockWebRtc = it)) }
+            )
+            StealthToggleRow(
+                title = "Chặn cookie bên thứ ba",
+                subtitle = "Giảm theo dõi chéo giữa các site",
+                isChecked = state.settings.blockThirdPartyCookies,
+                onCheckedChange = { viewModel.onIntent(AdGuardIntent.UpdateStealth(blockCookies = it)) }
+            )
+
+            Spacer(modifier = Modifier.height(24.dp))
+
+            EngineInfoSection(state.stats.filterBuildMs)
+
+            Spacer(modifier = Modifier.height(24.dp))
+
+            // A diagnostic screen rather than a daily tab: reachable from here.
+            SettingsLink(
+                icon = Icons.Default.Science,
+                title = "Phòng thí nghiệm bảo mật",
+                subtitle = "Quét một tên miền qua engine để xem luồng phân tích",
+                onClick = { viewModel.onIntent(AdGuardIntent.SelectTab(AdGuardTab.AI_LAB)) }
+            )
+
+            Spacer(modifier = Modifier.height(72.dp))
+    }
     }
 }
 

@@ -1,7 +1,11 @@
 package git.shin.adfree.ui.screens
 
+import android.graphics.Bitmap
+import android.graphics.drawable.BitmapDrawable
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -15,9 +19,9 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Apps
@@ -51,12 +55,16 @@ import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
@@ -151,8 +159,16 @@ fun AppsManagementScreen(
         Spacer(modifier = Modifier.height(10.dp))
 
         // Quick Category Filter Chips
-        LazyRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-            items(categories) { cat ->
+        // A plain scrolling Row, not a LazyRow: the row sits beside a vertical
+        // LazyColumn, and a lazy row nested like this refuses to scroll, so the
+        // last chips simply stay cut off at the screen edge.
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .horizontalScroll(rememberScrollState()),
+            horizontalArrangement = Arrangement.spacedBy(6.dp)
+        ) {
+            categories.forEach { cat ->
                 val isSelected = (state.appCategoryFilter == null && cat == "Tất cả") || (state.appCategoryFilter == cat)
                 FilterChip(
                     selected = isSelected,
@@ -290,6 +306,8 @@ fun AppFirewallCard(
                 modifier = Modifier.weight(1f),
                 verticalAlignment = Alignment.CenterVertically
             ) {
+                // The real launcher icon: a generic glyph tells the user nothing
+                // about which app they are looking at.
                 Box(
                     modifier = Modifier
                         .size(42.dp)
@@ -297,12 +315,21 @@ fun AppFirewallCard(
                         .background(AdGuardDarkSurfaceVariant),
                     contentAlignment = Alignment.Center
                 ) {
-                    Icon(
-                        imageVector = Icons.Default.Apps,
-                        contentDescription = null,
-                        tint = if (app.isFilterRouted) AdGuardGreenPrimary else AdGuardOrangeWarning,
-                        modifier = Modifier.size(22.dp)
-                    )
+                    val icon = rememberAppIcon(app.packageName)
+                    if (icon != null) {
+                        Image(
+                            bitmap = icon,
+                            contentDescription = null,
+                            modifier = Modifier.size(32.dp)
+                        )
+                    } else {
+                        Icon(
+                            imageVector = Icons.Default.Apps,
+                            contentDescription = null,
+                            tint = if (app.isFilterRouted) AdGuardGreenPrimary else AdGuardOrangeWarning,
+                            modifier = Modifier.size(22.dp)
+                        )
+                    }
                 }
 
                 Spacer(modifier = Modifier.width(12.dp))
@@ -341,9 +368,9 @@ fun AppFirewallCard(
 
             // Fast Actions (Logs, Cellular, Wifi, Filtered)
             Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                IconButton(
-                    onClick = onViewLogs,
+                Box(
                     modifier = Modifier
+                        .clickable { onViewLogs }
                         .size(34.dp)
                         .clip(RoundedCornerShape(8.dp))
                         .background(AdGuardDarkSurfaceVariant)
@@ -352,14 +379,14 @@ fun AppFirewallCard(
                     Icon(
                         imageVector = Icons.Default.FilterList,
                         contentDescription = "Xem nhật ký của ${app.appName}",
-                        tint = AdGuardBlueDns,
+                        tint = AdGuardGreenLight,
                         modifier = Modifier.size(16.dp)
                     )
                 }
 
-                IconButton(
-                    onClick = onToggleCellular,
+                Box(
                     modifier = Modifier
+                    .clickable { onToggleCellular }
                         .size(34.dp)
                         .clip(RoundedCornerShape(8.dp))
                         .background(if (app.isCellularAllowed) Color(0x2200D06C) else Color(0x22FF435A))
@@ -372,9 +399,9 @@ fun AppFirewallCard(
                     )
                 }
 
-                IconButton(
-                    onClick = onToggleWifi,
+                Box(
                     modifier = Modifier
+                    .clickable { onToggleWifi }
                         .size(34.dp)
                         .clip(RoundedCornerShape(8.dp))
                         .background(if (app.isWifiAllowed) Color(0x2200D06C) else Color(0x22FF435A))
@@ -387,9 +414,9 @@ fun AppFirewallCard(
                     )
                 }
 
-                IconButton(
-                    onClick = onToggleFiltered,
+                Box(
                     modifier = Modifier
+                    .clickable { onToggleFiltered }
                         .size(34.dp)
                         .clip(RoundedCornerShape(8.dp))
                         .background(if (app.isFilterRouted) Color(0x2200D06C) else Color(0x22FF9800))
@@ -403,6 +430,35 @@ fun AppFirewallCard(
                 }
             }
         }
+    }
+}
+
+/**
+ * Loads the launcher icon of [packageName], or null when it cannot be read.
+ *
+ * Icons are drawn once per row and cached by `remember`: the PackageManager has
+ * to decode a bitmap, which is far too slow to do on every recomposition of a
+ * list of apps.
+ */
+@Composable
+private fun rememberAppIcon(packageName: String): ImageBitmap? {
+    val context = LocalContext.current
+    return remember(packageName) {
+        runCatching {
+            val drawable = context.packageManager.getApplicationIcon(packageName)
+            val bitmap = (drawable as? BitmapDrawable)?.bitmap
+                ?: Bitmap.createBitmap(
+                    drawable.intrinsicWidth.coerceAtLeast(1),
+                    drawable.intrinsicHeight.coerceAtLeast(1),
+                    Bitmap.Config.ARGB_8888,
+                ).also { bmp ->
+                    android.graphics.Canvas(bmp).let { canvas ->
+                        drawable.setBounds(0, 0, canvas.width, canvas.height)
+                        drawable.draw(canvas)
+                    }
+                }
+            bitmap.asImageBitmap()
+        }.getOrNull()
     }
 }
 

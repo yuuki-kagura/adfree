@@ -2,6 +2,8 @@ package git.shin.adfree.ui.screens
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -106,43 +108,43 @@ fun FiltersScreen(
                 .padding(horizontal = 16.dp, vertical = 12.dp)
         ) {
             // Header
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Column {
-                    Text(
-                        text = "Bộ lọc",
-                        fontSize = 19.sp,
-                        fontWeight = FontWeight.Bold,
-                        color = AdGuardTextPrimary
-                    )
-                    Text(
-                        text = "Bật hoặc tắt từng danh sách chặn",
-                        fontSize = 12.sp,
-                        color = AdGuardTextMuted
-                    )
-                }
+            Column(modifier = Modifier.fillMaxWidth()) {
+                Text(
+                    text = "Bộ lọc",
+                    fontSize = 19.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = AdGuardTextPrimary
+                )
+                Text(
+                    text = "Bật hoặc tắt từng danh sách chặn",
+                    fontSize = 12.sp,
+                    color = AdGuardTextMuted
+                )
 
+                Spacer(modifier = Modifier.height(10.dp))
+
+                // Actions on their own row: two labelled buttons never fit next
+                // to the title on a narrow screen, and the update button then
+                // gets squeezed until its height collapses.
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    // Button Add Online Filter
-                    Button(
+                    OutlinedButton(
                         onClick = { viewModel.onIntent(AdGuardIntent.ShowOnlineSubDialog(true)) },
-                        colors = ButtonDefaults.buttonColors(containerColor = AdGuardBlueDns),
                         shape = RoundedCornerShape(10.dp),
+                        border = BorderStroke(1.dp, AdGuardDarkOutline),
+                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
                         modifier = Modifier.testTag("add_online_filter_btn")
                     ) {
-                        Icon(Icons.Default.Public, contentDescription = null, tint = Color.Black, modifier = Modifier.size(16.dp))
-                        Spacer(modifier = Modifier.width(4.dp))
-                        Text("+ Nguồn Online", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = Color.Black)
+                        Icon(Icons.Default.Public, contentDescription = null, tint = AdGuardBlueDns, modifier = Modifier.size(16.dp))
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text("Nguồn online", fontSize = 12.sp, fontWeight = FontWeight.Bold, color = AdGuardTextPrimary)
                     }
 
-                    // Button Update All
-                    Button(
+                    OutlinedButton(
                         onClick = { viewModel.onIntent(AdGuardIntent.RefreshAllSubscriptions) },
-                        colors = ButtonDefaults.buttonColors(containerColor = AdGuardDarkSurfaceVariant),
-                        shape = RoundedCornerShape(10.dp)
+                        enabled = state.loadingMessage == null,
+                        shape = RoundedCornerShape(10.dp),
+                        border = BorderStroke(1.dp, AdGuardDarkOutline),
+                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp)
                     ) {
                         Icon(
                             imageVector = Icons.Default.Sync,
@@ -150,10 +152,12 @@ fun FiltersScreen(
                             tint = AdGuardGreenLight,
                             modifier = Modifier.size(16.dp)
                         )
-                        Spacer(modifier = Modifier.width(4.dp))
+                        Spacer(modifier = Modifier.width(6.dp))
+                        // Never print the progress text here: a long message is
+                        // what used to stretch this button out of its bounds.
                         Text(
-                            text = state.loadingMessage?.take(18) ?: "Cập nhật",
-                            fontSize = 11.sp,
+                            text = if (state.loadingMessage == null) "Cập nhật" else "Đang tải…",
+                            fontSize = 12.sp,
                             fontWeight = FontWeight.Bold,
                             color = AdGuardGreenLight
                         )

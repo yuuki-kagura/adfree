@@ -88,15 +88,17 @@ fun SecurityLabScreen(
         "pixel.facebook.com"
     )
 
+    // The header stays outside the scroll: it says where you are, it should not
+    // slide away the moment the content moves.
     Column(
         modifier = modifier
             .fillMaxSize()
             .background(AdGuardDarkBg)
-            .verticalScroll(scrollState)
-            .padding(horizontal = 16.dp, vertical = 12.dp)
     ) {
-        // Title
-        Row(verticalAlignment = Alignment.CenterVertically) {
+        Row(
+            modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
             Icon(
                 imageVector = Icons.Default.Science,
                 contentDescription = null,
@@ -119,41 +121,48 @@ fun SecurityLabScreen(
             }
         }
 
-        Spacer(modifier = Modifier.height(16.dp))
-
-        // Engine explanation: everything runs on device.
-        Card(
-            modifier = Modifier.fillMaxWidth(),
-            shape = RoundedCornerShape(12.dp),
-            colors = CardDefaults.cardColors(containerColor = AdGuardDarkSurface),
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .verticalScroll(scrollState)
+                .padding(horizontal = 16.dp)
         ) {
-            Row(
-                modifier = Modifier.padding(14.dp),
-                verticalAlignment = Alignment.CenterVertically,
+
+            Spacer(modifier = Modifier.height(16.dp))
+
+            // Engine explanation: everything runs on device.
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(12.dp),
+                colors = CardDefaults.cardColors(containerColor = AdGuardDarkSurface),
             ) {
-                Icon(
-                    imageVector = Icons.Default.Memory,
-                    contentDescription = null,
-                    tint = AdGuardGreenLight,
-                    modifier = Modifier.size(18.dp),
-                )
-                Spacer(modifier = Modifier.width(8.dp))
-                Column {
-                    Text(
-                        text = "Quét ngay trên thiết bị, không gửi đi đâu",
-                        fontSize = 12.sp,
-                        fontWeight = FontWeight.Bold,
-                        color = AdGuardTextPrimary,
+                Row(
+                    modifier = Modifier.padding(14.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Memory,
+                        contentDescription = null,
+                        tint = AdGuardGreenLight,
+                        modifier = Modifier.size(18.dp),
                     )
-                    Text(
-                        text = "Chấm điểm từ cấu trúc tên miền và các quy tắc đang tải. " +
-                            "Không cần mạng.",
-                        fontSize = 10.sp,
-                        color = AdGuardTextMuted,
-                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Column {
+                        Text(
+                            text = "Quét ngay trên thiết bị, không gửi đi đâu",
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = AdGuardTextPrimary,
+                        )
+                        Text(
+                            text = "Chấm điểm từ cấu trúc tên miền và các quy tắc đang tải. " +
+                                "Không cần mạng.",
+                            fontSize = 10.sp,
+                            color = AdGuardTextMuted,
+                        )
+                    }
                 }
             }
-        }
 
         // Input Box & Scan Button
         OutlinedTextField(
@@ -288,6 +297,7 @@ fun SecurityLabScreen(
 
         Spacer(modifier = Modifier.height(24.dp))
     }
+}
 }
 
 @Composable

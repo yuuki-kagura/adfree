@@ -268,12 +268,15 @@ fun AdGuardShieldHero(
                 .clickable { onToggle() }
                 .testTag("shield_power_toggle")
         ) {
+            // The rings are drawn well inside the box: the older version scaled
+            // them past the box edge, and everything outside was simply clipped
+            // away by the layout bounds.
             if (isActive) {
                 Canvas(modifier = Modifier.fillMaxSize()) {
-                    val radius = (size.minDimension / 2f) * pulseScale
+                    val base = size.minDimension * 0.40f
+                    val radius = base + (size.minDimension * 0.055f) * pulseScale
                     drawCircle(color = Color(0x1A00D06C), radius = radius)
                     drawCircle(color = Color(0x2800D06C), radius = radius * 0.88f)
-                }
             }
 
             Box(
@@ -306,6 +309,7 @@ fun AdGuardShieldHero(
                     tint = if (isActive) Color.Black else Color(0xFF8B9DAF),
                     modifier = Modifier.size(44.dp)
                 )
+            }
             }
         }
 
