@@ -38,17 +38,20 @@ use crate::util::{now_ms, now_ns};
 use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
 use std::os::unix::io::RawFd;
 use std::sync::atomic::{AtomicBool, AtomicI32, AtomicU64, Ordering};
-use std::sync::{Arc, Condvar, Mutex, OnceLock, RwLock};
+use std::sync::{Arc, Mutex, OnceLock, RwLock};
 
 /// Read size for the TUN descriptor.
 const TUN_BUF_BYTES: usize = 64 * 1024;
-/// How long a single poll waits before re-checking the shutdown flag.
+/// How long the tun loop waits before re-checking the shutdown flag. Short
+/// because nothing wakes it but a packet or the timeout.
 const POLL_TIMEOUT_MS: i32 = 250;
 
-/// How long the DNS forwarder waits for work when nothing is in flight. It
-/// sleeps on a condvar with the upstream lock *released*, so a UI thread
-/// changing the resolver is never made to wait for this.
-const DNS_IDLE_MS: std::time::Duration = std::time::Duration::from_millis(250);
+/// Upper bound on the forwarder's wait between events.
+///
+/// Real work ends the wait through a descriptor (the wake eventfd, a DNS
+/// socket, a flow socket); this timeout only paces reaping and idle expiry,
+/// so it can be generous without costing latency.
+const FORWARD_WAIT_MS: i32 = 1_000;
 
 /// Rough upstream cost of one blocked request; only used for the "data saved"
 /// figure shown in the UI.
@@ -165,9 +168,12 @@ pub struct Core {
     lists: RwLock<Vec<FilterListInfo>>,
     user_rules: RwLock<Vec<String>>,
     upstream: Mutex<Upstream>,
-    /// Signalled when a query is queued, so the forwarder can wait without
-    /// holding `upstream` for the whole wait.
-    dns_wake: Condvar,
+    /// Eventfd the forwarder sleeps on. Anything that changes what the loop
+    /// must look at writes it — a queued DNS query, a new flow, bytes stuck
+    /// in a peer socket, `stop()` — so a long wait never delays real work.
+    /// A negative value means creation failed and the loop runs on its
+    /// timeout cadence instead.
+    wake_fd: RawFd,
     conntrack: Mutex<ConnTable>,
     doh_ips: RwLock<CidrSet>,
     stats: Stats,
@@ -221,7 +227,7 @@ impl Core {
             lists: RwLock::new(Vec::new()),
             user_rules: RwLock::new(Vec::new()),
             upstream: Mutex::new(Upstream::new(resolver)),
-            dns_wake: Condvar::new(),
+            wake_fd: unsafe { libc::eventfd(0, libc::EFD_CLOEXEC | libc::EFD_NONBLOCK) },
             conntrack: Mutex::new(ConnTable::new()),
             doh_ips: RwLock::new(default_doh_cidrs()),
             stats: Stats::new(),
@@ -432,6 +438,45 @@ impl Core {
     pub fn stop(&self) {
         self.running.store(false, Ordering::SeqCst);
         self.tun_fd.store(-1, Ordering::SeqCst);
+        // The forwarder may be halfway through its one-second wait; without
+        // this it would only notice the stop on the next timeout.
+        self.wake();
+    }
+
+    /// Asks the forwarder to take a pass now.
+    ///
+    /// One 8-byte counter write on the eventfd. Ignored when creation failed:
+    /// the loop's timeout cadence still services everything, just later.
+    fn wake(&self) {
+        if self.wake_fd < 0 {
+            return;
+        }
+        let one: u64 = 1;
+        unsafe {
+            libc::write(
+                self.wake_fd,
+                &one as *const u64 as *const libc::c_void,
+                std::mem::size_of::<u64>(),
+            );
+        }
+    }
+
+    /// Resets the wake counter after a wait.
+    ///
+    /// An eventfd stays readable while its counter is positive: without this
+    /// every later poll would return immediately.
+    fn drain_wake(&self) {
+        if self.wake_fd < 0 {
+            return;
+        }
+        let mut buf = [0u8; 8];
+        unsafe {
+            libc::read(
+                self.wake_fd,
+                buf.as_mut_ptr() as *mut libc::c_void,
+                buf.len(),
+            );
+        }
     }
 
     pub fn is_running(&self) -> bool {
@@ -562,6 +607,9 @@ impl Core {
             template: pkt.raw[..pkt.total_len.min(pkt.raw.len())].to_vec(),
             last_ms: now_ms(),
         });
+        // The reply can only arrive on this descriptor, so the forwarder must
+        // start watching it now rather than at its next cadence tick.
+        self.wake();
     }
 
     /// Fire-and-forget datagram send: UDP has no retransmission, and a packet
@@ -815,6 +863,10 @@ impl Core {
             }
             guard.insert(relay);
         }
+        // The peer descriptor has to join the wait set before the server can
+        // possibly answer: waking here is what makes a long forwarder wait
+        // safe, including for a connect() that finishes after the poll began.
+        self.wake();
         out.push(syn_ack);
         self.stats.inc(&self.stats.tcp_relayed);
         true
@@ -894,6 +946,18 @@ impl Core {
             return;
         }
         self.flush_peer(client_port);
+        // Bytes the socket refused stay queued; the forwarder has to rebuild
+        // its wait set with POLLOUT on this relay, and the wake makes it do
+        // that now instead of after the long timeout.
+        let still_queued = self
+            .relays
+            .lock()
+            .unwrap()
+            .get(client_port)
+            .is_some_and(|relay| !relay.pending_to_peer.is_empty());
+        if still_queued {
+            self.wake();
+        }
     }
 
     /// Drains a relay's queued client bytes towards its peer socket.
@@ -1123,10 +1187,9 @@ impl Core {
             }
         } else {
             self.stats.inc(&self.stats.packets_forwarded);
-            // Wake the forwarder so the answer is picked up at once instead of
-            // after its idle wait. The lock is already dropped, so the forwarder
-            // can act on the signal immediately.
-            self.dns_wake.notify_all();
+            // Wake the forwarder so the answer is picked up the moment it
+            // lands instead of after its idle wait.
+            self.wake();
         }
     }
 
@@ -1364,14 +1427,96 @@ impl Core {
         *self.mitm_resolver.write().unwrap() = None;
     }
 
-    /// True when no flow descriptor (TCP relay or UDP mapping) needs the
-    /// forwarder's attention, so it may sleep on the DNS condition variable.
-    fn flows_idle(&self) -> bool {
-        self.relays.lock().unwrap().is_empty() && self.udp_nat.lock().unwrap().is_empty()
-    }
-
     pub fn resolver_addr(&self) -> SocketAddr {
         *self.resolver.read().unwrap()
+    }
+
+    /// Sleeps until a descriptor is ready or the cadence ticks.
+    ///
+    /// One `poll()` covers the wake eventfd, the upstream DNS sockets and
+    /// every relay and UDP descriptor the engine owns: the loop blocks here
+    /// between bursts of real work instead of circulating on a short timeout.
+    /// Readiness is dispatched before returning, which is also what keeps
+    /// every descriptor owned by this thread.
+    fn wait_for_events(&self, timeout_ms: libc::c_int) {
+        let relays = self.relays.lock().unwrap().poll_snapshot();
+        let udp = self.udp_nat.lock().unwrap().poll_snapshot();
+        // Copy the DNS descriptors out and drop the lock before waiting: a UI
+        // thread inside `set_resolver` must not sit on the upstream mutex for
+        // a whole timeout interval.
+        let dns: Vec<RawFd> = self
+            .upstream
+            .lock()
+            .unwrap()
+            .socket_fds()
+            .iter()
+            .copied()
+            .filter(|fd| *fd > 0)
+            .collect();
+
+        let mut fds: Vec<libc::pollfd> =
+            Vec::with_capacity(1 + dns.len() + relays.len() + udp.len());
+        let wake_index = if self.wake_fd >= 0 {
+            let index = fds.len();
+            fds.push(libc::pollfd {
+                fd: self.wake_fd,
+                events: libc::POLLIN,
+                revents: 0,
+            });
+            Some(index)
+        } else {
+            None
+        };
+        fds.extend(dns.iter().map(|fd| libc::pollfd {
+            fd: *fd,
+            events: libc::POLLIN,
+            revents: 0,
+        }));
+        let flows_start = fds.len();
+        fds.extend(
+            relays
+                .iter()
+                .map(|(_, fd, connecting, want_write)| libc::pollfd {
+                    fd: *fd,
+                    events: libc::POLLIN
+                        | if *connecting || *want_write {
+                            libc::POLLOUT
+                        } else {
+                            0
+                        },
+                    revents: 0,
+                }),
+        );
+        fds.extend(udp.iter().map(|(_, fd)| libc::pollfd {
+            fd: *fd,
+            events: libc::POLLIN,
+            revents: 0,
+        }));
+
+        let n = unsafe { libc::poll(fds.as_mut_ptr(), fds.len() as libc::nfds_t, timeout_ms) };
+        if let Some(index) = wake_index {
+            // Drain on readiness only: a counter left behind by a racing wake
+            // simply makes the next wait return at once, which costs one pass
+            // and is always safe.
+            if fds[index].revents != 0 {
+                self.drain_wake();
+            }
+        }
+        if n <= 0 {
+            return;
+        }
+        for (i, p) in fds.iter().enumerate().skip(flows_start) {
+            if p.revents == 0 {
+                continue;
+            }
+            let index = i - flows_start;
+            if index < relays.len() {
+                self.handle_relay_ready(relays[index], p.revents);
+            } else {
+                let flow = udp[index - relays.len()];
+                self.handle_udp_reply(flow.0, flow.1);
+            }
+        }
     }
 
 
@@ -1429,42 +1574,37 @@ fn tun_loop(core: &'static Core, fd: RawFd) {
 }
 
 /// Waits for upstream answers and writes them back through the tunnel.
+///
+/// Passes are paced by descriptors, not by the clock: the loop blocks in
+/// [`Core::wait_for_events`] until a wake, a DNS socket or a flow socket is
+/// ready, then services everything that is due. A one-second timeout still
+/// ticks when nothing at all is live, which is what retires idle relays and
+/// NAT mappings.
 fn forwarder_loop(core: &'static Core) {
     let mut replies: Vec<crate::upstream::Reply> = Vec::with_capacity(32);
     while core.is_running() {
         replies.clear();
         let now = now_ms();
+
+        // Answers that are already on the wire. The DNS sockets are part of
+        // the wait set below, so a reply ends the wait and is read here right
+        // after it lands.
         {
             let mut upstream = core.upstream.lock().unwrap();
-            if upstream.pending_len() == 0 {
-                // Waiting here rather than inside `poll` matters: the lock is
-                // released while we wait, so a UI thread calling `set_resolver`
-                // is not blocked for a whole second. Flow descriptors have to
-                // be serviced on every pass though, so the long wait only
-                // happens when there is nothing else to poll - otherwise a
-                // game's reply would sit unread for a quarter of a second.
-                if core.flows_idle() {
-                    let (guard, _) = core
-                        .dns_wake
-                        .wait_timeout(upstream, DNS_IDLE_MS)
-                        .unwrap_or_else(|e| e.into_inner());
-                    upstream = guard;
-                }
-            }
-            // Never block for long here: 100ms is enough to catch an answer that
-            // is already on the wire, and the loop comes back immediately after.
-            let timeout = if upstream.pending_len() == 0 { 0 } else { 100 };
-            upstream.poll(&mut replies, timeout);
+            upstream.poll(&mut replies, 0);
             upstream.expire(now);
         }
         for reply in &replies {
             core.handle_reply(reply);
         }
 
-        // Relayed connections: whatever the real server answered has to be
-        // spliced back to the client, and finished relays are reaped here so
-        // their descriptors are only ever closed on this thread.
-        core.poll_flows();
+        // The single blocking point of the loop.
+        core.wait_for_events(FORWARD_WAIT_MS);
+
+        // Relayed connections: whatever the real server answered has been
+        // spliced back to the client by the wait itself, and finished relays
+        // are reaped here so their descriptors are only ever closed on this
+        // thread.
         core.prune_relays();
         // Idle NAT mappings are retired here too, for the same reason.
         core.udp_nat.lock().unwrap().expire(now);
@@ -1490,49 +1630,10 @@ fn forwarder_loop(core: &'static Core) {
 /// connections are open, which matters for battery when a page opens dozens of
 /// them. TCP peers whose `connect()` has not finished yet also ask for
 /// `POLLOUT` (how their completion or failure is noticed), as do peers whose
-/// queued client bytes could not be sent yet.
+/// queued client bytes could not be sent yet. The wait set now lives in
+/// [`Core::wait_for_events`], which also covers the wake eventfd and the DNS
+/// sockets.
 impl Core {
-    fn poll_flows(&self) {
-        let relays = self.relays.lock().unwrap().poll_snapshot();
-        let udp = self.udp_nat.lock().unwrap().poll_snapshot();
-        if relays.is_empty() && udp.is_empty() {
-            return;
-        }
-        let mut fds: Vec<libc::pollfd> = relays
-            .iter()
-            .map(|(_, fd, connecting, want_write)| libc::pollfd {
-                fd: *fd,
-                events: libc::POLLIN
-                    | if *connecting || *want_write { libc::POLLOUT } else { 0 },
-                revents: 0,
-            })
-            .collect();
-        fds.extend(udp.iter().map(|(_, fd)| libc::pollfd {
-            fd: *fd,
-            events: libc::POLLIN,
-            revents: 0,
-        }));
-        let n = unsafe {
-            libc::poll(
-                fds.as_mut_ptr(),
-                fds.len() as libc::nfds_t,
-                50,
-            )
-        };
-        if n <= 0 {
-            return;
-        }
-        for (i, p) in fds.iter().enumerate() {
-            if p.revents == 0 {
-                continue;
-            }
-            if i < relays.len() {
-                self.handle_relay_ready(relays[i], p.revents);
-            } else {
-                self.handle_udp_reply(udp[i - relays.len()].0, udp[i - relays.len()].1);
-            }
-        }
-    }
 
     /// One relay's peer socket became readable (or writable again).
     fn handle_relay_ready(&self, peer: (u16, RawFd, bool, bool), revents: libc::c_short) {

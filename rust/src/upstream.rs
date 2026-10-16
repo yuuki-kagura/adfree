@@ -67,6 +67,13 @@ impl Upstream {
         }
     }
 
+    /// Pool descriptors, for the forwarder's combined wait.
+    ///
+    /// Slots that hold no socket are reported as `-1`; `poll` ignores those.
+    pub fn socket_fds(&self) -> &[RawFd] {
+        &self.fds
+    }
+
     pub fn is_ready(&self) -> bool {
         self.fds.iter().any(|fd| *fd > 0)
     }
