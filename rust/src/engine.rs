@@ -9,14 +9,20 @@
 //!                              │             └► forward upstream (protected socket)
 //!                              ├─ UDP:443  ─► QUIC drop
 //!                              ├─ UDP:853  ─► DoT drop
-//!                              ├─ TCP      ─► conntrack / DoH check ─► RST
+//!                              ├─ TCP      ─► blocked? ─► RST
+//!                              │             └► new SYN ─► relay table
+//!                              │                (443 with filtering armed ─► TLS term)
 //!                              └─ UDP      ─► conntrack check ─► drop
 //!   dns-thread   poll(upstream sockets) ─► rewrite answer ─► learn IPs ─► TUN
+//!                poll(peer sockets)     ─► splice back ─► TUN
+//!                                          └► reap finished relays
 //! ```
 //!
 //! Two threads total, each blocked in a `poll` most of the time: that is why a
 //! DNS level filter costs a fraction of a percent of battery. Nothing is
-//! allocated on the packet path but the (rare) synthetic DNS answer.
+//! allocated on the packet path but the (rare) synthetic DNS answer. Relays are
+//! added from the tun-thread but only reaped on the dns-thread (which also
+//! polls their descriptors), so a peer socket is never closed under `poll()`.
 
 use crate::conntrack::{CidrSet, ConnTable, IpVerdict};
 use crate::dns::{self, BlockMode, Query};
@@ -46,6 +52,10 @@ const DNS_IDLE_MS: std::time::Duration = std::time::Duration::from_millis(250);
 /// Rough upstream cost of one blocked request; only used for the "data saved"
 /// figure shown in the UI.
 const BYTES_PER_BLOCKED_REQUEST: u64 = 48 * 1024;
+
+/// Client bytes a relay may buffer while its peer socket is full; beyond this
+/// the flow counts as stuck and is reset rather than buffering forever.
+const MAX_PENDING_TO_PEER: usize = 4 * 1024 * 1024;
 
 /// Built-in list of well known encrypted DNS providers. Blocking these is the
 /// only way to stop apps from silently bypassing the filter.
@@ -178,8 +188,8 @@ pub struct Core {
     pub mitm_resolver: RwLock<Option<Arc<crate::mitm::tls::SniCertResolver>>>,
     /// Live intercepted connections.
     relays: Mutex<crate::mitm::relay::RelayTable>,
-    /// Protected, unconnected TCP sockets the relays use towards the server.
-    peer_sockets: Mutex<Vec<RawFd>>,
+    /// App callback that routes engine-created sockets around the VPN.
+    socket_protector: Mutex<Option<Arc<dyn crate::api::SocketProtector>>>,
 }
 
 static CORE: OnceLock<Core> = OnceLock::new();
@@ -224,7 +234,7 @@ impl Core {
             mitm_scripts: RwLock::new(crate::mitm::script::ScriptSet::new()),
             mitm_resolver: RwLock::new(None),
             relays: Mutex::new(crate::mitm::relay::RelayTable::new()),
-            peer_sockets: Mutex::new(Vec::new()),
+            socket_protector: Mutex::new(None),
         }
     }
 
@@ -429,32 +439,50 @@ impl Core {
             if self.udp_blocked(&pkt, &cfg) {
                 self.stats.inc(&self.stats.udp_dropped);
             }
-        } else if pkt.proto == PROTO_TCP
-            && !self.relay_tcp(&pkt, &cfg, &mut out)
-            && self.tcp_blocked(&pkt, &cfg)
-        {
-            self.reset_tcp(&pkt);
+        } else if pkt.proto == PROTO_TCP {
+            self.handle_tcp(&pkt, &cfg, &mut out);
         }
         out
     }
 
-    /// Handles one TCP packet, terminating the connection ourselves when MITM is
-    /// armed. Returns true when the packet was consumed by a relay.
-    fn relay_tcp(&self, pkt: &Packet<'_>, cfg: &Config, out: &mut Vec<Vec<u8>>) -> bool {
-        if !cfg.mitm_enabled {
-            return false;
+    /// TCP is terminated locally: the client talks to us and we talk to the
+    /// real server, so every flow stays visible (and filterable).
+    ///
+    /// Blocked verdicts win over relaying; a new SYN starts a relay; anything
+    /// else that belongs to no relay is unrouteable here and fails fast.
+    fn handle_tcp(&self, pkt: &Packet<'_>, cfg: &Config, out: &mut Vec<Vec<u8>>) {
+        if self.relay_tcp(pkt, out) {
+            return;
         }
+        if self.tcp_blocked(pkt, cfg) {
+            self.reset_tcp(pkt);
+            return;
+        }
+        if pkt.is_syn {
+            if !self.start_tcp_relay(pkt, cfg, out) {
+                // No descriptor or no route: fail the client now instead of
+                // leaving it to a connect timeout.
+                self.reset_tcp(pkt);
+            }
+        } else if !pkt.is_rst && !pkt.l4_payload().is_empty() {
+            // Data for a flow that predates protection, or whose relay already
+            // died: nothing can carry it, so cut it.
+            self.reset_tcp(pkt);
+        }
+    }
+
+    /// Feeds a packet to its relay, if one owns the flow.
+    ///
+    /// Returns true when the packet was consumed; false means there is no
+    /// relay for this flow and the caller decides what happens next.
+    fn relay_tcp(&self, pkt: &Packet<'_>, out: &mut Vec<Vec<u8>>) -> bool {
         let port = pkt.src_port;
         if pkt.is_syn {
-            // A new flow: take a peer socket and answer the SYN ourselves.
-            if !crate::mitm::relay::is_mitm_port(pkt.dst_port) {
-                return false;
-            }
             // A retransmitted SYN for a live relay: answer again without
             // disturbing the flow (the first answer may have been lost).
             let existing = {
                 let guard = self.relays.lock().unwrap();
-                guard.get(port).map(|relay| {
+                guard.get(port).filter(|r| !r.closed).map(|relay| {
                     (
                         relay.syn_packet.clone(),
                         relay.flow.my_seq,
@@ -462,66 +490,117 @@ impl Core {
                     )
                 })
             };
-            if let Some((syn_packet, my_seq, acked_seq)) = existing {
-                if let Some(template) = Packet::parse(&syn_packet) {
-                    if let Some(reply) =
-                        crate::mitm::segment::build_ack(&template, my_seq, acked_seq, true)
-                    {
-                        out.push(reply);
-                    }
+            let Some((syn_packet, my_seq, acked_seq)) = existing else {
+                return false;
+            };
+            if let Some(template) = Packet::parse(&syn_packet) {
+                if let Some(reply) =
+                    crate::mitm::segment::build_ack(&template, my_seq, acked_seq, true)
+                {
+                    out.push(reply);
                 }
-                return true;
             }
-            return self.start_relay(pkt, out);
+            return true;
         }
         if pkt.is_rst {
-            // The client gave up: retire the flow quietly.
-            return self.relays.lock().unwrap().remove(port).is_some();
+            // The client gave up: retire the flow quietly. The entry is only
+            // marked here; the poller thread is the one that reaps relays and
+            // closes their descriptors, so a descriptor is never yanked from
+            // under a concurrent poll().
+            let mut guard = self.relays.lock().unwrap();
+            let Some(relay) = guard.get_mut(port) else {
+                return false;
+            };
+            relay.close();
+            return true;
         }
-        let mut guard = self.relays.lock().unwrap();
-        let Some(relay) = guard.get_mut(port) else {
-            return false;
-        };
-        let payload = pkt.l4_payload();
+        // Work on the relay under the lock, collect what has to go out, then
+        // release before pushing (which locks the table itself).
+        let mut to_peer = Vec::new();
         let mut reset = false;
-        if !payload.is_empty() {
-            match relay.on_client_segment(payload) {
-                Ok((to_peer, to_client)) => {
-                    if !to_peer.is_empty() {
-                        self.write_all(relay.peer_fd, &to_peer);
-                    }
-                    if !to_client.is_empty() {
-                        for segment in relay.segments_for_client(&to_client) {
-                            out.push(segment);
+        let mut fin_pending = false;
+        {
+            let mut guard = self.relays.lock().unwrap();
+            let Some(relay) = guard.get_mut(port) else {
+                return false;
+            };
+            if relay.closed {
+                // Finished, waiting to be reaped: consume silently.
+                return true;
+            }
+            let payload = pkt.l4_payload();
+            let mut saw_data = false;
+            if !payload.is_empty() {
+                match relay.on_client_segment(pkt.seq, payload) {
+                    Ok((peer_bytes, to_client)) => {
+                        to_peer = peer_bytes;
+                        saw_data = true;
+                        if !to_client.is_empty() {
+                            for segment in relay.segments_for_client(&to_client) {
+                                out.push(segment);
+                            }
                         }
                     }
-                }
-                Err(e) => {
-                    crate::logbuf::push(&format!("relay client step: {e}"));
-                    if let Some(rst) = relay.rst_to_client() {
-                        out.push(rst);
+                    Err(e) => {
+                        crate::logbuf::push(&format!("relay client step: {e}"));
+                        if let Some(rst) = relay.rst_to_client() {
+                            out.push(rst);
+                        }
+                        reset = true;
                     }
-                    reset = true;
+                }
+            }
+            if reset {
+                relay.close();
+            } else if pkt.is_fin && !relay.client_fin {
+                if let Some(ack) = relay.on_client_fin() {
+                    out.push(ack);
+                }
+                fin_pending = true;
+            } else if saw_data {
+                // A plain splice produces no reply of its own, so without this
+                // bare ACK the client keeps retransmitting its request (and
+                // the retransmissions must then be filtered by `seq`).
+                if let Some(ack) = relay.ack_to_client() {
+                    out.push(ack);
                 }
             }
         }
         if reset {
-            guard.remove(port);
             return true;
         }
-        if pkt.is_fin && !relay.client_fin {
-            if let Some(ack) = relay.on_client_fin() {
-                out.push(ack);
-            }
-            // Half-close the peer: it can still send back its remaining bytes.
-            unsafe {
-                libc::shutdown(relay.peer_fd, libc::SHUT_WR);
-            }
+        if !to_peer.is_empty() {
+            self.push_to_peer(port, &to_peer);
+        }
+        if fin_pending {
+            // Half-close the peer's write side, but only once everything the
+            // client sent has actually been handed to the socket: writes are
+            // refused after the shutdown.
+            self.half_close_peer(port);
         }
         // Anything else on a live relay (bare ACKs, window updates, the FIN we
         // just acknowledged) is consumed here: falling through would let
         // `tcp_blocked` reset a flow the engine itself owns.
         true
+    }
+
+    /// Sends FIN towards the peer, deferring it if unsent bytes are queued.
+    fn half_close_peer(&self, client_port: u16) {
+        let fd = {
+            let mut guard = self.relays.lock().unwrap();
+            let Some(relay) = guard.get_mut(client_port) else {
+                return;
+            };
+            if relay.pending_to_peer.is_empty() && !relay.flushing {
+                relay.peer_fd
+            } else {
+                relay.shutdown_after_flush = true;
+                return;
+            }
+        };
+        unsafe {
+            libc::shutdown(fd, libc::SHUT_WR);
+        }
     }
 
     /// The largest payload one segment towards the client may carry.
@@ -535,37 +614,28 @@ impl Core {
             .unwrap_or(cap)
     }
 
-    /// Answers a SYN for a host we want to intercept.
-    fn start_relay(&self, pkt: &Packet<'_>, out: &mut Vec<Vec<u8>>) -> bool {
+    /// Starts a relay for a new TCP flow.
+    ///
+    /// Port 443 is additionally TLS-terminated (and filtered) when HTTPS
+    /// filtering is armed and the destination hostname is known; every other
+    /// flow is a transparent splice.
+    fn start_tcp_relay(&self, pkt: &Packet<'_>, cfg: &Config, out: &mut Vec<Vec<u8>>) -> bool {
         let Some(client_ip) = pkt.src_ip() else {
-            return false;
-        };
-        let Some(target) = self.host_for_ip(pkt.dst_ip()) else {
-            // No hostname for this address: nothing to forge a certificate for.
             return false;
         };
         let Some(dst) = pkt.dst_ip() else {
             return false;
         };
-        let Some(peer_fd) = self.take_peer_socket() else {
+        let Some(peer_fd) = self.open_peer_socket(dst) else {
             return false;
         };
-        // The peer socket must be connected before any TLS byte flows, otherwise
-        // the splice would talk to nothing.
-        if !connect_fd(peer_fd, dst, pkt.dst_port) {
+        let connect = connect_fd(peer_fd, dst, pkt.dst_port);
+        if connect == Connect::Failed {
             crate::logbuf::push("relay: connect() to the peer failed");
+            unsafe { libc::close(peer_fd) };
             return false;
         }
-        let resolver = self.mitm_resolver();
-        let session = match crate::mitm::tls::open_session(&resolver, &target) {
-            Ok(s) => s,
-            Err(e) => {
-                crate::logbuf::push(&format!("open tls session: {e}"));
-                return false;
-            }
-        };
-        let script = self.mitm_scripts.read().unwrap().serve_path().to_string();
-        let proxy = crate::mitm::proxy::ProxySession::new(session, script);
+        let connecting = connect == Connect::InProgress;
         let flow = crate::mitm::tcp::Flow::new(
             client_ip,
             pkt.src_port,
@@ -574,44 +644,223 @@ impl Core {
             crate::mitm::tcp::initial_seq(pkt.seq as u64),
         );
         let mss = self.relay_mss(pkt);
-        let mut relay =
-            crate::mitm::relay::Relay::new(flow, peer_fd, proxy, pkt.raw.to_vec(), mss);
+        // TLS termination needs a hostname to forge a certificate for; when
+        // there is none the flow is still relayed, just not filtered.
+        let session = if cfg.mitm_enabled && crate::mitm::relay::is_mitm_port(pkt.dst_port) {
+            self.host_for_ip(pkt.dst_ip()).and_then(|target| {
+                let resolver = self.mitm_resolver();
+                match crate::mitm::tls::open_session(&resolver, &target) {
+                    Ok(s) => Some(s),
+                    Err(e) => {
+                        crate::logbuf::push(&format!("open tls session: {e}"));
+                        None
+                    }
+                }
+            })
+        } else {
+            None
+        };
+        let mut relay = match session {
+            Some(session) => {
+                let script = self.mitm_scripts.read().unwrap().serve_path().to_string();
+                let proxy = crate::mitm::proxy::ProxySession::new(session, script);
+                crate::mitm::relay::Relay::new_tls(
+                    flow,
+                    peer_fd,
+                    proxy,
+                    pkt.raw.to_vec(),
+                    mss,
+                    connecting,
+                )
+            }
+            None => crate::mitm::relay::Relay::new_plain(
+                flow,
+                peer_fd,
+                pkt.raw.to_vec(),
+                mss,
+                connecting,
+            ),
+        };
         // Our own SYN-ACK (the client-facing sequence starts here).
-        let syn_ack = match crate::mitm::segment::build_ack(pkt, relay.flow.my_seq, relay.flow.acked_seq, true) {
+        let syn_ack = match crate::mitm::segment::build_ack(
+            pkt,
+            relay.flow.my_seq,
+            relay.flow.acked_seq,
+            true,
+        ) {
             Some(s) => s,
+            // The relay drops here, which closes the peer descriptor.
             None => return false,
         };
         // The handshake we just answered consumed one sequence number.
         relay.flow.up_bytes = 1;
 
-        self.relays.lock().unwrap().insert(relay);
+        {
+            let mut guard = self.relays.lock().unwrap();
+            if guard.get(pkt.src_port).is_some() {
+                // A finished relay for this port is waiting for the poller to
+                // reap it. Inserting now would swap it out from under a
+                // concurrent poll(), so let the client retransmit instead.
+                return false;
+            }
+            guard.insert(relay);
+        }
         out.push(syn_ack);
-        self.stats.inc(&self.stats.tcp_reset); // reuse the counter for "relayed"
+        self.stats.inc(&self.stats.tcp_relayed);
         true
     }
 
-    /// Pops one protected, unconnected peer socket.
-    fn take_peer_socket(&self) -> Option<RawFd> {
-        self.peer_sockets.lock().unwrap().pop()
+    /// Opens a non-blocking TCP socket towards `dst` and asks the app to route
+    /// it around the VPN. Without protection the socket would loop right back
+    /// into the tunnel, so it is closed and the relay does not start.
+    fn open_peer_socket(&self, dst: IpKey) -> Option<RawFd> {
+        let family = match dst {
+            IpKey::V4(_) => libc::AF_INET,
+            IpKey::V6(_) => libc::AF_INET6,
+        };
+        let fd = unsafe {
+            libc::socket(
+                family,
+                libc::SOCK_STREAM | libc::SOCK_NONBLOCK | libc::SOCK_CLOEXEC,
+                0,
+            )
+        };
+        if fd < 0 {
+            crate::logbuf::push("relay: socket() failed");
+            return None;
+        }
+        if !self.protect_socket(fd) {
+            unsafe { libc::close(fd) };
+            crate::logbuf::push("relay: the app refused to protect a peer socket");
+            return None;
+        }
+        Some(fd)
     }
 
-    fn write_all(&self, fd: RawFd, bytes: &[u8]) {
+    /// Installs the app-side protector new sockets are handed to.
+    pub fn set_socket_protector(&self, protector: Arc<dyn crate::api::SocketProtector>) {
+        *self.socket_protector.lock().unwrap() = Some(protector);
+    }
+
+    /// Hands one descriptor to the app so it bypasses the VPN.
+    fn protect_socket(&self, fd: RawFd) -> bool {
+        let protector = self.socket_protector.lock().unwrap().clone();
+        match protector {
+            Some(p) => p.protect(fd),
+            None => false,
+        }
+    }
+
+    /// Buffers client bytes for a relay's peer socket and pushes them out.
+    ///
+    /// `send()` returning EAGAIN is normal (the peer accepts slower than the
+    /// client produces): whatever the socket refuses stays queued and
+    /// `poll_relays` retries when the socket becomes writable.
+    fn push_to_peer(&self, client_port: u16, bytes: &[u8]) {
+        let overflow = {
+            let mut guard = self.relays.lock().unwrap();
+            let Some(relay) = guard.get_mut(client_port) else {
+                return;
+            };
+            relay.queue_to_peer(bytes);
+            relay.pending_to_peer.len() > MAX_PENDING_TO_PEER
+        };
+        if overflow {
+            // A peer that never drains would let the queue grow without bound;
+            // the flow is broken anyway, so cut it.
+            crate::logbuf::push("relay: peer socket never drains");
+            let segment = {
+                let mut guard = self.relays.lock().unwrap();
+                let Some(relay) = guard.get_mut(client_port) else {
+                    return;
+                };
+                let segment = relay.rst_to_client();
+                relay.close();
+                segment
+            };
+            if let Some(segment) = segment {
+                self.write_raw(&segment);
+            }
+            return;
+        }
+        self.flush_peer(client_port);
+    }
+
+    /// Drains a relay's queued client bytes towards its peer socket.
+    ///
+    /// Only one thread is ever inside `send()` for a relay (`flushing`), so the
+    /// byte stream order the client produced is preserved.
+    fn flush_peer(&self, client_port: u16) {
+        loop {
+            let (fd, chunk) = {
+                let mut guard = self.relays.lock().unwrap();
+                let Some(relay) = guard.get_mut(client_port) else {
+                    return;
+                };
+                if relay.connecting || relay.flushing || relay.pending_to_peer.is_empty() {
+                    return;
+                }
+                relay.flushing = true;
+                (relay.peer_fd, std::mem::take(&mut relay.pending_to_peer))
+            };
+            let written = self.write_some(fd, &chunk);
+            let (more, half_close) = {
+                let mut guard = self.relays.lock().unwrap();
+                let Some(relay) = guard.get_mut(client_port) else {
+                    return;
+                };
+                relay.flushing = false;
+                if written < chunk.len() {
+                    // Prepend the unwritten remainder: anything queued while we
+                    // were writing came later in the stream.
+                    let mut rest = chunk[written..].to_vec();
+                    rest.extend_from_slice(&relay.pending_to_peer);
+                    relay.pending_to_peer = rest;
+                }
+                let drained = relay.pending_to_peer.is_empty();
+                // A FIN that surfaced while we were writing is owed now that
+                // the queue is empty.
+                let half_close = drained && relay.shutdown_after_flush;
+                if half_close {
+                    relay.shutdown_after_flush = false;
+                }
+                (!drained, half_close)
+            };
+            if half_close {
+                unsafe {
+                    libc::shutdown(fd, libc::SHUT_WR);
+                }
+            }
+            if written == chunk.len() && more {
+                continue; // the callers queued more while we were writing
+            }
+            return;
+        }
+    }
+
+    /// Writes as much as the socket accepts; returns how many bytes were taken.
+    fn write_some(&self, fd: RawFd, bytes: &[u8]) -> usize {
         let mut off = 0;
         while off < bytes.len() {
             let n = unsafe {
                 libc::send(fd, bytes.as_ptr().add(off) as *const libc::c_void, bytes.len() - off, libc::MSG_NOSIGNAL)
             };
             if n <= 0 {
-                return;
+                break;
             }
             off += n as usize;
         }
+        off
     }
 
     fn tcp_blocked(&self, pkt: &Packet<'_>, cfg: &Config) -> bool {
         let Some(dst) = pkt.dst_ip() else {
             return false;
         };
+        // DoT over TCP bypasses the DNS filter exactly like the UDP port does.
+        if cfg.block_dot && pkt.dst_port == 853 {
+            return true;
+        }
         if cfg.block_doh && self.is_encrypted_dns_elsewhere(dst) {
             return true;
         }
@@ -645,7 +894,8 @@ impl Core {
         let host = self
             .host_for_ip(pkt.dst_ip())
             .unwrap_or_else(|| pkt.dst_ip_text());
-        let rule = if host.len() > 12 && host.chars().all(|c| c.is_ascii_digit() || c == '.') {
+        let rule = if host.parse::<std::net::IpAddr>().is_ok() {
+            // A bare address only gets here from the encrypted-DNS lists.
             "connection to encrypted DNS blocked"
         } else {
             "connection dropped"
@@ -989,17 +1239,6 @@ impl Core {
             .clone()
     }
 
-    /// Installs a pool of protected, unconnected TCP sockets.
-    pub fn set_peer_sockets(&self, fds: &[RawFd]) {
-        let mut pool = self.peer_sockets.lock().unwrap();
-        pool.clear();
-        pool.extend_from_slice(fds);
-    }
-
-    pub fn peer_socket_pool_size(&self) -> usize {
-        self.peer_sockets.lock().unwrap().len()
-    }
-
     pub fn relay_count(&self) -> usize {
         self.relays.lock().unwrap().len()
     }
@@ -1091,8 +1330,10 @@ fn forwarder_loop(core: &'static Core) {
         }
 
         // Relayed connections: whatever the real server answered has to be
-        // spliced back to the client.
+        // spliced back to the client, and finished relays are reaped here so
+        // their descriptors are only ever closed on this thread.
         core.poll_relays();
+        core.prune_relays();
 
         if replies.is_empty() {
             core.conntrack.lock().unwrap().expire(now);
@@ -1104,18 +1345,21 @@ fn forwarder_loop(core: &'static Core) {
 ///
 /// Polling all peer sockets in one `poll()` keeps the cost independent of how
 /// many connections are open, which matters for battery when a page opens
-/// dozens of them.
+/// dozens of them. Sockets whose `connect()` has not finished yet also ask for
+/// `POLLOUT`, which is how their completion (or failure) is noticed; so do
+/// sockets whose queued client bytes could not be sent yet.
 impl Core {
     fn poll_relays(&self) {
-        let peers = self.relays.lock().unwrap().peer_fds();
+        let peers = self.relays.lock().unwrap().poll_snapshot();
         if peers.is_empty() {
             return;
         }
         let mut fds: Vec<libc::pollfd> = peers
             .iter()
-            .map(|(_, fd)| libc::pollfd {
+            .map(|(_, fd, connecting, want_write)| libc::pollfd {
                 fd: *fd,
-                events: libc::POLLIN,
+                events: libc::POLLIN
+                    | if *connecting || *want_write { libc::POLLOUT } else { 0 },
                 revents: 0,
             })
             .collect();
@@ -1130,15 +1374,53 @@ impl Core {
             return;
         }
         for (i, p) in fds.iter().enumerate() {
+            if p.revents == 0 {
+                continue;
+            }
+            let (client_port, fd, was_connecting, was_writing) = peers[i];
+            // A client RST may have marked the relay closed since the poll();
+            // the entry itself is still there (only this thread reaps relays),
+            // so matching it back means the descriptor is ours to touch.
+            let still_live = self
+                .relays
+                .lock()
+                .unwrap()
+                .get(client_port)
+                .map(|r| !r.closed && r.peer_fd == fd)
+                .unwrap_or(false);
+            if !still_live {
+                continue;
+            }
+            if was_connecting && p.revents & (libc::POLLOUT | libc::POLLERR | libc::POLLHUP) != 0 {
+                // The connect() finished: either it worked (flush what the
+                // client sent meanwhile) or it failed (cut the flow).
+                let err = so_error(fd);
+                if err != 0 {
+                    crate::logbuf::push(&format!(
+                        "relay: connect to the peer failed (errno {err})"
+                    ));
+                    self.close_relay_from_peer(client_port, true);
+                    continue;
+                }
+                {
+                    let mut guard = self.relays.lock().unwrap();
+                    if let Some(relay) = guard.get_mut(client_port) {
+                        relay.connecting = false;
+                    }
+                }
+                self.flush_peer(client_port);
+            } else if was_writing && p.revents & libc::POLLOUT != 0 {
+                // The send buffer drained: push what is left of the queue.
+                self.flush_peer(client_port);
+            }
             if p.revents & (libc::POLLIN | libc::POLLHUP | libc::POLLERR) == 0 {
                 continue;
             }
-            let (client_port, _) = peers[i];
             let mut buf = [0u8; 32 * 1024];
             loop {
                 let read = unsafe {
                     libc::recv(
-                        p.fd,
+                        fd,
                         buf.as_mut_ptr() as *mut libc::c_void,
                         buf.len(),
                         libc::MSG_DONTWAIT,
@@ -1217,7 +1499,6 @@ fn housekeeping(core: &Core) {
     core.last_tick_ns.store(now, Ordering::Relaxed);
     core.stats.set(&core.stats.rss_kb, stats::read_rss_kb());
     core.sync_engine_stats();
-    core.prune_relays();
 }
 
 /// How long a relay may sit silent before it is presumed dead.
@@ -1226,14 +1507,14 @@ const RELAY_IDLE_MS: u64 = 300_000;
 impl Core {
     /// Frees finished relays and resets ones that went silent.
     ///
-    /// Every relay holds a peer descriptor borrowed from the pool; without
-    /// this pass a page view's worth of closed connections would drain it.
+    /// Runs on the forwarder thread, the same one that polls relays and their
+    /// descriptors: keeping every removal on one thread means a peer
+    /// descriptor can never be closed from under a concurrent `poll()`.
     fn prune_relays(&self) {
         let now = now_ms();
         let mut resets = Vec::new();
         {
             let mut guard = self.relays.lock().unwrap();
-            guard.drop_closed();
             for (_, relay) in guard.iter_mut() {
                 if now.saturating_sub(relay.last_ms) > RELAY_IDLE_MS {
                     if let Some(rst) = relay.rst_to_client() {
@@ -1250,8 +1531,19 @@ impl Core {
     }
 }
 
+/// Outcome of a non-blocking `connect()`.
+#[derive(PartialEq)]
+enum Connect {
+    /// The connection is already up.
+    Connected,
+    /// Still being established; the socket becomes writable when it resolves.
+    InProgress,
+    /// Refused on the spot (bad address, network unreachable...).
+    Failed,
+}
+
 /// Connects `fd` (already protected) to `addr:port` without blocking.
-fn connect_fd(fd: RawFd, addr: IpKey, port: u16) -> bool {
+fn connect_fd(fd: RawFd, addr: IpKey, port: u16) -> Connect {
     let ret = match addr {
         IpKey::V4(v4) => {
             let sa = libc::sockaddr_in {
@@ -1289,7 +1581,30 @@ fn connect_fd(fd: RawFd, addr: IpKey, port: u16) -> bool {
             }
         }
     };
-    ret == 0 || std::io::Error::last_os_error().kind() == std::io::ErrorKind::WouldBlock
+    if ret == 0 {
+        return Connect::Connected;
+    }
+    match std::io::Error::last_os_error().raw_os_error() {
+        Some(libc::EINPROGRESS) | Some(libc::EALREADY) | Some(libc::EINTR) => Connect::InProgress,
+        _ => Connect::Failed,
+    }
+}
+
+/// Reads `SO_ERROR` off a socket whose connect just completed. Zero means the
+/// connection is up; anything else is the reason it failed.
+fn so_error(fd: RawFd) -> i32 {
+    let mut err: libc::c_int = 0;
+    let mut len = std::mem::size_of::<libc::c_int>() as libc::socklen_t;
+    unsafe {
+        libc::getsockopt(
+            fd,
+            libc::SOL_SOCKET,
+            libc::SO_ERROR,
+            &mut err as *mut libc::c_int as *mut libc::c_void,
+            &mut len,
+        );
+    }
+    err
 }
 
 fn parse_cidr(text: &str) -> Option<(IpKey, u8)> {

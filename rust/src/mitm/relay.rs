@@ -21,10 +21,15 @@ pub const MITM_PORT: u16 = 443;
 pub const DEFAULT_MSS: usize = 1460;
 
 /// One relayed connection.
+///
+/// `session` is `Some` only for TLS-terminated flows (HTTPS filtering): with
+/// `None` the relay is a transparent splice that just moves bytes between the
+/// client and the peer socket.
 pub struct Relay {
     pub flow: Flow,
     pub session: Option<ProxySession>,
-    /// Protected socket to the real server.
+    /// Protected socket to the real server; the relay owns it and closes it on
+    /// drop (-1 in tests).
     pub peer_fd: RawFd,
     /// The client's SYN, kept as the template for every reply we build.
     pub syn_packet: Vec<u8>,
@@ -38,10 +43,31 @@ pub struct Relay {
     pub last_ms: u64,
     /// The client already sent its FIN.
     pub client_fin: bool,
+    /// The peer `connect()` has not completed yet: `send()` would fail with
+    /// EAGAIN until the socket is writable, so bytes wait in `pending_to_peer`.
+    pub connecting: bool,
+    /// Client bytes not yet accepted by the peer socket (it is connecting, or
+    /// its send buffer is full). Flushed by the engine on the next writable.
+    pub pending_to_peer: Vec<u8>,
+    /// Set while some thread is inside `send()` for this relay, so two threads
+    /// never interleave writes and scramble the byte order.
+    pub flushing: bool,
+    /// The client sent its FIN while bytes were still queued for the peer: the
+    /// half-close waits until the queue is empty (writes are refused after).
+    pub shutdown_after_flush: bool,
 }
 
 impl Relay {
-    pub fn new(flow: Flow, peer_fd: RawFd, session: ProxySession, syn_packet: Vec<u8>, mss: usize) -> Self {
+    /// A relay that TLS-terminates: the client's HTTPS traffic is decrypted,
+    /// filtered and re-encrypted towards the real server.
+    pub fn new_tls(
+        flow: Flow,
+        peer_fd: RawFd,
+        session: ProxySession,
+        syn_packet: Vec<u8>,
+        mss: usize,
+        connecting: bool,
+    ) -> Self {
         Relay {
             flow,
             session: Some(session),
@@ -51,7 +77,41 @@ impl Relay {
             mss,
             last_ms: now_ms(),
             client_fin: false,
+            connecting,
+            pending_to_peer: Vec::new(),
+            flushing: false,
+            shutdown_after_flush: false,
         }
+    }
+
+    /// A relay that only splices bytes: no TLS, no filtering, used for every
+    /// TCP flow that is not an HTTPS connection we intercept.
+    pub fn new_plain(
+        flow: Flow,
+        peer_fd: RawFd,
+        syn_packet: Vec<u8>,
+        mss: usize,
+        connecting: bool,
+    ) -> Self {
+        Relay {
+            flow,
+            session: None,
+            peer_fd,
+            syn_packet,
+            closed: false,
+            mss,
+            last_ms: now_ms(),
+            client_fin: false,
+            connecting,
+            pending_to_peer: Vec::new(),
+            flushing: false,
+            shutdown_after_flush: false,
+        }
+    }
+
+    /// Buffers client bytes until the peer connection is writable.
+    pub fn queue_to_peer(&mut self, bytes: &[u8]) {
+        self.pending_to_peer.extend_from_slice(bytes);
     }
 
     /// Turns a payload into the TCP segments addressed to the client.
@@ -86,29 +146,59 @@ impl Relay {
     pub fn is_established(&self) -> bool {
         !self.closed
             && match &self.session {
+                // A plain splice is always ready; the TLS half is only ready
+                // once the handshake finished.
                 Some(s) => !s.server_handshaking(),
-                None => false,
+                None => true,
             }
     }
 
     /// A segment arrived from the client.
     ///
+    /// `seq` is the segment's own sequence number. Until our ACK reaches the
+    /// client it retransmits, so duplicates and overlaps are routine and each
+    /// byte may only be handed forward once: a second copy of a POST would hit
+    /// the server twice, and a second copy of a TLS record would corrupt the
+    /// rustls stream.
+    ///
     /// Returns `(to_peer, to_client)`: both directions can produce bytes, because
     /// during the handshake our own answers count towards the client.
-    pub fn on_client_segment(&mut self, payload: &[u8]) -> Result<(Vec<u8>, Vec<u8>), String> {
+    pub fn on_client_segment(
+        &mut self,
+        seq: u32,
+        payload: &[u8],
+    ) -> Result<(Vec<u8>, Vec<u8>), String> {
         if payload.is_empty() {
             return Ok((Vec::new(), Vec::new()));
         }
-        // Every client byte must be acknowledged exactly once. The ack we
-        // piggyback on the next segment we send is built from this counter;
-        // without advancing it the client retransmits everything forever.
-        self.flow.acked_seq = self.flow.acked_seq.wrapping_add(payload.len() as u32);
-        self.last_ms = now_ms();
-        let Some(session) = self.session.as_mut() else {
+        let expected = self.flow.acked_seq;
+        let fresh = if seq == expected {
+            payload
+        } else if seq.wrapping_sub(expected) & 0x8000_0000 != 0 {
+            // An older segment: the head was already forwarded, at best.
+            let skipped = expected.wrapping_sub(seq) as usize;
+            if skipped >= payload.len() {
+                return Ok((Vec::new(), Vec::new())); // a pure retransmission
+            }
+            &payload[skipped..]
+        } else {
+            // A gap. Client packets are read straight off the tun device and
+            // cannot be dropped by us, so this is a retransmission that raced
+            // ahead of our ACK; stay quiet and the caller's ACK pulls the
+            // missing hole back.
             return Ok((Vec::new(), Vec::new()));
         };
-        let out = session.on_client_payload(payload)?;
-        self.flow.down_bytes += payload.len() as u64;
+        // Every client byte must be acknowledged exactly once: the ACK the
+        // caller sends after this call carries `acked_seq`, and without it the
+        // client retransmits everything forever.
+        self.flow.acked_seq = self.flow.acked_seq.wrapping_add(fresh.len() as u32);
+        self.flow.down_bytes += fresh.len() as u64;
+        self.last_ms = now_ms();
+        let Some(session) = self.session.as_mut() else {
+            // Plain splice: forward the bytes untouched.
+            return Ok((fresh.to_vec(), Vec::new()));
+        };
+        let out = session.on_client_payload(fresh)?;
         if out.closed {
             self.closed = true;
         }
@@ -125,7 +215,8 @@ impl Relay {
         }
         self.last_ms = now_ms();
         let Some(session) = self.session.as_mut() else {
-            return Ok(Vec::new());
+            // Plain splice: forward the bytes untouched.
+            return Ok(bytes.to_vec());
         };
         let out = session.on_peer_payload(bytes)?;
         if out.closed {
@@ -140,6 +231,16 @@ impl Relay {
         self.client_fin = true;
         self.last_ms = now_ms();
         self.flow.acked_seq = self.flow.acked_seq.wrapping_add(1);
+        let pkt = crate::packet::Packet::parse(&self.syn_packet)?;
+        let seq = self.flow.my_seq.wrapping_add(self.flow.up_bytes as u32);
+        crate::mitm::segment::build_ack(&pkt, seq, self.flow.acked_seq, false)
+    }
+
+    /// A pure ACK for every client byte received so far.
+    ///
+    /// A plain splice has nothing to piggyback on, so this segment is the only
+    /// thing that stops the client from retransmitting its request.
+    pub fn ack_to_client(&mut self) -> Option<Vec<u8>> {
         let pkt = crate::packet::Packet::parse(&self.syn_packet)?;
         let seq = self.flow.my_seq.wrapping_add(self.flow.up_bytes as u32);
         crate::mitm::segment::build_ack(&pkt, seq, self.flow.acked_seq, false)
@@ -184,6 +285,18 @@ impl Relay {
             return if payload.is_empty() { Vec::new() } else { vec![payload] };
         }
         payload.chunks(max).map(<[u8]>::to_vec).collect()
+    }
+}
+
+impl Drop for Relay {
+    fn drop(&mut self) {
+        // The engine created this descriptor for us (and had the app protect
+        // it), so retiring the relay must close it. -1 is the test sentinel.
+        if self.peer_fd >= 0 {
+            unsafe {
+                libc::close(self.peer_fd);
+            }
+        }
     }
 }
 
@@ -234,12 +347,21 @@ impl RelayTable {
         self.relays.is_empty()
     }
 
-    /// Every peer socket in play, so the engine can poll them.
-    pub fn peer_fds(&self) -> Vec<(u16, RawFd)> {
+    /// Every peer socket in play, so the engine can poll them: client port,
+    /// descriptor, whether the connection is still being established, and
+    /// whether buffered client bytes are waiting for a writable socket.
+    pub fn poll_snapshot(&self) -> Vec<(u16, RawFd, bool, bool)> {
         self.relays
             .values()
             .filter(|r| !r.closed)
-            .map(|r| (r.flow.client_port, r.peer_fd))
+            .map(|r| {
+                (
+                    r.flow.client_port,
+                    r.peer_fd,
+                    r.connecting,
+                    !r.connecting && !r.pending_to_peer.is_empty(),
+                )
+            })
             .collect()
     }
 
@@ -294,12 +416,13 @@ mod tests {
         )));
         let session = open_session(&resolver, "x.example.com").expect("session");
         let proxy = ProxySession::new(session, "/adfree-user.js".into());
-        Relay::new(
+        Relay::new_tls(
             crate::mitm::tcp::Flow::new(crate::packet::IpKey::V4(1), 40000, 443, 1000, 5000),
             -1,
             proxy,
             Vec::new(),
             DEFAULT_MSS,
+            false,
         )
     }
 
@@ -308,6 +431,13 @@ mod tests {
         r.syn_packet = syn_packet();
         // The engine sets this right after it answers the SYN: the SYN-ACK
         // consumed one client-facing sequence number.
+        r.flow.up_bytes = 1;
+        r
+    }
+
+    fn plain_relay_with_syn() -> Relay {
+        let flow = crate::mitm::tcp::Flow::new(crate::packet::IpKey::V4(1), 40000, 80, 1000, 5000);
+        let mut r = Relay::new_plain(flow, -1, syn_packet(), DEFAULT_MSS, false);
         r.flow.up_bytes = 1;
         r
     }
@@ -321,12 +451,69 @@ mod tests {
     }
 
     #[test]
+    fn a_plain_relay_moves_bytes_untouched() {
+        let flow =
+            crate::mitm::tcp::Flow::new(crate::packet::IpKey::V4(1), 40000, 80, 1000, 5000);
+        let mut r = Relay::new_plain(flow, -1, syn_packet(), DEFAULT_MSS, false);
+        // No handshake to complete: bytes can flow immediately.
+        assert!(r.is_established());
+        let (to_peer, to_client) = r
+            .on_client_segment(1001, b"GET / HTTP/1.1\r\n\r\n")
+            .expect("step");
+        assert_eq!(to_peer, b"GET / HTTP/1.1\r\n\r\n");
+        assert!(to_client.is_empty());
+        // The request must be acknowledged (client seq + 1 from the SYN).
+        assert_eq!(r.flow.acked_seq, 1001 + 18);
+        assert_eq!(r.flow.down_bytes, 18);
+        let back = r.on_peer_data(b"HTTP/1.1 200 OK\r\n\r\n").expect("peer step");
+        assert_eq!(back, b"HTTP/1.1 200 OK\r\n\r\n");
+    }
+
+    #[test]
+    fn a_retransmission_is_forwarded_only_once() {
+        let mut r = plain_relay_with_syn();
+        let request = b"POST /x HTTP/1.1\r\n\r\nAB";
+        let (first, _) = r.on_client_segment(1001, request).expect("step");
+        assert_eq!(first, request);
+        assert_eq!(r.flow.acked_seq, 1001 + 22);
+        // The client retransmits while our ACK is in flight: a second copy of a
+        // POST must never reach the peer.
+        let (again, _) = r.on_client_segment(1001, request).expect("dup");
+        assert!(again.is_empty());
+        assert_eq!(r.flow.acked_seq, 1001 + 22, "a duplicate must not advance the ack");
+        assert_eq!(r.flow.down_bytes, 22);
+    }
+
+    #[test]
+    fn a_partial_overlap_forwards_only_the_new_tail() {
+        let mut r = plain_relay_with_syn();
+        let _ = r.on_client_segment(1001, b"abcdef").expect("step");
+        // A retransmission that starts mid-way and carries new bytes at the
+        // end (the client packeted ahead before our ACK arrived).
+        let (tail, _) = r.on_client_segment(1004, b"defghi").expect("overlap");
+        assert_eq!(tail, b"ghi");
+        // 1004..1007 was already delivered ("def"); only the tail is new.
+        assert_eq!(r.flow.acked_seq, 1010);
+    }
+
+    #[test]
+    fn an_ack_to_the_client_carries_the_running_sequence() {
+        let mut r = plain_relay_with_syn();
+        let _ = r.on_client_segment(1001, b"GET /").expect("step");
+        let ack = r.ack_to_client().expect("ack");
+        let pkt = crate::packet::Packet::parse(&ack).expect("parse");
+        assert!(pkt.is_ack && !pkt.is_fin);
+        assert_eq!(pkt.seq, 5001, "no data sent yet: seq stays after the SYN-ACK");
+        assert_eq!(pkt.ack_seq, 1001 + 5);
+    }
+
+    #[test]
     fn an_invalid_tls_record_is_rejected() {
         let mut r = relay();
         // Record type 0 does not exist: rustls must fail loudly instead of
         // buffering noise forever.
         let bogus = [0x00, 0x03, 0x01, 0x00, 0x02, 0x00, 0x00];
-        let out = r.on_client_segment(&bogus);
+        let out = r.on_client_segment(1001, &bogus);
         assert!(out.is_err(), "an invalid record must be rejected: {out:?}");
     }
 
@@ -334,7 +521,7 @@ mod tests {
     fn a_partial_record_is_buffered_not_rejected() {
         let mut r = relay();
         // Only the first 4 bytes of a 5 byte record header: nothing to judge yet.
-        let out = r.on_client_segment(&[0x16, 0x03, 0x01, 0x00]);
+        let out = r.on_client_segment(1001, &[0x16, 0x03, 0x01, 0x00]);
         assert!(out.is_ok(), "a partial record is not an error: {out:?}");
         assert!(out.unwrap() == (Vec::new(), Vec::new()));
     }
@@ -396,7 +583,7 @@ mod tests {
         let before = r.flow.acked_seq;
         // A bogus TLS record still counts as bytes the peer must be acked for:
         // the sequence bookkeeping must not depend on handshake state.
-        let _ = r.on_client_segment(&[0x16, 0x03, 0x01, 0x00]);
+        let _ = r.on_client_segment(1001, &[0x16, 0x03, 0x01, 0x00]);
         assert_eq!(r.flow.acked_seq, before + 4);
     }
 
@@ -457,7 +644,7 @@ mod tests {
     #[test]
     fn empty_payloads_are_no_ops() {
         let mut r = relay();
-        assert_eq!(r.on_client_segment(&[]).unwrap(), (Vec::new(), Vec::new()));
+        assert_eq!(r.on_client_segment(1001, &[]).unwrap(), (Vec::new(), Vec::new()));
         assert_eq!(r.on_peer_data(&[]).unwrap(), Vec::<u8>::new());
     }
 }

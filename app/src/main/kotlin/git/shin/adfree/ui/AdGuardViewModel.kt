@@ -331,19 +331,16 @@ class AdGuardViewModel(
         return coreEngine.mitmStatus()
     }
 
-    /** Turn HTTPS filtering (script injection) on or off. */
-    fun setMitmEnabled(enabled: Boolean, onDone: (git.shin.adfree.core.MitmStatus?) -> Unit) {
-        val current = coreEngine.mitmStatus()
-        val scripts = current?.let { emptyList<git.shin.adfree.core.ScriptBinding>() } ?: emptyList()
-        coreEngine.setScripts(scripts, enabled)
-        // Keep the existing scripts but flip the switch.
-        val existing = coreEngine.combinedScripts()
-        val binding = if (existing.isBlank()) {
-            listOf(git.shin.adfree.core.ScriptBinding("user", "// JS của bạn ở đây", true))
-        } else {
-            emptyList()
-        }
-        coreEngine.setScripts(binding, enabled)
+    /**
+     * Turns HTTPS filtering on or off.
+     *
+     * The engine is reconfigured right away: whether TLS termination happens is
+     * decided by the core config, and leaving the switch and the engine out of
+     * sync would filter (or fail to filter) behind the user's back.
+     */
+    fun setHttpsFiltering(enabled: Boolean, onDone: (git.shin.adfree.core.MitmStatus?) -> Unit) {
+        repository.toggleHttpsFiltering(enabled)
+        syncConfig()
         onDone(coreEngine.mitmStatus())
     }
 

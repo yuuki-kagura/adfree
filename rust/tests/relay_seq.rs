@@ -22,7 +22,7 @@ fn make_relay() -> Relay {
     let session = open_session(&resolver, "ads.example.com").expect("session");
     let proxy = ProxySession::new(session, "/adfree-user.js".into());
     let flow = Flow::new(packet::IpKey::V4(0x0a6f_2a01), 40000, 443, 1000, 55_000);
-    Relay::new(flow, -1, proxy, syn_packet(), 1460)
+    Relay::new_tls(flow, -1, proxy, syn_packet(), 1460, false)
 }
 
 /// The SYN that would have started the connection.
@@ -146,7 +146,7 @@ fn the_relay_table_tracks_flows_by_client_port() {
     assert_eq!(table.len(), 1);
     assert!(table.get(40000).is_some());
     assert!(table.get_mut(40000).is_some());
-    assert_eq!(table.peer_fds().len(), 1);
+    assert_eq!(table.poll_snapshot().len(), 1);
     assert!(table.remove(40000).is_some());
     assert!(table.is_empty());
 }

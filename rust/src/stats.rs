@@ -16,6 +16,8 @@ pub struct Stats {
     pub dns_allowed: AtomicU64,
     /// Connections killed before any upstream byte was spent.
     pub tcp_reset: AtomicU64,
+    /// Connections the engine took over (every TCP flow is relayed).
+    pub tcp_relayed: AtomicU64,
     /// Packets dropped (QUIC, DoT, blocked IPs).
     pub dropped: AtomicU64,
     pub dns_queries: AtomicU64,
@@ -79,6 +81,7 @@ impl Stats {
             &self.dns_blocked,
             &self.dns_allowed,
             &self.tcp_reset,
+            &self.tcp_relayed,
             &self.dropped,
             &self.dns_queries,
             &self.dns_replies,

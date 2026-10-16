@@ -400,16 +400,22 @@ pub struct MitmStatus {
 }
 
 
-/// Installs a pool of protected, unconnected TCP sockets for the relay.
+/// Android hook for descriptors the core opens on demand.
 ///
-/// The relays `connect()` these towards the real server themselves, so this is
-/// just handing over spare descriptors.
+/// Anything the core sends outside the tunnel has to bypass the VPN first
+/// (`VpnService.protect()`), or the socket's own traffic loops back into the
+/// tun device the core is reading from. That call lives on the Kotlin side, so
+/// the core asks for it through this callback instead of pooling sockets.
+#[uniffi::export(with_foreign)]
+pub trait SocketProtector: Send + Sync {
+    /// Routes `fd` around the VPN; false means the descriptor is unusable.
+    fn protect(&self, fd: i32) -> bool;
+}
+
+/// Installs the app-side socket protector (called before the tunnel starts).
 #[uniffi::export]
-pub fn core_set_peer_sockets(fds: Vec<i32>) -> bool {
-    guard(false, || {
-        crate::core().set_peer_sockets(&fds);
-        crate::core().peer_socket_pool_size() > 0
-    })
+pub fn core_set_socket_protector(protector: Arc<dyn SocketProtector>) {
+    guard((), || crate::core().set_socket_protector(protector));
 }
 
 /// Number of relays currently alive (for the UI).

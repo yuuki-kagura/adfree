@@ -290,6 +290,12 @@ private fun HttpsFilterSection(viewModel: AdGuardViewModel) {
     var status by remember { mutableStateOf<MitmStatus?>(null) }
     var showCert by remember { mutableStateOf(false) }
     var showEditor by remember { mutableStateOf(false) }
+    // HTTPS filtering is the persisted setting (the same one the engine config
+    // is built from); `scriptsEnabled` only says whether the script set is
+    // armed, which is a different thing entirely.
+    var httpsEnabled by remember {
+        mutableStateOf(viewModel.uiState.value.settings.isHttpsFilteringEnabled)
+    }
 
     // Lazily load the status; the core is cheap to query.
     androidx.compose.runtime.LaunchedEffect(Unit) {
@@ -314,9 +320,12 @@ private fun HttpsFilterSection(viewModel: AdGuardViewModel) {
         SettingsSwitch(
             icon = Icons.Default.Lock,
             title = "Bật lọc HTTPS",
-            subtitle = "Chèn script tùy chỉnh vào trang web",
-            checked = status?.scriptsEnabled == true,
-            onCheckedChange = { enabled -> viewModel.setMitmEnabled(enabled) { status = it } }
+            subtitle = "Giải mã HTTPS để lọc quảng cáo và chèn script",
+            checked = httpsEnabled,
+            onCheckedChange = { enabled ->
+                httpsEnabled = enabled
+                viewModel.setHttpsFiltering(enabled) { status = it }
+            }
         )
 
         Spacer(modifier = Modifier.height(10.dp))

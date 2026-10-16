@@ -79,16 +79,6 @@ class CoreEngine {
         pfd.fd
     }.getOrNull()
 
-    private fun protectAndKeep(
-        vpnService: android.net.VpnService,
-        socket: java.net.Socket,
-    ): Int? = runCatching {
-        vpnService.protect(socket)
-        val pfd = android.os.ParcelFileDescriptor.fromSocket(socket)
-        holderPipes += pfd
-        pfd.fd
-    }.getOrNull()
-
     private val holderPipes = mutableListOf<android.os.ParcelFileDescriptor>()
 
     private fun closeUpstreamSockets() {
@@ -104,8 +94,6 @@ class CoreEngine {
         holderPipes.forEach { runCatching { it.close() } }
         holderPipes.clear()
         upstreamSockets.forEach { runCatching { it.close() } }
-        peerSockets.forEach { runCatching { it.close() } }
-        peerSockets.clear()
     }
 
     // ----------------------------------------------------------------- config
@@ -227,27 +215,17 @@ class CoreEngine {
     }
 
     /**
-     * Creates a pool of protected, unconnected TCP sockets for the TLS relay.
+     * Installs the callback the core uses to `protect()` the TCP sockets it
+     * opens on demand (one per relayed connection).
      *
-     * The relays `connect()` these towards the real server themselves, so this is
-     * only handing over spare descriptors: a CA is useless without something to
-     * connect with.
+     * A preallocated pool is no longer possible: with every TCP flow relayed,
+     * the number of live sockets follows the apps' behaviour instead of a
+     * constant, so the core creates them itself and asks us to protect each.
      */
-    fun preparePeerSockets(vpnService: android.net.VpnService, count: Int = PEER_SOCKET_POOL) {
-        peerSockets.forEach { runCatching { it.close() } }
-        peerSockets.clear()
-        repeat(count) {
-            runCatching { java.net.Socket().apply { reuseAddress = true } }
-                .onSuccess { peerSockets += it }
-        }
-        val fds = peerSockets.mapNotNull { socket -> protectAndKeep(vpnService, socket) }
-        Log.i(tag, "peer sockets protected: ${fds.size}/$count")
-        if (fds.isNotEmpty()) {
-            runCatching { git.shin.adfree.core.coreSetPeerSockets(fds) }
-        }
+    fun setSocketProtector(protector: git.shin.adfree.core.SocketProtector) {
+        runCatching { git.shin.adfree.core.coreSetSocketProtector(protector) }
+            .onFailure { Log.w(tag, "setSocketProtector failed", it) }
     }
-
-    private val peerSockets = mutableListOf<java.net.Socket>()
 
     /** Number of live relays, for the settings screen. */
     fun relayCount(): Int = runCatching { git.shin.adfree.core.coreRelayCount().toInt() }.getOrDefault(0)
@@ -404,7 +382,6 @@ class CoreEngine {
     companion object {
         private const val TAG = "AdFreeCore"
         private const val SOCKET_COUNT = 4
-        private const val PEER_SOCKET_POOL = 16
         private const val USER_AGENT = "AdFree/1.0 (Android)"
         private var pendingStart = true
 

@@ -146,8 +146,13 @@ class AdGuardVpnService : VpnService() {
         // 1. create protect()ed DNS forwarding sockets BEFORE handing the TUN to the
         // core; 2. all the heavy lifting then runs natively.
         container.coreEngine.prepareUpstreamSockets(this)
-        // Spare descriptors the TLS relay connects towards the real server.
-        container.coreEngine.preparePeerSockets(this)
+        // The core opens one peer socket per relayed connection and asks us to
+        // protect() each one on the fly; without this the relays would send
+        // their own traffic back into the tunnel.
+        container.coreEngine.setSocketProtector(object : git.shin.adfree.core.SocketProtector {
+            override fun protect(fd: Int): Boolean =
+                runCatching { this@AdGuardVpnService.protect(fd) }.getOrDefault(false)
+        })
         container.coreEngine.start(fd)
         container.vpnController.onVpnStarted()
         Log.i(TAG, "TUN up (fd=$fd), dns=${dns.address}")
