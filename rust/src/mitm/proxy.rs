@@ -79,15 +79,27 @@ impl ProxySession {
         let mut outcome = Outcome::default();
         let plain = feed_server(&mut self.session.server, payload)?;
 
-        if self.client_handshaking() || self.server_handshaking() {
-            // Anything we produce here is handshake traffic for the client.
+        if self.server_handshaking() {
+            // Our own handshake answers go back to the client.
             outcome.to_client = tls::take_server_outbound(&mut self.session.server);
             return Ok(outcome);
         }
-
-        // Handshake done: request bytes go to the real server.
+        // Our handshake with the client is complete: everything the server
+        // half produced (NewSessionTicket and friends) is for the client, and
+        // any plaintext is an HTTP request. The request waits until the
+        // upstream half finishes its own handshake (`client_buffer`), because
+        // the real server must not see it as raw bytes.
         if !plain.is_empty() {
-            outcome.to_peer = feed_client(&mut self.session.client, &plain)?;
+            self.client_buffer.extend_from_slice(&plain);
+        }
+        // Open the upstream handshake: rustls queues the ClientHello inside
+        // the connection and nobody sends it unless we drain it here. Without
+        // this the real server is never asked and every HTTPS page hangs.
+        let hello = tls::take_client_outbound(&mut self.session.client);
+        outcome.to_peer = hello;
+        if !self.client_handshaking() && !self.client_buffer.is_empty() {
+            let request = std::mem::take(&mut self.client_buffer);
+            outcome.to_peer.extend(feed_client(&mut self.session.client, &request)?);
         }
         outcome.to_client = tls::take_server_outbound(&mut self.session.server);
         Ok(outcome)
@@ -96,18 +108,24 @@ impl ProxySession {
     /// Bytes the real server just sent.
     pub fn on_peer_payload(&mut self, payload: &[u8]) -> Result<Outcome, String> {
         let mut outcome = Outcome::default();
-        let plain = feed_client(&mut self.session.client, payload)?;
+        let plain = tls::feed_client_wire(&mut self.session.client, payload)?;
 
-        if self.client_handshaking() || self.server_handshaking() {
-            outcome.to_peer = tls::take_client_outbound(&mut self.session.client);
-            return Ok(outcome);
+        // The upstream half has wire bytes of its own: the rest of its
+        // handshake, and the request buffered while it was still handshaking.
+        outcome.to_peer = tls::take_client_outbound(&mut self.session.client);
+        if !self.client_handshaking() && !self.client_buffer.is_empty() {
+            let request = std::mem::take(&mut self.client_buffer);
+            outcome.to_peer.extend(feed_client(&mut self.session.client, &request)?);
         }
 
+        if self.server_handshaking() {
+            outcome.to_client = tls::take_server_outbound(&mut self.session.server);
+            return Ok(outcome);
+        }
         // Decrypt, edit, re-encrypt for the client.
         let (edited, injected) = self.rewrite_response_for_test(&plain);
         outcome.injected = injected;
         outcome.to_client = send_to_client(&mut self.session.server, &edited)?;
-        outcome.to_peer = tls::take_client_outbound(&mut self.session.client);
         Ok(outcome)
     }
 

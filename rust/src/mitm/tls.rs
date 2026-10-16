@@ -129,15 +129,19 @@ pub fn system_root_store() -> rustls::RootCertStore {
 pub fn client_config() -> Arc<ClientConfig> {
     static CONFIG: std::sync::OnceLock<Arc<ClientConfig>> = std::sync::OnceLock::new();
     CONFIG
-        .get_or_init(|| {
-            let roots = system_root_store();
-            let mut config = ClientConfig::builder()
-                .with_root_certificates(roots)
-                .with_no_client_auth();
-            config.alpn_protocols = vec![ALPN_H1.to_vec()];
-            Arc::new(config)
-        })
+        .get_or_init(|| client_config_with(system_root_store()))
         .clone()
+}
+
+/// A client config with an explicit root set: the real server's certificate
+/// must chain to one of `roots`. Split out so tests can stand in a server of
+/// their own without touching the device's trust store.
+pub fn client_config_with(roots: rustls::RootCertStore) -> Arc<ClientConfig> {
+    let mut config = ClientConfig::builder()
+        .with_root_certificates(roots)
+        .with_no_client_auth();
+    config.alpn_protocols = vec![ALPN_H1.to_vec()];
+    Arc::new(config)
 }
 
 /// Server config that asks [`SniCertResolver`] for the leaf per connection.
@@ -151,12 +155,22 @@ pub fn server_config(resolver: Arc<SniCertResolver>) -> Arc<ServerConfig> {
 
 /// Opens both halves for a flow towards `real_server`.
 pub fn open_session(resolver: &Arc<SniCertResolver>, real_server: &str) -> Result<TlsSession, String> {
+    open_session_with(resolver, real_server, client_config())
+}
+
+/// Like [`open_session`], but the upstream half verifies against the caller's
+/// own client config instead of the device trust store.
+pub fn open_session_with(
+    resolver: &Arc<SniCertResolver>,
+    real_server: &str,
+    upstream_config: Arc<ClientConfig>,
+) -> Result<TlsSession, String> {
     let server = ServerConnection::new(server_config(Arc::clone(resolver)))
         .map_err(|e| format!("server conn: {e}"))?;
 
     let name = rustls::pki_types::ServerName::try_from(real_server.to_string())
         .map_err(|e| format!("server name: {e}"))?;
-    let client = ClientConnection::new(client_config(), name)
+    let client = ClientConnection::new(upstream_config, name)
         .map_err(|e| format!("client conn: {e}"))?;
 
     Ok(TlsSession { server, client })
@@ -210,6 +224,32 @@ pub fn feed_server(connection: &mut ServerConnection, chunk: &[u8]) -> Result<Ve
         }
     }
     Ok(drain_server_plain(connection))
+}
+
+/// Feeds wire bytes from the real server into `ClientConnection`, returning the
+/// plaintext that was decrypted.
+///
+/// This is the peer-direction mirror of [`feed_server`]: handshake records and
+/// encrypted application data must go through `read_tls`/`process_new_packets`,
+/// never through `writer()` (which would try to encrypt them again).
+pub fn feed_client_wire(
+    connection: &mut ClientConnection,
+    chunk: &[u8],
+) -> Result<Vec<u8>, String> {
+    let mut reader = std::io::Cursor::new(chunk);
+    loop {
+        match connection.read_tls(&mut reader) {
+            Ok(0) => break,
+            Ok(_) => {
+                if let Err(e) = connection.process_new_packets() {
+                    return Err(format!("client process_new_packets: {e}"));
+                }
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::UnexpectedEof => break,
+            Err(e) => return Err(format!("client read_tls: {e}")),
+        }
+    }
+    Ok(drain_client_plain(connection))
 }
 
 /// Encrypts `plaintext` on `ClientConnection` and returns the wire bytes to send

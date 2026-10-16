@@ -24,6 +24,12 @@ fn client_trusting(ca: &crate::mitm::ca::CertificateAuthority) -> Arc<ClientConf
     Arc::new(config)
 }
 
+/// Server side that mints leaves through the same per-SNI resolver the device uses.
+fn server_using(ca: Arc<crate::mitm::ca::CertificateAuthority>) -> ServerConnection {
+    let resolver = Arc::new(SniCertResolver::new(ca));
+    ServerConnection::new(server_config(resolver)).expect("server conn")
+}
+
 /// Runs a full handshake between our `ServerConnection` and the client side.
 fn handshake(
     server: &mut ServerConnection,
@@ -68,10 +74,8 @@ fn feed_client_bytes(connection: &mut ClientConnection, chunk: &[u8]) -> usize {
 
 #[test]
 fn terminates_a_full_tls_conversation() {
-    let ca = crate::mitm::ca::CertificateAuthority::generate().expect("ca");
-    let issued = ca.issue("origin.example.com").expect("leaf");
-    let sconfig = server_config(ca.chain_for(&issued), issued.key.clone()).expect("server config");
-    let mut server = ServerConnection::new(sconfig).expect("server conn");
+    let ca = Arc::new(crate::mitm::ca::CertificateAuthority::generate().expect("ca"));
+    let mut server = server_using(Arc::clone(&ca));
 
     let cconfig = client_trusting(&ca);
     let name = rustls::pki_types::ServerName::try_from("origin.example.com".to_string())
@@ -96,10 +100,8 @@ fn terminates_a_full_tls_conversation() {
 
 #[test]
 fn spliced_body_survives_the_tls_round_trip() {
-    let ca = crate::mitm::ca::CertificateAuthority::generate().expect("ca");
-    let issued = ca.issue("html.example.com").expect("leaf");
-    let sconfig = server_config(ca.chain_for(&issued), issued.key.clone()).expect("server config");
-    let mut server = ServerConnection::new(sconfig).expect("server conn");
+    let ca = Arc::new(crate::mitm::ca::CertificateAuthority::generate().expect("ca"));
+    let mut server = server_using(Arc::clone(&ca));
 
     let cconfig = client_trusting(&ca);
     let name = rustls::pki_types::ServerName::try_from("html.example.com".to_string())
@@ -121,6 +123,43 @@ fn spliced_body_survives_the_tls_round_trip() {
         "injected script must reach the client: {text}"
     );
     assert!(text.contains("ad here"));
+}
+
+#[test]
+fn a_restored_ca_still_signs_leaves_the_original_trusts() {
+    // This is the path a real device takes after a restart: the CA is rebuilt
+    // from persisted PEM (rcgen cannot parse its DER back), so the issuer
+    // object is fresh while the DER the client installed is the original one.
+    // If `from_pem` stops mirroring the stored CA, every leaf would fail to
+    // chain and HTTPS pages would die with CERT_AUTHORITY_INVALID.
+    let ca = crate::mitm::ca::CertificateAuthority::generate().expect("ca");
+    let stored_der = ca.cert_der();
+    let restored = crate::mitm::ca::CertificateAuthority::from_pem(
+        &ca.cert_pem(),
+        &ca.key_pem(),
+    )
+    .expect("restore");
+
+    let issued = restored.issue("origin.example.com").expect("leaf");
+    let _ = &issued; // the resolver mints its own leaf; keep the call to exercise the cache
+    let mut server = server_using(Arc::new(restored));
+
+    // The client trusts only what the user installed: the original DER.
+    let mut roots = rustls::RootCertStore::empty();
+    roots
+        .add(CertificateDer::from(stored_der))
+        .expect("root accepted");
+    let mut cconfig = ClientConfig::builder()
+        .with_root_certificates(roots)
+        .with_no_client_auth();
+    cconfig.alpn_protocols = vec![ALPN_H1.to_vec()];
+    let cconfig = Arc::new(cconfig);
+
+    let name = rustls::pki_types::ServerName::try_from("origin.example.com".to_string())
+        .expect("server name");
+    let mut client = ClientConnection::new(cconfig, name).expect("client conn");
+
+    handshake(&mut server, &mut client);
 }
 
 /// Reads new plaintext from a client connection without draining old data.

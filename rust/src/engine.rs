@@ -1668,14 +1668,23 @@ impl Core {
 
     /// Moves server bytes through the splice and writes them back to the client.
     fn relay_peer_bytes(&self, client_port: u16, bytes: &[u8]) {
-        let segments = {
+        let (segments, to_peer) = {
             let mut guard = self.relays.lock().unwrap();
             let Some(relay) = guard.get_mut(client_port) else {
                 return;
             };
             match relay.on_peer_data(bytes) {
-                Ok(outbound) if outbound.is_empty() => Vec::new(),
-                Ok(outbound) => relay.segments_for_client(&outbound),
+                // The upstream half may want bytes on its own socket (its
+                // protocol handshake finishing, a buffered request): those
+                // must reach the peer or the flow deadlocks.
+                Ok((to_peer, outbound)) => {
+                    let segments = if outbound.is_empty() {
+                        Vec::new()
+                    } else {
+                        relay.segments_for_client(&outbound)
+                    };
+                    (segments, to_peer)
+                }
                 Err(e) => {
                     crate::logbuf::push(&format!("relay peer step: {e}"));
                     return;
@@ -1684,6 +1693,9 @@ impl Core {
         };
         for segment in segments {
             self.write_raw(&segment);
+        }
+        if !to_peer.is_empty() {
+            self.push_to_peer(client_port, &to_peer);
         }
     }
 }

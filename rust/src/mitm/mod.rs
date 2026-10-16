@@ -20,6 +20,9 @@ pub mod tls;
 #[cfg(test)]
 mod proxy_tests;
 
+#[cfg(test)]
+mod tls_tests;
+
 /// Where the MITM stage stands.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Stage {

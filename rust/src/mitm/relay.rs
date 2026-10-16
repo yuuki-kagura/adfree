@@ -207,22 +207,25 @@ impl Relay {
 
     /// Data arrived from the real server.
     ///
-    /// Returns the plaintext to send to the client (with any script injected).
-    /// Sequence bookkeeping happens in [`Relay::segments_for_client`], not here.
-    pub fn on_peer_data(&mut self, bytes: &[u8]) -> Result<Vec<u8>, String> {
+    /// Returns `(to_peer, to_client)`: the peer direction carries wire bytes
+    /// the upstream half produced while processing server data (its protocol
+    /// handshake finishing, plus a request that waited for it). Dropping those
+    /// silently deadlocks the flow: the real server never sees the client's
+    /// Finished and never answers.
+    pub fn on_peer_data(&mut self, bytes: &[u8]) -> Result<(Vec<u8>, Vec<u8>), String> {
         if bytes.is_empty() {
-            return Ok(Vec::new());
+            return Ok((Vec::new(), Vec::new()));
         }
         self.last_ms = now_ms();
         let Some(session) = self.session.as_mut() else {
             // Plain splice: forward the bytes untouched.
-            return Ok(bytes.to_vec());
+            return Ok((Vec::new(), bytes.to_vec()));
         };
         let out = session.on_peer_payload(bytes)?;
         if out.closed {
             self.closed = true;
         }
-        Ok(out.to_client)
+        Ok((out.to_peer, out.to_client))
     }
 
     /// The client sent a FIN. Shut our write side to the peer down and
@@ -473,7 +476,7 @@ mod tests {
         assert_eq!(r.flow.acked_seq, 1001 + 18);
         assert_eq!(r.flow.down_bytes, 18);
         let back = r.on_peer_data(b"HTTP/1.1 200 OK\r\n\r\n").expect("peer step");
-        assert_eq!(back, b"HTTP/1.1 200 OK\r\n\r\n");
+        assert_eq!(back, (Vec::new(), b"HTTP/1.1 200 OK\r\n\r\n".to_vec()));
     }
 
     #[test]
@@ -541,7 +544,10 @@ mod tests {
         let out = r.on_peer_data(&[0x00, 0x03, 0x01, 0x00, 0x02, 0x00, 0x00]);
         match out {
             Err(_) => {}
-            Ok(bytes) => assert!(bytes.is_empty(), "junk must not become plaintext"),
+            Ok((to_peer, to_client)) => {
+                assert!(to_peer.is_empty(), "junk must not reach the peer");
+                assert!(to_client.is_empty(), "junk must not become plaintext");
+            }
         }
     }
 
@@ -652,6 +658,120 @@ mod tests {
     fn empty_payloads_are_no_ops() {
         let mut r = relay();
         assert_eq!(r.on_client_segment(1001, &[]).unwrap(), (Vec::new(), Vec::new()));
-        assert_eq!(r.on_peer_data(&[]).unwrap(), Vec::<u8>::new());
+        assert_eq!(r.on_peer_data(&[]).unwrap(), (Vec::new(), Vec::new()));
+    }
+
+    /// The engine's own path: a browser, a `Relay`, and an origin, with the
+    /// relay in the middle exactly as the engine drives it.
+    ///
+    /// Regression: `on_peer_data` used to return only the client-bound bytes,
+    /// dropping what the upstream half produced while processing server data
+    /// (its protocol Finished and the request buffered behind it). The origin
+    /// then never completed its handshake, and every HTTPS page died with an
+    /// empty response.
+    #[test]
+    fn on_peer_data_carries_the_upstreams_own_bytes() {
+        use crate::mitm::proxy_tests::{feed_browser, feed_origin};
+        use rustls::pki_types::ServerName;
+        use rustls::{ClientConnection, ServerConnection};
+        use std::io::Write;
+
+        // The origin's CA: the certificate the upstream half must trust.
+        let origin_ca = CertificateAuthority::generate().expect("origin ca");
+        let mut origin_roots = rustls::RootCertStore::empty();
+        origin_roots
+            .add(rustls::pki_types::CertificateDer::from(origin_ca.cert_der()))
+            .expect("origin root");
+
+        // The CA the browser trusts: the one we present to it.
+        let mitm_ca = CertificateAuthority::generate().expect("mitm ca");
+        let resolver = Arc::new(SniCertResolver::new(Arc::new(
+            CertificateAuthority::from_pem(&mitm_ca.cert_pem(), &mitm_ca.key_pem())
+                .expect("restore"),
+        )));
+        let session = crate::mitm::tls::open_session_with(
+            &resolver,
+            "origin.example.com",
+            crate::mitm::tls::client_config_with(origin_roots),
+        )
+        .expect("session");
+        let proxy = ProxySession::new(session, String::new());
+        let mut relay = Relay::new_tls(
+            crate::mitm::tcp::Flow::new(crate::packet::IpKey::V4(1), 40000, 443, 1000, 5000),
+            -1,
+            proxy,
+            Vec::new(),
+            DEFAULT_MSS,
+            false,
+        );
+
+        // The origin, minting leaves from its own CA.
+        let origin_resolver = Arc::new(SniCertResolver::new(Arc::new(origin_ca)));
+        let mut origin = ServerConnection::new(crate::mitm::tls::server_config(origin_resolver))
+            .expect("origin");
+
+        // The fake browser.
+        let mut browser_roots = rustls::RootCertStore::empty();
+        browser_roots
+            .add(rustls::pki_types::CertificateDer::from(mitm_ca.cert_der()))
+            .expect("browser root");
+        let name = ServerName::try_from("origin.example.com".to_string()).expect("server name");
+        let mut browser =
+            ClientConnection::new(crate::mitm::tls::client_config_with(browser_roots), name)
+                .expect("browser");
+
+        let request = b"GET / HTTP/1.1\r\nHost: origin.example.com\r\n\r\n";
+        let response = b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nhi";
+        browser
+            .writer()
+            .write_all(request)
+            .expect("browser writes the request");
+
+        let mut to_origin: Vec<u8> = Vec::new();
+        let mut origin_request: Vec<u8> = Vec::new();
+        let mut browser_plain: Vec<u8> = Vec::new();
+        let mut origin_answered = false;
+
+        for _round in 0..64 {
+            // browser -> relay -> origin
+            let wire = crate::mitm::tls::take_client_outbound(&mut browser);
+            if !wire.is_empty() {
+                let seq = relay.flow.acked_seq;
+                let (to_peer, to_client) =
+                    relay.on_client_segment(seq, &wire).expect("client step");
+                to_origin.extend_from_slice(&to_peer);
+                feed_browser(&mut browser, &to_client, &mut browser_plain);
+            }
+            if !to_origin.is_empty() {
+                feed_origin(&mut origin, &to_origin, &mut origin_request);
+                to_origin.clear();
+                if !origin_answered && !origin_request.is_empty() {
+                    origin
+                        .writer()
+                        .write_all(response)
+                        .expect("origin writes the response");
+                    origin_answered = true;
+                }
+            }
+            // origin -> relay -> browser
+            let wire = crate::mitm::tls::take_server_outbound(&mut origin);
+            if !wire.is_empty() {
+                let (to_peer, to_client) = relay.on_peer_data(&wire).expect("peer step");
+                to_origin.extend_from_slice(&to_peer);
+                feed_browser(&mut browser, &to_client, &mut browser_plain);
+            }
+            if browser_plain.windows(12).any(|w| w == b"HTTP/1.1 200") {
+                break;
+            }
+        }
+
+        assert_eq!(
+            origin_request, request,
+            "the origin must receive the request byte for byte"
+        );
+        assert!(
+            browser_plain.starts_with(b"HTTP/1.1 200 OK"),
+            "the browser must receive the response"
+        );
     }
 }
