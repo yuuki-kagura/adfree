@@ -193,7 +193,10 @@ data class ProtectionSettings(
     val isAdBlockingEnabled: Boolean = true,
     val isTrackingProtectionEnabled: Boolean = true,
     val isDnsProtectionEnabled: Boolean = true,
-    val isHttpsFilteringEnabled: Boolean = true,
+    // Off until the CA is installed in the trust store and the user opts in:
+    // terminating TLS without a trusted certificate would hand apps a leaf
+    // they reject, breaking HTTPS instead of filtering it.
+    val isHttpsFilteringEnabled: Boolean = false,
     val isFirewallEnabled: Boolean = true,
     val isEcoBatteryModeEnabled: Boolean = true,
     val isStealthModeEnabled: Boolean = true,

@@ -73,6 +73,9 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        // System screens (the certificate installer, consent dialogs) launch
+        // from the ViewModel, so it needs a context that can start activities.
+        viewModel.attachContext { this }
         enableEdgeToEdge()
 
         setContent {

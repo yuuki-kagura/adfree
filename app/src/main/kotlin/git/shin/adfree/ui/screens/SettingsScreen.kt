@@ -1,5 +1,6 @@
 package git.shin.adfree.ui.screens
 
+import android.widget.Toast
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -52,8 +53,11 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LifecycleEventEffect
 import git.shin.adfree.core.MitmStatus
 import git.shin.adfree.core.ScriptBinding
 import git.shin.adfree.model.DnsBlockMode
@@ -68,6 +72,7 @@ import git.shin.adfree.ui.theme.AdGuardDarkSurface
 import git.shin.adfree.ui.theme.AdGuardDarkSurfaceVariant
 import git.shin.adfree.ui.theme.AdGuardGreenLight
 import git.shin.adfree.ui.theme.AdGuardGreenPrimary
+import git.shin.adfree.ui.theme.AdGuardOrangeWarning
 import git.shin.adfree.ui.theme.AdGuardTextMuted
 import git.shin.adfree.ui.theme.AdGuardTextPrimary
 import git.shin.adfree.ui.theme.AdGuardTextSecondary
@@ -290,16 +295,38 @@ private fun HttpsFilterSection(viewModel: AdGuardViewModel) {
     var status by remember { mutableStateOf<MitmStatus?>(null) }
     var showCert by remember { mutableStateOf(false) }
     var showEditor by remember { mutableStateOf(false) }
+    var showCertGate by remember { mutableStateOf(false) }
     // HTTPS filtering is the persisted setting (the same one the engine config
     // is built from); `scriptsEnabled` only says whether the script set is
     // armed, which is a different thing entirely.
     var httpsEnabled by remember {
         mutableStateOf(viewModel.uiState.value.settings.isHttpsFilteringEnabled)
     }
+    // Live view of the trust store: installing the CA while the app sits in
+    // the background must flip this without a restart.
+    var caTrusted by remember { mutableStateOf(viewModel.isCaTrusted()) }
+    // Set when the gate dialog sends the user off to install the certificate,
+    // so coming back with it installed turns filtering on as they intended.
+    var pendingEnable by remember { mutableStateOf(false) }
+
+    val context = LocalContext.current
 
     // Lazily load the status; the core is cheap to query.
     androidx.compose.runtime.LaunchedEffect(Unit) {
         status = viewModel.readMitmStatus()
+        caTrusted = viewModel.isCaTrusted()
+    }
+
+    // The system certificate installer lives in another activity: re-check the
+    // store and honour the pending enable when we come back to the app.
+    LifecycleEventEffect(Lifecycle.Event.ON_RESUME) {
+        status = viewModel.readMitmStatus()
+        caTrusted = viewModel.isCaTrusted()
+        if (pendingEnable && caTrusted && !httpsEnabled) {
+            pendingEnable = false
+            httpsEnabled = true
+            viewModel.setHttpsFiltering(true) { status = it }
+        }
     }
 
     Column {
@@ -323,8 +350,16 @@ private fun HttpsFilterSection(viewModel: AdGuardViewModel) {
             subtitle = "Giải mã HTTPS để lọc quảng cáo và chèn script",
             checked = httpsEnabled,
             onCheckedChange = { enabled ->
-                httpsEnabled = enabled
-                viewModel.setHttpsFiltering(enabled) { status = it }
+                if (enabled && !caTrusted) {
+                    // Without a trusted CA the engine can only fall back to a
+                    // plain relay, so an "on" switch would lie: ask for the
+                    // certificate first.
+                    pendingEnable = true
+                    showCertGate = true
+                } else {
+                    httpsEnabled = enabled
+                    viewModel.setHttpsFiltering(enabled) { status = it }
+                }
             }
         )
 
@@ -355,6 +390,12 @@ private fun HttpsFilterSection(viewModel: AdGuardViewModel) {
                             color = AdGuardTextMuted,
                             fontFamily = FontFamily.Monospace,
                         )
+                        Text(
+                            text = if (caTrusted) "Chứng chỉ: đã cài đặt"
+                                else "Chứng chỉ: chưa cài đặt",
+                            fontSize = 11.sp,
+                            color = if (caTrusted) AdGuardGreenLight else AdGuardOrangeWarning,
+                        )
                     }
                     OutlinedButton(
                         onClick = { viewModel.createCa { status = it } },
@@ -368,7 +409,12 @@ private fun HttpsFilterSection(viewModel: AdGuardViewModel) {
                     Spacer(modifier = Modifier.height(8.dp))
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         OutlinedButton(
-                            onClick = { viewModel.installCertificate() },
+                            onClick = {
+                                // The install is a multi-step trip through
+                                // Settings; show the route before leaving.
+                                pendingEnable = false
+                                showCertGate = true
+                            },
                             shape = RoundedCornerShape(8.dp),
                         ) {
                             Text("Cài chứng chỉ", fontSize = 11.sp)
@@ -404,6 +450,55 @@ private fun HttpsFilterSection(viewModel: AdGuardViewModel) {
 
     if (showCert) {
         CertificateDialog(status?.caPem.orEmpty()) { showCert = false }
+    }
+    if (showCertGate) {
+        AlertDialog(
+            onDismissRequest = {
+                pendingEnable = false
+                showCertGate = false
+            },
+            title = { Text("Cần cài chứng chỉ", fontSize = 16.sp) },
+            text = {
+                Column {
+                    Text(
+                        "Lọc HTTPS cần chứng chỉ của AdFree để giải mã kết nối. " +
+                            "AdFree sẽ lưu tệp chứng chỉ vào Downloads rồi mở Cài đặt.",
+                        fontSize = 12.sp,
+                        color = AdGuardTextSecondary,
+                    )
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Text(
+                        "Trong Cài đặt chọn: Bảo mật & quyền riêng tư → Cài đặt bảo " +
+                            "mật khác → Mã hóa & thông tin xác thực → Cài đặt chứng " +
+                            "chỉ → Chứng chỉ CA,\nrồi chọn tệp AdFree-CA.crt trong Downloads.",
+                        fontSize = 12.sp,
+                        color = AdGuardTextSecondary,
+                    )
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    showCertGate = false
+                    val saved = viewModel.installCertificate()
+                    Toast.makeText(
+                        context,
+                        if (saved != null) "Đã lưu $saved vào Downloads"
+                        else "Không lưu được chứng chỉ",
+                        Toast.LENGTH_SHORT,
+                    ).show()
+                }) {
+                    Text("Mở Cài đặt")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = {
+                    pendingEnable = false
+                    showCertGate = false
+                }) {
+                    Text("Để sau")
+                }
+            },
+        )
     }
     if (showEditor) {
         ScriptEditorDialog(

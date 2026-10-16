@@ -1,5 +1,6 @@
 package git.shin.adfree.ui
 
+import android.util.Log
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import git.shin.adfree.core.CoreEngine
@@ -331,6 +332,9 @@ class AdGuardViewModel(
         return coreEngine.mitmStatus()
     }
 
+    /** True when the CA is present in the device trust store. */
+    fun isCaTrusted(): Boolean = coreEngine.isCaTrusted()
+
     /**
      * Turns HTTPS filtering on or off.
      *
@@ -352,9 +356,16 @@ class AdGuardViewModel(
         onDone(coreEngine.mitmStatus())
     }
 
-    /** Sends the user to the system screen that installs a CA certificate. */
-    fun installCertificate() {
+    /**
+     * Exports the CA certificate to Downloads and opens the Settings screen
+     * that leads to the installer. Returns the exported file name so the
+     * caller can tell the user what to pick, or null when the export failed.
+     */
+    fun installCertificate(): String? {
+        val name = coreEngine.exportCaCertificate()
         runCatching { containerProvider()?.startActivity(coreEngine.installCertificateIntent()) }
+            .onFailure { Log.w("AdFree", "certificate install intent failed", it) }
+        return name
     }
 
     /** Replaces the user script list. */

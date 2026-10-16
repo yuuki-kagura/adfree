@@ -1,12 +1,20 @@
 package git.shin.adfree.core
 
+import android.content.ContentValues
 import android.content.Intent
 import android.net.Uri
+import android.os.Build
+import android.os.Environment
+import android.provider.MediaStore
 import android.provider.Settings
 import android.util.Log
+import git.shin.adfree.AdGuardApplication
 import git.shin.adfree.model.DnsBlockMode
 import git.shin.adfree.model.NetworkRequestLog
 import java.io.File
+import java.security.KeyStore
+import java.security.cert.CertificateFactory
+import java.security.cert.X509Certificate
 
 /**
  * Kotlin-side wrapper around the uniffi bindings (`adfree.kt`).
@@ -271,11 +279,98 @@ class CoreEngine {
         runCatching { caKeyFile().delete() }
     }
 
-    /** Opens the system screen where the user installs a CA certificate. */
-    fun installCertificateIntent(): Intent {
-        // Android has no deep link for "install CA", so open the encryption screen
-        // and let the user pick "Install a certificate".
-        return Intent(Settings.ACTION_SECURITY_SETTINGS)
+    /**
+     * Opens the Settings screen that leads to the CA installer.
+     *
+     * The platform refuses to install a CA certificate inline (`KeyChain`
+     * install intents answer "Install CA certificates in Settings"), so the
+     * user has to walk the Settings flow: Encryption & credentials → Install a
+     * certificate → CA certificate → pick the exported file → confirm the
+     * monitoring warning. [exportCaCertificate] puts that file where the
+     * picker can reach it.
+     */
+    fun installCertificateIntent(): Intent =
+        Intent(Settings.ACTION_SECURITY_SETTINGS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+
+    /**
+     * Copies the CA certificate to the shared Downloads folder.
+     *
+     * The Settings file picker cannot open app-private storage, so the
+     * certificate has to travel through the media store for the install flow
+     * to finish. Only the certificate is copied; the private half stays in
+     * [caKeyFile]. Returns the exported file name, or null when it failed.
+     */
+    fun exportCaCertificate(): String? {
+        val pem = runCatching { ensureCa() }.getOrNull() ?: return null
+        val name = "AdFree-CA.crt"
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) {
+            return runCatching {
+                @Suppress("DEPRECATION")
+                val downloads = Environment
+                    .getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
+                if (!downloads.exists() && !downloads.mkdirs()) return null
+                File(downloads, name).writeText(pem)
+                name
+            }.getOrNull()
+        }
+        return runCatching {
+            val resolver = AdGuardApplication.instance.contentResolver
+            val collection = MediaStore.Downloads.EXTERNAL_CONTENT_URI
+            // Replace any earlier copy: two identical rows would leave the
+            // picker showing the same certificate twice with no way to tell
+            // them apart.
+            resolver.delete(
+                collection,
+                "${MediaStore.Downloads.DISPLAY_NAME} = ?",
+                arrayOf(name),
+            )
+            val uri = resolver.insert(
+                collection,
+                ContentValues().apply {
+                    put(MediaStore.Downloads.DISPLAY_NAME, name)
+                    put(MediaStore.Downloads.MIME_TYPE, "application/x-x509-ca-cert")
+                    put(MediaStore.Downloads.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS)
+                    put(MediaStore.Downloads.IS_PENDING, 1)
+                },
+            ) ?: return null
+            resolver.openOutputStream(uri)?.use { it.write(pem.toByteArray()) }
+            resolver.update(
+                uri,
+                ContentValues().apply { put(MediaStore.Downloads.IS_PENDING, 0) },
+                null,
+                null,
+            )
+            name
+        }.getOrNull()
+    }
+
+    /**
+     * True when our CA sits in the device trust store.
+     *
+     * Trust is checked by comparing DER bytes, not aliases: the same
+     * certificate can live in the user store (installed through the dialog
+     * above) or in the system store (preloaded images, emulator tooling), and
+     * either way the leaves we mint are accepted.
+     */
+    fun isCaTrusted(): Boolean {
+        val pem = runCatching { git.shin.adfree.core.coreCaPem() }.getOrNull().orEmpty()
+        if (pem.isBlank()) return false
+        val expected = runCatching {
+            CertificateFactory.getInstance("X.509")
+                .generateCertificate(pem.byteInputStream())
+        }.getOrNull() as? X509Certificate ?: return false
+        val store = runCatching {
+            KeyStore.getInstance("AndroidCAStore").apply { load(null, null) }
+        }.getOrNull() ?: return false
+        return runCatching {
+            val aliases = store.aliases()
+            while (aliases.hasMoreElements()) {
+                val cert = store.getCertificate(aliases.nextElement()) as? X509Certificate
+                    ?: continue
+                if (cert.encoded.contentEquals(expected.encoded)) return true
+            }
+            false
+        }.getOrDefault(false)
     }
 
     /** Current MITM status from the core. */
