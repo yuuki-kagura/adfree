@@ -121,6 +121,12 @@ impl CertificateAuthority {
 
     /// Issue (or reuse from cache) a leaf cert for a host.
     pub fn issue(&self, host: &str) -> Result<IssuedCert, String> {
+        if !self.valid {
+            // The `failed()` placeholder must never sign: its key is generated
+            // on the spot and never leaves memory, so the chain would reach the
+            // client signed by something nobody could have installed.
+            return Err("no CA loaded".into());
+        }
         let host = host.to_ascii_lowercase();
         if host.is_empty() || host.starts_with('.') {
             return Err(format!("invalid host {host:?}"));
@@ -132,6 +138,11 @@ impl CertificateAuthority {
         let leaf_key = rcgen::KeyPair::generate().map_err(|e| format!("leaf keygen: {e}"))?;
         let mut params =
             rcgen::CertificateParams::new(vec![host.clone()]).map_err(|e| format!("params: {e}"))?;
+        // Same as the CA: the DN is what a "view certificate" screen shows, so
+        // it names the host instead of rcgen's placeholder.
+        let mut dn = rcgen::DistinguishedName::new();
+        dn.push(rcgen::DnType::CommonName, host.clone());
+        params.distinguished_name = dn;
         params.is_ca = rcgen::IsCa::NoCa;
         params.use_authority_key_identifier_extension = true;
         params.key_usages = vec![
@@ -174,8 +185,15 @@ impl CertificateAuthority {
 
 /// Self-sign a CA object and return its DER.
 fn self_signed_ca(key: &rcgen::KeyPair) -> Result<(rcgen::Certificate, Vec<u8>), String> {
-    let mut params = rcgen::CertificateParams::new(vec!["AdFree Root CA".to_string()])
+    let mut params = rcgen::CertificateParams::new(Vec::new())
         .map_err(|e| format!("params: {e}"))?;
+    // `new()` only fills the SANs; without a distinguished name rcgen writes
+    // "CN=rcgen self signed cert" into the certificate, which is what the
+    // system's certificate install dialog shows the user.
+    let mut dn = rcgen::DistinguishedName::new();
+    dn.push(rcgen::DnType::CommonName, "AdFree Personal CA");
+    dn.push(rcgen::DnType::OrganizationName, "AdFree");
+    params.distinguished_name = dn;
     params.is_ca = rcgen::IsCa::Ca(rcgen::BasicConstraints::Unconstrained);
     params.key_usages = vec![
         rcgen::KeyUsagePurpose::KeyCertSign,
@@ -272,6 +290,33 @@ mod tests {
             .add(rustls::pki_types::CertificateDer::from(ca.cert_der()))
             .expect("root accepted");
         assert_eq!(roots.len(), 1);
+    }
+
+    #[test]
+    fn the_placeholder_ca_refuses_to_issue() {
+        // Signing from the placeholder would produce a chain whose root was
+        // generated in memory and never installed anywhere.
+        let ca = CertificateAuthority::failed("not initialised");
+        assert!(!ca.has_ca());
+        assert!(ca.issue("ads.example.com").is_err());
+        assert!(ca.cached_hosts() == 0);
+    }
+
+    #[test]
+    fn the_ca_carries_a_real_name_not_rcgens_placeholder() {
+        let ca = CertificateAuthority::generate().expect("ca");
+        let der = ca.cert_der();
+        let has = |needle: &[u8]| der.windows(needle.len()).any(|w| w == needle);
+        // The CN lands in the DER as-is, and this is what the system's
+        // certificate install dialog shows.
+        assert!(has(b"AdFree Personal CA"));
+        assert!(!has(b"rcgen self signed cert"));
+        // The issuer DN of a leaf is copied from the CA, so it carries the
+        // same name rather than rcgen's.
+        let leaf = ca.issue("ads.example.com").expect("leaf");
+        let leaf_has = |needle: &[u8]| leaf.cert.windows(needle.len()).any(|w| w == needle);
+        assert!(leaf_has(b"AdFree Personal CA"));
+        assert!(leaf_has(b"ads.example.com"));
     }
 
     #[test]

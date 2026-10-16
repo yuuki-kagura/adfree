@@ -439,7 +439,7 @@ pub fn core_generate_ca() -> String {
             }
         };
         let pem = ca.cert_pem();
-        *crate::core().mitm_ca.write().unwrap() = Arc::new(ca);
+        crate::core().set_mitm_ca(Arc::new(ca));
         pem
     })
 }
@@ -455,7 +455,7 @@ pub fn core_restore_ca(cert_pem: String, key_pem: String) -> bool {
                 if cert.is_empty() || key.is_empty() {
                     return false;
                 }
-                *crate::core().mitm_ca.write().unwrap() = Arc::new(ca);
+                crate::core().set_mitm_ca(Arc::new(ca));
                 true
             }
             Err(e) => {

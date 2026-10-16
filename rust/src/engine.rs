@@ -750,9 +750,13 @@ impl Core {
             crate::mitm::tcp::initial_seq(pkt.seq as u64),
         );
         let mss = self.relay_mss(pkt);
-        // TLS termination needs a hostname to forge a certificate for; when
-        // there is none the flow is still relayed, just not filtered.
-        let session = if cfg.mitm_enabled && crate::mitm::relay::is_mitm_port(pkt.dst_port) {
+        // TLS termination needs a hostname to forge a certificate for and a
+        // loaded CA to sign it with; without either the flow is still relayed,
+        // just not filtered (protecting the user beats breaking their pages).
+        let session = if cfg.mitm_enabled
+            && crate::mitm::relay::is_mitm_port(pkt.dst_port)
+            && self.mitm_ca.read().unwrap().has_ca()
+        {
             self.host_for_ip(pkt.dst_ip()).and_then(|target| {
                 let resolver = self.mitm_resolver();
                 match crate::mitm::tls::open_session(&resolver, &target) {
@@ -1349,6 +1353,17 @@ impl Core {
         self.relays.lock().unwrap().len()
     }
 
+    /// Installs a new CA and drops the cached resolver.
+    ///
+    /// The resolver captures the `Arc<CertificateAuthority>` it was built
+    /// with, so keeping it after a regeneration (or after the CA is first
+    /// loaded) would keep signing leaves with the previous — possibly
+    /// placeholder — key.
+    pub fn set_mitm_ca(&self, ca: Arc<crate::mitm::ca::CertificateAuthority>) {
+        *self.mitm_ca.write().unwrap() = ca;
+        *self.mitm_resolver.write().unwrap() = None;
+    }
+
     /// True when no flow descriptor (TCP relay or UDP mapping) needs the
     /// forwarder's attention, so it may sleep on the DNS condition variable.
     fn flows_idle(&self) -> bool {
@@ -1864,6 +1879,19 @@ mod tests {
         assert_eq!(snap.packets_total, 0);
         assert_eq!(snap.active_rules, 0);
         assert_eq!(snap.pending_dns, 0);
+    }
+
+    #[test]
+    fn a_new_ca_drops_the_resolver_that_cached_the_old_one() {
+        let core = Core::new();
+        let before = core.mitm_resolver();
+        // The same CA keeps the same resolver...
+        assert!(Arc::ptr_eq(&before, &core.mitm_resolver()));
+        // ...but a swap (a restored CA, or a regenerated one) must rebuild it,
+        // or port 443 would keep being signed by the previous key.
+        let ca = crate::mitm::ca::CertificateAuthority::generate().expect("ca");
+        core.set_mitm_ca(Arc::new(ca));
+        assert!(!Arc::ptr_eq(&before, &core.mitm_resolver()));
     }
 
     /// Minimal IPv4 UDP packet; only the fields `Packet::parse` reads matter.
