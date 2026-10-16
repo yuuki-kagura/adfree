@@ -8,6 +8,37 @@
 
 use crate::packet::{self, Packet, ACK, FIN, PSH, RST, SYN};
 
+/// Finalises a segment: length fields, IPv4 header checksum, then the TCP
+/// checksum over the real pseudo header.
+///
+/// Both checksum fields must read zero while they are being computed — the
+/// buffers we build start as a copy of the client's packet, so the stale
+/// values would otherwise be folded into the result and every segment would be
+/// discarded by the receiving stack.
+fn finish(pkt: &Packet<'_>, out: &mut [u8]) {
+    let l4 = pkt.ip_hdr_len;
+    let total = out.len();
+    if pkt.version == 4 {
+        out[2] = (total >> 8) as u8;
+        out[3] = (total & 0xff) as u8;
+        packet::fix_ipv4_checksum(out);
+    } else {
+        out[4] = ((total - 40) >> 8) as u8;
+        out[5] = ((total - 40) & 0xff) as u8;
+    }
+    out[l4 + 16..l4 + 20].copy_from_slice(&[0, 0, 0, 0]);
+    let checksum = {
+        let (ip, tcp) = out.split_at(l4);
+        let tcp = &tcp[..total - l4];
+        if pkt.version == 4 {
+            packet::tcp_checksum_v4(ip, tcp)
+        } else {
+            packet::tcp_checksum_v6(ip, tcp)
+        }
+    };
+    out[l4 + 16..l4 + 18].copy_from_slice(&checksum.to_be_bytes());
+}
+
 /// Builds an ACK (or SYN-ACK) for `pkt` with explicit seq/ack.
 pub fn build_ack(pkt: &Packet<'_>, seq: u32, ack: u32, syn: bool) -> Option<Vec<u8>> {
     let mut out = pkt.raw[..pkt.total_len.min(pkt.raw.len())].to_vec();
@@ -40,18 +71,7 @@ pub fn build_ack(pkt: &Packet<'_>, seq: u32, ack: u32, syn: bool) -> Option<Vec<
     let total = l4 + 20;
     out.truncate(total);
 
-    if pkt.version == 4 {
-        out[2] = (total >> 8) as u8;
-        out[3] = (total & 0xff) as u8;
-        packet::fix_ipv4_checksum(&mut out);
-        zero_tcp_checksum_v4(&mut out, l4);
-    } else {
-        out[4] = ((total - 40) >> 8) as u8;
-        out[5] = ((total - 40) & 0xff) as u8;
-        let checksum = packet::tcp_checksum_v6(&out[..l4], &out[l4..total]);
-        out[l4 + 16..l4 + 18].copy_from_slice(&checksum.to_be_bytes());
-        out[l4 + 18..l4 + 20].copy_from_slice(&0u16.to_be_bytes());
-    }
+    finish(pkt, &mut out);
     Some(out)
 }
 
@@ -70,19 +90,7 @@ pub fn build_data_segment(
     let l4 = pkt.ip_hdr_len;
     out[l4 + 13] = ACK | PSH;
     out.extend_from_slice(payload);
-    let total = out.len();
-    if pkt.version == 4 {
-        out[2] = (total >> 8) as u8;
-        out[3] = (total & 0xff) as u8;
-        packet::fix_ipv4_checksum(&mut out);
-        zero_tcp_checksum_v4(&mut out, l4);
-    } else {
-        out[4] = ((total - 40) >> 8) as u8;
-        out[5] = ((total - 40) & 0xff) as u8;
-        let checksum = packet::tcp_checksum_v6(&out[..l4], &out[l4..total]);
-        out[l4 + 16..l4 + 18].copy_from_slice(&checksum.to_be_bytes());
-        out[l4 + 18..l4 + 20].copy_from_slice(&0u16.to_be_bytes());
-    }
+    finish(pkt, &mut out);
     Some(out)
 }
 
@@ -91,16 +99,7 @@ pub fn build_fin(pkt: &Packet<'_>, seq: u32, ack: u32) -> Option<Vec<u8>> {
     let mut out = build_ack(pkt, seq, ack, false)?;
     let l4 = pkt.ip_hdr_len;
     out[l4 + 13] = ACK | FIN;
-    let total = out.len();
-    if pkt.version == 4 {
-        out[2] = (total >> 8) as u8;
-        out[3] = (total & 0xff) as u8;
-        packet::fix_ipv4_checksum(&mut out);
-        zero_tcp_checksum_v4(&mut out, l4);
-    } else {
-        let checksum = packet::tcp_checksum_v6(&out[..l4], &out[l4..total]);
-        out[l4 + 16..l4 + 18].copy_from_slice(&checksum.to_be_bytes());
-    }
+    finish(pkt, &mut out);
     Some(out)
 }
 
@@ -109,25 +108,8 @@ pub fn build_rst(pkt: &Packet<'_>, seq: u32) -> Option<Vec<u8>> {
     let mut out = build_ack(pkt, seq, 0, false)?;
     let l4 = pkt.ip_hdr_len;
     out[l4 + 13] = RST;
-    let total = out.len();
-    if pkt.version == 4 {
-        out[2] = (total >> 8) as u8;
-        out[3] = (total & 0xff) as u8;
-        packet::fix_ipv4_checksum(&mut out);
-        zero_tcp_checksum_v4(&mut out, l4);
-    } else {
-        let checksum = packet::tcp_checksum_v6(&out[..l4], &out[l4..total]);
-        out[l4 + 16..l4 + 18].copy_from_slice(&checksum.to_be_bytes());
-    }
+    finish(pkt, &mut out);
     Some(out)
-}
-
-/// IPv4 UDP checksum 0 is legal; keeping it zero also avoids recomputing.
-fn zero_tcp_checksum_v4(buf: &mut [u8], l4: usize) {
-    buf[l4 + 16] = 0;
-    buf[l4 + 17] = 0;
-    buf[l4 + 18] = 0;
-    buf[l4 + 19] = 0;
 }
 
 #[cfg(test)]
@@ -196,6 +178,30 @@ mod tests {
             assert_eq!(rp.is_rst, want_rst);
             assert!(rp.is_ack || want_rst);
             assert!(rp.l4_payload().is_empty());
+        }
+    }
+
+    #[test]
+    fn every_v4_segment_verifies_both_checksums() {
+        // The receiving stack validates these: a stale or zero checksum means
+        // the segment is discarded before the socket ever sees a byte.
+        let raw = syn(1000);
+        let pkt = Packet::parse(&raw).expect("parse");
+        let segs = [
+            build_ack(&pkt, 5000, 1001, true).expect("ack"),
+            build_data_segment(&pkt, 5000, 1001, b"payload").expect("data"),
+            build_fin(&pkt, 5000, 1001).expect("fin"),
+            build_rst(&pkt, 5000).expect("rst"),
+        ];
+        for seg in &segs {
+            let rp = Packet::parse(seg).expect("parse");
+            let l4 = rp.ip_hdr_len;
+            assert_eq!(packet::ipv4_checksum(&seg[..l4]), 0, "ip header checksum");
+            assert_eq!(
+                packet::tcp_checksum_v4(&seg[..l4], &seg[l4..]),
+                0,
+                "tcp checksum"
+            );
         }
     }
 

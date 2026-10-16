@@ -22,7 +22,7 @@ fn make_relay() -> Relay {
     let session = open_session(&resolver, "ads.example.com").expect("session");
     let proxy = ProxySession::new(session, "/adfree-user.js".into());
     let flow = Flow::new(packet::IpKey::V4(0x0a6f_2a01), 40000, 443, 1000, 55_000);
-    Relay::new(flow, -1, proxy, syn_packet())
+    Relay::new(flow, -1, proxy, syn_packet(), 1460)
 }
 
 /// The SYN that would have started the connection.
@@ -59,25 +59,52 @@ fn client_facing_sequence_advances_with_every_payload() {
 }
 
 #[test]
-fn large_payloads_are_split_into_bounded_segments() {
+fn large_payloads_are_split_into_mss_sized_segments() {
     let mut relay = make_relay();
     relay.flow.up_bytes = 1;
     let payload = vec![0xABu8; 40 * 1024];
     let segs = relay.segments_for_client(&payload);
-    assert_eq!(segs.len(), 3, "40 KiB splits into 16 KiB segments");
+    assert!(segs.len() >= 28, "40 KiB cannot fit under the MSS in fewer");
 
-    // Each segment must carry the right slice at the right sequence number.
+    // Each segment must carry the right slice at the right sequence number,
+    // and none may exceed the client's MSS: anything bigger is dropped by its
+    // stack, or cannot even be written to the tun descriptor.
     let mut expect_seq = 55_000 + 1;
     let mut offset = 0usize;
     for seg in &segs {
         let parsed = Packet::parse(seg).expect("parse");
         assert_eq!(parsed.seq, expect_seq);
+        assert!(
+            parsed.l4_payload_len <= 1460,
+            "segment payload {} above the MSS",
+            parsed.l4_payload_len
+        );
         let len = parsed.l4_payload().len();
         assert_eq!(parsed.l4_payload(), &payload[offset..offset + len]);
         expect_seq = expect_seq.wrapping_add(len as u32);
         offset += len;
     }
     assert_eq!(offset, payload.len(), "no bytes may be lost");
+}
+
+#[test]
+fn every_segment_carries_a_valid_ipv4_tcp_checksum() {
+    let mut relay = make_relay();
+    relay.flow.up_bytes = 1;
+    let segs = relay.segments_for_client(b"checksum me");
+    assert_eq!(segs.len(), 1);
+    let seg = &segs[0];
+    let parsed = Packet::parse(seg).expect("parse");
+    let l4 = parsed.ip_hdr_len;
+    // The receiving stack validates this before the socket sees a byte: a zero
+    // or stale checksum silently discards the segment on device.
+    assert_eq!(
+        packet::tcp_checksum_v4(&seg[..l4], &seg[l4..]),
+        0,
+        "recomputed checksum must verify"
+    );
+    // And the IPv4 header checksum too, since we rewrote the addresses.
+    assert_eq!(packet::ipv4_checksum(&seg[..l4]), 0);
 }
 
 #[test]

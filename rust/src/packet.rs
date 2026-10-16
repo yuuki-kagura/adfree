@@ -305,6 +305,37 @@ impl<'a> Packet<'a> {
         self.ip_hdr_len + self.l4_hdr_len()
     }
 
+    /// The MSS advertised in a TCP SYN's options, if present.
+    ///
+    /// Our segments must fit inside it or the client's stack will drop what
+    /// does not: replying to a SYN without ever sending more than the peer's
+    /// own declared size is the only way to be sure.
+    pub fn tcp_mss(&self) -> Option<u16> {
+        if self.proto != PROTO_TCP {
+            return None;
+        }
+        let options = self.raw.get(self.ip_hdr_len + 20..self.ip_hdr_len + self.l4_hdr_len())?;
+        let mut i = 0;
+        while i < options.len() {
+            match options[i] {
+                0 => break, // End of options
+                1 => i += 1, // NOP
+                kind => {
+                    let len = *options.get(i + 1)? as usize;
+                    if len < 2 {
+                        break;
+                    }
+                    if kind == 2 && len == 4 {
+                        let value = u16::from_be_bytes([options[i + 2], options[i + 3]]);
+                        return Some(value);
+                    }
+                    i += len;
+                }
+            }
+        }
+        None
+    }
+
     /// Builds a DNS reply packet by rewriting the query in place.
     ///
     /// `payload` is the new DNS message (possibly a different length than the
@@ -424,6 +455,11 @@ pub fn build_rst(packet: &Packet<'_>) -> Option<Vec<u8>> {
         out[2] = (total >> 8) as u8;
         out[3] = (total & 0xff) as u8;
         fix_ipv4_checksum(&mut out);
+        // The seq/ack/flags just changed: the carried checksum is the client's,
+        // it cannot survive. Recompute over the real pseudo header.
+        let checksum = tcp_checksum_v4(&out[..l4], &out[l4..l4 + 20]);
+        out[l4 + 16..l4 + 18].copy_from_slice(&checksum.to_be_bytes());
+        out[l4 + 18..l4 + 20].copy_from_slice(&0u16.to_be_bytes());
     } else {
         out[4] = ((total - 40) >> 8) as u8;
         out[5] = ((total - 40) & 0xff) as u8;
@@ -475,11 +511,12 @@ pub fn build_ack_response(pkt: &Packet<'_>, seq: u32, ack: u32) -> Option<Vec<u8
         out[2] = (total >> 8) as u8;
         out[3] = (total & 0xff) as u8;
         fix_ipv4_checksum(&mut out);
-        // TCP checksum set to 0; not required for the packets we synthesise.
-        out[l4 + 16] = 0;
-        out[l4 + 17] = 0;
-        out[l4 + 18] = 0;
-        out[l4 + 19] = 0;
+        // A zero TCP checksum is not a "no checksum" marker the way it is for
+        // UDP: the receiving stack validates it and drops the segment, so the
+        // reply would never arrive. Compute the real one.
+        let checksum = tcp_checksum_v4(&out[..l4], &out[l4..total]);
+        out[l4 + 16..l4 + 18].copy_from_slice(&checksum.to_be_bytes());
+        out[l4 + 18..l4 + 20].copy_from_slice(&0u16.to_be_bytes());
     } else {
         out[4] = ((total - 40) >> 8) as u8;
         out[5] = ((total - 40) & 0xff) as u8;
@@ -490,19 +527,19 @@ pub fn build_ack_response(pkt: &Packet<'_>, seq: u32, ack: u32) -> Option<Vec<u8
     Some(out)
 }
 
+/// The IPv4 header checksum; `0` means the header is correct.
+pub fn ipv4_checksum(buf: &[u8]) -> u16 {
+    let ihl = ((buf[0] & 0x0f) as usize) * 4;
+    internet_checksum(&[], &buf[..ihl], &[])
+}
+
 /// Recomputes the IPv4 header checksum of a mutable packet buffer.
 pub fn fix_ipv4_checksum(buf: &mut [u8]) {
-    let ihl = ((buf[0] & 0x0f) as usize) * 4;
-    let mut sum: u32 = 0;
-    let mut i = 0;
-    while i + 1 < ihl {
-        sum += u16::from_be_bytes([buf[i], buf[i + 1]]) as u32;
-        i += 2;
-    }
-    while (sum >> 16) != 0 {
-        sum = (sum & 0xffff) + (sum >> 16);
-    }
-    let csum = !(sum as u16);
+    // The checksum field must read zero while it is being computed, or the
+    // previous value is folded into the result.
+    buf[10] = 0;
+    buf[11] = 0;
+    let csum = ipv4_checksum(buf);
     buf[10] = (csum >> 8) as u8;
     buf[11] = (csum & 0xff) as u8;
 }
@@ -518,6 +555,23 @@ fn v6_pseudo(ip_hdr: &[u8], len: u32, next_header: u8) -> [u8; 40] {
     pseudo[32..36].copy_from_slice(&len.to_be_bytes());
     pseudo[39] = next_header;
     pseudo
+}
+
+/// IPv4 pseudo header: src(4) dst(4) zero(1) proto(1) len(2).
+fn v4_pseudo(ip_hdr: &[u8], len: u32, next_header: u8) -> [u8; 12] {
+    let mut pseudo = [0u8; 12];
+    if ip_hdr.len() < 20 {
+        return pseudo;
+    }
+    pseudo[0..4].copy_from_slice(&ip_hdr[12..16]);
+    pseudo[4..8].copy_from_slice(&ip_hdr[16..20]);
+    pseudo[9] = next_header;
+    pseudo[10..12].copy_from_slice(&(len as u16).to_be_bytes());
+    pseudo
+}
+
+pub fn tcp_checksum_v4(ip_hdr: &[u8], tcp: &[u8]) -> u16 {
+    internet_checksum(&v4_pseudo(ip_hdr, tcp.len() as u32, PROTO_TCP), tcp, &[])
 }
 
 pub fn tcp_checksum_v6(ip_hdr: &[u8], tcp: &[u8]) -> u16 {

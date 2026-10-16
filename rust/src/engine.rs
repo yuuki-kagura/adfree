@@ -450,35 +450,89 @@ impl Core {
             if !crate::mitm::relay::is_mitm_port(pkt.dst_port) {
                 return false;
             }
+            // A retransmitted SYN for a live relay: answer again without
+            // disturbing the flow (the first answer may have been lost).
+            let existing = {
+                let guard = self.relays.lock().unwrap();
+                guard.get(port).map(|relay| {
+                    (
+                        relay.syn_packet.clone(),
+                        relay.flow.my_seq,
+                        relay.flow.acked_seq,
+                    )
+                })
+            };
+            if let Some((syn_packet, my_seq, acked_seq)) = existing {
+                if let Some(template) = Packet::parse(&syn_packet) {
+                    if let Some(reply) =
+                        crate::mitm::segment::build_ack(&template, my_seq, acked_seq, true)
+                    {
+                        out.push(reply);
+                    }
+                }
+                return true;
+            }
             return self.start_relay(pkt, out);
         }
-        // Existing relay: feed the payload through the splice.
+        if pkt.is_rst {
+            // The client gave up: retire the flow quietly.
+            return self.relays.lock().unwrap().remove(port).is_some();
+        }
         let mut guard = self.relays.lock().unwrap();
         let Some(relay) = guard.get_mut(port) else {
             return false;
         };
         let payload = pkt.l4_payload();
-        if payload.is_empty() {
-            return false;
-        }
-        match relay.on_client_segment(payload) {
-            Ok((to_peer, to_client)) => {
-                if !to_peer.is_empty() {
-                    self.write_all(relay.peer_fd, &to_peer);
-                }
-                if !to_client.is_empty() {
-                    for segment in relay.segments_for_client(&to_client) {
-                        out.push(segment);
+        let mut reset = false;
+        if !payload.is_empty() {
+            match relay.on_client_segment(payload) {
+                Ok((to_peer, to_client)) => {
+                    if !to_peer.is_empty() {
+                        self.write_all(relay.peer_fd, &to_peer);
+                    }
+                    if !to_client.is_empty() {
+                        for segment in relay.segments_for_client(&to_client) {
+                            out.push(segment);
+                        }
                     }
                 }
-                true
-            }
-            Err(e) => {
-                crate::logbuf::push(&format!("relay client step: {e}"));
-                self.reset_relay(port, pkt, out);
-                true
+                Err(e) => {
+                    crate::logbuf::push(&format!("relay client step: {e}"));
+                    if let Some(rst) = relay.rst_to_client() {
+                        out.push(rst);
+                    }
+                    reset = true;
+                }
             }
         }
+        if reset {
+            guard.remove(port);
+            return true;
+        }
+        if pkt.is_fin && !relay.client_fin {
+            if let Some(ack) = relay.on_client_fin() {
+                out.push(ack);
+            }
+            // Half-close the peer: it can still send back its remaining bytes.
+            unsafe {
+                libc::shutdown(relay.peer_fd, libc::SHUT_WR);
+            }
+        }
+        // Anything else on a live relay (bare ACKs, window updates, the FIN we
+        // just acknowledged) is consumed here: falling through would let
+        // `tcp_blocked` reset a flow the engine itself owns.
+        true
+    }
+
+    /// The largest payload one segment towards the client may carry.
+    ///
+    /// The client's own MSS is authoritative (its stack drops anything bigger)
+    /// and the tunnel MTU is the hard ceiling.
+    fn relay_mss(&self, pkt: &Packet<'_>) -> usize {
+        let cap = if pkt.version == 4 { 1460 } else { 1440 };
+        pkt.tcp_mss()
+            .map(|m| (m as usize).min(cap))
+            .unwrap_or(cap)
     }
 
     /// Answers a SYN for a host we want to intercept.
@@ -519,7 +573,9 @@ impl Core {
             pkt.seq,
             crate::mitm::tcp::initial_seq(pkt.seq as u64),
         );
-        let mut relay = crate::mitm::relay::Relay::new(flow, peer_fd, proxy, pkt.raw.to_vec());
+        let mss = self.relay_mss(pkt);
+        let mut relay =
+            crate::mitm::relay::Relay::new(flow, peer_fd, proxy, pkt.raw.to_vec(), mss);
         // Our own SYN-ACK (the client-facing sequence starts here).
         let syn_ack = match crate::mitm::segment::build_ack(pkt, relay.flow.my_seq, relay.flow.acked_seq, true) {
             Some(s) => s,
@@ -532,14 +588,6 @@ impl Core {
         out.push(syn_ack);
         self.stats.inc(&self.stats.tcp_reset); // reuse the counter for "relayed"
         true
-    }
-
-    fn reset_relay(&self, port: u16, pkt: &Packet<'_>, out: &mut Vec<Vec<u8>>) {
-        if let Some(relay) = self.relays.lock().unwrap().remove(port) {
-            if let Some(rst) = crate::mitm::segment::build_rst(pkt, relay.flow.my_seq) {
-                out.push(rst);
-            }
-        }
     }
 
     /// Pops one protected, unconnected peer socket.
@@ -1096,11 +1144,44 @@ impl Core {
                         libc::MSG_DONTWAIT,
                     )
                 };
-                if read <= 0 {
+                if read < 0 {
+                    let err = std::io::Error::last_os_error();
+                    if err.kind() == std::io::ErrorKind::WouldBlock {
+                        break;
+                    }
+                    // Hard error (ECONNRESET, ECONNREFUSED...): the flow is
+                    // dead, reset the client so it does not wait forever.
+                    self.close_relay_from_peer(client_port, true);
+                    break;
+                }
+                if read == 0 {
+                    // Orderly shutdown: FIN back to the client.
+                    self.close_relay_from_peer(client_port, false);
                     break;
                 }
                 self.relay_peer_bytes(client_port, &buf[..read as usize]);
             }
+        }
+    }
+
+    /// The peer side finished (EOF or error): tell the client and retire the
+    /// relay so the table entry and the descriptor stop leaking.
+    fn close_relay_from_peer(&self, client_port: u16, reset: bool) {
+        let segment = {
+            let mut guard = self.relays.lock().unwrap();
+            let Some(relay) = guard.get_mut(client_port) else {
+                return;
+            };
+            let segment = if reset {
+                relay.rst_to_client()
+            } else {
+                relay.on_peer_eof()
+            };
+            guard.remove(client_port);
+            segment
+        };
+        if let Some(segment) = segment {
+            self.write_raw(&segment);
         }
     }
 
@@ -1136,6 +1217,37 @@ fn housekeeping(core: &Core) {
     core.last_tick_ns.store(now, Ordering::Relaxed);
     core.stats.set(&core.stats.rss_kb, stats::read_rss_kb());
     core.sync_engine_stats();
+    core.prune_relays();
+}
+
+/// How long a relay may sit silent before it is presumed dead.
+const RELAY_IDLE_MS: u64 = 300_000;
+
+impl Core {
+    /// Frees finished relays and resets ones that went silent.
+    ///
+    /// Every relay holds a peer descriptor borrowed from the pool; without
+    /// this pass a page view's worth of closed connections would drain it.
+    fn prune_relays(&self) {
+        let now = now_ms();
+        let mut resets = Vec::new();
+        {
+            let mut guard = self.relays.lock().unwrap();
+            guard.drop_closed();
+            for (_, relay) in guard.iter_mut() {
+                if now.saturating_sub(relay.last_ms) > RELAY_IDLE_MS {
+                    if let Some(rst) = relay.rst_to_client() {
+                        resets.push(rst);
+                    }
+                    relay.close();
+                }
+            }
+            guard.drop_closed();
+        }
+        for rst in resets {
+            self.write_raw(&rst);
+        }
+    }
 }
 
 /// Connects `fd` (already protected) to `addr:port` without blocking.
