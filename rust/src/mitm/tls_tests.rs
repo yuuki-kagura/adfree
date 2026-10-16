@@ -162,6 +162,33 @@ fn a_restored_ca_still_signs_leaves_the_original_trusts() {
     handshake(&mut server, &mut client);
 }
 
+#[test]
+fn the_flow_resolver_captures_the_clients_sni() {
+    // The engine opens the upstream half only after this capture: if the
+    // wrapper ever stops storing the hello's server_name, every intercepted
+    // flow would present the wrong name (or none) upstream.
+    let ca = Arc::new(crate::mitm::ca::CertificateAuthority::generate().expect("ca"));
+    let inner = Arc::new(SniCertResolver::new(Arc::clone(&ca)));
+    let flow = FlowResolver::new(Arc::clone(&inner));
+    let mut server = new_server(server_config_dyn(flow.clone())).expect("server conn");
+
+    let cconfig = client_trusting(&ca);
+    let name = rustls::pki_types::ServerName::try_from("captured.example.com".to_string())
+        .expect("server name");
+    let mut client = ClientConnection::new(cconfig, name).expect("client conn");
+
+    assert_eq!(flow.captured(), None, "nothing captured before the hello");
+
+    handshake(&mut server, &mut client);
+
+    assert_eq!(flow.captured().as_deref(), Some("captured.example.com"));
+    assert!(
+        inner.issued_hosts().iter().any(|h| h == "captured.example.com"),
+        "the shared resolver must still mint the leaf: {:?}",
+        inner.issued_hosts()
+    );
+}
+
 /// Reads new plaintext from a client connection without draining old data.
 fn feed_client_read_only(
     connection: &mut ClientConnection,

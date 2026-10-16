@@ -798,39 +798,40 @@ impl Core {
             crate::mitm::tcp::initial_seq(pkt.seq as u64),
         );
         let mss = self.relay_mss(pkt);
-        // TLS termination needs a hostname to forge a certificate for and a
-        // loaded CA to sign it with; without either the flow is still relayed,
-        // just not filtered (protecting the user beats breaking their pages).
+        // TLS termination needs a loaded CA. The hostname to present upstream
+        // comes from the ClientHello itself, not from the DNS table: a
+        // browser's own cache, DoH or a shared CDN address can put a flow on
+        // an address we never learned, and filtering must not silently skip
+        // those. Without a CA the flow is still relayed, just not filtered
+        // (protecting the user beats breaking their pages).
         let session = if cfg.mitm_enabled
             && crate::mitm::relay::is_mitm_port(pkt.dst_port)
             && self.mitm_ca.read().unwrap().has_ca()
         {
-            self.host_for_ip(pkt.dst_ip()).and_then(|target| {
-                let resolver = self.mitm_resolver();
-                match crate::mitm::tls::open_session(&resolver, &target) {
-                    Ok(s) => Some(s),
-                    Err(e) => {
-                        crate::logbuf::push(&format!("open tls session: {e}"));
-                        None
-                    }
+            let script = self.mitm_scripts.read().unwrap().serve_path().to_string();
+            match crate::mitm::proxy::ProxySession::new_pending(
+                self.mitm_resolver(),
+                crate::mitm::tls::client_config(),
+                script,
+            ) {
+                Ok(proxy) => Some(proxy),
+                Err(e) => {
+                    crate::logbuf::push(&format!("open tls session: {e}"));
+                    None
                 }
-            })
+            }
         } else {
             None
         };
         let mut relay = match session {
-            Some(session) => {
-                let script = self.mitm_scripts.read().unwrap().serve_path().to_string();
-                let proxy = crate::mitm::proxy::ProxySession::new(session, script);
-                crate::mitm::relay::Relay::new_tls(
-                    flow,
-                    peer_fd,
-                    proxy,
-                    pkt.raw.to_vec(),
-                    mss,
-                    connecting,
-                )
-            }
+            Some(proxy) => crate::mitm::relay::Relay::new_tls(
+                flow,
+                peer_fd,
+                proxy,
+                pkt.raw.to_vec(),
+                mss,
+                connecting,
+            ),
             None => crate::mitm::relay::Relay::new_plain(
                 flow,
                 peer_fd,
@@ -1656,6 +1657,14 @@ impl Core {
             // client sent meanwhile) or it failed (cut the flow).
             let err = so_error(fd);
             if err != 0 {
+                // A SYN can die with a reset when its source port collides
+                // with stale NAT bookkeeping (seen on emulators). The
+                // client's own retry is seconds away, so try once on a
+                // fresh socket first: a new port usually goes through and
+                // the flow never notices.
+                if self.retry_peer_connect(client_port) {
+                    return;
+                }
                 crate::logbuf::push(&format!(
                     "relay: connect to the peer failed (errno {err})"
                 ));
@@ -1744,6 +1753,64 @@ impl Core {
             self.stats.inc(&self.stats.udp_relayed);
             self.write_raw(&reply);
         }
+    }
+
+    /// One free retry of a failed peer connect, on a fresh socket.
+    ///
+    /// A connect can die with ECONNRESET when the forwarder's SYN collides
+    /// with stale NAT state (guest source ports get reused, and emulator
+    /// NATs have been seen to answer with a reset). A fresh socket gets a
+    /// fresh port and usually goes through; the client flow is untouched,
+    /// so a success here is invisible to the app. Returns true when the
+    /// relay is back in business.
+    fn retry_peer_connect(&self, client_port: u16) -> bool {
+        let (dst, dport, old_fd) = {
+            let mut guard = self.relays.lock().unwrap();
+            let Some(relay) = guard.get_mut(client_port) else {
+                return false;
+            };
+            if relay.closed || !relay.connecting || relay.connect_retries > 0 {
+                return false;
+            }
+            let Some(pkt) = Packet::parse(&relay.syn_packet) else {
+                return false;
+            };
+            let Some(dst) = pkt.dst_ip() else {
+                return false;
+            };
+            (dst, pkt.dst_port, relay.peer_fd)
+        };
+        let Some(new_fd) = self.open_peer_socket(dst, libc::SOCK_STREAM) else {
+            return false;
+        };
+        let connect = connect_fd(new_fd, dst, dport);
+        if connect == Connect::Failed {
+            unsafe { libc::close(new_fd) };
+            return false;
+        }
+        let swapped = {
+            let mut guard = self.relays.lock().unwrap();
+            match guard.get_mut(client_port) {
+                Some(relay) if !relay.closed => {
+                    relay.peer_fd = new_fd;
+                    relay.connecting = connect == Connect::InProgress;
+                    relay.connect_retries += 1;
+                    true
+                }
+                _ => false,
+            }
+        };
+        if !swapped {
+            unsafe { libc::close(new_fd) };
+            return false;
+        }
+        // Retire the failed socket and let whatever was queued go out.
+        unsafe { libc::close(old_fd) };
+        if connect == Connect::Connected {
+            self.flush_peer(client_port);
+        }
+        crate::logbuf::push("relay: peer connect failed, retrying on a fresh socket");
+        true
     }
 
     /// The peer side finished (EOF or error): tell the client and retire the
@@ -2061,5 +2128,75 @@ mod tests {
         assert_eq!(core.snapshot().udp_dropped, 0);
         // Three datagrams went out: two on the first mapping, one on the other.
         assert_eq!(core.stats.snapshot().udp_relayed, 3);
+    }
+
+    /// A SYN-only IPv4 packet (only the fields `Packet::parse` reads matter).
+    fn tcp_syn(src_port: u16, dst: [u8; 4], dst_port: u16) -> Vec<u8> {
+        let total = 40;
+        let mut p = Vec::with_capacity(total);
+        p.extend_from_slice(&[0x45, 0x00]);
+        p.extend_from_slice(&(total as u16).to_be_bytes());
+        p.extend_from_slice(&[0x00, 0x00, 0x00, 0x00, 64, 6, 0x00, 0x00]);
+        p.extend_from_slice(&[10, 0, 2, 15]);
+        p.extend_from_slice(&dst);
+        p.extend_from_slice(&src_port.to_be_bytes());
+        p.extend_from_slice(&dst_port.to_be_bytes());
+        p.extend_from_slice(&7u32.to_be_bytes());
+        p.extend_from_slice(&0u32.to_be_bytes());
+        p.extend_from_slice(&[0x50, 0x02, 0xff, 0xff, 0x00, 0x00, 0x00, 0x00]);
+        crate::packet::fix_ipv4_checksum(&mut p);
+        p
+    }
+
+    #[test]
+    fn a_failed_peer_connect_is_retried_on_a_fresh_socket() {
+        use std::os::fd::IntoRawFd;
+        let core = Core::new();
+        core.set_socket_protector(Arc::new(AllowAll));
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("listener");
+        let port = listener.local_addr().expect("addr").port();
+        // Stand-ins: the relay's old peer descriptor (live, so the retry can
+        // close it) and the SYN that remembers where the flow was going.
+        let old_fd = std::net::TcpStream::connect(("127.0.0.1", port))
+            .expect("first connection")
+            .into_raw_fd();
+        let flow = crate::mitm::tcp::Flow::new(
+            crate::packet::IpKey::V4(u32::from_be_bytes([10, 0, 2, 15])),
+            40000,
+            port,
+            7,
+            7000,
+        );
+        let relay = crate::mitm::relay::Relay::new_plain(
+            flow,
+            old_fd,
+            tcp_syn(40000, [127, 0, 0, 1], port),
+            crate::mitm::relay::DEFAULT_MSS,
+            true,
+        );
+        core.relays.lock().unwrap().insert(relay);
+
+        assert!(core.retry_peer_connect(40000));
+        {
+            let guard = core.relays.lock().unwrap();
+            let relay = guard.get(40000).expect("relay");
+            assert_ne!(relay.peer_fd, old_fd, "a fresh descriptor was installed");
+            assert_eq!(relay.connect_retries, 1);
+        }
+        // The second connection in the listener's backlog is the retry.
+        listener.set_nonblocking(true).expect("nonblocking");
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+        let mut accepted = 0;
+        while accepted < 2 && std::time::Instant::now() < deadline {
+            if listener.accept().is_ok() {
+                accepted += 1;
+            } else {
+                std::thread::sleep(std::time::Duration::from_millis(5));
+            }
+        }
+        assert_eq!(accepted, 2, "the retry opened a real second connection");
+        // Only one retry: a second failure is left to the client's own retry.
+        core.relays.lock().unwrap().get_mut(40000).unwrap().connecting = true;
+        assert!(!core.retry_peer_connect(40000));
     }
 }

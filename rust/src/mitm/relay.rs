@@ -9,7 +9,6 @@
 //! charge of TCP segmentation and no syscall ever blocks.
 
 use crate::mitm::proxy::ProxySession;
-use crate::mitm::tls::take_client_outbound;
 use crate::mitm::tcp::{Flow, FlowState};
 use crate::util::now_ms;
 use std::os::unix::io::RawFd;
@@ -46,6 +45,9 @@ pub struct Relay {
     /// The peer `connect()` has not completed yet: `send()` would fail with
     /// EAGAIN until the socket is writable, so bytes wait in `pending_to_peer`.
     pub connecting: bool,
+    /// Peer connect attempts already spent; one retry is allowed after a
+    /// failure, because a fresh socket picks a fresh source port.
+    pub connect_retries: u8,
     /// Client bytes not yet accepted by the peer socket (it is connecting, or
     /// its send buffer is full). Flushed by the engine on the next writable.
     pub pending_to_peer: Vec<u8>,
@@ -78,6 +80,7 @@ impl Relay {
             last_ms: now_ms(),
             client_fin: false,
             connecting,
+            connect_retries: 0,
             pending_to_peer: Vec::new(),
             flushing: false,
             shutdown_after_flush: false,
@@ -103,6 +106,7 @@ impl Relay {
             last_ms: now_ms(),
             client_fin: false,
             connecting,
+            connect_retries: 0,
             pending_to_peer: Vec::new(),
             flushing: false,
             shutdown_after_flush: false,
@@ -270,7 +274,7 @@ impl Relay {
     /// Bytes the peer-facing TLS half wants to put on the wire.
     pub fn client_outbound(&mut self) -> Vec<u8> {
         match self.session.as_mut() {
-            Some(s) => tls_outbound_client(&mut s.session.client),
+            Some(s) => s.take_upstream_outbound(),
             None => Vec::new(),
         }
     }
@@ -387,12 +391,6 @@ impl RelayTable {
 /// Decides whether a destination port is worth terminating TLS for.
 pub fn is_mitm_port(port: u16) -> bool {
     port == MITM_PORT
-}
-
-
-#[inline]
-fn tls_outbound_client(conn: &mut rustls::ClientConnection) -> Vec<u8> {
-    take_client_outbound(conn)
 }
 
 #[cfg(test)]

@@ -278,3 +278,190 @@ fn a_request_and_its_response_cross_the_splice() {
         "the body must survive the splice"
     );
 }
+
+/// The engine's actual path: the relay is armed before the flow's hostname is
+/// known, and the session opens from the ClientHello itself — the DNS table
+/// is not consulted (a browser's own cache, DoH or a shared CDN address can
+/// put the flow on an address we never learned).
+#[test]
+fn a_pending_session_opens_from_the_client_hello() {
+    use rustls::pki_types::ServerName;
+    use rustls::{ClientConnection, ServerConnection};
+
+    let origin_ca = CertificateAuthority::generate().expect("origin ca");
+    let mut origin_roots = rustls::RootCertStore::empty();
+    origin_roots
+        .add(rustls::pki_types::CertificateDer::from(origin_ca.cert_der()))
+        .expect("origin root");
+    let upstream_config = tls::client_config_with(origin_roots);
+
+    let mitm_ca = CertificateAuthority::generate().expect("mitm ca");
+    let resolver = Arc::new(SniCertResolver::new(Arc::new(
+        CertificateAuthority::from_pem(&mitm_ca.cert_pem(), &mitm_ca.key_pem()).expect("restore"),
+    )));
+    let mut proxy = ProxySession::new_pending(resolver, upstream_config, "/adfree-user.js".into())
+        .expect("pending session");
+    assert_eq!(proxy.captured_sni(), None, "no hostname before the hello");
+
+    let origin_resolver = Arc::new(SniCertResolver::new(Arc::new(origin_ca)));
+    let mut origin = ServerConnection::new(tls::server_config(origin_resolver)).expect("origin");
+
+    let mut browser_roots = rustls::RootCertStore::empty();
+    browser_roots
+        .add(rustls::pki_types::CertificateDer::from(mitm_ca.cert_der()))
+        .expect("browser root");
+    let name = ServerName::try_from("origin.example.com".to_string()).expect("server name");
+    let mut browser =
+        ClientConnection::new(tls::client_config_with(browser_roots), name).expect("browser");
+
+    let request = b"GET / HTTP/1.1\r\nHost: origin.example.com\r\n\r\n";
+    let body = "<html><head></head><body>hi</body></html>";
+    let mut response = Vec::new();
+    response.extend_from_slice(b"HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: ");
+    response.extend_from_slice(body.len().to_string().as_bytes());
+    response.extend_from_slice(b"\r\n\r\n");
+    response.extend_from_slice(body.as_bytes());
+    browser
+        .writer()
+        .write_all(request)
+        .expect("browser writes the request");
+
+    let mut to_origin: Vec<u8> = Vec::new();
+    let mut origin_request: Vec<u8> = Vec::new();
+    let mut browser_plain: Vec<u8> = Vec::new();
+    let mut origin_answered = false;
+
+    for _round in 0..64 {
+        // browser -> proxy -> origin
+        let wire = tls::take_client_outbound(&mut browser);
+        if !wire.is_empty() {
+            let out = proxy.on_client_payload(&wire).expect("proxy client step");
+            to_origin.extend_from_slice(&out.to_peer);
+            feed_browser(&mut browser, &out.to_client, &mut browser_plain);
+        }
+        if !to_origin.is_empty() {
+            feed_origin(&mut origin, &to_origin, &mut origin_request);
+            to_origin.clear();
+            if !origin_answered && !origin_request.is_empty() {
+                origin
+                    .writer()
+                    .write_all(&response)
+                    .expect("origin writes the response");
+                origin_answered = true;
+            }
+        }
+        // origin -> proxy -> browser
+        let wire = tls::take_server_outbound(&mut origin);
+        if !wire.is_empty() {
+            let out = proxy.on_peer_payload(&wire).expect("proxy peer step");
+            to_origin.extend_from_slice(&out.to_peer);
+            feed_browser(&mut browser, &out.to_client, &mut browser_plain);
+        }
+        if browser_plain.windows(12).any(|w| w == b"HTTP/1.1 200") {
+            break;
+        }
+    }
+
+    assert_eq!(
+        proxy.captured_sni().as_deref(),
+        Some("origin.example.com"),
+        "the ClientHello is the source of the hostname"
+    );
+    assert_eq!(
+        origin_request, request,
+        "the origin must receive the request byte for byte"
+    );
+    assert!(
+        browser_plain.starts_with(b"HTTP/1.1 200 OK"),
+        "the browser must receive the response: {:?}",
+        String::from_utf8_lossy(&browser_plain)
+    );
+    assert!(
+        browser_plain
+            .windows(expected_tag().len())
+            .any(|w| w == expected_tag().as_bytes()),
+        "the script must still be injected through a pending-opened session"
+    );
+}
+
+/// A stream that is not TLS is spliced through untouched even though the
+/// relay was armed for interception: arming must never break a flow.
+#[test]
+fn a_pending_session_splices_non_tls_streams_untouched() {
+    let ca = CertificateAuthority::generate().expect("ca");
+    let resolver = Arc::new(SniCertResolver::new(Arc::new(
+        CertificateAuthority::from_pem(&ca.cert_pem(), &ca.key_pem()).expect("restore"),
+    )));
+    let mut proxy =
+        ProxySession::new_pending(resolver, tls::client_config(), String::new())
+            .expect("pending session");
+
+    let request = b"GET / HTTP/1.1\r\nHost: plain.example.com\r\n\r\n";
+    let out = proxy.on_client_payload(request).expect("client step");
+    assert_eq!(out.to_peer, request, "a non-TLS stream must pass verbatim");
+    assert!(out.to_client.is_empty());
+
+    let response = b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n";
+    let out = proxy.on_peer_payload(response).expect("peer step");
+    assert_eq!(out.to_client, response);
+
+    // Later bytes keep flowing in both directions.
+    let out = proxy.on_client_payload(b"tail").expect("client step 2");
+    assert_eq!(out.to_peer, b"tail");
+}
+
+/// A hello split across two TCP segments still opens the session.
+#[test]
+fn a_fragmented_client_hello_still_opens_the_session() {
+    use rustls::pki_types::ServerName;
+    use rustls::ClientConnection;
+
+    let mitm_ca = CertificateAuthority::generate().expect("mitm ca");
+    let resolver = Arc::new(SniCertResolver::new(Arc::new(
+        CertificateAuthority::from_pem(&mitm_ca.cert_pem(), &mitm_ca.key_pem()).expect("restore"),
+    )));
+    let mut proxy =
+        ProxySession::new_pending(resolver, tls::client_config(), String::new())
+            .expect("pending session");
+
+    let mut browser_roots = rustls::RootCertStore::empty();
+    browser_roots
+        .add(rustls::pki_types::CertificateDer::from(mitm_ca.cert_der()))
+        .expect("browser root");
+    let name = ServerName::try_from("split.example.com".to_string()).expect("server name");
+    let mut browser =
+        ClientConnection::new(tls::client_config_with(browser_roots), name).expect("browser");
+
+    let hello = tls::take_client_outbound(&mut browser);
+    assert!(hello.len() > 8, "the hello spans a whole record");
+
+    // First segment: a partial record. Nothing can be decided yet.
+    let out = proxy.on_client_payload(&hello[..7]).expect("first chunk");
+    assert!(
+        out.to_peer.is_empty(),
+        "no upstream bytes before the hello is complete"
+    );
+    assert!(out.to_client.is_empty());
+    assert_eq!(proxy.captured_sni(), None);
+
+    // Second segment: the rest. The session opens and our own server flight
+    // answers the hello.
+    let out = proxy.on_client_payload(&hello[7..]).expect("second chunk");
+    assert_eq!(proxy.captured_sni().as_deref(), Some("split.example.com"));
+    assert!(
+        !out.to_client.is_empty(),
+        "our server flight must answer the completed hello"
+    );
+
+    // The browser finishes its handshake; the upstream ClientHello (now that
+    // the server half is done) is drained towards the real server.
+    let mut browser_plain: Vec<u8> = Vec::new();
+    feed_browser(&mut browser, &out.to_client, &mut browser_plain);
+    let finished = tls::take_client_outbound(&mut browser);
+    assert!(!finished.is_empty(), "the client sends its Finished");
+    let out = proxy.on_client_payload(&finished).expect("finished");
+    assert!(
+        !out.to_peer.is_empty(),
+        "the upstream hello must be drained once the server handshake is done"
+    );
+}

@@ -40,6 +40,49 @@ pub struct TlsSession {
     pub client: ClientConnection,
 }
 
+/// One flow's view of the shared resolver: mints the same leaves, but keeps
+/// the last SNI rustls parsed.
+///
+/// The upstream half cannot open before the client's ClientHello lands (that
+/// is where the hostname comes from), and rustls hands that hostname to the
+/// certificate resolver at exactly that moment. Wrapping the engine's resolver
+/// per flow therefore captures the SNI without parsing the handshake by hand.
+pub struct FlowResolver {
+    inner: Arc<SniCertResolver>,
+    captured: Mutex<Option<String>>,
+}
+
+impl FlowResolver {
+    pub fn new(inner: Arc<SniCertResolver>) -> Arc<Self> {
+        Arc::new(FlowResolver {
+            inner,
+            captured: Mutex::new(None),
+        })
+    }
+
+    /// The SNI the client asked for, if its ClientHello has arrived.
+    pub fn captured(&self) -> Option<String> {
+        self.captured.lock().ok().and_then(|slot| slot.clone())
+    }
+}
+
+impl std::fmt::Debug for FlowResolver {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("FlowResolver")
+    }
+}
+
+impl ResolvesServerCert for FlowResolver {
+    fn resolve(&self, client_hello: ClientHello<'_>) -> Option<Arc<CertifiedKey>> {
+        if let Some(name) = client_hello.server_name() {
+            if let Ok(mut slot) = self.captured.lock() {
+                *slot = Some(name.to_string());
+            }
+        }
+        self.inner.resolve(client_hello)
+    }
+}
+
 /// Resolves the leaf for whatever SNI the client asked for.
 ///
 /// We only learn the hostname when the ClientHello lands, so the resolver is the
@@ -146,11 +189,33 @@ pub fn client_config_with(roots: rustls::RootCertStore) -> Arc<ClientConfig> {
 
 /// Server config that asks [`SniCertResolver`] for the leaf per connection.
 pub fn server_config(resolver: Arc<SniCertResolver>) -> Arc<ServerConfig> {
+    server_config_dyn(resolver)
+}
+
+/// Server config with any per-connection resolver: the engine passes a
+/// [`FlowResolver`] wrapper so the ClientHello's SNI is captured per flow.
+pub fn server_config_dyn(resolver: Arc<dyn ResolvesServerCert>) -> Arc<ServerConfig> {
     let mut config = ServerConfig::builder()
         .with_no_client_auth()
         .with_cert_resolver(resolver);
     config.alpn_protocols = vec![ALPN_H1.to_vec()];
     Arc::new(config)
+}
+
+/// One server half, waiting for the client's ClientHello.
+pub fn new_server(config: Arc<ServerConfig>) -> Result<ServerConnection, String> {
+    ServerConnection::new(config).map_err(|e| format!("server conn: {e}"))
+}
+
+/// The upstream half for `real_server`: the name goes out as SNI and anchors
+/// certificate verification.
+pub fn new_client(
+    upstream_config: Arc<ClientConfig>,
+    real_server: &str,
+) -> Result<ClientConnection, String> {
+    let name = rustls::pki_types::ServerName::try_from(real_server.to_string())
+        .map_err(|e| format!("server name: {e}"))?;
+    ClientConnection::new(upstream_config, name).map_err(|e| format!("client conn: {e}"))
 }
 
 /// Opens both halves for a flow towards `real_server`.
@@ -165,13 +230,8 @@ pub fn open_session_with(
     real_server: &str,
     upstream_config: Arc<ClientConfig>,
 ) -> Result<TlsSession, String> {
-    let server = ServerConnection::new(server_config(Arc::clone(resolver)))
-        .map_err(|e| format!("server conn: {e}"))?;
-
-    let name = rustls::pki_types::ServerName::try_from(real_server.to_string())
-        .map_err(|e| format!("server name: {e}"))?;
-    let client = ClientConnection::new(upstream_config, name)
-        .map_err(|e| format!("client conn: {e}"))?;
+    let server = new_server(server_config(Arc::clone(resolver)))?;
+    let client = new_client(upstream_config, real_server)?;
 
     Ok(TlsSession { server, client })
 }
