@@ -13,11 +13,13 @@ import android.os.ParcelFileDescriptor
 import android.util.Log
 import androidx.core.app.NotificationCompat
 import git.shin.adfree.AdGuardApplication
+import git.shin.adfree.BuildConfig
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
+import java.io.File
 
 /**
  * A real VpnService: build the TUN, `protect()` the DNS sockets, hand the fd
@@ -123,8 +125,15 @@ class AdGuardVpnService : VpnService() {
         // adbd runs as the `shell` user. Without this the tunnel swallows its
         // traffic to the host and every tool loses the device the moment the
         // VPN goes up — which makes the whole thing impossible to debug.
-        runCatching { builder.addDisallowedApplication(SHELL_PACKAGE) }
-            .onFailure { Log.w(TAG, "cannot exclude the shell package", it) }
+        // Debug builds can flip this: dropping a marker file in the app's
+        // files directory (`adb shell run-as git.shin.adfree touch
+        // files/capture-shell`) routes the shell through the tunnel too, which
+        // is how UDP relays are exercised with `nc` from adb.
+        val captureShell = BuildConfig.DEBUG && File(filesDir, CAPTURE_SHELL_MARKER).exists()
+        if (!captureShell) {
+            runCatching { builder.addDisallowedApplication(SHELL_PACKAGE) }
+                .onFailure { Log.w(TAG, "cannot exclude the shell package", it) }
+        }
 
         // Exclude the apps that must not be filtered (from the real firewall).
         container.repository.excludedPackages()
@@ -240,6 +249,9 @@ class AdGuardVpnService : VpnService() {
         private const val TAG = "AdGuardVpnService"
         /** adbd's package: kept out of the tunnel so tooling survives. */
         private const val SHELL_PACKAGE = "com.android.shell"
+
+        /** See [onStartCommand]: presence means "capture the shell too". */
+        private const val CAPTURE_SHELL_MARKER = "capture-shell"
         private const val NOTIFICATION_CHANNEL_ID = "adfree_status"
         private const val NOTIFICATION_ID = 1001
         private const val TUN_ADDRESS = "10.111.42.1"

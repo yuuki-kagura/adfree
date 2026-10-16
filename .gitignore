@@ -2,6 +2,8 @@
 .gradle/
 build/
 local.properties
+# Kotlin Gradle plugin session data
+.kotlin/
 
 # Rust build artifacts. They are produced by :app:buildRust (cargo-ndk) and are
 # never committed: the crate source in rust/ is the single source of truth.

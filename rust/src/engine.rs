@@ -31,6 +31,7 @@ use crate::filter::{FilterEngine, FilterListInfo, HostVerdict};
 use crate::fxhash::hash_str;
 use crate::packet::{self, IpKey, Packet, PROTO_TCP, PROTO_UDP};
 use crate::stats::{self, Stats};
+use crate::udpnat::{UdpFlow, UdpKey, UdpNat, UDP_MAX_FLOWS};
 use crate::uidmap::UidMap;
 use crate::upstream::Upstream;
 use crate::util::{now_ms, now_ns};
@@ -188,6 +189,11 @@ pub struct Core {
     pub mitm_resolver: RwLock<Option<Arc<crate::mitm::tls::SniCertResolver>>>,
     /// Live intercepted connections.
     relays: Mutex<crate::mitm::relay::RelayTable>,
+    /// Live UDP NAT mappings (everything except DNS).
+    udp_nat: Mutex<UdpNat>,
+    /// Tun and forwarder threads of the current session. A new session joins
+    /// them before starting its own, so two tunnels never share the tables.
+    workers: Mutex<Vec<std::thread::JoinHandle<()>>>,
     /// App callback that routes engine-created sockets around the VPN.
     socket_protector: Mutex<Option<Arc<dyn crate::api::SocketProtector>>>,
 }
@@ -234,6 +240,8 @@ impl Core {
             mitm_scripts: RwLock::new(crate::mitm::script::ScriptSet::new()),
             mitm_resolver: RwLock::new(None),
             relays: Mutex::new(crate::mitm::relay::RelayTable::new()),
+            udp_nat: Mutex::new(UdpNat::new()),
+            workers: Mutex::new(Vec::new()),
             socket_protector: Mutex::new(None),
         }
     }
@@ -386,19 +394,39 @@ impl Core {
     /// open until [`stop`] is called.
     pub fn start(&self, tun_fd: RawFd) {
         self.stop();
+        // The previous session's thread must be gone before this one starts:
+        // two forwarders would poll the same tables, and the departing one
+        // would retire the arriving one's flows. It notices `stop()` within
+        // its poll timeout, so this blocks for a few hundred milliseconds at
+        // most (and not at all when the tunnel was already down).
+        self.join_workers();
         self.tun_fd.store(tun_fd, Ordering::SeqCst);
         self.running.store(true, Ordering::SeqCst);
         let statics: &'static Core = core();
-        std::thread::Builder::new()
+        let mut workers = Vec::with_capacity(2);
+        if let Ok(worker) = std::thread::Builder::new()
             .name("adfree-tun".into())
             .stack_size(128 * 1024)
             .spawn(move || tun_loop(statics, tun_fd))
-            .ok();
-        std::thread::Builder::new()
+        {
+            workers.push(worker);
+        }
+        if let Ok(worker) = std::thread::Builder::new()
             .name("adfree-dns".into())
             .stack_size(128 * 1024)
             .spawn(move || forwarder_loop(statics))
-            .ok();
+        {
+            workers.push(worker);
+        }
+        *self.workers.lock().unwrap() = workers;
+    }
+
+    /// Waits for the previous session's workers to return.
+    fn join_workers(&self) {
+        let workers = std::mem::take(&mut *self.workers.lock().unwrap());
+        for worker in workers {
+            let _ = worker.join();
+        }
     }
 
     pub fn stop(&self) {
@@ -438,6 +466,10 @@ impl Core {
         } else if pkt.proto == PROTO_UDP {
             if self.udp_blocked(&pkt, &cfg) {
                 self.stats.inc(&self.stats.udp_dropped);
+            } else {
+                // Everything left is spliced through a NAT mapping: without it
+                // games, VoIP and video would die the moment protection is on.
+                self.relay_udp(&pkt);
             }
         } else if pkt.proto == PROTO_TCP {
             self.handle_tcp(&pkt, &cfg, &mut out);
@@ -468,6 +500,80 @@ impl Core {
             // Data for a flow that predates protection, or whose relay already
             // died: nothing can carry it, so cut it.
             self.reset_tcp(pkt);
+        }
+    }
+
+    /// Sends the datagrams of one non-DNS UDP flow through a protected socket.
+    ///
+    /// The mapping is keyed by both endpoints; the first datagram opens the
+    /// socket and later ones reuse it, so a game keeps one descriptor (and one
+    /// NAT port on the server's side) for the whole session. Replies are handled
+    /// by [`Core::handle_udp_reply`].
+    fn relay_udp(&self, pkt: &Packet<'_>) {
+        let (Some(client), Some(server)) = (pkt.src_ip(), pkt.dst_ip()) else {
+            return;
+        };
+        let key = UdpKey {
+            client,
+            client_port: pkt.src_port,
+            server,
+            server_port: pkt.dst_port,
+        };
+        let payload = pkt.l4_payload();
+        let mut nat = self.udp_nat.lock().unwrap();
+        if let Some(flow) = nat.get_mut(&key) {
+            flow.last_ms = now_ms();
+            // The lock is held across the send so the polling thread cannot
+            // retire (and close) the descriptor between the lookup and the
+            // syscall. `send()` on a non-blocking socket never blocks.
+            Self::send_udp(flow.fd, payload);
+            self.stats.inc(&self.stats.udp_relayed);
+            return;
+        }
+        if nat.len() >= UDP_MAX_FLOWS {
+            // One app spraying destination ports must not drain the descriptor
+            // budget; the flow simply loses its packets, like a full NAT box.
+            drop(nat);
+            self.stats.inc(&self.stats.udp_dropped);
+            return;
+        }
+        // A new mapping. The lock is dropped first because `open_peer_socket`
+        // makes a `protect()` binder round-trip; only the tun thread inserts,
+        // and the socket is not in the table yet, so nothing can touch it
+        // while it is built. The cap cannot fill up meanwhile: the table only
+        // shrinks while unlocked.
+        drop(nat);
+        let Some(fd) = self.open_peer_socket(server, libc::SOCK_DGRAM) else {
+            self.stats.inc(&self.stats.udp_dropped);
+            return;
+        };
+        if connect_fd(fd, server, pkt.dst_port) == Connect::Failed {
+            unsafe { libc::close(fd) };
+            self.stats.inc(&self.stats.udp_dropped);
+            return;
+        }
+        Self::send_udp(fd, payload);
+        self.stats.inc(&self.stats.udp_relayed);
+        self.udp_nat.lock().unwrap().insert(UdpFlow {
+            fd,
+            key,
+            // The client's first datagram doubles as the template every reply
+            // is rewritten from (addresses and ports swapped).
+            template: pkt.raw[..pkt.total_len.min(pkt.raw.len())].to_vec(),
+            last_ms: now_ms(),
+        });
+    }
+
+    /// Fire-and-forget datagram send: UDP has no retransmission, and a packet
+    /// the socket refuses would be lost on the wire anyway.
+    fn send_udp(fd: RawFd, payload: &[u8]) {
+        unsafe {
+            libc::send(
+                fd,
+                payload.as_ptr() as *const libc::c_void,
+                payload.len(),
+                libc::MSG_NOSIGNAL,
+            );
         }
     }
 
@@ -626,7 +732,7 @@ impl Core {
         let Some(dst) = pkt.dst_ip() else {
             return false;
         };
-        let Some(peer_fd) = self.open_peer_socket(dst) else {
+        let Some(peer_fd) = self.open_peer_socket(dst, libc::SOCK_STREAM) else {
             return false;
         };
         let connect = connect_fd(peer_fd, dst, pkt.dst_port);
@@ -710,10 +816,10 @@ impl Core {
         true
     }
 
-    /// Opens a non-blocking TCP socket towards `dst` and asks the app to route
-    /// it around the VPN. Without protection the socket would loop right back
-    /// into the tunnel, so it is closed and the relay does not start.
-    fn open_peer_socket(&self, dst: IpKey) -> Option<RawFd> {
+    /// Opens a non-blocking socket towards `dst` and asks the app to route it
+    /// around the VPN. Without protection the socket would loop right back
+    /// into the tunnel, so it is closed and the call fails.
+    fn open_peer_socket(&self, dst: IpKey, kind: libc::c_int) -> Option<RawFd> {
         let family = match dst {
             IpKey::V4(_) => libc::AF_INET,
             IpKey::V6(_) => libc::AF_INET6,
@@ -721,7 +827,7 @@ impl Core {
         let fd = unsafe {
             libc::socket(
                 family,
-                libc::SOCK_STREAM | libc::SOCK_NONBLOCK | libc::SOCK_CLOEXEC,
+                kind | libc::SOCK_NONBLOCK | libc::SOCK_CLOEXEC,
                 0,
             )
         };
@@ -1243,6 +1349,12 @@ impl Core {
         self.relays.lock().unwrap().len()
     }
 
+    /// True when no flow descriptor (TCP relay or UDP mapping) needs the
+    /// forwarder's attention, so it may sleep on the DNS condition variable.
+    fn flows_idle(&self) -> bool {
+        self.relays.lock().unwrap().is_empty() && self.udp_nat.lock().unwrap().is_empty()
+    }
+
     pub fn resolver_addr(&self) -> SocketAddr {
         *self.resolver.read().unwrap()
     }
@@ -1310,14 +1422,19 @@ fn forwarder_loop(core: &'static Core) {
         {
             let mut upstream = core.upstream.lock().unwrap();
             if upstream.pending_len() == 0 {
-                // Nothing is in flight. Waiting here rather than inside `poll`
-                // matters: the lock is released while we wait, so a UI thread
-                // calling `set_resolver` is not blocked for a whole second.
-                let (guard, _) = core
-                    .dns_wake
-                    .wait_timeout(upstream, DNS_IDLE_MS)
-                    .unwrap_or_else(|e| e.into_inner());
-                upstream = guard;
+                // Waiting here rather than inside `poll` matters: the lock is
+                // released while we wait, so a UI thread calling `set_resolver`
+                // is not blocked for a whole second. Flow descriptors have to
+                // be serviced on every pass though, so the long wait only
+                // happens when there is nothing else to poll - otherwise a
+                // game's reply would sit unread for a quarter of a second.
+                if core.flows_idle() {
+                    let (guard, _) = core
+                        .dns_wake
+                        .wait_timeout(upstream, DNS_IDLE_MS)
+                        .unwrap_or_else(|e| e.into_inner());
+                    upstream = guard;
+                }
             }
             // Never block for long here: 100ms is enough to catch an answer that
             // is already on the wire, and the loop comes back immediately after.
@@ -1332,29 +1449,41 @@ fn forwarder_loop(core: &'static Core) {
         // Relayed connections: whatever the real server answered has to be
         // spliced back to the client, and finished relays are reaped here so
         // their descriptors are only ever closed on this thread.
-        core.poll_relays();
+        core.poll_flows();
         core.prune_relays();
+        // Idle NAT mappings are retired here too, for the same reason.
+        core.udp_nat.lock().unwrap().expire(now);
 
         if replies.is_empty() {
             core.conntrack.lock().unwrap().expire(now);
         }
     }
+
+    // The tunnel is going away: every peer and NAT descriptor belongs to a
+    // flow the next session will recreate from scratch, and leaving them in
+    // the tables would have the next forwarder poll dead sockets (and refuse
+    // new sessions whose client ports are still taken). This thread is the
+    // only one that closes flow descriptors, so clean up here, after the last
+    // poll and before returning.
+    core.relays.lock().unwrap().clear();
+    core.udp_nat.lock().unwrap().clear();
 }
 
-/// Reads from every relay's peer socket and writes the result to the client.
+/// Services every flow descriptor the engine owns.
 ///
-/// Polling all peer sockets in one `poll()` keeps the cost independent of how
-/// many connections are open, which matters for battery when a page opens
-/// dozens of them. Sockets whose `connect()` has not finished yet also ask for
-/// `POLLOUT`, which is how their completion (or failure) is noticed; so do
-/// sockets whose queued client bytes could not be sent yet.
+/// Polling all of them in one `poll()` keeps the cost independent of how many
+/// connections are open, which matters for battery when a page opens dozens of
+/// them. TCP peers whose `connect()` has not finished yet also ask for
+/// `POLLOUT` (how their completion or failure is noticed), as do peers whose
+/// queued client bytes could not be sent yet.
 impl Core {
-    fn poll_relays(&self) {
-        let peers = self.relays.lock().unwrap().poll_snapshot();
-        if peers.is_empty() {
+    fn poll_flows(&self) {
+        let relays = self.relays.lock().unwrap().poll_snapshot();
+        let udp = self.udp_nat.lock().unwrap().poll_snapshot();
+        if relays.is_empty() && udp.is_empty() {
             return;
         }
-        let mut fds: Vec<libc::pollfd> = peers
+        let mut fds: Vec<libc::pollfd> = relays
             .iter()
             .map(|(_, fd, connecting, want_write)| libc::pollfd {
                 fd: *fd,
@@ -1363,6 +1492,11 @@ impl Core {
                 revents: 0,
             })
             .collect();
+        fds.extend(udp.iter().map(|(_, fd)| libc::pollfd {
+            fd: *fd,
+            events: libc::POLLIN,
+            revents: 0,
+        }));
         let n = unsafe {
             libc::poll(
                 fds.as_mut_ptr(),
@@ -1377,72 +1511,122 @@ impl Core {
             if p.revents == 0 {
                 continue;
             }
-            let (client_port, fd, was_connecting, was_writing) = peers[i];
-            // A client RST may have marked the relay closed since the poll();
-            // the entry itself is still there (only this thread reaps relays),
-            // so matching it back means the descriptor is ours to touch.
-            let still_live = self
-                .relays
-                .lock()
-                .unwrap()
-                .get(client_port)
-                .map(|r| !r.closed && r.peer_fd == fd)
-                .unwrap_or(false);
-            if !still_live {
-                continue;
+            if i < relays.len() {
+                self.handle_relay_ready(relays[i], p.revents);
+            } else {
+                self.handle_udp_reply(udp[i - relays.len()].0, udp[i - relays.len()].1);
             }
-            if was_connecting && p.revents & (libc::POLLOUT | libc::POLLERR | libc::POLLHUP) != 0 {
-                // The connect() finished: either it worked (flush what the
-                // client sent meanwhile) or it failed (cut the flow).
-                let err = so_error(fd);
-                if err != 0 {
-                    crate::logbuf::push(&format!(
-                        "relay: connect to the peer failed (errno {err})"
-                    ));
-                    self.close_relay_from_peer(client_port, true);
-                    continue;
+        }
+    }
+
+    /// One relay's peer socket became readable (or writable again).
+    fn handle_relay_ready(&self, peer: (u16, RawFd, bool, bool), revents: libc::c_short) {
+        let (client_port, fd, was_connecting, was_writing) = peer;
+        // A client RST may have marked the relay closed since the poll(); the
+        // entry itself is still there (only this thread reaps relays), so
+        // matching it back means the descriptor is ours to touch.
+        let still_live = self
+            .relays
+            .lock()
+            .unwrap()
+            .get(client_port)
+            .map(|r| !r.closed && r.peer_fd == fd)
+            .unwrap_or(false);
+        if !still_live {
+            return;
+        }
+        if was_connecting && revents & (libc::POLLOUT | libc::POLLERR | libc::POLLHUP) != 0 {
+            // The connect() finished: either it worked (flush what the
+            // client sent meanwhile) or it failed (cut the flow).
+            let err = so_error(fd);
+            if err != 0 {
+                crate::logbuf::push(&format!(
+                    "relay: connect to the peer failed (errno {err})"
+                ));
+                self.close_relay_from_peer(client_port, true);
+                return;
+            }
+            {
+                let mut guard = self.relays.lock().unwrap();
+                if let Some(relay) = guard.get_mut(client_port) {
+                    relay.connecting = false;
                 }
-                {
-                    let mut guard = self.relays.lock().unwrap();
-                    if let Some(relay) = guard.get_mut(client_port) {
-                        relay.connecting = false;
-                    }
+            }
+            self.flush_peer(client_port);
+        } else if was_writing && revents & libc::POLLOUT != 0 {
+            // The send buffer drained: push what is left of the queue.
+            self.flush_peer(client_port);
+        }
+        if revents & (libc::POLLIN | libc::POLLHUP | libc::POLLERR) == 0 {
+            return;
+        }
+        let mut buf = [0u8; 32 * 1024];
+        loop {
+            let read = unsafe {
+                libc::recv(
+                    fd,
+                    buf.as_mut_ptr() as *mut libc::c_void,
+                    buf.len(),
+                    libc::MSG_DONTWAIT,
+                )
+            };
+            if read < 0 {
+                let err = std::io::Error::last_os_error();
+                if err.kind() == std::io::ErrorKind::WouldBlock {
+                    break;
                 }
-                self.flush_peer(client_port);
-            } else if was_writing && p.revents & libc::POLLOUT != 0 {
-                // The send buffer drained: push what is left of the queue.
-                self.flush_peer(client_port);
+                // Hard error (ECONNRESET, ECONNREFUSED...): the flow is
+                // dead, reset the client so it does not wait forever.
+                self.close_relay_from_peer(client_port, true);
+                break;
             }
-            if p.revents & (libc::POLLIN | libc::POLLHUP | libc::POLLERR) == 0 {
-                continue;
+            if read == 0 {
+                // Orderly shutdown: FIN back to the client.
+                self.close_relay_from_peer(client_port, false);
+                break;
             }
-            let mut buf = [0u8; 32 * 1024];
-            loop {
-                let read = unsafe {
-                    libc::recv(
-                        fd,
-                        buf.as_mut_ptr() as *mut libc::c_void,
-                        buf.len(),
-                        libc::MSG_DONTWAIT,
-                    )
+            self.relay_peer_bytes(client_port, &buf[..read as usize]);
+        }
+    }
+
+    /// One NAT mapping's socket has datagrams (or an ICMP error) waiting.
+    fn handle_udp_reply(&self, key: UdpKey, fd: RawFd) {
+        let mut buf = [0u8; 64 * 1024];
+        loop {
+            let read = unsafe {
+                libc::recv(
+                    fd,
+                    buf.as_mut_ptr() as *mut libc::c_void,
+                    buf.len(),
+                    libc::MSG_DONTWAIT,
+                )
+            };
+            if read < 0 {
+                let err = std::io::Error::last_os_error();
+                if err.kind() == std::io::ErrorKind::WouldBlock {
+                    return;
+                }
+                // ICMP port unreachable and friends surface as hard errors
+                // here: the mapping can never produce a reply, so retire it.
+                self.udp_nat.lock().unwrap().remove(&key);
+                return;
+            }
+            let reply = {
+                let mut nat = self.udp_nat.lock().unwrap();
+                let Some(flow) = nat.get_mut(&key) else {
+                    return;
                 };
-                if read < 0 {
-                    let err = std::io::Error::last_os_error();
-                    if err.kind() == std::io::ErrorKind::WouldBlock {
-                        break;
-                    }
-                    // Hard error (ECONNRESET, ECONNREFUSED...): the flow is
-                    // dead, reset the client so it does not wait forever.
-                    self.close_relay_from_peer(client_port, true);
-                    break;
+                flow.last_ms = now_ms();
+                match Packet::parse(&flow.template) {
+                    // Swaps addresses and ports, recomputes lengths and
+                    // checksums: the datagram looks like it came from the real
+                    // server. A zero-length reply is a datagram too, not EOF.
+                    Some(template) => template.rewrite_udp(&buf[..read as usize]),
+                    None => return,
                 }
-                if read == 0 {
-                    // Orderly shutdown: FIN back to the client.
-                    self.close_relay_from_peer(client_port, false);
-                    break;
-                }
-                self.relay_peer_bytes(client_port, &buf[..read as usize]);
-            }
+            };
+            self.stats.inc(&self.stats.udp_relayed);
+            self.write_raw(&reply);
         }
     }
 
@@ -1680,5 +1864,61 @@ mod tests {
         assert_eq!(snap.packets_total, 0);
         assert_eq!(snap.active_rules, 0);
         assert_eq!(snap.pending_dns, 0);
+    }
+
+    /// Minimal IPv4 UDP packet; only the fields `Packet::parse` reads matter.
+    fn udp_packet(src_port: u16, dst: [u8; 4], dst_port: u16) -> Vec<u8> {
+        let payload = [1u8, 2, 3, 4];
+        let total = 20 + 8 + payload.len();
+        let mut p = Vec::with_capacity(total);
+        p.extend_from_slice(&[0x45, 0x00]);
+        p.extend_from_slice(&(total as u16).to_be_bytes());
+        p.extend_from_slice(&[0x00, 0x00, 0x00, 0x00, 64, 17, 0x00, 0x00]);
+        p.extend_from_slice(&[10, 0, 2, 15]);
+        p.extend_from_slice(&dst);
+        p.extend_from_slice(&src_port.to_be_bytes());
+        p.extend_from_slice(&dst_port.to_be_bytes());
+        p.extend_from_slice(&((8 + payload.len()) as u16).to_be_bytes());
+        p.extend_from_slice(&[0x00, 0x00]);
+        p.extend_from_slice(&payload);
+        crate::packet::fix_ipv4_checksum(&mut p);
+        p
+    }
+
+    struct AllowAll;
+
+    impl crate::api::SocketProtector for AllowAll {
+        fn protect(&self, _fd: i32) -> bool {
+            true
+        }
+    }
+
+    #[test]
+    fn udp_without_a_protector_is_dropped_not_relayed() {
+        let core = Core::new();
+        let pkt = udp_packet(40000, [192, 0, 2, 1], 5000);
+        assert!(core.handle_packet(&pkt).is_empty());
+        // The app never offered a protector, so no descriptor may be created
+        // (an unprotected socket would loop the datagram right back in).
+        assert!(core.udp_nat.lock().unwrap().is_empty());
+        assert_eq!(core.snapshot().udp_dropped, 1);
+    }
+
+    #[test]
+    fn udp_flows_are_natted_per_endpoint() {
+        let core = Core::new();
+        core.set_socket_protector(Arc::new(AllowAll));
+        let pkt = udp_packet(40000, [192, 0, 2, 1], 5000);
+        assert!(core.handle_packet(&pkt).is_empty());
+        assert_eq!(core.udp_nat.lock().unwrap().len(), 1);
+        // A retransmission (same four-tuple) reuses the mapping...
+        core.handle_packet(&pkt);
+        assert_eq!(core.udp_nat.lock().unwrap().len(), 1);
+        // ...while the same server on another port is a new one.
+        core.handle_packet(&udp_packet(40000, [192, 0, 2, 1], 5001));
+        assert_eq!(core.udp_nat.lock().unwrap().len(), 2);
+        assert_eq!(core.snapshot().udp_dropped, 0);
+        // Three datagrams went out: two on the first mapping, one on the other.
+        assert_eq!(core.stats.snapshot().udp_relayed, 3);
     }
 }

@@ -339,6 +339,13 @@ impl RelayTable {
         self.relays.remove(&port)
     }
 
+    /// Drops every relay (and closes its peer descriptor). Used on shutdown:
+    /// a restart must not inherit half-dead flows whose client ports are about
+    /// to be reused by fresh sessions.
+    pub fn clear(&mut self) {
+        self.relays.clear();
+    }
+
     pub fn len(&self) -> usize {
         self.relays.len()
     }

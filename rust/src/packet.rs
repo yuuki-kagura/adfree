@@ -159,9 +159,11 @@ impl<'a> Packet<'a> {
                     return None;
                 }
                 let flags_frag = u16::from_be_bytes([raw[6], raw[7]]);
-                // Fragments other than the first cannot be classified and the
-                // DNS payload would be incomplete.
-                if flags_frag & 0x1fff != 0 {
+                // MF or a non-zero offset means the datagram is fragmented:
+                // the payload alone cannot be classified, and relaying the
+                // first fragment would deliver a truncated datagram instead
+                // of the ones the upper layer expects. Both are dropped.
+                if flags_frag & 0x3fff != 0 {
                     return None;
                 }
                 let total_len = u16::from_be_bytes([raw[2], raw[3]]) as usize;
@@ -645,6 +647,23 @@ mod tests {
         assert_eq!(p.dst_ip_text(), "9.9.9.9");
         assert_eq!(p.src_ip_text(), "192.168.1.5");
         assert_eq!(p.l4_payload()[..4], [0x12, 0x34, 0x01, 0x00]);
+    }
+
+    #[test]
+    fn fragmented_packets_are_rejected() {
+        // First fragment (MF): the payload is incomplete, so relaying it would
+        // hand a truncated datagram to the peer.
+        let mut q = ipv4_udp_dns_query(b"\x03one\x03one\x03one");
+        q[6] |= 0x20;
+        assert!(Packet::parse(&q).is_none());
+        // Later fragments carry no ports at all.
+        let mut q = ipv4_udp_dns_query(b"\x03one\x03one\x03one");
+        q[7] |= 0x08;
+        assert!(Packet::parse(&q).is_none());
+        // DF is an ordinary flag and must keep parsing.
+        let mut q = ipv4_udp_dns_query(b"\x03one\x03one\x03one");
+        q[6] |= 0x40;
+        assert!(Packet::parse(&q).is_some());
     }
 
     #[test]
