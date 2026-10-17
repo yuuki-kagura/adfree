@@ -23,7 +23,32 @@ class SettingsPreferencesTest {
 
     private val context: Context = ApplicationProvider.getApplicationContext()
 
-    private fun prefs() = SettingsPreferences(context)
+    /** In-memory stand-in for the core's SQLite blob. */
+    private class FakeStore : SettingsBlobStore {
+        var value: String? = null
+        var rejectsWrites = false
+
+        override fun get(): String? = value
+
+        override fun set(json: String): Boolean {
+            if (rejectsWrites) return false
+            value = json
+            return true
+        }
+    }
+
+    private val store = FakeStore()
+
+    private fun prefs() = SettingsPreferences(context, store)
+
+    private fun legacy(raw: String) {
+        context.getSharedPreferences("adfree_settings", Context.MODE_PRIVATE)
+            .edit().putString("protection_settings", raw).apply()
+    }
+
+    private fun legacyRaw(): String? =
+        context.getSharedPreferences("adfree_settings", Context.MODE_PRIVATE)
+            .getString("protection_settings", null)
 
     @Test
     fun `a first run has nothing saved`() {
@@ -59,9 +84,7 @@ class SettingsPreferencesTest {
     @Test
     fun `a switch added after the fact falls back to its default`() {
         // A blob from an older install lacks every key the model grew since.
-        val stored = JSONObject().put("protection", true).put("https", true).toString()
-        context.getSharedPreferences("adfree_settings", Context.MODE_PRIVATE)
-            .edit().putString("protection_settings", stored).apply()
+        store.value = JSONObject().put("protection", true).put("https", true).toString()
 
         val loaded = prefs().settings()!!
         assertTrue(loaded.isProtectionActive)
@@ -74,8 +97,30 @@ class SettingsPreferencesTest {
 
     @Test
     fun `a corrupted blob is treated as a first run`() {
-        context.getSharedPreferences("adfree_settings", Context.MODE_PRIVATE)
-            .edit().putString("protection_settings", "{not json").apply()
+        store.value = "{not json"
         assertNull(prefs().settings())
+    }
+
+    @Test
+    fun `the legacy SharedPreferences blob moves into the store on first read`() {
+        val stored = JSONObject().put("protection", true).put("https", true).toString()
+        legacy(stored)
+
+        val loaded = prefs().settings()!!
+        assertTrue(loaded.isProtectionActive)
+        assertTrue(loaded.isHttpsFilteringEnabled)
+        assertEquals("the core now owns the blob", stored, store.value)
+        assertNull("the legacy copy is dropped once the core accepted it", legacyRaw())
+    }
+
+    @Test
+    fun `a rejected migration keeps the legacy blob for the next launch`() {
+        store.rejectsWrites = true
+        val stored = JSONObject().put("protection", true).toString()
+        legacy(stored)
+
+        assertTrue(prefs().settings()!!.isProtectionActive)
+        assertEquals("still there to retry later", stored, legacyRaw())
+        assertNull(store.value)
     }
 }

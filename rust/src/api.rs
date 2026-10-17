@@ -431,6 +431,20 @@ pub fn core_log_clear() -> bool {
     })
 }
 
+/// The opaque settings blob (the platform owns the JSON schema). `None` on a
+/// first run, or while the store is not open.
+#[uniffi::export]
+pub fn core_settings_get() -> Option<String> {
+    guard(None, || crate::core().settings_get())
+}
+
+/// Replaces the settings blob. False when the store is not open, in which
+/// case the caller keeps its own copy and retries on the next launch.
+#[uniffi::export]
+pub fn core_settings_set(json: String) -> bool {
+    guard(false, || crate::core().settings_set(&json))
+}
+
 /// Internal diagnostics buffered by the core (bad resolver, unreadable list...).
 #[uniffi::export]
 pub fn core_take_log_lines() -> Vec<String> {

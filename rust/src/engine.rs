@@ -302,6 +302,20 @@ impl Core {
         self.store.get()
     }
 
+    /// The opaque settings blob (schema owned by the platform).
+    pub fn settings_get(&self) -> Option<String> {
+        self.store.get().and_then(|s| s.settings_get())
+    }
+
+    /// Replaces the settings blob. False while the store is not open — the
+    /// platform then keeps its own copy and retries on the next launch.
+    pub fn settings_set(&self, json: &str) -> bool {
+        match self.store.get() {
+            Some(store) => store.settings_set(json).is_ok(),
+            None => false,
+        }
+    }
+
     pub fn uptime_ms(&self) -> u64 {
         now_ms().saturating_sub(self.started_at)
     }

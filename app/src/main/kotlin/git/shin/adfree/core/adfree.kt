@@ -751,6 +751,10 @@ internal object IntegrityCheckingUniffiLib {
     ): Int
     external fun uniffi_adfree_core_checksum_func_core_set_socket_protector(
     ): Int
+    external fun uniffi_adfree_core_checksum_func_core_settings_get(
+    ): Int
+    external fun uniffi_adfree_core_checksum_func_core_settings_set(
+    ): Int
     external fun uniffi_adfree_core_checksum_func_core_start(
     ): Int
     external fun uniffi_adfree_core_checksum_func_core_stats(
@@ -848,6 +852,10 @@ internal object UniffiLib {
     ): Byte
     external fun uniffi_adfree_core_fn_func_core_set_socket_protector(`protector`: Long,uniffi_out_err: UniffiRustCallStatus, 
     ): Unit
+    external fun uniffi_adfree_core_fn_func_core_settings_get(uniffi_out_err: UniffiRustCallStatus, 
+    ): RustBuffer.ByValue
+    external fun uniffi_adfree_core_fn_func_core_settings_set(`json`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    ): Byte
     external fun uniffi_adfree_core_fn_func_core_start(`tunFd`: Int,uniffi_out_err: UniffiRustCallStatus, 
     ): Unit
     external fun uniffi_adfree_core_fn_func_core_stats(uniffi_out_err: UniffiRustCallStatus, 
@@ -1058,6 +1066,12 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if ((lib.uniffi_adfree_core_checksum_func_core_set_socket_protector() and 0xFFFF) != 21576) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if ((lib.uniffi_adfree_core_checksum_func_core_settings_get() and 0xFFFF) != 44339) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if ((lib.uniffi_adfree_core_checksum_func_core_settings_set() and 0xFFFF) != 64325) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if ((lib.uniffi_adfree_core_checksum_func_core_start() and 0xFFFF) != 51365) {
@@ -2387,6 +2401,38 @@ public object FfiConverterTypeStatsSnapshot: FfiConverterRustBuffer<StatsSnapsho
 /**
  * @suppress
  */
+public object FfiConverterOptionalString: FfiConverterRustBuffer<kotlin.String?> {
+    override fun read(buf: ByteBuffer): kotlin.String? {
+        if (buf.get().toInt() == 0) {
+            return null
+        }
+        return FfiConverterString.read(buf)
+    }
+
+    override fun allocationSize(value: kotlin.String?): ULong {
+        if (value == null) {
+            return 1UL
+        } else {
+            return 1UL + FfiConverterString.allocationSize(value)
+        }
+    }
+
+    override fun write(value: kotlin.String?, buf: ByteBuffer) {
+        if (value == null) {
+            buf.put(0)
+        } else {
+            buf.put(1)
+            FfiConverterString.write(value, buf)
+        }
+    }
+}
+
+
+
+
+/**
+ * @suppress
+ */
 public object FfiConverterSequenceInt: FfiConverterRustBuffer<List<kotlin.Int>> {
     override fun read(buf: ByteBuffer): List<kotlin.Int> {
         val len = buf.getInt()
@@ -2867,6 +2913,35 @@ public object FfiConverterSequenceTypeScriptBinding: FfiConverterRustBuffer<List
         FfiConverterTypeSocketProtector.lower(`protector`),_status)
 }
     
+    
+
+        /**
+         * The opaque settings blob (the platform owns the JSON schema). `None` on a
+         * first run, or while the store is not open.
+         */ fun `coreSettingsGet`(): kotlin.String? {
+            return FfiConverterOptionalString.lift(
+    uniffiRustCall() { _status ->
+    UniffiLib.uniffi_adfree_core_fn_func_core_settings_get(
+    
+        _status)
+}
+    )
+    }
+    
+
+        /**
+         * Replaces the settings blob. False when the store is not open, in which
+         * case the caller keeps its own copy and retries on the next launch.
+         */ fun `coreSettingsSet`(`json`: kotlin.String): kotlin.Boolean {
+            return FfiConverterBoolean.lift(
+    uniffiRustCall() { _status ->
+    UniffiLib.uniffi_adfree_core_fn_func_core_settings_set(
+    
+        
+        FfiConverterString.lower(`json`),_status)
+}
+    )
+    }
     
 
         /**
