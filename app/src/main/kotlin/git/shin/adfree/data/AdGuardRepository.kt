@@ -25,6 +25,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.drop
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -81,8 +82,15 @@ class AdGuardRepository(
         }
     }
 
-    /** User choices that outlive a restart: which lists are on, custom filters, scripts. */
-    private val prefs = FilterPreferences(context)
+    /**
+     * User choices that outlive a restart: which lists are on, custom filters,
+     * scripts. Lazy so a JVM test can build a repository without a real
+     * Android context (SharedPreferences are only reachable through one).
+     */
+    private val prefs by lazy { FilterPreferences(context) }
+
+    /** The protection switches; without this the app came back with all of them off. */
+    private val settingsPrefs by lazy { SettingsPreferences(context) }
 
     private val _userscripts = MutableStateFlow<List<UserScriptInfo>>(emptyList())
     val userscripts: StateFlow<List<UserScriptInfo>> = _userscripts.asStateFlow()
@@ -92,7 +100,33 @@ class AdGuardRepository(
 
     init {
         startStatsPoller()
+        // Every change to the switches lands on disk, so the VPN and HTTPS
+        // filtering survive a restart instead of coming back off. StateFlow
+        // conflates, so this writes once per real change, not per emission.
+        scope.launch {
+            _settings.drop(1).collect { settingsPrefs.save(it) }
+        }
     }
+
+    /**
+     * Restores the switches saved by an earlier run; called once at startup,
+     * before the configuration is pushed down to the core.
+     */
+    fun loadSettings() {
+        val stored = settingsPrefs.settings() ?: return
+        // Terminating TLS with a certificate the device no longer trusts would
+        // break every page it touches, so that switch only comes back when the
+        // CA is still installed.
+        val https = stored.isHttpsFilteringEnabled && engine.isCaTrusted()
+        _settings.value = stored.copy(isHttpsFilteringEnabled = https)
+    }
+
+    /**
+     * True when protection was on the last time the app ran: it is then
+     * switched back on at launch instead of waiting for the user. A first run
+     * has nothing saved and stays off.
+     */
+    fun protectionWasOn(): Boolean = settingsPrefs.settings()?.isProtectionActive == true
 
     // ------------------------------------------------------ polling the engine
 

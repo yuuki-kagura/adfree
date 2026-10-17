@@ -213,7 +213,10 @@ data class ProtectionStats(
 }
 
 data class ProtectionSettings(
-    val isProtectionActive: Boolean = true,
+    // Off until the user asks for it: the remembered intent that decides
+    // whether the tunnel comes back up at launch. The running state is the
+    // VPN's, not this flag's.
+    val isProtectionActive: Boolean = false,
     val isAdBlockingEnabled: Boolean = true,
     val isTrackingProtectionEnabled: Boolean = true,
     val isDnsProtectionEnabled: Boolean = true,

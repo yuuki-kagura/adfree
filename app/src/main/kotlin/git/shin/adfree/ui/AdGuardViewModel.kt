@@ -187,6 +187,17 @@ class AdGuardViewModel(
 
     init {
         repository.loadInstalledApps()
+        // Protection that was on when the app last ran comes back by itself;
+        // a first run has nothing saved and waits for the user. The consent
+        // dialog can only be raised by the Activity, hence the flag.
+        if (repository.protectionWasOn()) {
+            repository.toggleProtection(true)
+            if (vpnController.prepareIfNeeded() != null) {
+                _showVpnPermissionPrompt.value = true
+            } else {
+                vpnController.startVpnService()
+            }
+        }
     }
 
     // ---------------------------------------------------------------- intents
@@ -325,14 +336,26 @@ class AdGuardViewModel(
             )
 
             is AdGuardIntent.DismissLoading -> repository.dismissLoading()
-            is AdGuardIntent.VpnPermissionResolved -> vpnController.onPermissionResult(intent.granted)
+            is AdGuardIntent.VpnPermissionResolved -> {
+                // The dialog is gone either way; leaving the flag set would keep
+                // the next tap from raising it again.
+                _showVpnPermissionPrompt.value = false
+                vpnController.onPermissionResult(intent.granted)
+                // A refusal means the tunnel cannot come up: record that as the
+                // switch being off, so a later launch does not ask again by
+                // itself (the persisted intent is what auto-start reads).
+                if (!intent.granted) repository.toggleProtection(false)
+            }
             is AdGuardIntent.DismissVpnPermission -> _showVpnPermissionPrompt.value = false
         }
         syncConfig()
     }
 
     private fun toggleProtection() {
-        val next = !uiState.value.settings.isProtectionActive
+        // The switch follows the VPN itself, not a remembered flag: the flag
+        // defaulted to on while no tunnel existed, so the first tap after a
+        // restart "switched off" protection that had never come up.
+        val next = !vpnController.isVpnActive.value
         if (next) {
             val needsPermission = vpnController.prepareIfNeeded() != null
             if (needsPermission) {

@@ -21,6 +21,9 @@ class AdGuardApplication : Application() {
         // the core.
         container.repository.loadFilterState()
         container.repository.loadScriptsState()
+        // The switches the user left on come back before the engine is told
+        // what to do: HTTPS filtering and bypass blocking depend on them.
+        container.repository.loadSettings()
         container.syncConfigToEngine()
     }
 
