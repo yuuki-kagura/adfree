@@ -411,6 +411,16 @@ fn request(tcp: &mut Client, conn: &mut ClientConnection, path: &str) -> (String
     request_with(tcp, conn, path, "")
 }
 
+/// The href of the hiding stylesheet the injector wrote into a page.
+fn hide_href(page: &str) -> String {
+    let start = page
+        .find("/adfree-hide.css")
+        .expect("the stylesheet link must be injected");
+    let rest = &page[start..];
+    let end = rest.find('"').expect("the href must be quoted");
+    rest[..end].to_string()
+}
+
 /// Same, with extra request headers (each line already ending in CRLF).
 fn request_with(
     tcp: &mut Client,
@@ -585,15 +595,23 @@ fn cosmetic_filtering_rides_the_packet_path() {
     let page = String::from_utf8_lossy(&body);
     assert!(page.contains("window.__adfree_page="), "payload injected");
     assert!(
-        page.contains("<script src=\"/adfree-page.js\"></script>"),
+        page.contains("<script src=\"/adfree-page.js?h="),
         "runtime tag injected"
     );
     assert!(
-        page.contains("<script src=\"/adfree-user.js\" defer></script>"),
+        page.contains("<script src=\"/adfree-user.js?h="),
         "user script tag injected"
     );
-    // Element hiding, style action, scriptlet and the hostname rules.
-    assert!(page.contains("\".ad-box\""), "hide selector missing: {page}");
+    // Element hiding left the payload: it travels as a stylesheet the browser
+    // fetches once per site, and its URL hashes exactly what it serves.
+    let href = hide_href(&page);
+    assert!(href.starts_with("/adfree-hide.css?h="), "{href}");
+    assert!(!page.contains("\"hide\""), "hiding left the payload: {page}");
+    assert!(
+        !page.contains("display:none"),
+        "no CSS belongs inline any more: {page}"
+    );
+    // Style action, scriptlet and the hostname rules.
     assert!(page.contains("\".banner\""), "style rule missing: {page}");
     assert!(page.contains("setConstant"), "scriptlet missing: {page}");
     assert!(page.contains("adBlocked"), "scriptlet args missing: {page}");
@@ -613,6 +631,10 @@ fn cosmetic_filtering_rides_the_packet_path() {
         "the runtime must consume the inline payload"
     );
     assert!(runtime.contains("MutationObserver"), "the runtime must watch the DOM");
+    assert!(
+        runtime.contains("adfree-hide"),
+        "the runtime must keep the hiding stylesheet alive"
+    );
 
     // 4. The dynamic lookup answers for tokens the HTML scan never saw.
     let (head, body) = request(
@@ -625,6 +647,26 @@ fn cosmetic_filtering_rides_the_packet_path() {
     assert!(json.contains("\".adsbygoogle\""), "{json}");
     assert!(json.contains("\"#slot-1\""), "{json}");
     assert!(!json.contains("never-used"), "{json}");
+
+    // 5. The hiding stylesheet the page was told to fetch: cacheable forever,
+    //    and the bytes are the ones its URL hashed (so the cached copy can
+    //    never be stale).
+    let (head, body) = request(&mut tcp, &mut conn, &href);
+    assert!(head.starts_with("HTTP/1.1 200"), "{head}");
+    assert!(head.contains("Content-Type: text/css"), "{head}");
+    assert!(
+        head.contains("Cache-Control: max-age=31536000, immutable"),
+        "{head}"
+    );
+    let css = String::from_utf8(body).expect("utf8");
+    assert!(css.contains(".ad-box"), "{css}");
+    assert_eq!(css, ".ad-box{display:none!important}\n", "{css}");
+    let advertised = u64::from_str_radix(href.split("h=").nth(1).expect("hash"), 16).expect("hex");
+    assert_eq!(
+        advertised,
+        super::proxy::content_hash(css.as_bytes()),
+        "the URL must hash the bytes that are served"
+    );
 
     tcp.close();
 }
@@ -668,7 +710,11 @@ fn compressed_and_chunked_pages_are_still_filtered() {
             page.contains("window.__adfree_page="),
             "the payload must be injected into a {mode:?} page: {page}"
         );
-        assert!(page.contains("\".ad-box\""), "{page}");
+        let href = hide_href(&page);
+        assert!(
+            href.starts_with("/adfree-hide.css?h="),
+            "hiding travels as a stylesheet into a {mode:?} page: {href}"
+        );
         assert!(page.contains("\"#slot-1\""), "generic rules must be scanned: {page}");
         assert!(page.contains("Sponsored content"), "the page itself is intact: {page}");
         tcp.close();
@@ -764,11 +810,11 @@ fn a_page_larger_than_one_window_streams_to_the_client() {
 
     let page = String::from_utf8(body).expect("utf8");
     assert!(
-        page.contains("<script src=\"/adfree-page.js\"></script>"),
+        page.contains("<script src=\"/adfree-page.js?h="),
         "the runtime tag must be injected"
     );
     assert!(
-        page.contains("<script src=\"/adfree-user.js\" defer></script>"),
+        page.contains("<script src=\"/adfree-user.js?h="),
         "the user script tag must be injected"
     );
     assert!(
@@ -776,8 +822,10 @@ fn a_page_larger_than_one_window_streams_to_the_client() {
         "the payload must be injected"
     );
     // Hostname rules come from the URL, so they are there even though the scan
-    // only saw the head of the document.
-    assert!(page.contains("\".ad-box\""), "hostname rule missing");
+    // only saw the head of the document — as the stylesheet the browser caches.
+    let href = hide_href(&page);
+    assert!(href.starts_with("/adfree-hide.css?h="), "{href}");
+    assert!(!page.contains("\"hide\""), "hiding left the payload: {page}");
     // The tag has to land before the body renders, and nothing may be lost.
     let tag = page.find("/adfree-user.js").expect("tag");
     let head_close = page.find("</head>").expect("</head>");

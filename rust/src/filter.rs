@@ -473,6 +473,21 @@ impl FilterEngine {
         }
     }
 
+    /// The element-hiding selectors that apply to `host`, in a stable order.
+    ///
+    /// The engine hands these out as a `HashSet`, so two calls for the same
+    /// page need not agree on the order. The stylesheet they are served as is
+    /// content-addressed (its URL carries a hash of the bytes), which makes a
+    /// stable order mandatory: the hash written into the page has to match the
+    /// bytes the stylesheet request comes back with.
+    pub fn hide_selectors_for(&self, host: &str) -> Vec<String> {
+        let url = format!("https://{host}/");
+        let mut selectors = self.cosmetic_resources(&url).hide_selectors;
+        selectors.sort_unstable();
+        selectors.dedup();
+        selectors
+    }
+
     /// Generic `##.class` / `## #id` rules matching the tokens a page uses.
     ///
     /// These rules are not tied to a hostname, so the page's own classes and
@@ -925,6 +940,37 @@ mod tests {
         assert!(generic.iter().any(|s| s == ".adsbygoogle"), "{generic:?}");
         let none = fe.generic_selectors(&["unused-token".to_string()], &[], &res.exceptions);
         assert!(none.is_empty(), "{none:?}");
+    }
+
+    #[test]
+    fn hiding_selectors_come_back_in_a_stable_order() {
+        // The engine stores them in a `HashSet`, so without the sort two calls
+        // can differ — and the stylesheet URL hashes these bytes.
+        let fe = cosmetic_engine(
+            "example.com##.zebra\n\
+             example.com##.alpha\n\
+             example.com##.middle\n\
+             other.test##.not-here\n\
+             ##.adsbygoogle\n",
+        );
+        let first = fe.hide_selectors_for("example.com");
+        let second = fe.hide_selectors_for("example.com");
+        assert_eq!(first, second, "the same host must yield the same bytes");
+        assert!(
+            first.windows(2).all(|w| w[0] <= w[1]),
+            "not sorted: {first:?}"
+        );
+        for selector in [".alpha", ".middle", ".zebra"] {
+            assert!(first.iter().any(|s| s == selector), "{first:?}");
+        }
+        assert!(
+            !first.iter().any(|s| s == ".not-here"),
+            "another host's rule must not leak in: {first:?}"
+        );
+        assert!(
+            fe.hide_selectors_for("nowhere.test").is_empty(),
+            "a host with no hiding rules gets no stylesheet"
+        );
     }
 
     #[test]

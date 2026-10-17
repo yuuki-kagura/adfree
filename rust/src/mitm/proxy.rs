@@ -35,6 +35,18 @@ pub const PAGE_SCRIPT_PATH: &str = "/adfree-page.js";
 /// proxy's initial HTML scan could not see.
 pub const GENERIC_PATH: &str = "/adfree-generic.js";
 
+/// Path the page's element-hiding stylesheet is served from.
+///
+/// Element hiding is the bulk of the cosmetic work (11 KB of all-site rules on
+/// a typical page) and repeats on every page of a site, so it travels as a
+/// stylesheet the browser caches instead of inline script data.
+pub const HIDE_PATH: &str = "/adfree-hide.css";
+
+/// Cache policy for the local answers whose URL carries a content hash: the
+/// bytes behind a given URL can never change, so the browser need not ask
+/// again. (A filter update changes the hash, which changes the URL.)
+const IMMUTABLE_CACHE: &str = "max-age=31536000, immutable";
+
 /// The page runtime itself, compiled into the binary.
 pub const PAGE_RUNTIME: &str = include_str!("page_runtime.js");
 
@@ -104,6 +116,10 @@ pub struct ProxySession {
     pub client_buffer: Vec<u8>,
     /// Scripts to inject into HTML (already combined).
     pub script_src: String,
+    /// The tag the browser sees: `script_src` plus the content hash of
+    /// [`Self::script_body`], so the answer can be cached per origin until the
+    /// script itself changes.
+    script_tag_src: String,
     /// Combined JS served back for requests to `script_src` (empty = nothing
     /// to serve, and the request is forwarded like any other).
     pub script_body: Arc<str>,
@@ -245,6 +261,7 @@ impl ProxySession {
     /// A session whose halves are already open (tests, and any caller that
     /// knows the hostname up front).
     pub fn new(session: TlsSession, script_src: String, script_body: Arc<str>) -> Self {
+        let script_tag_src = versioned_path(&script_src, content_hash(script_body.as_bytes()));
         ProxySession {
             state: ProxyState::Active(Box::new(session)),
             captured: None,
@@ -254,6 +271,7 @@ impl ProxySession {
             peer_buffer: Vec::new(),
             client_buffer: Vec::new(),
             script_src,
+            script_tag_src,
             script_body,
             cosmetic: None,
         }
@@ -273,6 +291,7 @@ impl ProxySession {
     ) -> Result<Self, String> {
         let resolver = FlowResolver::new(resolver);
         let server = tls::new_server(tls::server_config_dyn(resolver.clone()))?;
+        let script_tag_src = versioned_path(&script_src, content_hash(script_body.as_bytes()));
         Ok(ProxySession {
             state: ProxyState::Pending(Box::new(PendingState {
                 server,
@@ -287,6 +306,7 @@ impl ProxySession {
             peer_buffer: Vec::new(),
             client_buffer: Vec::new(),
             script_src,
+            script_tag_src,
             script_body,
             cosmetic: None,
         })
@@ -975,35 +995,51 @@ impl ProxySession {
         Ok(())
     }
 
-    /// The HTML snippet injected before `</head>`: the cosmetic payload (data
-    /// inline, runtime fetched from the local endpoint) plus the user script
-    /// tag when one is installed. Empty when nothing applies.
+    /// The HTML snippet injected before `</head>`: the hiding stylesheet, the
+    /// cosmetic payload (rule data inline, runtime fetched from the local
+    /// endpoint) plus the user script tag when one is installed. Empty when
+    /// nothing applies.
     fn injection_snippet(&self, body: &[u8]) -> Vec<u8> {
         let mut out = Vec::new();
-        if self.cosmetic.is_some() {
-            if let Some(data) = self.cosmetic_payload(body) {
-                out.extend_from_slice(b"<script>window.__adfree_page=");
-                out.extend_from_slice(data.as_bytes());
-                out.extend_from_slice(b";</script>");
+        if let Some(filter) = self.cosmetic.as_deref() {
+            // Without a hostname there are no rules to look up (a session that
+            // never saw a ClientHello keeps only the runtime).
+            if let Some(host) = self.captured.as_deref() {
+                // What the rules hide goes out as a stylesheet, not as inline
+                // data: the same 11 KB of all-site selectors applies to every
+                // page of a site, and this way the browser fetches it once and
+                // keeps it.
+                if let Some((href, _)) = hide_stylesheet(filter, host) {
+                    out.extend_from_slice(http::style_link_tag(&href, "adfree-hide").as_bytes());
+                }
+                if let Some(data) = self.cosmetic_payload(filter, host, body) {
+                    out.extend_from_slice(b"<script>window.__adfree_page=");
+                    out.extend_from_slice(data.as_bytes());
+                    out.extend_from_slice(b";</script>");
+                }
             }
             // The runtime goes out whenever cosmetic filtering runs, payload or
             // not: it is what finds rules for the tokens the proxy never saw,
             // which on a streamed page is everything past `</head>`.
             // Not deferred: the hiding stylesheet must land before the body
             // renders, and the answer comes from this very connection.
-            out.extend_from_slice(http::script_tag(PAGE_SCRIPT_PATH, false).as_bytes());
+            let runtime = versioned_path(PAGE_SCRIPT_PATH, content_hash(PAGE_RUNTIME.as_bytes()));
+            out.extend_from_slice(http::script_tag(&runtime, false).as_bytes());
         }
         if !self.script_src.is_empty() {
-            out.extend_from_slice(http::script_tag(&self.script_src, true).as_bytes());
+            out.extend_from_slice(http::script_tag(&self.script_tag_src, true).as_bytes());
         }
         out
     }
 
-    /// The per-page cosmetic payload as JSON, or `None` when the page has no
-    /// rules at all.
-    fn cosmetic_payload(&self, body: &[u8]) -> Option<String> {
-        let filter = self.cosmetic.as_deref()?;
-        let host = self.captured.as_deref()?;
+    /// The per-page cosmetic payload as JSON, or `None` when the page has
+    /// nothing left to carry inline (element hiding travels as a stylesheet).
+    fn cosmetic_payload(
+        &self,
+        filter: &FilterEngine,
+        host: &str,
+        body: &[u8],
+    ) -> Option<String> {
         let url = format!("https://{host}/");
         let rules = filter.cosmetic_resources(&url);
 
@@ -1017,14 +1053,8 @@ impl ProxySession {
                 generic = filter.generic_selectors(&classes, &ids, &rules.exceptions);
             }
         }
-        if rules.is_empty() && generic.is_empty() {
-            return None;
-        }
 
         let mut obj = serde_json::Map::new();
-        if !rules.hide_selectors.is_empty() {
-            obj.insert("hide".into(), serde_json::json!(rules.hide_selectors));
-        }
         if !rules.style_rules.is_empty() {
             obj.insert("style".into(), serde_json::json!(rules.style_rules));
         }
@@ -1038,8 +1068,14 @@ impl ProxySession {
             obj.insert("scriptlets".into(), serde_json::json!(rules.scriptlets));
         }
         // With `$generichide` in play the dynamic lookup would answer `[]`
-        // every time; tell the runtime not to bother.
-        obj.insert("dynamic".into(), serde_json::json!(!rules.generichide));
+        // every time; say so, and only then — the runtime assumes it is on, so
+        // a page whose payload never made it out still gets the lookup.
+        if rules.generichide {
+            obj.insert("dynamic".into(), serde_json::json!(false));
+        }
+        if obj.is_empty() {
+            return None;
+        }
         Some(escape_for_script(&serde_json::Value::Object(obj).to_string()))
     }
 }
@@ -1060,20 +1096,40 @@ pub fn take_local_request(
     let line_end = buffer.windows(2).position(|w| w == b"\r\n")?;
     let first_line = std::str::from_utf8(&buffer[..line_end]).ok()?.to_string();
     let target = request_target(&first_line)?;
+    let gzip = http::accepts_gzip(&buffer[..head]);
 
     if !serve_path.is_empty() && !script_body.is_empty() && target == serve_path {
         buffer.drain(..head);
-        return Some(http_response(
+        // The tag carries the script's content hash, so this answer may be
+        // kept: a changed script is requested under a different URL.
+        return Some(local_response(
             "application/javascript; charset=utf-8",
+            IMMUTABLE_CACHE,
             script_body.as_bytes(),
+            gzip,
         ));
     }
     let (filter, host) = cosmetic?;
     if target == PAGE_SCRIPT_PATH {
         buffer.drain(..head);
-        return Some(http_response(
+        return Some(local_response(
             "application/javascript; charset=utf-8",
+            IMMUTABLE_CACHE,
             PAGE_RUNTIME.as_bytes(),
+            gzip,
+        ));
+    }
+    if target == HIDE_PATH {
+        buffer.drain(..head);
+        // Only the bytes matter here; the hash in the URL was computed over
+        // exactly these bytes when the link was written. An empty stylesheet
+        // (rules changed since) is a valid answer.
+        let body = hide_stylesheet(filter, host).map(|(_, body)| body);
+        return Some(local_response(
+            "text/css; charset=utf-8",
+            IMMUTABLE_CACHE,
+            body.as_deref().unwrap_or("").as_bytes(),
+            gzip,
         ));
     }
     if target == GENERIC_PATH {
@@ -1165,16 +1221,72 @@ fn percent_decode(value: &str) -> String {
 
 /// A complete HTTP/1.1 response for a locally answered request.
 fn http_response(content_type: &str, body: &[u8]) -> Vec<u8> {
-    let mut resp = Vec::with_capacity(body.len() + 160);
+    local_response(content_type, "no-store", body, false)
+}
+
+/// A locally answered response with an explicit cache policy.
+///
+/// `gzip` encodes the body when the caller saw the client accept it: the page
+/// runtime and the hiding stylesheet are document-sized, and page data stays
+/// compressed on the wire.
+fn local_response(content_type: &str, cache: &str, body: &[u8], gzip: bool) -> Vec<u8> {
+    let compressed = if gzip && !body.is_empty() {
+        http::gzip_bytes(body)
+    } else {
+        None
+    };
+    let payload = compressed.as_deref().unwrap_or(body);
+    // `Vary` keeps any cache from handing the gzipped answer to a client that
+    // never said it takes one.
+    let encoding = if compressed.is_some() {
+        "Content-Encoding: gzip\r\nVary: Accept-Encoding\r\n"
+    } else {
+        ""
+    };
+    let mut resp = Vec::with_capacity(payload.len() + 200);
     resp.extend_from_slice(
         format!(
-            "HTTP/1.1 200 OK\r\nContent-Type: {content_type}\r\nCache-Control: no-store\r\nContent-Length: {}\r\n\r\n",
-            body.len()
+            "HTTP/1.1 200 OK\r\nContent-Type: {content_type}\r\nCache-Control: {cache}\r\n{encoding}Content-Length: {}\r\n\r\n",
+            payload.len()
         )
         .as_bytes(),
     );
-    resp.extend_from_slice(body);
+    resp.extend_from_slice(payload);
     resp
+}
+
+/// FNV-1a over the bytes: a cheap, stable content hash for cache busting.
+///
+/// Local answers carry it in their URL, which is what lets them be cached
+/// forever: the URL changes when the bytes do, and only then.
+pub(crate) fn content_hash(bytes: &[u8]) -> u64 {
+    let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
+    for byte in bytes {
+        hash ^= *byte as u64;
+        hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+    }
+    hash
+}
+
+/// Appends the content hash to a local path (`?h=…`, or `&h=…` if the path
+/// already carries a query) so its answer can be cached until it changes.
+fn versioned_path(path: &str, hash: u64) -> String {
+    let separator = if path.contains('?') { '&' } else { '?' };
+    format!("{path}{separator}h={hash:016x}")
+}
+
+/// The elements-hiding stylesheet of a host: its bytes and the same-origin URL
+/// they are served from. `None` when nothing is hidden on this host.
+///
+/// The bytes are what the URL hashes, so the two can never disagree: whoever
+/// writes the link and whoever answers it build the same string.
+pub(crate) fn hide_stylesheet(filter: &FilterEngine, host: &str) -> Option<(String, String)> {
+    let selectors = filter.hide_selectors_for(host);
+    if selectors.is_empty() {
+        return None;
+    }
+    let body = format!("{}{{display:none!important}}\n", selectors.join(","));
+    Some((versioned_path(HIDE_PATH, content_hash(body.as_bytes())), body))
 }
 
 /// Escapes a JSON payload for embedding inside an inline `<script>`.

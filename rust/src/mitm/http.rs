@@ -41,6 +41,18 @@ pub fn script_tag(src: &str, defer: bool) -> String {
     }
 }
 
+/// Builds the `<link rel="stylesheet">` tag for an injected stylesheet.
+///
+/// The id is what lets the page runtime notice the page dropping the element
+/// and put it back; the browser then reuses its cached copy.
+pub fn style_link_tag(href: &str, id: &str) -> String {
+    format!(
+        "<link rel=\"stylesheet\" id=\"{}\" href=\"{}\">",
+        escape_attr(id),
+        escape_attr(href)
+    )
+}
+
 /// Chèn `snippet` (raw HTML: script tags, inline data) vào `body`.
 ///
 /// The caller decides what goes in — the injector only finds the insertion
@@ -917,6 +929,34 @@ fn gzip_body_start(buf: &[u8]) -> GzipHeader {
     GzipHeader::Ok(pos)
 }
 
+/// True when the request's `Accept-Encoding` allows a gzipped answer.
+///
+/// Only gzip can be produced here (no brotli), and only gzip is checked for:
+/// a client that did not ask for it gets the body plain.
+pub fn accepts_gzip(request_head: &[u8]) -> bool {
+    let lower: Vec<u8> = request_head.iter().map(|b| b.to_ascii_lowercase()).collect();
+    let Some(pos) = find_ci(&lower, b"\r\naccept-encoding:") else {
+        return false;
+    };
+    let rest = &lower[pos + 2..];
+    let end = rest
+        .windows(2)
+        .position(|w| w == b"\r\n")
+        .unwrap_or(rest.len());
+    rest[..end].windows(4).any(|w| w == b"gzip")
+}
+
+/// Gzips a whole locally answered body.
+///
+/// `None` when the encoder refuses; the caller then sends the bytes plain
+/// rather than not at all.
+pub fn gzip_bytes(body: &[u8]) -> Option<Vec<u8>> {
+    use std::io::Write;
+    let mut encoder = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::fast());
+    encoder.write_all(body).ok()?;
+    encoder.finish().ok()
+}
+
 /// Incremental gzip encoder, so an edited body can leave compressed without
 /// being held whole first.
 pub struct GzipState {
@@ -1249,6 +1289,45 @@ mod tests {
         let escaped = script_tag("/a\"<b>", false);
         assert!(!escaped.contains("/a\"<b>"), "{escaped}");
         assert!(escaped.contains("&quot;") && escaped.contains("&lt;"), "{escaped}");
+    }
+
+    #[test]
+    fn style_link_escapes_and_keeps_an_id() {
+        assert_eq!(
+            style_link_tag("/adfree-hide.css?h=abc", "adfree-hide"),
+            "<link rel=\"stylesheet\" id=\"adfree-hide\" href=\"/adfree-hide.css?h=abc\">"
+        );
+        let escaped = style_link_tag("/a\"<b>", "x\"");
+        assert!(!escaped.contains("/a\"<b>"), "{escaped}");
+        assert!(escaped.contains("&quot;"), "{escaped}");
+    }
+
+    #[test]
+    fn accept_encoding_decides_whether_a_local_body_is_gzipped() {
+        assert!(accepts_gzip(
+            b"GET / HTTP/1.1\r\nHost: x\r\nAccept-Encoding: gzip, deflate, br\r\n\r\n"
+        ));
+        assert!(accepts_gzip(
+            b"GET / HTTP/1.1\r\naccept-encoding: GZIP\r\n\r\n"
+        ));
+        assert!(!accepts_gzip(b"GET / HTTP/1.1\r\nHost: x\r\n\r\n"));
+        assert!(!accepts_gzip(
+            b"GET / HTTP/1.1\r\nHost: x\r\nAccept-Encoding: deflate, br\r\n\r\n"
+        ));
+        // A path or header value that merely mentions the word is not a yes.
+        assert!(!accepts_gzip(b"GET /gzip HTTP/1.1\r\nHost: x\r\n\r\n"));
+    }
+
+    #[test]
+    fn gzipped_local_bodies_decode_back() {
+        let body = b"body".repeat(300);
+        let gz = gzip_bytes(&body).expect("gzip");
+        assert!(gz.len() < body.len(), "the point is to shrink page data");
+        let mut out = Vec::new();
+        let mut gunzip = GunzipState::new();
+        gunzip.push(&gz, &mut out).expect("decode");
+        assert!(gunzip.is_done(), "the stream must end");
+        assert_eq!(out, body);
     }
 
     #[test]

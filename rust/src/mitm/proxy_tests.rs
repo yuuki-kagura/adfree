@@ -4,7 +4,7 @@
 //! conversation end to end. These tests therefore focus on what this module adds
 //! on top of TLS: the response rewriter that injects scripts into HTML.
 
-use super::proxy::{take_local_request, ProxySession};
+use super::proxy::{content_hash, take_local_request, ProxySession, HIDE_PATH};
 use super::*;
 use crate::mitm::ca::CertificateAuthority;
 use crate::mitm::tls::{open_session, SniCertResolver};
@@ -12,8 +12,58 @@ use std::io::{Read, Write};
 use std::sync::Arc;
 
 /// The tag the injector emits, so expectations stay in sync with the code.
+///
+/// The session `build_proxy` makes has an empty script body, so the tag's URL
+/// carries the hash of nothing; the hash itself is what keeps the browser from
+/// re-fetching the script on every page.
 fn expected_tag() -> &'static str {
-    "<script src=\"/adfree-user.js\" defer></script>"
+    static TAG: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    TAG.get_or_init(|| {
+        format!(
+            "<script src=\"/adfree-user.js?h={:016x}\" defer></script>",
+            content_hash(b"")
+        )
+    })
+}
+
+/// A filter engine built from a list written to disk, exactly like the app
+/// ships them.
+fn engine_with(tag: &str, rules: &str) -> Arc<crate::filter::FilterEngine> {
+    let dir = std::env::temp_dir().join("adfree-proxy-tests");
+    std::fs::create_dir_all(&dir).expect("temp dir");
+    let path = dir.join(format!("{tag}-list.txt"));
+    std::fs::write(&path, rules).expect("write list");
+    let engine = Arc::new(crate::filter::FilterEngine::new());
+    engine.rebuild(
+        &[crate::filter::FilterListInfo {
+            id: 1,
+            name: tag.to_string(),
+            url: String::new(),
+            enabled: true,
+            local_path: Some(path),
+            format: crate::filter::ListFormat::Standard,
+            category: 0,
+            rule_count: 0,
+            last_error: None,
+        }],
+        &[],
+    );
+    engine
+}
+
+/// The content hash a locally served URL advertises.
+fn href_hash(href: &str) -> u64 {
+    let value = href.split("h=").nth(1).expect("the URL carries a hash");
+    u64::from_str_radix(value, 16).expect("the hash is hexadecimal")
+}
+
+/// Splits a locally served response into its head and body.
+fn split_local(response: &[u8]) -> (String, Vec<u8>) {
+    let split = http::head_end(response).expect("the head is complete");
+    (
+        String::from_utf8(response[..split].to_vec()).expect("utf8"),
+        response[split..].to_vec(),
+    )
 }
 
 fn build_proxy(ca: &CertificateAuthority, script: &str) -> ProxySession {
@@ -980,32 +1030,13 @@ fn the_page_runtime_is_injected_even_without_a_payload() {
     let mut proxy = build_proxy(&ca, "/adfree-user.js");
 
     // A list whose rules match nothing on the page that follows.
-    let dir = std::env::temp_dir().join("adfree-proxy-tests");
-    std::fs::create_dir_all(&dir).expect("temp dir");
-    let path = dir.join("no-match-list.txt");
-    std::fs::write(&path, "other.test##.ad-box\n").expect("write list");
-    let engine = Arc::new(crate::filter::FilterEngine::new());
-    engine.rebuild(
-        &[crate::filter::FilterListInfo {
-            id: 1,
-            name: "no-match".to_string(),
-            url: String::new(),
-            enabled: true,
-            local_path: Some(path),
-            format: crate::filter::ListFormat::Standard,
-            category: 0,
-            rule_count: 0,
-            last_error: None,
-        }],
-        &[],
-    );
-    proxy.cosmetic = Some(engine);
+    proxy.cosmetic = Some(engine_with("no-match", "other.test##.ad-box\n"));
 
     let body = "<html><head><title>t</title></head><body>plain text</body></html>";
     let (out, injected) = proxy.rewrite_response(&html_response(body));
     let text = String::from_utf8(out).expect("utf8");
     assert!(
-        text.contains("<script src=\"/adfree-page.js\"></script>"),
+        text.contains("<script src=\"/adfree-page.js?h="),
         "the runtime must go out: {text}"
     );
     assert!(
@@ -1038,4 +1069,133 @@ fn redirect_bodies_are_left_alone() {
         "the body must travel untouched"
     );
     assert!(!out.windows(6).any(|w| w == b"adfree"));
+}
+
+/// The hiding selectors are the bulk of the per-page payload, and they repeat
+/// on every page of a site: they are served as a stylesheet whose URL carries
+/// their content hash, so the browser fetches them once and keeps them.
+#[test]
+fn the_hiding_stylesheet_is_served_from_a_content_addressed_url() {
+    let engine = engine_with(
+        "hide-sheet",
+        "origin.example.com##.ad-slot\norigin.example.com##.ad-box\n",
+    );
+    let (href, body) = super::proxy::hide_stylesheet(&engine, "origin.example.com")
+        .expect("the host hides something");
+    assert!(href.starts_with(HIDE_PATH), "{href}");
+    // Sorted, so the same page always produces the same bytes and the same URL.
+    assert_eq!(body, ".ad-box,.ad-slot{display:none!important}\n");
+    assert_eq!(href_hash(&href), content_hash(body.as_bytes()));
+
+    // A host the rules do not cover has no stylesheet at all.
+    assert!(super::proxy::hide_stylesheet(&engine, "other.test").is_none());
+}
+
+#[test]
+fn answering_the_stylesheet_request_repeats_the_bytes_the_link_hashed() {
+    let engine = engine_with(
+        "hide-serve",
+        "origin.example.com##.ad-box\norigin.example.com##.ad-slot\n",
+    );
+    let (href, body) = super::proxy::hide_stylesheet(&engine, "origin.example.com").expect("sheet");
+
+    // The request the browser sends for the link it was given.
+    let mut buffer = format!(
+        "GET {href} HTTP/1.1\r\nHost: origin.example.com\r\nAccept-Encoding: gzip, deflate\r\n\r\n"
+    )
+    .into_bytes();
+    let response = take_local_request(
+        "/adfree-user.js",
+        "",
+        Some((engine.as_ref(), "origin.example.com")),
+        &mut buffer,
+    )
+    .expect("served");
+    assert!(buffer.is_empty(), "the request is consumed");
+
+    let (head, compressed) = split_local(&response);
+    assert!(head.starts_with("HTTP/1.1 200 OK"), "{head}");
+    assert!(head.contains("Content-Type: text/css; charset=utf-8"), "{head}");
+    // Cacheable forever: the URL changes when the bytes do, and only then.
+    assert!(head.contains("Cache-Control: max-age=31536000, immutable"), "{head}");
+    assert!(head.contains("Content-Encoding: gzip"), "{head}");
+    assert!(head.contains("Vary: Accept-Encoding"), "{head}");
+
+    let plain = http::decode_body(&compressed, http::Encoding::Gzip).expect("decoded");
+    let css = String::from_utf8(plain).expect("utf8");
+    assert_eq!(css, body, "the served bytes must be the ones hashed");
+    assert_eq!(href_hash(&href), content_hash(css.as_bytes()));
+}
+
+/// A client that never said it takes gzip gets the bytes plain.
+#[test]
+fn the_hiding_stylesheet_travels_plain_when_gzip_is_not_accepted() {
+    let engine = engine_with("hide-plain", "origin.example.com##.ad-box\n");
+    let (href, body) = super::proxy::hide_stylesheet(&engine, "origin.example.com").expect("sheet");
+    let mut buffer =
+        format!("GET {href} HTTP/1.1\r\nHost: origin.example.com\r\n\r\n").into_bytes();
+    let response = take_local_request(
+        "/adfree-user.js",
+        "",
+        Some((engine.as_ref(), "origin.example.com")),
+        &mut buffer,
+    )
+    .expect("served");
+
+    let (head, payload) = split_local(&response);
+    assert!(!head.contains("Content-Encoding"), "{head}");
+    assert_eq!(String::from_utf8(payload).expect("utf8"), body);
+}
+
+/// The page runtime is document-sized and was re-fetched on every navigation;
+/// its tag carries a content hash so the answer is cacheable too.
+#[test]
+fn the_runtime_is_served_from_a_content_addressed_url() {
+    let expected = format!(
+        "{}?h={:016x}",
+        super::proxy::PAGE_SCRIPT_PATH,
+        content_hash(super::proxy::PAGE_RUNTIME.as_bytes())
+    );
+
+    // The request is the one the injected tag asks for.
+    let mut buffer = format!(
+        "GET {expected} HTTP/1.1\r\nHost: origin.example.com\r\nAccept-Encoding: gzip\r\n\r\n"
+    )
+    .into_bytes();
+    let engine = engine_with("runtime-serve", "origin.example.com##.ad-box\n");
+    let response = take_local_request(
+        "/adfree-user.js",
+        "",
+        Some((engine.as_ref(), "origin.example.com")),
+        &mut buffer,
+    )
+    .expect("served");
+    let (head, compressed) = split_local(&response);
+    assert!(
+        head.contains("Cache-Control: max-age=31536000, immutable"),
+        "{head}"
+    );
+    assert!(head.contains("Content-Encoding: gzip"), "{head}");
+    let plain = http::decode_body(&compressed, http::Encoding::Gzip).expect("decoded");
+    assert_eq!(plain, super::proxy::PAGE_RUNTIME.as_bytes());
+}
+
+/// The same treatment for the user script: it is re-served to every page, and
+/// a big one is why the tag carries a hash of its body.
+#[test]
+fn the_user_script_is_served_from_a_content_addressed_url() {
+    let script = "/* big */ window.__adfree_user=\"x\";";
+    let href = format!(
+        "/adfree-user.js?h={:016x}",
+        content_hash(script.as_bytes())
+    );
+    let mut buffer = format!(
+        "GET {href} HTTP/1.1\r\nHost: origin.example.com\r\nAccept-Encoding: gzip\r\n\r\n"
+    )
+    .into_bytes();
+    let response = take_local_request("/adfree-user.js", script, None, &mut buffer).expect("served");
+    let (head, compressed) = split_local(&response);
+    assert!(head.contains("Cache-Control: max-age=31536000, immutable"), "{head}");
+    let plain = http::decode_body(&compressed, http::Encoding::Gzip).expect("decoded");
+    assert_eq!(String::from_utf8(plain).expect("utf8"), script);
 }

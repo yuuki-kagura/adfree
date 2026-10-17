@@ -5,10 +5,14 @@
 // The rules arrive inline as `window.__adfree_page` (written by the proxy):
 //
 // ```text
-// { hide: [selector], style: [[selector, css]], generic: [selector],
+// { style: [[selector, css]], generic: [selector],
 //   procedural: [{selector: [{type, arg}], action: {type, arg}|null}],
 //   scriptlets: "js source", dynamic: true }
 // ```
+//
+// Element hiding is not in there: the proxy writes it as a stylesheet served
+// from the page's own origin (`<link rel="stylesheet" id="adfree-hide">`),
+// which the browser fetches once per site and keeps until the rules change.
 //
 // Everything is defensive: a broken rule must never take a page down, so
 // every step is guarded and failures are swallowed.
@@ -36,9 +40,6 @@
 
   function cssText() {
     var rules = [];
-    if (data.hide && data.hide.length) {
-      rules.push(data.hide.join(',') + '{display:none!important}');
-    }
     if (data.generic && data.generic.length) {
       rules.push(data.generic.join(',') + '{display:none!important}');
     }
@@ -430,15 +431,36 @@
     }
   }
 
+  // --- stylesheet link ------------------------------------------------------
+  //
+  // The proxy writes the hiding stylesheet into the head as a `<link>` before
+  // this script. The page is free to remove it (DOM sanitizers do), and the
+  // browser then has to be told again — the same element re-attaches with the
+  // bytes it already has cached.
+
+  var hideLink = null;
+  try {
+    hideLink = document.getElementById('adfree-hide');
+  } catch (e) {
+    hideLink = null;
+  }
+
   // --- observers ------------------------------------------------------------
 
-  if ((procedural.length || dynamic) && document.documentElement) {
+  if ((procedural.length || dynamic || hideLink) && document.documentElement) {
     var pendingRun = false;
     try {
       var observer = new MutationObserver(function (records) {
         // Keep our stylesheet alive if the page removes it.
         if (styleEl && !styleEl.isConnected) {
           installStyles();
+        }
+        if (hideLink && !hideLink.isConnected) {
+          try {
+            (document.head || document.documentElement).appendChild(hideLink);
+          } catch (e) {
+            /* the link stays detached: static hiding is lost, nothing else */
+          }
         }
         if (dynamic) {
           for (var i = 0; i < records.length; i++) {
