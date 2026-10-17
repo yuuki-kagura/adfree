@@ -20,7 +20,7 @@ fn make_relay() -> Relay {
         CertificateAuthority::from_pem(&ca.cert_pem(), &ca.key_pem()).expect("restore"),
     )));
     let session = open_session(&resolver, "ads.example.com").expect("session");
-    let proxy = ProxySession::new(session, "/adfree-user.js".into());
+    let proxy = ProxySession::new(session, "/adfree-user.js".into(), Arc::from(""));
     let flow = Flow::new(packet::IpKey::V4(0x0a6f_2a01), 40000, 443, 1000, 55_000);
     Relay::new_tls(flow, -1, proxy, syn_packet(), 1460, false)
 }
@@ -120,6 +120,75 @@ fn closing_a_relay_is_idempotent() {
     relay.close();
     assert!(relay.closed);
     assert_eq!(relay.peer_fd, fd, "the socket is the caller's to close");
+}
+
+#[test]
+fn client_bound_bytes_wait_for_the_receive_window() {
+    let mut relay = make_relay();
+    // The SYN-ACK consumed one sequence number, as on a real connection.
+    relay.flow.up_bytes = 1;
+    // A 2 KB window funds exactly one 2 KB burst; the rest must wait.
+    relay.on_client_ack(55_000 + 1, 2_000);
+    let segs = relay.segments_for_client(&vec![0x5Au8; 5_000]);
+    let sent: usize = segs
+        .iter()
+        .map(|s| Packet::parse(s).expect("parse").l4_payload().len())
+        .sum();
+    assert_eq!(sent, 2_000, "only the window's worth may leave at once");
+
+    // The ACK covering those bytes opens the window for the next burst.
+    relay.on_client_ack(55_000 + 1 + 2_000, 2_000);
+    let segs = relay.segments_for_client(&[]);
+    let sent: usize = segs
+        .iter()
+        .map(|s| Packet::parse(s).expect("parse").l4_payload().len())
+        .sum();
+    assert_eq!(sent, 2_000, "the next ACK releases the next burst");
+
+    // A zero window stalls everything until an update arrives.
+    relay.on_client_ack(55_000 + 1 + 4_000, 0);
+    assert!(relay.segments_for_client(&[]).is_empty(), "zero window");
+    relay.on_client_ack(55_000 + 1 + 4_000, 1_000);
+    let segs = relay.segments_for_client(&[]);
+    let sent: usize = segs
+        .iter()
+        .map(|s| Packet::parse(s).expect("parse").l4_payload().len())
+        .sum();
+    assert_eq!(sent, 1_000, "the window update releases the last bytes");
+}
+
+#[test]
+fn a_peer_eof_waits_for_pending_bytes() {
+    let mut relay = make_relay();
+    relay.flow.up_bytes = 1;
+    relay.on_client_ack(55_000 + 1, 100);
+    relay.queue_to_client(&vec![0xABu8; 300]);
+    let segs = relay.flush_to_client();
+    assert_eq!(segs.len(), 1, "a 100-byte window funds one segment");
+
+    // The peer closing now must not retire the relay: 200 bytes are unsent.
+    assert!(relay.on_peer_eof().is_none(), "the FIN must wait");
+    assert!(!relay.closed, "and the relay stays open");
+
+    relay.on_client_ack(55_000 + 1 + 100, 100);
+    assert_eq!(relay.flush_to_client().len(), 1, "second burst");
+    let last = relay.flush_to_client();
+    assert!(last.is_empty(), "window exhausted again");
+
+    relay.on_client_ack(55_000 + 1 + 200, 100);
+    let last = relay.flush_to_client();
+    assert_eq!(last.len(), 1, "the last data segment");
+    assert!(!relay.closed, "the FIN still needs window room of its own");
+
+    // The ACK covering every data byte opens room for the FIN's sequence
+    // number, and the deferred FIN rides out with the next flush.
+    relay.on_client_ack(55_000 + 1 + 300, 100);
+    let last = relay.flush_to_client();
+    assert_eq!(last.len(), 1, "the deferred FIN");
+    let fin = Packet::parse(&last[0]).expect("parse");
+    assert!(fin.is_fin, "the last segment carries the FIN");
+    assert_eq!(fin.seq, 55_000 + 1 + 300, "the FIN follows the data");
+    assert!(relay.closed, "the relay retires with the FIN");
 }
 
 #[test]

@@ -84,12 +84,15 @@ pub struct ProxySession {
     pub client_buffer: Vec<u8>,
     /// Scripts to inject into HTML (already combined).
     pub script_src: String,
+    /// Combined JS served back for requests to `script_src` (empty = nothing
+    /// to serve, and the request is forwarded like any other).
+    pub script_body: Arc<str>,
 }
 
 impl ProxySession {
     /// A session whose halves are already open (tests, and any caller that
     /// knows the hostname up front).
-    pub fn new(session: TlsSession, script_src: String) -> Self {
+    pub fn new(session: TlsSession, script_src: String, script_body: Arc<str>) -> Self {
         ProxySession {
             state: ProxyState::Active(Box::new(session)),
             captured: None,
@@ -98,6 +101,7 @@ impl ProxySession {
             peer_buffer: Vec::new(),
             client_buffer: Vec::new(),
             script_src,
+            script_body,
         }
     }
 
@@ -111,6 +115,7 @@ impl ProxySession {
         resolver: Arc<tls::SniCertResolver>,
         upstream_config: Arc<ClientConfig>,
         script_src: String,
+        script_body: Arc<str>,
     ) -> Result<Self, String> {
         let resolver = FlowResolver::new(resolver);
         let server = tls::new_server(tls::server_config_dyn(resolver.clone()))?;
@@ -127,6 +132,7 @@ impl ProxySession {
             peer_buffer: Vec::new(),
             client_buffer: Vec::new(),
             script_src,
+            script_body,
         })
     }
 
@@ -287,12 +293,46 @@ impl ProxySession {
         // this the real server is never asked and every HTTPS page hangs.
         let hello = tls::take_client_outbound(&mut session.client);
         outcome.to_peer = hello;
-        if !tls::client_handshaking(&session.client) && !self.client_buffer.is_empty() {
-            let request = std::mem::take(&mut self.client_buffer);
+        outcome.to_client = tls::take_server_outbound(&mut session.server);
+        Self::flush_client_requests(
+            session,
+            &mut self.client_buffer,
+            &self.script_src,
+            &self.script_body,
+            &mut outcome,
+        )?;
+        Ok(outcome)
+    }
+
+    /// Drains buffered client requests towards the peer, answering requests
+    /// for the injected user script locally first.
+    ///
+    /// The injected tag is a same-origin path (`<script src="/adfree-user.js">`)
+    /// because CSP commonly blocks inline scripts; the browser then asks the
+    /// *origin* for that path, and without this the real server would answer
+    /// 404 and nothing would run.
+    fn flush_client_requests(
+        session: &mut TlsSession,
+        buffer: &mut Vec<u8>,
+        serve_path: &str,
+        script_body: &str,
+        outcome: &mut Outcome,
+    ) -> Result<(), String> {
+        if tls::client_handshaking(&session.client) || buffer.is_empty() {
+            return Ok(());
+        }
+        if !tls::server_handshaking(&session.server) {
+            while let Some(local) = take_script_request(serve_path, script_body, buffer) {
+                outcome
+                    .to_client
+                    .extend(send_to_client(&mut session.server, &local)?);
+            }
+        }
+        let request = std::mem::take(buffer);
+        if !request.is_empty() {
             outcome.to_peer.extend(feed_client(&mut session.client, &request)?);
         }
-        outcome.to_client = tls::take_server_outbound(&mut session.server);
-        Ok(outcome)
+        Ok(())
     }
 
     /// Bytes the real server just sent.
@@ -325,10 +365,13 @@ impl ProxySession {
             // The upstream half has wire bytes of its own: the rest of its
             // handshake, and the request buffered while it was still handshaking.
             outcome.to_peer = tls::take_client_outbound(&mut session.client);
-            if !tls::client_handshaking(&session.client) && !self.client_buffer.is_empty() {
-                let request = std::mem::take(&mut self.client_buffer);
-                outcome.to_peer.extend(feed_client(&mut session.client, &request)?);
-            }
+            Self::flush_client_requests(
+                session,
+                &mut self.client_buffer,
+                &self.script_src,
+                &self.script_body,
+                &mut outcome,
+            )?;
 
             if tls::server_handshaking(&session.server) {
                 outcome.to_client = tls::take_server_outbound(&mut session.server);
@@ -339,7 +382,16 @@ impl ProxySession {
         let (edited, injected) = self.rewrite_response_for_test(&plain);
         outcome.injected = injected;
         if let ProxyState::Active(session) = &mut self.state {
-            outcome.to_client = send_to_client(&mut session.server, &edited)?;
+            // Append, never replace: flush_client_requests may already have
+            // queued the locally served script for this very round, and a
+            // handshake bookkeeping record (NewSessionTicket) can still be
+            // waiting even when there is no body to forward.
+            outcome
+                .to_client
+                .extend(send_to_client(&mut session.server, &edited)?);
+            outcome
+                .to_client
+                .extend(tls::take_server_outbound(&mut session.server));
         }
         Ok(outcome)
     }
@@ -404,6 +456,37 @@ impl ProxySession {
     }
 }
 
+/// Answers a request for the injected user script without touching the peer.
+///
+/// Returns the whole HTTP response and removes the request from `buffer` when
+/// the buffer starts with `GET <serve_path> HTTP/1.`. Split out so the check
+/// is unit-testable without a live TLS session.
+pub fn take_script_request(
+    serve_path: &str,
+    script_body: &str,
+    buffer: &mut Vec<u8>,
+) -> Option<Vec<u8>> {
+    if serve_path.is_empty() || script_body.is_empty() {
+        return None;
+    }
+    let head = header_end(buffer)?;
+    let line_end = buffer.windows(2).position(|w| w == b"\r\n")?;
+    let first_line = std::str::from_utf8(&buffer[..line_end]).ok()?;
+    let prefix = format!("GET {serve_path} HTTP/1.");
+    if !first_line.starts_with(&prefix) {
+        return None;
+    }
+    buffer.drain(..head);
+    let mut resp = Vec::with_capacity(script_body.len() + 160);
+    resp.extend_from_slice(
+        b"HTTP/1.1 200 OK\r\nContent-Type: application/javascript; charset=utf-8\r\nCache-Control: no-store\r\nContent-Length: ",
+    );
+    resp.extend_from_slice(script_body.len().to_string().as_bytes());
+    resp.extend_from_slice(b"\r\n\r\n");
+    resp.extend_from_slice(script_body.as_bytes());
+    Some(resp)
+}
+
 /// Byte offset just past the HTTP header block, if it is complete.
 fn header_end(buf: &[u8]) -> Option<usize> {
     buf.windows(4)
@@ -417,9 +500,10 @@ pub fn open(
     resolver: &Arc<tls::SniCertResolver>,
     real_server: &str,
     script_src: String,
+    script_body: Arc<str>,
 ) -> Result<ProxySession, String> {
     let ca = Arc::clone(ca);
     let _ = ca;
     let session = tls::open_session(resolver, real_server)?;
-    Ok(ProxySession::new(session, script_src))
+    Ok(ProxySession::new(session, script_src, script_body))
 }

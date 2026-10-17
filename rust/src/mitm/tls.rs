@@ -238,20 +238,28 @@ pub fn open_session_with(
 
 /// `Connection` is an enum, so one macro generates the per-side plumbing.
 macro_rules! connection_helpers {
-    ($drain:ident, $take:ident, $conn:ty) => {
-        /// Drains whatever plaintext this connection has already decrypted.
-        pub fn $drain(connection: &mut $conn) -> Vec<u8> {
-            let mut out = Vec::new();
+    ($drain:ident, $drain_into:ident, $take:ident, $conn:ty) => {
+        /// Drains decrypted plaintext into `out`, returning how many bytes
+        /// were appended.
+        pub fn $drain_into(connection: &mut $conn, out: &mut Vec<u8>) -> usize {
+            let start = out.len();
             let mut buf = vec![0u8; 16 * 1024];
             while let Ok(n) = connection.reader().read(&mut buf) {
                 if n == 0 {
                     break;
                 }
                 out.extend_from_slice(&buf[..n]);
-                if out.len() > 1024 * 1024 {
+                if out.len() - start > 1024 * 1024 {
                     break; // bound memory: this is a filter, not a data plane
                 }
             }
+            out.len() - start
+        }
+
+        /// Drains whatever plaintext this connection has already decrypted.
+        pub fn $drain(connection: &mut $conn) -> Vec<u8> {
+            let mut out = Vec::new();
+            $drain_into(connection, &mut out);
             out
         }
 
@@ -264,26 +272,52 @@ macro_rules! connection_helpers {
     };
 }
 
-connection_helpers!(drain_server_plain, take_server_outbound, ServerConnection);
-connection_helpers!(drain_client_plain, take_client_outbound, ClientConnection);
+connection_helpers!(
+    drain_server_plain,
+    drain_server_plain_into,
+    take_server_outbound,
+    ServerConnection
+);
+connection_helpers!(
+    drain_client_plain,
+    drain_client_plain_into,
+    take_client_outbound,
+    ClientConnection
+);
 
 /// Feeds wire bytes from the client into `ServerConnection`, returning the
 /// plaintext that was decrypted.
+///
+/// rustls reports backpressure as `ErrorKind::Other` ("received plaintext
+/// buffer full", a 16 KiB cap) and pauses decryption once that buffer fills;
+/// draining after every record is what lets a large burst through. Treating
+/// the signal as fatal used to reset flows mid-response.
 pub fn feed_server(connection: &mut ServerConnection, chunk: &[u8]) -> Result<Vec<u8>, String> {
     let mut reader = std::io::Cursor::new(chunk);
+    let mut out = Vec::new();
     loop {
         match connection.read_tls(&mut reader) {
             Ok(0) => break,
-            Ok(_) => {
-                if let Err(e) = connection.process_new_packets() {
-                    return Err(format!("process_new_packets: {e}"));
-                }
-            }
+            Ok(_) => {}
             Err(e) if e.kind() == std::io::ErrorKind::UnexpectedEof => break,
-            Err(e) => return Err(format!("read_tls: {e}")),
+            Err(e) => {
+                // Only the buffer-full signal is recoverable: drain and retry.
+                let drained = drain_server_plain_into(connection, &mut out);
+                if drained == 0 || e.kind() != std::io::ErrorKind::Other {
+                    return Err(format!("read_tls: {e}"));
+                }
+                continue;
+            }
+        }
+        if let Err(e) = connection.process_new_packets() {
+            return Err(format!("process_new_packets: {e}"));
+        }
+        drain_server_plain_into(connection, &mut out);
+        if out.len() > 1024 * 1024 {
+            break;
         }
     }
-    Ok(drain_server_plain(connection))
+    Ok(out)
 }
 
 /// Feeds wire bytes from the real server into `ClientConnection`, returning the
@@ -297,19 +331,31 @@ pub fn feed_client_wire(
     chunk: &[u8],
 ) -> Result<Vec<u8>, String> {
     let mut reader = std::io::Cursor::new(chunk);
+    let mut out = Vec::new();
     loop {
         match connection.read_tls(&mut reader) {
             Ok(0) => break,
-            Ok(_) => {
-                if let Err(e) = connection.process_new_packets() {
-                    return Err(format!("client process_new_packets: {e}"));
-                }
-            }
+            Ok(_) => {}
             Err(e) if e.kind() == std::io::ErrorKind::UnexpectedEof => break,
-            Err(e) => return Err(format!("client read_tls: {e}")),
+            Err(e) => {
+                // Mirror of `feed_server`: the 16 KiB plaintext cap reports
+                // backpressure as an `Other` error, not a fatal condition.
+                let drained = drain_client_plain_into(connection, &mut out);
+                if drained == 0 || e.kind() != std::io::ErrorKind::Other {
+                    return Err(format!("client read_tls: {e}"));
+                }
+                continue;
+            }
+        }
+        if let Err(e) = connection.process_new_packets() {
+            return Err(format!("client process_new_packets: {e}"));
+        }
+        drain_client_plain_into(connection, &mut out);
+        if out.len() > 1024 * 1024 {
+            break;
         }
     }
-    Ok(drain_client_plain(connection))
+    Ok(out)
 }
 
 /// Encrypts `plaintext` on `ClientConnection` and returns the wire bytes to send
@@ -321,11 +367,13 @@ pub fn feed_client(
     if plaintext.is_empty() {
         return Ok(Vec::new());
     }
-    connection
-        .writer()
-        .write_all(plaintext)
-        .map_err(|e| format!("write plaintext: {e}"))?;
-    Ok(take_client_outbound(connection))
+    write_plaintext_draining(plaintext, |chunk| {
+        let written = connection
+            .writer()
+            .write(chunk)
+            .map_err(|e| format!("write plaintext: {e}"))?;
+        Ok((written, take_client_outbound(connection)))
+    })
 }
 
 /// Re-encrypts (possibly edited) plaintext on `ServerConnection` for the client.
@@ -336,11 +384,39 @@ pub fn send_to_client(
     if plaintext.is_empty() {
         return Ok(Vec::new());
     }
-    connection
-        .writer()
-        .write_all(plaintext)
-        .map_err(|e| format!("write plaintext: {e}"))?;
-    Ok(take_server_outbound(connection))
+    write_plaintext_draining(plaintext, |chunk| {
+        let written = connection
+            .writer()
+            .write(chunk)
+            .map_err(|e| format!("write plaintext: {e}"))?;
+        Ok((written, take_server_outbound(connection)))
+    })
+}
+
+/// Feeds `plaintext` to `write_chunk`, draining records between chunks.
+///
+/// rustls caps its unsent-record buffer (64 KiB by default) and `write` only
+/// accepts what the cap leaves: a single `write_all` of a larger body (the
+/// stitched userscript is ~600 KB) stalls at the cap and dies with
+/// `WriteZero`. Draining after every accepted chunk empties the buffer again,
+/// so the whole body is encrypted and every record ends up in the result.
+fn write_plaintext_draining(
+    plaintext: &[u8],
+    mut write_chunk: impl FnMut(&[u8]) -> Result<(usize, Vec<u8>), String>,
+) -> Result<Vec<u8>, String> {
+    let mut out = Vec::new();
+    let mut rest = plaintext;
+    while !rest.is_empty() {
+        let (written, drained) = write_chunk(rest)?;
+        out.extend(drained);
+        if written == 0 {
+            // The drain should have freed the buffer; a refusal here would
+            // otherwise loop forever.
+            return Err("write plaintext: send buffer full".into());
+        }
+        rest = &rest[written..];
+    }
+    Ok(out)
 }
 
 /// Is the server half still handshaking?

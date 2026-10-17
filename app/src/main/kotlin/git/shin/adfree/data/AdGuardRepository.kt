@@ -5,13 +5,16 @@ import android.util.Log
 import android.content.pm.ApplicationInfo
 import android.content.pm.PackageManager
 import git.shin.adfree.core.CoreEngine
+import git.shin.adfree.core.DownloadResult
 import git.shin.adfree.core.FilterListBinding
+import git.shin.adfree.core.ScriptBinding
 import git.shin.adfree.core.StatsSnapshot
 import git.shin.adfree.model.AppFirewallRule
 import git.shin.adfree.model.DnsBlockMode
 import git.shin.adfree.model.DnsProvider
 import git.shin.adfree.model.FilterList
 import git.shin.adfree.model.FilterStatus
+import git.shin.adfree.model.UserScriptInfo
 import git.shin.adfree.model.NetworkRequestLog
 import git.shin.adfree.model.ProtectionStats
 import git.shin.adfree.model.ProtectionSettings
@@ -62,6 +65,30 @@ class AdGuardRepository(
 
     private val _loadingMessage = MutableStateFlow<String?>(null)
     val loadingMessage: StateFlow<String?> = _loadingMessage.asStateFlow()
+
+    /**
+     * Shows a one-shot result message ("đã tải…", download errors) and clears it
+     * a few seconds later, so the header cannot stay stuck on "Đang tải…".
+     * The equality check keeps a newer message from being cleared by an older
+     * timer.
+     */
+    private fun showTransientStatus(message: String?) {
+        _loadingMessage.value = message
+        if (message == null) return
+        scope.launch {
+            delay(4_000)
+            if (_loadingMessage.value == message) _loadingMessage.value = null
+        }
+    }
+
+    /** User choices that outlive a restart: which lists are on, custom filters, scripts. */
+    private val prefs = FilterPreferences(context)
+
+    private val _userscripts = MutableStateFlow<List<UserScriptInfo>>(emptyList())
+    val userscripts: StateFlow<List<UserScriptInfo>> = _userscripts.asStateFlow()
+
+    private val _scriptsMasterEnabled = MutableStateFlow(false)
+    val scriptsMasterEnabled: StateFlow<Boolean> = _scriptsMasterEnabled.asStateFlow()
 
     init {
         startStatsPoller()
@@ -205,101 +232,342 @@ class AdGuardRepository(
 
     // ----------------------------------------------------------- filter lists
 
+    /**
+     * Seeds the catalogue, merges the user's saved choices and downloads what
+     * is enabled but missing.
+     *
+     * Only enabled lists cost a download: a fresh install fetches the four
+     * defaults and nothing else.
+     */
+    fun loadFilterState() {
+        scope.launch {
+            val savedIds = prefs.enabledCatalogIds()
+            val lists = mutableListOf<FilterList>()
+            for (entry in FilterCatalog.filters) {
+                val enabled = savedIds?.contains(entry.id) ?: entry.defaultEnabled
+                lists += FilterList(
+                    id = entry.listId ?: "cat_${entry.id}",
+                    name = entry.name,
+                    description = entry.description,
+                    ruleCount = 0,
+                    isEnabled = enabled,
+                    category = entry.group.id,
+                    version = entry.format,
+                    isOnlineSubscription = true,
+                    subscriptionUrl = entry.url,
+                    lastUpdatedText = "Chưa tải",
+                    groupId = entry.group.id,
+                    format = entry.format,
+                    catalogId = entry.id,
+                    defaultEnabled = entry.defaultEnabled,
+                    homepage = entry.homepage,
+                )
+            }
+            for (stored in prefs.customFilters()) {
+                lists += FilterList(
+                    id = stored.id,
+                    name = stored.name,
+                    description = "Bộ lọc tùy chỉnh của bạn",
+                    ruleCount = 0,
+                    isEnabled = stored.enabled,
+                    category = "custom",
+                    version = stored.format,
+                    isOnlineSubscription = stored.url.isNotBlank(),
+                    subscriptionUrl = stored.url.ifBlank { null },
+                    lastUpdatedText = "Chưa tải",
+                    groupId = "custom",
+                    format = stored.format,
+                    homepage = stored.homepage,
+                    isUserAdded = true,
+                )
+            }
+            val rules = prefs.userRules() ?: starterRules
+            lists += FilterList(
+                id = BUILTIN_CUSTOM,
+                name = "Quy tắc của bạn",
+                description = "Quy tắc chặn và cho phép do bạn tự viết, áp dụng cho mọi trang",
+                ruleCount = rules.size,
+                isEnabled = rules.isNotEmpty(),
+                category = "user",
+                version = "user",
+                isCustom = true,
+                customRules = rules,
+            )
+
+            _filterLists.value = lists
+            refreshFilesAndDownload(lists.filterNot { it.isCustom })
+            pushListsToEngine()
+            saveFilterChoices()
+            _loadingMessage.value = null
+        }
+    }
+
+    /** Recounts files already on disk and downloads the enabled lists without one. */
+    private suspend fun refreshFilesAndDownload(lists: List<FilterList>) {
+        for (list in lists) {
+            val file = engine.listFileFor(list)
+            if (file.exists()) {
+                applyFileStats(list.id, file)
+                continue
+            }
+            if (!list.isEnabled || list.subscriptionUrl.isNullOrBlank()) continue
+            _loadingMessage.value = "Đang tải ${list.name}…"
+            val result = withContext(Dispatchers.IO) { engine.downloadList(list) }
+            if (result.ok) applyDownloadResult(list.id, result)
+        }
+    }
+
+    /** Refreshes count/date/version of one list from its file on disk (no network). */
+    private suspend fun applyFileStats(listId: String, file: File) {
+        val count = withContext(Dispatchers.IO) { engine.countRules(file) }
+        val meta = withContext(Dispatchers.IO) { engine.readListMeta(file) }
+        _filterLists.update { current ->
+            current.map {
+                if (it.id == listId) {
+                    it.copy(
+                        ruleCount = count,
+                        lastUpdatedText = meta.updatedText ?: engine.fileDateText(file),
+                        version = meta.version ?: it.version,
+                    )
+                } else it
+            }
+        }
+    }
+
+    private fun applyDownloadResult(listId: String, result: DownloadResult) {
+        _filterLists.update { current ->
+            current.map {
+                if (it.id == listId) {
+                    it.copy(
+                        ruleCount = result.lineCount.toInt(),
+                        lastUpdatedText = result.updatedText ?: "Vừa tải",
+                        version = result.version ?: it.version,
+                        format = result.detectedFormat ?: it.format,
+                    )
+                } else it
+            }
+        }
+    }
+
+    /** Turns one list on or off; enabling downloads it when the file is missing. */
+    fun toggleFilterList(listId: String, enabled: Boolean) {
+        scope.launch {
+            _filterLists.update { lists ->
+                lists.map { if (it.id == listId) it.copy(isEnabled = enabled) else it }
+            }
+            val list = _filterLists.value.firstOrNull { it.id == listId }
+            if (enabled && list != null && !list.isCustom && !engine.listFileFor(list).exists() &&
+                !list.subscriptionUrl.isNullOrBlank()
+            ) {
+                _loadingMessage.value = "Đang tải ${list.name}…"
+                val result = withContext(Dispatchers.IO) { engine.downloadList(list) }
+                showTransientStatus(result.message)
+                if (result.ok) applyDownloadResult(list.id, result)
+            }
+            saveFilterChoices()
+            pushListsToEngine()
+        }
+    }
+
     /** Download/refresh one subscription. Cheap: HTTP + file write, the core does the rest. */
     fun refreshSubscription(id: String) {
         scope.launch {
             val list = _filterLists.value.firstOrNull { it.id == id } ?: return@launch
             if (list.subscriptionUrl.isNullOrBlank()) {
-                _loadingMessage.value = "Danh sách tùy chỉnh không có URL"
+                showTransientStatus("Bộ lọc này không có URL để cập nhật")
                 return@launch
             }
             _loadingMessage.value = "Đang tải ${list.name}…"
             val result = withContext(Dispatchers.IO) { engine.downloadList(list) }
-            _loadingMessage.value = result.message
+            showTransientStatus(result.message)
             if (result.ok) {
+                applyDownloadResult(list.id, result)
                 pushListsToEngine()
             }
         }
     }
 
+    /** Refreshes every enabled list that has a URL, in catalogue order. */
     fun refreshAllSubscriptions() {
         scope.launch {
-            val urls = _filterLists.value.filter { it.isOnlineSubscription }
-            if (urls.isEmpty()) {
-                _loadingMessage.value = "Không có subscription nào để cập nhật"
+            val targets = _filterLists.value.filter {
+                it.isEnabled && !it.isCustom && !it.subscriptionUrl.isNullOrBlank()
+            }
+            if (targets.isEmpty()) {
+                showTransientStatus("Không có bộ lọc nào để cập nhật")
                 return@launch
             }
-            _loadingMessage.value = "Đang cập nhật ${urls.size} bộ lọc…"
+            _loadingMessage.value = "Đang cập nhật ${targets.size} bộ lọc…"
             var failures = 0
-            for (list in urls) {
+            for (list in targets) {
                 val result = withContext(Dispatchers.IO) { engine.downloadList(list) }
-                if (!result.ok) failures++
+                if (result.ok) applyDownloadResult(list.id, result) else failures++
             }
-            _loadingMessage.value = when (failures) {
-                0 -> "Đã cập nhật ${urls.size} bộ lọc"
-                else -> "Cập nhật xong, $failures danh sách lỗi"
-            }
+            showTransientStatus(
+                when (failures) {
+                    0 -> "Đã cập nhật ${targets.size} bộ lọc"
+                    else -> "Cập nhật xong, $failures danh sách bị lỗi"
+                }
+            )
             pushListsToEngine()
         }
     }
 
-    fun toggleFilterList(listId: String, enabled: Boolean) {
-        _filterLists.update { lists -> lists.map { if (it.id == listId) it.copy(isEnabled = enabled) else it } }
-        pushListsToEngine()
-    }
-
-    fun addOnlineSubscription(name: String, url: String, category: String) {
+    /** Adds a filter list from a URL the user pasted. */
+    fun addCustomFilter(name: String, url: String) {
         scope.launch {
             val trimmedUrl = url.trim()
             if (trimmedUrl.isEmpty()) return@launch
             val list = FilterList(
                 id = "sub_${System.currentTimeMillis()}",
-                name = name.ifBlank { trimmedUrl.take(40) },
-                description = "Đăng ký từ $trimmedUrl",
+                name = name.ifBlank { trimmedUrl.substringAfter("//").take(40) },
+                description = "Bộ lọc tùy chỉnh của bạn",
                 ruleCount = 0,
                 isEnabled = true,
-                category = category.ifBlank { "Tùy chỉnh" },
-                version = "online",
+                category = "custom",
+                version = "standard",
                 isOnlineSubscription = true,
                 subscriptionUrl = trimmedUrl,
-                isCustom = !category.equals("hosts", ignoreCase = true),
+                groupId = "custom",
+                isUserAdded = true,
             )
             _filterLists.update { it + list }
             _loadingMessage.value = "Đang tải ${list.name}…"
             val result = withContext(Dispatchers.IO) { engine.downloadList(list) }
-            _loadingMessage.value = result.message
-            if (result.ok) pushListsToEngine()
+            showTransientStatus(result.message)
+            if (result.ok) applyDownloadResult(list.id, result)
+            saveFilterChoices()
+            pushListsToEngine()
         }
     }
 
-    fun deleteFilterList(id: String) {
-        val target = _filterLists.value.firstOrNull { it.id == id }
-        _filterLists.update { lists -> lists.filter { it.id != id } }
-        if (target?.isCustom == true) {
-            scope.launch(Dispatchers.IO) {
-                engine.deleteUserRules(target.customRules)
-                pushListsToEngine()
+    /** Adds a `.txt` the user picked through the system file chooser. */
+    fun importLocalFilter(uriText: String) {
+        scope.launch {
+            val uri = android.net.Uri.parse(uriText)
+            val resolver = context.contentResolver
+            val text = withContext(Dispatchers.IO) {
+                runCatching {
+                    resolver.openInputStream(uri)?.bufferedReader()?.use { it.readText() }
+                }.getOrNull()
             }
-        } else {
+            if (text.isNullOrBlank()) {
+                showTransientStatus("Không đọc được tệp đã chọn")
+                return@launch
+            }
+            val displayName = withContext(Dispatchers.IO) {
+                runCatching {
+                    resolver.query(uri, null, null, null, null)?.use { cursor ->
+                        if (cursor.moveToFirst()) {
+                            val index = cursor.getColumnIndex(android.provider.OpenableColumns.DISPLAY_NAME)
+                            if (index >= 0) cursor.getString(index) else null
+                        } else null
+                    }
+                }.getOrNull()
+            }
+            val list = FilterList(
+                id = "local_${System.currentTimeMillis()}",
+                name = displayName?.take(60)?.takeIf { it.isNotBlank() } ?: "Bộ lọc từ tệp",
+                description = "Bộ lọc tùy chỉnh từ tệp trong máy",
+                ruleCount = 0,
+                isEnabled = true,
+                category = "custom",
+                version = "standard",
+                groupId = "custom",
+                isUserAdded = true,
+            )
+            val file = engine.listFileFor(list)
+            val writeFailure = withContext(Dispatchers.IO) {
+                runCatching { file.writeText(text) }.exceptionOrNull()
+            }
+            if (writeFailure != null) {
+                showTransientStatus("Lỗi ghi tệp: ${writeFailure.javaClass.simpleName}")
+                return@launch
+            }
+            val meta = engine.parseListMeta(text)
+            val count = withContext(Dispatchers.IO) { engine.countRules(file) }
+            _filterLists.update {
+                it + list.copy(
+                    ruleCount = count,
+                    lastUpdatedText = "Vừa nhập",
+                    version = meta.version ?: "standard",
+                    format = meta.format ?: list.format,
+                )
+            }
+            saveFilterChoices()
+            pushListsToEngine()
+            showTransientStatus("Đã thêm ${list.name} ($count quy tắc)")
+        }
+    }
+
+    /** Removes a user-added list (catalogue entries are toggled off, not deleted). */
+    fun deleteFilterList(id: String) {
+        val target = _filterLists.value.firstOrNull { it.id == id } ?: return
+        if (!target.isUserAdded) return
+        _filterLists.update { lists -> lists.filter { it.id != id } }
+        scope.launch {
+            withContext(Dispatchers.IO) { runCatching { engine.listFileFor(target).delete() } }
+            saveFilterChoices()
             pushListsToEngine()
         }
+    }
+
+    /** AdGuard's "Khôi phục mặc định": the catalogue back to factory state. */
+    fun restoreDefaultFilters() {
+        scope.launch {
+            _filterLists.update { lists ->
+                lists.map { list ->
+                    val catalog = list.catalogId?.let { FilterCatalog.byId(it) }
+                    if (catalog != null) list.copy(isEnabled = catalog.defaultEnabled) else list
+                }
+            }
+            val missing = _filterLists.value.filter {
+                it.isEnabled && !it.isCustom && !it.subscriptionUrl.isNullOrBlank() &&
+                    !engine.listFileFor(it).exists()
+            }
+            for (list in missing) {
+                _loadingMessage.value = "Đang tải ${list.name}…"
+                val result = withContext(Dispatchers.IO) { engine.downloadList(list) }
+                if (result.ok) applyDownloadResult(list.id, result)
+            }
+            saveFilterChoices()
+            pushListsToEngine()
+            showTransientStatus("Đã khôi phục bộ lọc mặc định")
+        }
+    }
+
+    /** Persists the user's choices: enabled catalogue ids, custom lists, user rules. */
+    private fun saveFilterChoices() {
+        val lists = _filterLists.value
+        prefs.saveEnabledCatalogIds(
+            lists.filter { it.catalogId != null && it.isEnabled }.mapNotNull { it.catalogId }.toSet()
+        )
+        prefs.saveCustomFilters(
+            lists.filter { it.isUserAdded }.map {
+                StoredFilter(
+                    id = it.id,
+                    name = it.name,
+                    url = it.subscriptionUrl.orEmpty(),
+                    format = it.format,
+                    enabled = it.isEnabled,
+                    homepage = it.homepage,
+                )
+            }
+        )
+        lists.firstOrNull { it.isCustom }?.let { prefs.saveUserRules(it.customRules) }
     }
 
     fun updateAllCustomRules(newRules: List<String>) {
         scope.launch {
             val cleaned = newRules.map { it.trim() }
-                .filter { it.isNotEmpty() && !it.startsWith("!") && !it.startsWith("#") }
-            withContext(Dispatchers.IO) {
-                _filterLists.value.firstOrNull { it.isCustom }?.let { current ->
-                    engine.deleteUserRules(current.customRules)
-                }
-                engine.addUserRules(cleaned)
-            }
+                .filter { it.isNotEmpty() && !it.startsWith("!") && !it.startsWith("#") && !it.startsWith("[") }
+                .distinct()
             _filterLists.update { lists ->
                 lists.map {
-                    if (it.isCustom) it.copy(ruleCount = cleaned.size, customRules = cleaned) else it
+                    if (it.isCustom) it.copy(ruleCount = cleaned.size, customRules = cleaned, isEnabled = cleaned.isNotEmpty()) else it
                 }
             }
+            saveFilterChoices()
             pushListsToEngine()
         }
     }
@@ -308,19 +576,21 @@ class AdGuardRepository(
         val rule = rawRule.trim()
         if (rule.isEmpty() || rule.startsWith("!")) return
         scope.launch {
-            withContext(Dispatchers.IO) { engine.addUserRules(listOf(rule)) }
             _filterLists.update { lists ->
                 lists.map {
-                    if (it.isCustom) it.copy(ruleCount = it.ruleCount + 1, customRules = it.customRules + rule) else it
+                    if (it.isCustom) {
+                        val updated = (it.customRules + rule).distinct()
+                        it.copy(ruleCount = updated.size, customRules = updated, isEnabled = true)
+                    } else it
                 }
             }
+            saveFilterChoices()
             pushListsToEngine()
         }
     }
 
     fun removeCustomRule(ruleStr: String) {
         scope.launch {
-            withContext(Dispatchers.IO) { engine.deleteUserRules(listOf(ruleStr)) }
             _filterLists.update { lists ->
                 lists.map {
                     if (it.isCustom) {
@@ -329,6 +599,7 @@ class AdGuardRepository(
                     } else it
                 }
             }
+            saveFilterChoices()
             pushListsToEngine()
         }
     }
@@ -360,23 +631,32 @@ class AdGuardRepository(
         _logs.value = emptyList()
     }
 
-    /** Push the current list state down to the core. */
+    /**
+     * Pushes the whole filter state (enabled lists + user rules) to the core in
+     * one rebuild.
+     *
+     * The core replaces *both* at once, so they must be sent together —
+     * pushing lists and rules separately makes them wipe each other.
+     */
     private fun pushListsToEngine() {
         val lists = _filterLists.value
-        val bindings = lists.map { list ->
+        val bindings = lists.filter { it.isEnabled && !it.isCustom }.mapNotNull { list ->
+            val file = engine.listFileFor(list)
+            if (!file.exists()) return@mapNotNull null
             FilterListBinding(
                 id = list.stableId(),
                 name = list.name,
                 url = list.subscriptionUrl.orEmpty(),
-                enabled = list.isEnabled,
-                path = engine.listFileFor(list).absolutePath,
-                format = if (list.isCustom || !list.category.equals("hosts", ignoreCase = true)) 0 else 1,
+                enabled = true,
+                path = file.absolutePath,
+                format = if (list.format.equals("hosts", ignoreCase = true)) 1 else 0,
                 category = list.categoryIndex(),
                 ruleCount = list.ruleCount.toLong(),
                 lastError = "",
             )
         }
-        engine.setListsAsync(bindings, emptyList())
+        val userRules = lists.firstOrNull { it.isCustom }?.customRules.orEmpty()
+        engine.setListsAsync(bindings, userRules)
     }
 
     // ------------------------------------------------------------ app firewall
@@ -462,95 +742,158 @@ class AdGuardRepository(
     }
 
     /**
-     * The built-in subscriptions. Files land in `filesDir/filters/` and
-     * persist, so later launches need no network.
+     * Loads the userscript list: catalogue entries first, then anything the
+     * user added. Bodies live under `filesDir/scripts/`, so nothing is ever
+     * re-downloaded on a restart.
      */
-    fun loadBuiltInFilterLists(forceDownload: Boolean = false) {
+    fun loadScriptsState() {
         scope.launch {
-            val builtIns = listOf(
-                FilterList(
-                    id = BUILTIN_DNS,
-                    name = "AdGuard DNS filter",
-                    description = "Bộ lọc chính thức của AdGuard cho chặn quảng cáo & tracker mức DNS",
-                    ruleCount = 0,
-                    isEnabled = true,
-                    category = "Ad Blocking",
-                    version = "online",
-                    isOnlineSubscription = true,
-                    subscriptionUrl = "https://adguardteam.github.io/AdGuardSDNSFilter/Filters/filter.txt",
-                    lastUpdatedText = "Chưa tải",
-                ),
-                FilterList(
-                    id = BUILTIN_MOBILE,
-                    name = "OISD Big (hosts)",
-                    description = "Tổng hợp quảng cáo + tracker cho mobile, định dạng hosts",
-                    ruleCount = 0,
-                    isEnabled = true,
-                    category = "hosts",
-                    version = "online",
-                    isOnlineSubscription = true,
-                    subscriptionUrl = "https://big.oisd.nl/dnsmasq2",
-                    lastUpdatedText = "Chưa tải",
-                ),
-                FilterList(
-                    id = BUILTIN_MALWARE,
-                    name = "StevenBlack hosts",
-                    description = "Chặn malware, phishing & adware",
-                    ruleCount = 0,
-                    isEnabled = false,
-                    category = "hosts",
-                    version = "online",
-                    isOnlineSubscription = true,
-                    subscriptionUrl = "https://raw.githubusercontent.com/StevenBlack/hosts/master/hosts",
-                    lastUpdatedText = "Chưa tải",
-                ),
-                FilterList(
-                    id = BUILTIN_CUSTOM,
-                    name = "Quy tắc của bạn",
-                    description = "Quy tắc tự viết: ||domain^, @@||domain^, /regex/",
-                    ruleCount = starterRules.size,
-                    isEnabled = true,
-                    category = "Custom",
-                    version = "user",
-                    isCustom = true,
-                    customRules = starterRules,
-                ),
-            )
-
-            if (_filterLists.value.isEmpty() || forceDownload) {
-                _filterLists.value = builtIns
+            val stored = prefs.scripts()
+            val scripts = mutableListOf<UserScriptInfo>()
+            for (entry in UserScriptCatalog.scripts) {
+                val state = stored.firstOrNull { it.id == entry.id }
+                val file = engine.scriptFileFor(entry.id)
+                scripts += UserScriptInfo(
+                    id = entry.id,
+                    name = entry.name,
+                    description = entry.description,
+                    url = entry.url,
+                    isEnabled = state?.enabled ?: false,
+                    sizeBytes = file.length(),
+                    lastUpdatedText = if (file.exists()) engine.fileDateText(file) else "Chưa tải",
+                )
             }
-
-            withContext(Dispatchers.IO) { engine.addUserRules(starterRules) }
-            for (list in builtIns.filter { it.isOnlineSubscription }) {
-                // The file is already on disk: just recount the rules for the UI, at no
-                // network cost.
-                val existing = engine.listFileFor(list)
-                if (existing.exists() && !forceDownload) {
-                    val count = withContext(Dispatchers.IO) { engine.countRules(existing) }
-                    _filterLists.update { lists ->
-                        lists.map { if (it.id == list.id) it.copy(ruleCount = count) else it }
-                    }
-                    continue
-                }
-                val result = engine.downloadList(list)
-                _loadingMessage.value = result.message
-                if (result.ok) {
-                    _filterLists.update { lists ->
-                        lists.map {
-                            if (it.id == list.id) {
-                                it.copy(
-                                    ruleCount = result.lineCount.toInt(),
-                                    lastUpdatedText = "Vừa xong",
-                                )
-                            } else it
-                        }
-                    }
-                }
+            for (state in stored.filter { s -> UserScriptCatalog.scripts.none { it.id == s.id } }) {
+                val file = engine.scriptFileFor(state.id)
+                scripts += UserScriptInfo(
+                    id = state.id,
+                    name = state.name,
+                    description = state.description,
+                    url = state.url,
+                    isEnabled = state.enabled,
+                    sizeBytes = file.length(),
+                    lastUpdatedText = if (file.exists()) engine.fileDateText(file) else "Chưa tải",
+                    isUserAdded = true,
+                )
             }
-            pushListsToEngine()
-            _loadingMessage.value = null
+            _userscripts.value = scripts
+            _scriptsMasterEnabled.value = prefs.scriptsMasterEnabled()
+            pushScriptsToCore()
         }
+    }
+
+    fun toggleScriptsMaster(enabled: Boolean) {
+        _scriptsMasterEnabled.value = enabled
+        prefs.saveScriptsMasterEnabled(enabled)
+        pushScriptsToCore()
+    }
+
+    fun toggleScript(id: String, enabled: Boolean) {
+        scope.launch {
+            _userscripts.update { list ->
+                list.map { if (it.id == id) it.copy(isEnabled = enabled) else it }
+            }
+            val script = _userscripts.value.firstOrNull { it.id == id }
+            // Catalogue scripts start without a body: enabling one fetches it.
+            if (enabled && script != null && script.url.isNotBlank() &&
+                !engine.scriptFileFor(script.id).exists()
+            ) {
+                _loadingMessage.value = "Đang tải ${script.name}…"
+                showTransientStatus(downloadScriptBody(script))
+            }
+            saveScripts()
+            pushScriptsToCore()
+        }
+    }
+
+    /** Adds a userscript by URL and fetches its body right away. */
+    fun addScript(name: String, url: String) {
+        scope.launch {
+            val trimmed = url.trim()
+            if (trimmed.isEmpty()) return@launch
+            val id = "script_${System.currentTimeMillis()}"
+            val script = UserScriptInfo(
+                id = id,
+                name = name.ifBlank {
+                    trimmed.substringAfterLast('/').take(40).ifBlank { "Tiện ích" }
+                },
+                description = "Tiện ích tùy chỉnh của bạn",
+                url = trimmed,
+                isEnabled = true,
+                isUserAdded = true,
+            )
+            _userscripts.update { it + script }
+            _loadingMessage.value = "Đang tải ${script.name}…"
+            showTransientStatus(downloadScriptBody(script))
+            saveScripts()
+            pushScriptsToCore()
+        }
+    }
+
+    fun refreshScript(id: String) {
+        scope.launch {
+            val script = _userscripts.value.firstOrNull { it.id == id } ?: return@launch
+            _loadingMessage.value = "Đang tải ${script.name}…"
+            showTransientStatus(downloadScriptBody(script))
+            saveScripts()
+            pushScriptsToCore()
+        }
+    }
+
+    /** Downloads one script body to disk; returns the result line for the UI. */
+    private suspend fun downloadScriptBody(script: UserScriptInfo): String {
+        if (script.url.isBlank()) return "Tiện ích này không có URL"
+        val fetched = withContext(Dispatchers.IO) { engine.fetchUrl(script.url) }
+        if (!fetched.ok || fetched.body == null) {
+            return "Không tải được ${script.name}: ${fetched.message}"
+        }
+        val file = engine.scriptFileFor(script.id)
+        val writeFailure = withContext(Dispatchers.IO) {
+            runCatching { file.writeText(fetched.body) }.exceptionOrNull()
+        }
+        if (writeFailure != null) return "Lỗi ghi tệp: ${writeFailure.javaClass.simpleName}"
+        _userscripts.update { list ->
+            list.map {
+                if (it.id == script.id) {
+                    it.copy(sizeBytes = file.length(), lastUpdatedText = engine.fileDateText(file))
+                } else it
+            }
+        }
+        return "Đã tải ${script.name} (${file.length() / 1024} KB)"
+    }
+
+    /** Removes a user-added script (catalogue entries are toggled off, not deleted). */
+    fun deleteScript(id: String) {
+        val target = _userscripts.value.firstOrNull { it.id == id } ?: return
+        if (!target.isUserAdded) return
+        _userscripts.update { list -> list.filter { it.id != id } }
+        scope.launch {
+            withContext(Dispatchers.IO) { runCatching { engine.scriptFileFor(id).delete() } }
+            saveScripts()
+            pushScriptsToCore()
+        }
+    }
+
+    private fun saveScripts() {
+        prefs.saveScripts(
+            _userscripts.value.map {
+                StoredScript(it.id, it.name, it.description, it.url, it.isEnabled)
+            }
+        )
+    }
+
+    /** Hands the core every script with its body; the master switch rides along. */
+    private fun pushScriptsToCore() {
+        val bindings = _userscripts.value.mapNotNull { script ->
+            val file = engine.scriptFileFor(script.id)
+            if (!file.exists()) return@mapNotNull null
+            ScriptBinding(
+                name = script.name,
+                body = runCatching { file.readText() }.getOrDefault(""),
+                enabled = script.isEnabled,
+            )
+        }.filter { it.body.isNotBlank() }
+        engine.setScripts(bindings, _scriptsMasterEnabled.value)
     }
 
     /**
@@ -578,9 +921,6 @@ class AdGuardRepository(
         private const val TAG = "AdFreeRepo"
         private const val MAX_LOG_ENTRIES = 300
         private const val MAX_APPS_SHOWN = 250
-        private const val BUILTIN_DNS = "builtin_dns"
-        private const val BUILTIN_MOBILE = "builtin_oisd"
-        private const val BUILTIN_MALWARE = "builtin_stevenblack"
         private const val BUILTIN_CUSTOM = "builtin_custom"
 
         /** Apps excluded from the tunnel (set before establish). */
@@ -597,14 +937,28 @@ class AdGuardRepository(
         fun FilterList.stableId(): Int =
             id.hashCode().toLong().let { it.and(0xFFFF).toInt() }.coerceAtLeast(1)
 
-        fun FilterList.categoryIndex(): Int = when (category.lowercase()) {
-            "ad blocking", "ad" -> 0
-            "privacy", "tracker" -> 1
-            "analytics" -> 2
+        /**
+         * Maps a list to one of the core's fixed categories (u8, kept stable on
+         * the Rust side): 0 ads, 1 privacy, 3 social, 4 annoyances, 5 security,
+         * 6 other. Legacy lists from older builds have an empty `groupId`, so
+         * the old `category` text is still honoured.
+         */
+        fun FilterList.categoryIndex(): Int = when (groupId.lowercase()) {
+            "ads", "language" -> 0
+            "privacy" -> 1
             "social" -> 3
             "annoyances" -> 4
-            "malware", "phishing" -> 5
-            else -> 6
+            "security" -> 5
+            "custom", "user", "other" -> 6
+            else -> when (category.lowercase()) {
+                "ad blocking", "ad" -> 0
+                "privacy", "tracker" -> 1
+                "analytics" -> 2
+                "social" -> 3
+                "annoyances" -> 4
+                "malware", "phishing" -> 5
+                else -> 6
+            }
         }
 
         private fun DnsProvider.hostAndPort(): Pair<String, Int>? {

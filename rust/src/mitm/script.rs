@@ -4,9 +4,11 @@
 //! inlining), the scripts are stitched into one file. Keeping it separate means
 //! one `<script src>` per response instead of full bodies inside the HTML.
 
-/// Caps so a client never downloads too much.
+/// Caps so a client never downloads too much. The byte cap has to fit real
+/// userscripts (AdGuard Extra is ~560 KB), so it is generous; the combined
+/// body is only rebuilt when the list changes, not per request.
 pub const MAX_SCRIPTS: usize = 32;
-pub const MAX_SCRIPT_BYTES: usize = 64 * 1024;
+pub const MAX_SCRIPT_BYTES: usize = 1024 * 1024;
 
 /// One user script.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -17,13 +19,22 @@ pub struct UserScript {
 }
 
 /// Script list plus serving state.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug)]
 pub struct ScriptSet {
     scripts: Vec<UserScript>,
     /// Master switch for script injection.
     pub enabled: bool,
     /// URL mà ta dùng trong `<script src>`.
     pub serve_path: String,
+    /// The stitched body, rebuilt when the list changes: serving a page must
+    /// never pay for re-stitching the scripts on every request.
+    combined: std::sync::Arc<str>,
+}
+
+impl Default for ScriptSet {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl ScriptSet {
@@ -32,6 +43,7 @@ impl ScriptSet {
             scripts: Vec::new(),
             enabled: false,
             serve_path: "/adfree-user.js".to_string(),
+            combined: std::sync::Arc::from(""),
         }
     }
 
@@ -43,11 +55,22 @@ impl ScriptSet {
             .filter(|s| s.body.len() <= MAX_SCRIPT_BYTES)
             .take(MAX_SCRIPTS)
             .collect();
+        self.recompute();
         self.scripts.len()
     }
 
     pub fn set_enabled(&mut self, enabled: bool) {
         self.enabled = enabled;
+        self.recompute();
+    }
+
+    /// Rebuilds the served body; called after any state change.
+    fn recompute(&mut self) {
+        self.combined = if self.is_enabled() {
+            std::sync::Arc::from(self.build_combined().as_str())
+        } else {
+            std::sync::Arc::from("")
+        };
     }
 
     pub fn is_enabled(&self) -> bool {
@@ -60,9 +83,17 @@ impl ScriptSet {
 
     /// Combined JS body (enabled scripts only).
     pub fn combined_js(&self) -> String {
-        if !self.is_enabled() {
-            return String::new();
-        }
+        self.combined.to_string()
+    }
+
+    /// Cheap handle for the serving path: cloning an `Arc` beats copying a
+    /// megabyte of JS for every intercepted connection.
+    pub fn combined_arc(&self) -> std::sync::Arc<str> {
+        std::sync::Arc::clone(&self.combined)
+    }
+
+    /// Stitches the enabled scripts into one body wrapped per script.
+    fn build_combined(&self) -> String {
         let mut out = String::with_capacity(256);
         out.push_str("/* AdFree user scripts */\n");
         out.push_str("(function(){'use strict';\n");
@@ -176,5 +207,17 @@ mod tests {
     fn serve_path_defaults_to_a_stable_url() {
         let set = ScriptSet::new();
         assert_eq!(set.serve_path(), "/adfree-user.js");
+    }
+
+    #[test]
+    fn combined_arc_follows_state_changes() {
+        let mut set = ScriptSet::new();
+        assert!(set.combined_arc().is_empty());
+        set.replace_all(vec![script("a", "let a = 1;")]);
+        assert!(set.combined_arc().is_empty(), "master switch still off");
+        set.set_enabled(true);
+        assert!(set.combined_arc().contains("let a = 1;"));
+        set.set_enabled(false);
+        assert!(set.combined_arc().is_empty());
     }
 }

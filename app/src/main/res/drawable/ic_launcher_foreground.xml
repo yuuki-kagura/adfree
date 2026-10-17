@@ -1,8 +1,36 @@
 <?xml version="1.0" encoding="utf-8"?>
-<layer-list xmlns:android="http://schemas.android.com/apk/res/android">
-    <item
-        android:width="66dp"
-        android:height="66dp"
-        android:drawable="@drawable/ic_adguard_logo_1791733669549"
-        android:gravity="center" />
-</layer-list>
+<!-- AdFree mark: angular shield + lightning bolt (faster, lighter identity). -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:aapt="http://schemas.android.com/aapt"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <group
+        android:scaleX="0.2"
+        android:scaleY="0.2"
+        android:translateX="2.8"
+        android:translateY="0.4">
+        <path
+            android:pathData="M256,112 L380,156 L380,270 C380,336 332,390 256,424 C180,390 132,336 132,270 L132,156 Z"
+            android:fillColor="#062015"
+            android:strokeColor="#22E685"
+            android:strokeWidth="10"
+            android:strokeLineJoin="round" />
+        <path android:pathData="M256,150 L350,184 L350,268 C350,320 312,362 256,392 C200,362 162,320 162,268 L162,184 Z">
+            <aapt:attr name="android:fillColor">
+                <gradient
+                    android:type="linear"
+                    android:startX="256"
+                    android:startY="150"
+                    android:endX="256"
+                    android:endY="392"
+                    android:startColor="#00E074"
+                    android:endColor="#00964D" />
+            </aapt:attr>
+        </path>
+        <path
+            android:pathData="M272,196 L212,294 L250,294 L236,356 L306,250 L264,250 Z"
+            android:fillColor="#0A0E13" />
+    </group>
+</vector>

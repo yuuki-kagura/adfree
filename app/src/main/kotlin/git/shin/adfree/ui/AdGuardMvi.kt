@@ -9,6 +9,7 @@ import git.shin.adfree.model.NetworkRequestLog
 import git.shin.adfree.model.ProtectionSettings
 import git.shin.adfree.model.ProtectionStats
 import git.shin.adfree.model.ThreatAnalysisResult
+import git.shin.adfree.model.UserScriptInfo
 
 /** Consolidated MVI state. */
 data class AdGuardUiState(
@@ -25,7 +26,6 @@ data class AdGuardUiState(
     val searchQuery: String = "",
     val statusFilter: FilterStatus? = null,
     val showCustomRuleDialog: Boolean = false,
-    val showOnlineSubDialog: Boolean = false,
     val showCustomRuleEditor: Boolean = false,
     val inspectedApp: AppFirewallRule? = null,
     val appSearchQuery: String = "",
@@ -34,6 +34,14 @@ data class AdGuardUiState(
     val aiLabState: AiLabUiState = AiLabUiState.Idle,
     val showVpnPermissionPrompt: Boolean = false,
     val loadingMessage: String? = null,
+    // Filters tab
+    val filterSearchQuery: String = "",
+    val inspectedFilterId: String? = null,
+    val showAddFilterDialog: Boolean = false,
+    val userscripts: List<UserScriptInfo> = emptyList(),
+    val scriptsMasterEnabled: Boolean = false,
+    val inspectedScriptId: String? = null,
+    val showAddScriptDialog: Boolean = false,
 )
 
 /** MVI intents. */
@@ -77,9 +85,20 @@ sealed interface AdGuardIntent {
     data object ClearLogs : AdGuardIntent
     data object ResetStats : AdGuardIntent
     data class ShowCustomRuleDialog(val show: Boolean) : AdGuardIntent
-    data class ShowOnlineSubDialog(val show: Boolean) : AdGuardIntent
     data class ShowCustomRuleEditor(val show: Boolean) : AdGuardIntent
-    data class AddOnlineSubscription(val name: String, val url: String, val category: String) : AdGuardIntent
+    data class FilterSearchQueryChanged(val query: String) : AdGuardIntent
+    data class ShowAddFilterDialog(val show: Boolean) : AdGuardIntent
+    data class AddCustomFilter(val name: String, val url: String) : AdGuardIntent
+    data class ImportLocalFilter(val uri: String) : AdGuardIntent
+    data class InspectFilter(val id: String?) : AdGuardIntent
+    data object RestoreDefaultFilters : AdGuardIntent
+    data class ShowAddScriptDialog(val show: Boolean) : AdGuardIntent
+    data class AddScript(val name: String, val url: String) : AdGuardIntent
+    data class ToggleScript(val id: String, val enabled: Boolean) : AdGuardIntent
+    data class ToggleScriptsMaster(val enabled: Boolean) : AdGuardIntent
+    data class RefreshScript(val id: String) : AdGuardIntent
+    data class DeleteScript(val id: String) : AdGuardIntent
+    data class InspectScript(val id: String?) : AdGuardIntent
     data class DeleteFilterList(val id: String) : AdGuardIntent
     data class RefreshSubscription(val id: String) : AdGuardIntent
     data object RefreshAllSubscriptions : AdGuardIntent

@@ -30,6 +30,14 @@ class CoreEngine {
     /** UDP sockets used to forward DNS, `VpnService.protect()`ed so they do not loop. */
     private val upstreamSockets = mutableListOf<java.net.DatagramSocket>()
 
+    /** Shared HTTP client: a fresh one per download would waste a thread pool each time. */
+    private val httpClient by lazy {
+        okhttp3.OkHttpClient.Builder()
+            .connectTimeout(15, java.util.concurrent.TimeUnit.SECONDS)
+            .readTimeout(30, java.util.concurrent.TimeUnit.SECONDS)
+            .build()
+    }
+
     val version: String
         get() = runCatching { git.shin.adfree.core.coreVersion() }.getOrDefault("unknown")
 
@@ -146,17 +154,6 @@ class CoreEngine {
             .onFailure { Log.w(tag, "setLists failed", it) }
     }
 
-    fun addUserRules(rules: List<String>) {
-        runCatching { git.shin.adfree.core.coreSetLists(listOf(), rules) }
-            .onFailure { Log.w(tag, "addUserRules failed", it) }
-    }
-
-    fun deleteUserRules(rules: List<String>) {
-        // The core compiles from "all current rules"; deleting means a rebuild without them.
-        runCatching { git.shin.adfree.core.coreSetLists(listOf(), emptyList()) }
-            .onFailure { Log.w(tag, "deleteUserRules failed", it) }
-    }
-
     /**
      * Count the rule lines in a filter file (used by the UI when the file
      * already exists on disk, so no re-download is needed).
@@ -187,39 +184,115 @@ class CoreEngine {
     /** Download one subscription to `filesDir/filters/<id>.txt`. */
     fun downloadList(list: git.shin.adfree.model.FilterList): DownloadResult {
         val url = list.subscriptionUrl ?: return DownloadResult(false, "Danh sách này không có URL")
+        val fetched = fetchUrl(url)
+        if (!fetched.ok || fetched.body == null) return DownloadResult(false, fetched.message)
+        val body = fetched.body
         val file = listFileFor(list)
+        return try {
+            file.writeText(body)
+            val meta = parseListMeta(body)
+            val count = body.lines().count { line ->
+                val t = line.trim()
+                t.isNotEmpty() && !t.startsWith("!") && !t.startsWith("[") && !t.startsWith("#")
+            }
+            DownloadResult(
+                ok = true,
+                message = "Đã tải ${list.name} ($count quy tắc)",
+                lineCount = count.toLong(),
+                version = meta.version,
+                updatedText = meta.updatedText,
+                detectedFormat = meta.format,
+            )
+        } catch (e: Exception) {
+            DownloadResult(false, "Lỗi ghi tệp: ${e.javaClass.simpleName}")
+        }
+    }
+
+    /** Plain GET with the app's User-Agent; filter lists and userscripts share it. */
+    fun fetchUrl(url: String): FetchResult {
         return try {
             val request = okhttp3.Request.Builder()
                 .url(url)
                 .header("User-Agent", USER_AGENT)
                 .build()
-            okhttp3.OkHttpClient.Builder()
-                .connectTimeout(15, java.util.concurrent.TimeUnit.SECONDS)
-                .readTimeout(30, java.util.concurrent.TimeUnit.SECONDS)
-                .build()
-                .newCall(request)
-                .execute()
-                .use { response ->
-                    if (!response.isSuccessful) {
-                        return DownloadResult(false, "HTTP ${response.code}")
-                    }
-                    val body = response.body?.string().orEmpty()
-                    if (body.isBlank()) return DownloadResult(false, "Danh sách rỗng")
-                    file.writeText(body)
-                    val count = body.lines().count { line ->
-                        val t = line.trim()
-                        t.isNotEmpty() && !t.startsWith("!") && !t.startsWith("[") && !t.startsWith("#")
-                    }
-                    DownloadResult(true, "Đã tải ${list.name} ($count quy tắc)", count.toLong())
-                }
+            httpClient.newCall(request).execute().use { response ->
+                if (!response.isSuccessful) return FetchResult(false, "HTTP ${response.code}")
+                val body = response.body?.string().orEmpty()
+                if (body.isBlank()) return FetchResult(false, "Nội dung rỗng")
+                FetchResult(ok = true, message = "OK", body = body)
+            }
         } catch (e: Exception) {
-            DownloadResult(false, "Lỗi: ${e.javaClass.simpleName}")
+            FetchResult(false, "Lỗi: ${e.javaClass.simpleName}")
         }
     }
+
+    /**
+     * Header metadata AdGuard-style comments carry, plus a guess at the syntax.
+     * Hosts files look like `0.0.0.0 domain` lines instead of `||domain^`, and
+     * the two formats are parsed differently, so this matters.
+     */
+    fun parseListMeta(text: String): ListMeta {
+        var version: String? = null
+        var updated: String? = null
+        var hostsLike = 0
+        var adblockLike = 0
+        var inspected = 0
+        for (line in text.lineSequence()) {
+            if (inspected++ > 400) break
+            val t = line.trim()
+            when {
+                t.startsWith("! Version:") -> version = t.substringAfter(':').trim().take(40)
+                t.startsWith("! TimeUpdated:") -> updated = formatIsoDate(t.substringAfter(':')) ?: updated
+                t.length < 3 || t.startsWith("!") || t.startsWith("#") || t.startsWith("[") -> {}
+                HOSTS_LINE.containsMatchIn(t) -> hostsLike++
+                else -> adblockLike++
+            }
+        }
+        val format = when {
+            hostsLike == 0 && adblockLike == 0 -> null
+            hostsLike > adblockLike -> "hosts"
+            else -> "standard"
+        }
+        return ListMeta(version, updated, format)
+    }
+
+    /** Header metadata of a list already on disk (only the first 60 lines are read). */
+    fun readListMeta(file: File): ListMeta {
+        val head = runCatching {
+            file.bufferedReader().use { reader ->
+                val sb = StringBuilder()
+                var lines = 0
+                while (lines < 60) {
+                    val line = reader.readLine() ?: break
+                    sb.append(line).append('\n')
+                    lines++
+                }
+                sb.toString()
+            }
+        }.getOrDefault("")
+        return parseListMeta(head)
+    }
+
+    /** "15/05/2025 23:04" from a file timestamp, for the list rows. */
+    fun fileDateText(file: File): String =
+        java.text.SimpleDateFormat("dd/MM/yyyy HH:mm", java.util.Locale.getDefault())
+            .format(java.util.Date(file.lastModified()))
+
+    private fun formatIsoDate(raw: String): String? = runCatching {
+        val cleaned = raw.trim().take(19)
+        val date = java.text.SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss", java.util.Locale.US).parse(cleaned)
+        java.text.SimpleDateFormat("dd/MM/yyyy HH:mm", java.util.Locale.US).format(date!!)
+    }.getOrNull()
 
     fun listFileFor(list: git.shin.adfree.model.FilterList): File {
         val dir = File(filesRoot(), "filters").apply { mkdirs() }
         return File(dir, "${sanitizeId(list.id)}.txt")
+    }
+
+    /** Where a userscript body lives: `filesDir/scripts/<id>.js`. */
+    fun scriptFileFor(id: String): File {
+        val dir = File(filesRoot(), "scripts").apply { mkdirs() }
+        return File(dir, "${sanitizeId(id)}.js")
     }
 
     /**
@@ -480,6 +553,9 @@ class CoreEngine {
         private const val USER_AGENT = "AdFree/1.0 (Android)"
         private var pendingStart = true
 
+        /** `0.0.0.0 example.com` / `127.0.0.1 example.com` host entries. */
+        private val HOSTS_LINE = Regex("""^(0\.0\.0\.0|127\.0\.0\.1|::1?|::)\s+\S+""")
+
         @Volatile
         var screenOffFlag = false
 
@@ -493,9 +569,27 @@ class CoreEngine {
     }
 }
 
-/** Result of downloading a subscription. */
+/** Result of downloading a subscription or userscript. */
 data class DownloadResult(
     val ok: Boolean,
     val message: String,
     val lineCount: Long = 0,
+    val version: String? = null,
+    val updatedText: String? = null,
+    val detectedFormat: String? = null,
+)
+
+/** Raw HTTP GET result shared by list and script downloads. */
+data class FetchResult(
+    val ok: Boolean,
+    val message: String,
+    val body: String? = null,
+)
+
+/** Comment-header metadata of a filter list. */
+data class ListMeta(
+    val version: String?,
+    val updatedText: String?,
+    /** "hosts" or "standard"; null when the header was inconclusive. */
+    val format: String?,
 )

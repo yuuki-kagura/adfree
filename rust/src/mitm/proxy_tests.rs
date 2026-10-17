@@ -4,7 +4,7 @@
 //! conversation end to end. These tests therefore focus on what this module adds
 //! on top of TLS: the response rewriter that injects scripts into HTML.
 
-use super::proxy::ProxySession;
+use super::proxy::{take_script_request, ProxySession};
 use super::*;
 use crate::mitm::ca::CertificateAuthority;
 use crate::mitm::tls::{open_session, SniCertResolver};
@@ -21,7 +21,44 @@ fn build_proxy(ca: &CertificateAuthority, script: &str) -> ProxySession {
         CertificateAuthority::from_pem(&ca.cert_pem(), &ca.key_pem()).expect("restore"),
     )));
     let session = open_session(&resolver, "origin.example.com").expect("session");
-    ProxySession::new(session, script.to_string())
+    ProxySession::new(session, script.to_string(), Arc::from(""))
+}
+
+/// Answers the injected tag's request locally: the client asks the origin for
+/// the script path, and the response must come from us, not the server.
+#[test]
+fn script_request_is_answered_locally() {
+    let mut buffer = b"GET /adfree-user.js HTTP/1.1\r\nHost: origin.example.com\r\n\r\n".to_vec();
+    let response =
+        take_script_request("/adfree-user.js", "let x = 1;", &mut buffer).expect("served");
+    assert!(buffer.is_empty(), "the request is consumed");
+    let text = String::from_utf8(response).expect("utf8");
+    assert!(text.starts_with("HTTP/1.1 200 OK\r\n"));
+    assert!(text.contains("Content-Type: application/javascript"));
+    assert!(text.contains("Content-Length: 10\r\n"));
+    assert!(text.ends_with("let x = 1;"));
+}
+
+#[test]
+fn script_request_ignores_other_requests() {
+    let mut buffer = b"GET /index.html HTTP/1.1\r\nHost: x\r\n\r\n".to_vec();
+    assert!(take_script_request("/adfree-user.js", "let x = 1;", &mut buffer).is_none());
+    assert!(!buffer.is_empty(), "untouched");
+}
+
+#[test]
+fn script_request_waits_for_the_full_head() {
+    let mut buffer = b"GET /adfree-user.js HTTP/1.1\r\nHost: x\r\n".to_vec();
+    assert!(take_script_request("/adfree-user.js", "let x = 1;", &mut buffer).is_none());
+    buffer.extend_from_slice(b"\r\n");
+    assert!(take_script_request("/adfree-user.js", "let x = 1;", &mut buffer).is_some());
+}
+
+#[test]
+fn script_request_serves_only_when_enabled() {
+    let mut buffer = b"GET /adfree-user.js HTTP/1.1\r\n\r\n".to_vec();
+    assert!(take_script_request("/adfree-user.js", "", &mut buffer).is_none());
+    assert!(!buffer.is_empty());
 }
 
 /// A minimal HTML response whose declared length matches its real body.
@@ -141,36 +178,73 @@ fn oversized_bodies_are_flushed_unchanged() {
 /// Feeds wire bytes into a browser connection and collects its plaintext.
 pub(crate) fn feed_browser(browser: &mut rustls::ClientConnection, wire: &[u8], out: &mut Vec<u8>) {
     let mut cursor = std::io::Cursor::new(wire);
-    while let Ok(n) = browser.read_tls(&mut cursor) {
-        if n == 0 {
-            break;
+    loop {
+        match browser.read_tls(&mut cursor) {
+            Ok(0) => break,
+            Ok(_) => {
+                browser.process_new_packets().expect("browser packets");
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::UnexpectedEof => break,
+            Err(e) => {
+                // Same backpressure signal the production feed handles: rustls
+                // pauses once its 16 KiB plaintext buffer fills, so drain and
+                // retry instead of giving up.
+                let before = out.len();
+                let mut buf = [0u8; 4096];
+                while let Ok(n) = browser.reader().read(&mut buf) {
+                    if n == 0 {
+                        break;
+                    }
+                    out.extend_from_slice(&buf[..n]);
+                }
+                if out.len() == before || e.kind() != std::io::ErrorKind::Other {
+                    break;
+                }
+                continue;
+            }
         }
-        browser.process_new_packets().expect("browser packets");
-    }
-    let mut buf = [0u8; 4096];
-    while let Ok(n) = browser.reader().read(&mut buf) {
-        if n == 0 {
-            break;
+        let mut buf = [0u8; 4096];
+        while let Ok(n) = browser.reader().read(&mut buf) {
+            if n == 0 {
+                break;
+            }
+            out.extend_from_slice(&buf[..n]);
         }
-        out.extend_from_slice(&buf[..n]);
     }
 }
 
 /// Feeds wire bytes into the origin server and collects what it decrypted.
 pub(crate) fn feed_origin(server: &mut rustls::ServerConnection, wire: &[u8], out: &mut Vec<u8>) {
     let mut cursor = std::io::Cursor::new(wire);
-    while let Ok(n) = server.read_tls(&mut cursor) {
-        if n == 0 {
-            break;
+    loop {
+        match server.read_tls(&mut cursor) {
+            Ok(0) => break,
+            Ok(_) => {
+                server.process_new_packets().expect("origin packets");
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::UnexpectedEof => break,
+            Err(e) => {
+                let before = out.len();
+                let mut buf = [0u8; 4096];
+                while let Ok(n) = server.reader().read(&mut buf) {
+                    if n == 0 {
+                        break;
+                    }
+                    out.extend_from_slice(&buf[..n]);
+                }
+                if out.len() == before || e.kind() != std::io::ErrorKind::Other {
+                    break;
+                }
+                continue;
+            }
         }
-        server.process_new_packets().expect("origin packets");
-    }
-    let mut buf = [0u8; 4096];
-    while let Ok(n) = server.reader().read(&mut buf) {
-        if n == 0 {
-            break;
+        let mut buf = [0u8; 4096];
+        while let Ok(n) = server.reader().read(&mut buf) {
+            if n == 0 {
+                break;
+            }
+            out.extend_from_slice(&buf[..n]);
         }
-        out.extend_from_slice(&buf[..n]);
     }
 }
 
@@ -201,7 +275,7 @@ fn a_request_and_its_response_cross_the_splice() {
     )));
     let session =
         tls::open_session_with(&resolver, "origin.example.com", upstream_config).expect("session");
-    let mut proxy = ProxySession::new(session, String::new());
+    let mut proxy = ProxySession::new(session, String::new(), Arc::from(""));
 
     // The origin, minting leaves from its own CA.
     let origin_resolver = Arc::new(SniCertResolver::new(Arc::new(origin_ca)));
@@ -299,8 +373,9 @@ fn a_pending_session_opens_from_the_client_hello() {
     let resolver = Arc::new(SniCertResolver::new(Arc::new(
         CertificateAuthority::from_pem(&mitm_ca.cert_pem(), &mitm_ca.key_pem()).expect("restore"),
     )));
-    let mut proxy = ProxySession::new_pending(resolver, upstream_config, "/adfree-user.js".into())
-        .expect("pending session");
+    let mut proxy =
+        ProxySession::new_pending(resolver, upstream_config, "/adfree-user.js".into(), Arc::from(""))
+            .expect("pending session");
     assert_eq!(proxy.captured_sni(), None, "no hostname before the hello");
 
     let origin_resolver = Arc::new(SniCertResolver::new(Arc::new(origin_ca)));
@@ -384,6 +459,100 @@ fn a_pending_session_opens_from_the_client_hello() {
     );
 }
 
+/// A script body larger than rustls' 64 KiB buffer cap must still reach the
+/// client: the write has to drain records between chunks, or the splice dies
+/// with `WriteZero` and the page hangs (the stitched AdGuard Extra + Disable
+/// AMP userscript is ~600 KB).
+#[test]
+fn a_large_script_body_reaches_the_client() {
+    use rustls::pki_types::ServerName;
+    use rustls::{ClientConnection, ServerConnection};
+
+    let origin_ca = CertificateAuthority::generate().expect("origin ca");
+    let mut origin_roots = rustls::RootCertStore::empty();
+    origin_roots
+        .add(rustls::pki_types::CertificateDer::from(origin_ca.cert_der()))
+        .expect("origin root");
+    let upstream_config = tls::client_config_with(origin_roots);
+
+    let mitm_ca = CertificateAuthority::generate().expect("mitm ca");
+    let resolver = Arc::new(SniCertResolver::new(Arc::new(
+        CertificateAuthority::from_pem(&mitm_ca.cert_pem(), &mitm_ca.key_pem()).expect("restore"),
+    )));
+    let session =
+        tls::open_session_with(&resolver, "origin.example.com", upstream_config).expect("session");
+    // ~220 KB: well past the rustls buffer cap that used to stall the write.
+    let script = "var x = 1;\n".repeat(20_000);
+    let mut proxy = ProxySession::new(
+        session,
+        "/adfree-user.js".into(),
+        Arc::from(script.as_str()),
+    );
+
+    let origin_resolver = Arc::new(SniCertResolver::new(Arc::new(origin_ca)));
+    let mut origin = ServerConnection::new(tls::server_config(origin_resolver)).expect("origin");
+
+    let mut browser_roots = rustls::RootCertStore::empty();
+    browser_roots
+        .add(rustls::pki_types::CertificateDer::from(mitm_ca.cert_der()))
+        .expect("browser root");
+    let name = ServerName::try_from("origin.example.com".to_string()).expect("server name");
+    let mut browser =
+        ClientConnection::new(tls::client_config_with(browser_roots), name).expect("browser");
+
+    // The request the injected tag makes: it must be answered locally.
+    let request = b"GET /adfree-user.js HTTP/1.1\r\nHost: origin.example.com\r\n\r\n";
+    browser
+        .writer()
+        .write_all(request)
+        .expect("browser writes the request");
+
+    let mut to_origin: Vec<u8> = Vec::new();
+    let mut origin_request: Vec<u8> = Vec::new();
+    let mut browser_plain: Vec<u8> = Vec::new();
+
+    for _round in 0..64 {
+        // browser -> proxy -> origin
+        let wire = tls::take_client_outbound(&mut browser);
+        if !wire.is_empty() {
+            let out = proxy.on_client_payload(&wire).expect("proxy client step");
+            to_origin.extend_from_slice(&out.to_peer);
+            feed_browser(&mut browser, &out.to_client, &mut browser_plain);
+        }
+        if !to_origin.is_empty() {
+            feed_origin(&mut origin, &to_origin, &mut origin_request);
+            to_origin.clear();
+        }
+        // origin -> proxy -> browser
+        let wire = tls::take_server_outbound(&mut origin);
+        if !wire.is_empty() {
+            let out = proxy.on_peer_payload(&wire).expect("proxy peer step");
+            to_origin.extend_from_slice(&out.to_peer);
+            feed_browser(&mut browser, &out.to_client, &mut browser_plain);
+        }
+        if browser_plain.len() >= script.len() {
+            break;
+        }
+    }
+
+    assert!(
+        origin_request.is_empty(),
+        "the script request is served locally, never forwarded"
+    );
+    let text = String::from_utf8_lossy(&browser_plain).into_owned();
+    assert!(text.starts_with("HTTP/1.1 200 OK"), "served locally");
+    assert!(
+        text.contains(&format!("Content-Length: {}", script.len())),
+        "the declared length must match the script"
+    );
+    assert!(
+        text.ends_with(&script),
+        "the whole body must survive: got {} of {} bytes",
+        browser_plain.len(),
+        script.len()
+    );
+}
+
 /// A stream that is not TLS is spliced through untouched even though the
 /// relay was armed for interception: arming must never break a flow.
 #[test]
@@ -393,7 +562,7 @@ fn a_pending_session_splices_non_tls_streams_untouched() {
         CertificateAuthority::from_pem(&ca.cert_pem(), &ca.key_pem()).expect("restore"),
     )));
     let mut proxy =
-        ProxySession::new_pending(resolver, tls::client_config(), String::new())
+        ProxySession::new_pending(resolver, tls::client_config(), String::new(), Arc::from(""))
             .expect("pending session");
 
     let request = b"GET / HTTP/1.1\r\nHost: plain.example.com\r\n\r\n";
@@ -421,7 +590,7 @@ fn a_fragmented_client_hello_still_opens_the_session() {
         CertificateAuthority::from_pem(&mitm_ca.cert_pem(), &mitm_ca.key_pem()).expect("restore"),
     )));
     let mut proxy =
-        ProxySession::new_pending(resolver, tls::client_config(), String::new())
+        ProxySession::new_pending(resolver, tls::client_config(), String::new(), Arc::from(""))
             .expect("pending session");
 
     let mut browser_roots = rustls::RootCertStore::empty();

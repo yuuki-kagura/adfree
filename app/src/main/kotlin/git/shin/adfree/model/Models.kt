@@ -116,11 +116,35 @@ data class FilterList(
     val isEnabled: Boolean,
     val category: String,
     val version: String,
+    /** The user-rules list ("Quy tắc của bạn"); it is edited, never deleted. */
     val isCustom: Boolean = false,
     val customRules: List<String> = emptyList(),
     val subscriptionUrl: String? = null,
     val isOnlineSubscription: Boolean = false,
     val lastUpdatedText: String = "Chưa cập nhật",
+    /** Catalog group id: ads/privacy/social/annoyances/security/other/language/custom. */
+    val groupId: String = "other",
+    /** "standard" (AdGuard/EasyList syntax) or "hosts". */
+    val format: String = "standard",
+    /** Catalogue entry id; null for lists the user added. */
+    val catalogId: String? = null,
+    /** Enabled state that "Khôi phục mặc định" restores. */
+    val defaultEnabled: Boolean = false,
+    val homepage: String? = null,
+    /** Added by the user (URL or local file): deletable, not in the catalogue. */
+    val isUserAdded: Boolean = false,
+)
+
+/** One userscript served to intercepted pages (the Extensions section). */
+data class UserScriptInfo(
+    val id: String,
+    val name: String,
+    val description: String,
+    val url: String,
+    val isEnabled: Boolean,
+    val sizeBytes: Long = 0,
+    val lastUpdatedText: String = "Chưa tải",
+    val isUserAdded: Boolean = false,
 )
 
 data class AppFirewallRule(

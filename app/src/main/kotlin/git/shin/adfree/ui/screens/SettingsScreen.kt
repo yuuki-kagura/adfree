@@ -59,7 +59,6 @@ import androidx.compose.ui.unit.sp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LifecycleEventEffect
 import git.shin.adfree.core.MitmStatus
-import git.shin.adfree.core.ScriptBinding
 import git.shin.adfree.model.DnsBlockMode
 import git.shin.adfree.ui.AdGuardTab
 import git.shin.adfree.ui.AdGuardIntent
@@ -294,7 +293,6 @@ private fun SettingsLink(
 private fun HttpsFilterSection(viewModel: AdGuardViewModel) {
     var status by remember { mutableStateOf<MitmStatus?>(null) }
     var showCert by remember { mutableStateOf(false) }
-    var showEditor by remember { mutableStateOf(false) }
     var showCertGate by remember { mutableStateOf(false) }
     // HTTPS filtering is the persisted setting (the same one the engine config
     // is built from); `scriptsEnabled` only says whether the script set is
@@ -438,11 +436,11 @@ private fun HttpsFilterSection(viewModel: AdGuardViewModel) {
                 )
 
                 OutlinedButton(
-                    onClick = { showEditor = true },
+                    onClick = { viewModel.onIntent(AdGuardIntent.SelectTab(AdGuardTab.FILTERS)) },
                     modifier = Modifier.padding(top = 8.dp),
                     shape = RoundedCornerShape(8.dp),
                 ) {
-                    Text("Sửa script tùy chỉnh", fontSize = 11.sp)
+                    Text("Quản lý script trong Bộ lọc", fontSize = 11.sp)
                 }
             }
         }
@@ -500,13 +498,6 @@ private fun HttpsFilterSection(viewModel: AdGuardViewModel) {
             },
         )
     }
-    if (showEditor) {
-        ScriptEditorDialog(
-            initial = emptyList(),
-            onDismiss = { showEditor = false },
-            onSave = { scripts, enabled -> viewModel.setScripts(scripts, enabled) },
-        )
-    }
 }
 
 @Composable
@@ -542,64 +533,6 @@ private fun CertificateDialog(pem: String, onDismiss: () -> Unit) {
             }) { Text("Copy") }
         },
         dismissButton = { TextButton(onClick = onDismiss) { Text("Đóng") } },
-    )
-}
-
-@Composable
-private fun ScriptEditorDialog(
-    initial: List<ScriptBinding>,
-    onDismiss: () -> Unit,
-    onSave: (List<ScriptBinding>, Boolean) -> Unit,
-) {
-    var enabled by remember { mutableStateOf(true) }
-    var body by remember { mutableStateOf("") }
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text("Script tùy chỉnh", fontSize = 16.sp) },
-        text = {
-            Column {
-                Text(
-                    text = "JS chạy trên mọi trang HTTPS. Hết lỗi sẽ bị bỏ qua.",
-                    fontSize = 11.sp,
-                    color = AdGuardTextMuted,
-                )
-                Spacer(modifier = Modifier.height(8.dp))
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text("Bật", fontSize = 12.sp, color = AdGuardTextPrimary)
-                    Spacer(modifier = Modifier.size(8.dp))
-                    Switch(
-                        checked = enabled,
-                        onCheckedChange = { enabled = it },
-                        colors = SwitchDefaults.colors(
-                            checkedTrackColor = AdGuardGreenPrimary,
-                        ),
-                    )
-                }
-                Spacer(modifier = Modifier.height(8.dp))
-                OutlinedTextField(
-                    value = body,
-                    onValueChange = { body = it },
-                    modifier = Modifier.height(180.dp),
-                    label = { Text("Mã JS", fontSize = 11.sp) },
-                    textStyle = androidx.compose.ui.text.TextStyle(
-                        fontFamily = FontFamily.Monospace,
-                        fontSize = 11.sp,
-                    ),
-                )
-            }
-        },
-        confirmButton = {
-            TextButton(onClick = {
-                val scripts = if (body.isBlank()) {
-                    emptyList()
-                } else {
-                    listOf(ScriptBinding("user", body, enabled = true))
-                }
-                onSave(scripts, enabled)
-                onDismiss()
-            }) { Text("Lưu") }
-        },
-        dismissButton = { TextButton(onClick = onDismiss) { Text("Huỷ") } },
     )
 }
 

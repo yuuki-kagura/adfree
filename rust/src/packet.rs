@@ -34,6 +34,8 @@ pub struct Packet<'a> {
     pub is_fin: bool,
     pub seq: u32,
     pub ack_seq: u32,
+    /// Receive window the sender advertises (TCP only; zero for UDP).
+    pub window: u16,
     /// Payload length of the L4 datagram (L3 payload minus the L4 header).
     pub l4_payload_len: usize,
     ip_hdr: &'a [u8],
@@ -232,6 +234,7 @@ impl<'a> Packet<'a> {
             flags,
             seq,
             ack_seq,
+            window,
             is_syn,
             is_ack,
             is_rst,
@@ -250,7 +253,7 @@ impl<'a> Packet<'a> {
                 }
                 // UDP has no sequence numbers; the placeholders are only there to
                 // keep the struct shape uniform between the two protocols.
-                (sp, dp, 0u8, 0, 0, false, false, false, false, len - 8)
+                (sp, dp, 0u8, 0, 0, 0u16, false, false, false, false, len - 8)
             }
             PROTO_TCP => {
                 if l4_hdr.len() < 20 {
@@ -262,6 +265,10 @@ impl<'a> Packet<'a> {
                 let seq = u32::from_be_bytes([l4_hdr[4], l4_hdr[5], l4_hdr[6], l4_hdr[7]]);
                 let ack =
                     u32::from_be_bytes([l4_hdr[8], l4_hdr[9], l4_hdr[10], l4_hdr[11]]);
+                // The window is what funds every byte we send back: without it
+                // a big response (the stitched userscript) overruns the client's
+                // receive buffer and the excess is dropped, never retransmitted.
+                let window = u16::from_be_bytes([l4_hdr[14], l4_hdr[15]]);
                 let data_off = (f >> 4) as usize * 4;
                 let l4_payload_len = l4_hdr.len().saturating_sub(data_off.max(20));
                 (
@@ -270,6 +277,7 @@ impl<'a> Packet<'a> {
                     f,
                     seq,
                     ack,
+                    window,
                     f & SYN != 0,
                     f & ACK != 0,
                     f & RST != 0,
@@ -295,6 +303,7 @@ impl<'a> Packet<'a> {
             is_fin,
             seq,
             ack_seq,
+            window,
             l4_payload_len,
             ip_hdr,
             l4_hdr,
@@ -330,6 +339,36 @@ impl<'a> Packet<'a> {
                     if kind == 2 && len == 4 {
                         let value = u16::from_be_bytes([options[i + 2], options[i + 3]]);
                         return Some(value);
+                    }
+                    i += len;
+                }
+            }
+        }
+        None
+    }
+
+    /// The receive-window scale the sender advertised in its SYN.
+    ///
+    /// A window field of 65535 with scale 8 means a 16 MB window: ignoring the
+    /// scale would hold every reply down to a few hundred bytes per burst.
+    pub fn tcp_window_scale(&self) -> Option<u8> {
+        if self.proto != PROTO_TCP {
+            return None;
+        }
+        let options = self.raw.get(self.ip_hdr_len + 20..self.ip_hdr_len + self.l4_hdr_len())?;
+        let mut i = 0;
+        while i < options.len() {
+            match options[i] {
+                0 => break, // End of options
+                1 => i += 1, // NOP
+                kind => {
+                    let len = *options.get(i + 1)? as usize;
+                    if len < 2 {
+                        break;
+                    }
+                    if kind == 3 && len == 3 {
+                        // The option caps at 14 per RFC 7323.
+                        return Some(options[i + 2].min(14));
                     }
                     i += len;
                 }

@@ -12,6 +12,7 @@ import git.shin.adfree.model.NetworkRequestLog
 import git.shin.adfree.model.ProtectionSettings
 import git.shin.adfree.model.ProtectionStats
 import git.shin.adfree.model.ThreatAnalysisResult
+import git.shin.adfree.model.UserScriptInfo
 import git.shin.adfree.security.ThreatAnalyzer
 import git.shin.adfree.vpn.VpnController
 import kotlinx.coroutines.channels.BufferOverflow
@@ -56,8 +57,12 @@ class AdGuardViewModel(
     private val _statusFilter = MutableStateFlow<FilterStatus?>(null)
     private val _inspectedLog = MutableStateFlow<NetworkRequestLog?>(null)
     private val _showCustomRuleDialog = MutableStateFlow(false)
-    private val _showOnlineSubDialog = MutableStateFlow(false)
     private val _showCustomRuleEditor = MutableStateFlow(false)
+    private val _filterSearchQuery = MutableStateFlow("")
+    private val _inspectedFilter = MutableStateFlow<String?>(null)
+    private val _showAddFilterDialog = MutableStateFlow(false)
+    private val _inspectedScript = MutableStateFlow<String?>(null)
+    private val _showAddScriptDialog = MutableStateFlow(false)
     private val _inspectedApp = MutableStateFlow<AppFirewallRule?>(null)
     private val _appSearchQuery = MutableStateFlow("")
     private val _appCategoryFilter = MutableStateFlow<String?>(null)
@@ -90,11 +95,19 @@ class AdGuardViewModel(
         combine(
             _inspectedLog,
             _showCustomRuleDialog,
-            _showOnlineSubDialog,
             _showCustomRuleEditor,
             _inspectedApp,
-        ) { inspected, dialog, online, editor, app ->
-            UiPartC(inspected, dialog, online, editor, app)
+            _filterSearchQuery,
+        ) { inspected, dialog, editor, app, filterSearch ->
+            UiPartC(inspected, dialog, editor, app, filterSearch)
+        },
+        combine(
+            _inspectedFilter,
+            _showAddFilterDialog,
+            _inspectedScript,
+            _showAddScriptDialog,
+        ) { filter, addFilter, script, addScript ->
+            UiPartC2(filter, addFilter, script, addScript)
         },
         combine(
             combine(
@@ -103,11 +116,14 @@ class AdGuardViewModel(
                 _selectedAppFilter,
                 _aiLabState,
             ) { q, cat, app, lab -> UiPartD(q, cat, app, lab) },
-            combine(_showVpnPermissionPrompt, repository.loadingMessage) { prompt, loading ->
-                prompt to loading
-            },
-        ) { d, (prompt, loading) -> d.plusExtras(prompt, loading) },
-    ) { a, b, c, d ->
+            combine(
+                _showVpnPermissionPrompt,
+                repository.loadingMessage,
+                repository.userscripts,
+                repository.scriptsMasterEnabled,
+            ) { prompt, loading, scripts, master -> UiExtras(prompt, loading, scripts, master) },
+        ) { d, extras -> d.plusExtras(extras) },
+    ) { a, b, c, c2, d ->
         val logs = a.logs.filter { log ->
             val query = a.query
             val matchesQuery = query.isBlank() ||
@@ -147,9 +163,15 @@ class AdGuardViewModel(
             searchQuery = a.query,
             statusFilter = b.status,
             showCustomRuleDialog = c.showCustomRule,
-            showOnlineSubDialog = c.showOnline,
             showCustomRuleEditor = c.showEditor,
             inspectedApp = c.inspectedApp,
+            filterSearchQuery = c.filterSearch,
+            inspectedFilterId = c2.inspectedFilter,
+            showAddFilterDialog = c2.showAddFilter,
+            inspectedScriptId = c2.inspectedScript,
+            showAddScriptDialog = c2.showAddScript,
+            userscripts = d.userscripts,
+            scriptsMasterEnabled = d.scriptsMasterEnabled,
             appSearchQuery = d.appSearch,
             appCategoryFilter = d.appCategoryFilter,
             selectedAppFilter = d.selectedApp,
@@ -260,12 +282,37 @@ class AdGuardViewModel(
             is AdGuardIntent.ClearLogs -> repository.clearLogs()
             is AdGuardIntent.ResetStats -> repository.resetStats()
             is AdGuardIntent.ShowCustomRuleDialog -> _showCustomRuleDialog.value = intent.show
-            is AdGuardIntent.ShowOnlineSubDialog -> _showOnlineSubDialog.value = intent.show
             is AdGuardIntent.ShowCustomRuleEditor -> _showCustomRuleEditor.value = intent.show
-            is AdGuardIntent.AddOnlineSubscription -> {
-                repository.addOnlineSubscription(intent.name, intent.url, intent.category)
-                _showOnlineSubDialog.value = false
+            is AdGuardIntent.FilterSearchQueryChanged -> _filterSearchQuery.value = intent.query
+            is AdGuardIntent.ShowAddFilterDialog -> _showAddFilterDialog.value = intent.show
+            is AdGuardIntent.AddCustomFilter -> {
+                repository.addCustomFilter(intent.name, intent.url)
+                _showAddFilterDialog.value = false
+                emit(AdGuardEffect.ShowSnackbar("Đang tải bộ lọc mới…"))
             }
+
+            is AdGuardIntent.ImportLocalFilter -> {
+                repository.importLocalFilter(intent.uri)
+                _showAddFilterDialog.value = false
+            }
+
+            is AdGuardIntent.InspectFilter -> _inspectedFilter.value = intent.id
+            is AdGuardIntent.RestoreDefaultFilters -> {
+                repository.restoreDefaultFilters()
+                emit(AdGuardEffect.ShowSnackbar("Đã khôi phục bộ lọc mặc định"))
+            }
+
+            is AdGuardIntent.ShowAddScriptDialog -> _showAddScriptDialog.value = intent.show
+            is AdGuardIntent.AddScript -> {
+                repository.addScript(intent.name, intent.url)
+                _showAddScriptDialog.value = false
+            }
+
+            is AdGuardIntent.ToggleScript -> repository.toggleScript(intent.id, intent.enabled)
+            is AdGuardIntent.ToggleScriptsMaster -> repository.toggleScriptsMaster(intent.enabled)
+            is AdGuardIntent.RefreshScript -> repository.refreshScript(intent.id)
+            is AdGuardIntent.DeleteScript -> repository.deleteScript(intent.id)
+            is AdGuardIntent.InspectScript -> _inspectedScript.value = intent.id
 
             is AdGuardIntent.DeleteFilterList -> repository.deleteFilterList(intent.id)
             is AdGuardIntent.RefreshSubscription -> repository.refreshSubscription(intent.id)
@@ -368,11 +415,6 @@ class AdGuardViewModel(
         return name
     }
 
-    /** Replaces the user script list. */
-    fun setScripts(scripts: List<git.shin.adfree.core.ScriptBinding>, enabled: Boolean) {
-        coreEngine.setScripts(scripts, enabled)
-    }
-
     /** Context used to launch system screens; supplied by the Activity. */
     private var contextProvider: (() -> android.content.Context)? = null
     private fun containerProvider(): android.content.Context? = contextProvider?.invoke()
@@ -404,9 +446,16 @@ class AdGuardViewModel(
     private data class UiPartC(
         val inspected: NetworkRequestLog?,
         val showCustomRule: Boolean,
-        val showOnline: Boolean,
         val showEditor: Boolean,
         val inspectedApp: AppFirewallRule?,
+        val filterSearch: String,
+    )
+
+    private data class UiPartC2(
+        val inspectedFilter: String?,
+        val showAddFilter: Boolean,
+        val inspectedScript: String?,
+        val showAddScript: Boolean,
     )
 
     private data class UiPartD(
@@ -417,10 +466,21 @@ class AdGuardViewModel(
     ) {
         var showVpnPermission: Boolean = false
         var loadingMessage: String? = null
+        var userscripts: List<UserScriptInfo> = emptyList()
+        var scriptsMasterEnabled: Boolean = false
 
-        fun plusExtras(prompt: Boolean, loading: String?): UiPartD = apply {
-            showVpnPermission = prompt
-            loadingMessage = loading
+        fun plusExtras(extras: UiExtras): UiPartD = apply {
+            showVpnPermission = extras.showVpnPermission
+            loadingMessage = extras.loadingMessage
+            userscripts = extras.userscripts
+            scriptsMasterEnabled = extras.scriptsMasterEnabled
         }
     }
+
+    private data class UiExtras(
+        val showVpnPermission: Boolean,
+        val loadingMessage: String?,
+        val userscripts: List<UserScriptInfo>,
+        val scriptsMasterEnabled: Boolean,
+    )
 }

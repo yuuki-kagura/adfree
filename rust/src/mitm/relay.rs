@@ -51,6 +51,13 @@ pub struct Relay {
     /// Client bytes not yet accepted by the peer socket (it is connecting, or
     /// its send buffer is full). Flushed by the engine on the next writable.
     pub pending_to_peer: Vec<u8>,
+    /// Wire bytes for the client the receive window could not take yet.
+    /// Flushed as the client's ACKs open the window further.
+    pub pending_to_client: Vec<u8>,
+    /// The peer closed while bytes were still pending: the FIN must wait for
+    /// them, or it would carry a sequence number ahead of data the client has
+    /// not seen (and the relay would drop that data on retirement).
+    pub fin_after_flush: bool,
     /// Set while some thread is inside `send()` for this relay, so two threads
     /// never interleave writes and scramble the byte order.
     pub flushing: bool,
@@ -82,6 +89,8 @@ impl Relay {
             connecting,
             connect_retries: 0,
             pending_to_peer: Vec::new(),
+            pending_to_client: Vec::new(),
+            fin_after_flush: false,
             flushing: false,
             shutdown_after_flush: false,
         }
@@ -108,6 +117,8 @@ impl Relay {
             connecting,
             connect_retries: 0,
             pending_to_peer: Vec::new(),
+            pending_to_client: Vec::new(),
+            fin_after_flush: false,
             flushing: false,
             shutdown_after_flush: false,
         }
@@ -123,24 +134,76 @@ impl Relay {
     /// The relay owns the flow, so it is the right place to advance the
     /// client-facing sequence number; the engine just writes the result out.
     pub fn segments_for_client(&mut self, payload: &[u8]) -> Vec<Vec<u8>> {
+        self.queue_to_client(payload);
+        self.flush_to_client()
+    }
+
+    /// Buffers wire bytes for the client until its window takes them.
+    pub fn queue_to_client(&mut self, bytes: &[u8]) {
+        if !bytes.is_empty() {
+            self.pending_to_client.extend_from_slice(bytes);
+        }
+    }
+
+    /// Records the ACK and window carried by any packet from the client.
+    pub fn on_client_ack(&mut self, ack_seq: u32, window: u16) {
+        // Only ever move the ACK forward: retransmissions carry stale values.
+        if ack_seq.wrapping_sub(self.flow.client_ack) < 0x8000_0000 {
+            self.flow.client_ack = ack_seq;
+        }
+        self.flow.client_window = (window as u32) << self.flow.client_window_scale;
+    }
+
+    /// Emits as many client-bound segments as the receive window allows.
+    ///
+    /// A receiver drops anything past its advertised window and this relay has
+    /// no retransmission, so staying inside the window is what keeps a large
+    /// body flowing (the stitched userscript is ~600 KB): each ACK opens the
+    /// window further and the engine calls back in to flush the rest.
+    pub fn flush_to_client(&mut self) -> Vec<Vec<u8>> {
         let mut out = Vec::new();
-        for chunk in Relay::split_segments(payload.to_vec(), self.mss) {
+        if self.closed {
+            return out;
+        }
+        while !self.pending_to_client.is_empty() {
+            let in_flight = self
+                .flow
+                .next_send_seq()
+                .wrapping_sub(self.flow.client_ack) as u64;
+            let window = self.flow.client_window as u64;
+            if in_flight >= window {
+                break;
+            }
+            let room = (window - in_flight) as usize;
+            let take = room.min(self.mss).min(self.pending_to_client.len());
             let Some(pkt) = crate::packet::Packet::parse(&self.syn_packet) else {
                 break;
             };
-            let seq = self.flow.my_seq.wrapping_add(self.flow.up_bytes as u32);
-            let seg = crate::mitm::segment::build_data_segment(
+            let seq = self.flow.next_send_seq();
+            let Some(segment) = crate::mitm::segment::build_data_segment(
                 &pkt,
                 seq,
                 self.flow.acked_seq,
-                &chunk,
-            );
-            match seg {
-                Some(segment) => {
-                    self.flow.up_bytes += chunk.len() as u64;
-                    out.push(segment);
+                &self.pending_to_client[..take],
+            ) else {
+                break;
+            };
+            self.pending_to_client.drain(..take);
+            self.flow.up_bytes += take as u64;
+            out.push(segment);
+        }
+        // A deferred FIN rides out once the last byte is on its way and the
+        // window has room for its sequence number.
+        if self.pending_to_client.is_empty() && self.fin_after_flush && !self.closed {
+            let in_flight = self
+                .flow
+                .next_send_seq()
+                .wrapping_sub(self.flow.client_ack) as u64;
+            if in_flight < self.flow.client_window as u64 {
+                self.fin_after_flush = false;
+                if let Some(fin) = self.fin_now() {
+                    out.push(fin);
                 }
-                None => break,
             }
         }
         out
@@ -254,7 +317,19 @@ impl Relay {
     }
 
     /// The peer closed its side: send the client a FIN and retire the relay.
+    ///
+    /// When bytes are still waiting for window space the FIN is deferred; the
+    /// flush that empties the queue sends it.
     pub fn on_peer_eof(&mut self) -> Option<Vec<u8>> {
+        if !self.pending_to_client.is_empty() {
+            self.fin_after_flush = true;
+            return None;
+        }
+        self.fin_now()
+    }
+
+    /// Emits the FIN immediately and retires the relay.
+    fn fin_now(&mut self) -> Option<Vec<u8>> {
         let pkt = crate::packet::Packet::parse(&self.syn_packet)?;
         let seq = self.flow.my_seq.wrapping_add(self.flow.up_bytes as u32);
         self.flow.up_bytes += 1; // the FIN we send consumes one sequence number
@@ -423,7 +498,7 @@ mod tests {
             CertificateAuthority::from_pem(&ca.cert_pem(), &ca.key_pem()).expect("restore"),
         )));
         let session = open_session(&resolver, "x.example.com").expect("session");
-        let proxy = ProxySession::new(session, "/adfree-user.js".into());
+        let proxy = ProxySession::new(session, "/adfree-user.js".into(), Arc::from(""));
         Relay::new_tls(
             crate::mitm::tcp::Flow::new(crate::packet::IpKey::V4(1), 40000, 443, 1000, 5000),
             -1,
@@ -693,7 +768,7 @@ mod tests {
             crate::mitm::tls::client_config_with(origin_roots),
         )
         .expect("session");
-        let proxy = ProxySession::new(session, String::new());
+        let proxy = ProxySession::new(session, String::new(), Arc::from(""));
         let mut relay = Relay::new_tls(
             crate::mitm::tcp::Flow::new(crate::packet::IpKey::V4(1), 40000, 443, 1000, 5000),
             -1,

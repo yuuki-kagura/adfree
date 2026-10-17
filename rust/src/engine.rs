@@ -682,6 +682,10 @@ impl Core {
                 // Finished, waiting to be reaped: consume silently.
                 return true;
             }
+            // Every packet from the client carries an ACK and a window: this
+            // is what funds the bytes we still owe it, so a ~600 KB script
+            // body leaves in window-sized bursts, one burst per ACK.
+            relay.on_client_ack(pkt.ack_seq, pkt.window);
             let payload = pkt.l4_payload();
             let mut saw_data = false;
             if !payload.is_empty() {
@@ -689,11 +693,7 @@ impl Core {
                     Ok((peer_bytes, to_client)) => {
                         to_peer = peer_bytes;
                         saw_data = true;
-                        if !to_client.is_empty() {
-                            for segment in relay.segments_for_client(&to_client) {
-                                out.push(segment);
-                            }
-                        }
+                        relay.queue_to_client(&to_client);
                     }
                     Err(e) => {
                         crate::logbuf::push(&format!("relay client step: {e}"));
@@ -703,6 +703,11 @@ impl Core {
                         reset = true;
                     }
                 }
+            }
+            // Flush whatever the window now takes. A pure ACK lands here too:
+            // it is exactly the event that opens the window further.
+            for segment in relay.flush_to_client() {
+                out.push(segment);
             }
             if reset {
                 relay.close();
@@ -808,11 +813,15 @@ impl Core {
             && crate::mitm::relay::is_mitm_port(pkt.dst_port)
             && self.mitm_ca.read().unwrap().has_ca()
         {
-            let script = self.mitm_scripts.read().unwrap().serve_path().to_string();
+            let (script_path, script_body) = {
+                let scripts = self.mitm_scripts.read().unwrap();
+                (scripts.serve_path().to_string(), scripts.combined_arc())
+            };
             match crate::mitm::proxy::ProxySession::new_pending(
                 self.mitm_resolver(),
                 crate::mitm::tls::client_config(),
-                script,
+                script_path,
+                script_body,
             ) {
                 Ok(proxy) => Some(proxy),
                 Err(e) => {
@@ -853,6 +862,9 @@ impl Core {
         };
         // The handshake we just answered consumed one sequence number.
         relay.flow.up_bytes = 1;
+        // The client's SYN also carried the scale its window fields use; all
+        // later windows are relative to it (RFC 7323).
+        relay.flow.client_window_scale = pkt.tcp_window_scale().unwrap_or(0);
 
         {
             let mut guard = self.relays.lock().unwrap();

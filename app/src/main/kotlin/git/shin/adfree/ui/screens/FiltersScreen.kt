@@ -1,12 +1,16 @@
 package git.shin.adfree.ui.screens
 
+import android.content.Intent
+import android.net.Uri
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.BorderStroke
-import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -16,31 +20,35 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.LazyRow
-import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
-import androidx.compose.material.icons.filled.AutoFixHigh
-import androidx.compose.material.icons.filled.Check
-import androidx.compose.material.icons.filled.Close
-import androidx.compose.material.icons.filled.CloudDownload
+import androidx.compose.material.icons.filled.Block
+import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
-import androidx.compose.material.icons.filled.Layers
+import androidx.compose.material.icons.filled.ExpandLess
+import androidx.compose.material.icons.filled.ExpandMore
+import androidx.compose.material.icons.filled.Language
+import androidx.compose.material.icons.filled.Lock
+import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material.icons.filled.NotificationsOff
 import androidx.compose.material.icons.filled.Public
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Science
 import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.Share
+import androidx.compose.material.icons.filled.Shield
 import androidx.compose.material.icons.filled.Sync
+import androidx.compose.material.icons.filled.UploadFile
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.FilterChip
-import androidx.compose.material3.FilterChipDefaults
-import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.ModalBottomSheet
@@ -49,16 +57,12 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Switch
 import androidx.compose.material3.SwitchDefaults
-import androidx.compose.material3.Tab
-import androidx.compose.material3.TabRow
-import androidx.compose.material3.TabRowDefaults
-import androidx.compose.material3.TabRowDefaults.tabIndicatorOffset
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -66,12 +70,15 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import git.shin.adfree.data.FilterGroup
 import git.shin.adfree.model.FilterList
 import git.shin.adfree.ui.AdGuardIntent
 import git.shin.adfree.ui.AdGuardViewModel
@@ -79,794 +86,753 @@ import git.shin.adfree.ui.theme.AdGuardBlueDns
 import git.shin.adfree.ui.theme.AdGuardDarkBg
 import git.shin.adfree.ui.theme.AdGuardDarkOutline
 import git.shin.adfree.ui.theme.AdGuardDarkSurface
-import git.shin.adfree.ui.theme.AdGuardDarkSurfaceVariant
 import git.shin.adfree.ui.theme.AdGuardGreenLight
 import git.shin.adfree.ui.theme.AdGuardGreenPrimary
-import git.shin.adfree.ui.theme.AdGuardOrangeWarning
-import git.shin.adfree.ui.theme.AdGuardPurpleAI
 import git.shin.adfree.ui.theme.AdGuardRedBlocked
 import git.shin.adfree.ui.theme.AdGuardTextMuted
 import git.shin.adfree.ui.theme.AdGuardTextPrimary
 import git.shin.adfree.ui.theme.AdGuardTextSecondary
 
+/**
+ * The "Bộ lọc" tab: the filter catalogue, custom lists and userscripts.
+ *
+ * Layout mirrors AdGuard's Filters screen: the catalogue is grouped (ads,
+ * privacy, annoyances…) with a switch per list, every group shows an
+ * "enabled/total" counter, and search flattens everything. What each list does
+ * is one tap away in a detail sheet, which also carries refresh/delete.
+ */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun FiltersScreen(
     viewModel: AdGuardViewModel,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
 ) {
     val state by viewModel.uiState.collectAsState()
+    val context = LocalContext.current
+    var expandedGroups by remember { mutableStateOf(setOf(FilterGroup.ADS.id)) }
+    var showOverflow by remember { mutableStateOf(false) }
+
+    // Local files are imported through the system picker; the URI is read once
+    // and copied into the app's own directory (SAF permissions are not trusted
+    // to survive).
+    val filePicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        if (uri != null) {
+            runCatching {
+                context.contentResolver.takePersistableUriPermission(
+                    uri,
+                    Intent.FLAG_GRANT_READ_URI_PERMISSION,
+                )
+            }
+            viewModel.onIntent(AdGuardIntent.ImportLocalFilter(uri.toString()))
+        }
+    }
+
+    val query = state.filterSearchQuery
+    val matchesQuery: (FilterList) -> Boolean = {
+        query.isBlank() ||
+            it.name.contains(query, ignoreCase = true) ||
+            it.description.contains(query, ignoreCase = true)
+    }
+    val catalogLists = state.filterLists.filter { !it.isCustom && !it.isUserAdded }
+    val customLists = state.filterLists.filter { it.isUserAdded }
+    val visibleCatalog = catalogLists.filter(matchesQuery)
+    val visibleCustom = customLists.filter(matchesQuery)
+    val userRulesCount = state.filterLists.firstOrNull { it.isCustom }?.ruleCount ?: 0
+    val enabledCount = state.filterLists.count { it.isEnabled && !it.isCustom }
+    val totalRules = state.filterLists.filter { it.isEnabled && !it.isCustom }.sumOf { it.ruleCount }
 
     Box(
         modifier = modifier
             .fillMaxSize()
-            .background(AdGuardDarkBg)
+            .background(AdGuardDarkBg),
     ) {
         Column(
             modifier = Modifier
                 .fillMaxSize()
-                .padding(horizontal = 16.dp, vertical = 12.dp)
+                .padding(horizontal = 16.dp, vertical = 12.dp),
         ) {
-            // Header
-            Column(modifier = Modifier.fillMaxWidth()) {
-                Text(
-                    text = "Bộ lọc",
-                    fontSize = 19.sp,
-                    fontWeight = FontWeight.Bold,
-                    color = AdGuardTextPrimary
-                )
-                Text(
-                    text = "Bật hoặc tắt từng danh sách chặn",
-                    fontSize = 12.sp,
-                    color = AdGuardTextMuted
-                )
-
-                Spacer(modifier = Modifier.height(10.dp))
-
-                // Actions on their own row: two labelled buttons never fit next
-                // to the title on a narrow screen, and the update button then
-                // gets squeezed until its height collapses.
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    OutlinedButton(
-                        onClick = { viewModel.onIntent(AdGuardIntent.ShowOnlineSubDialog(true)) },
-                        shape = RoundedCornerShape(10.dp),
-                        border = BorderStroke(1.dp, AdGuardDarkOutline),
-                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
-                        modifier = Modifier.testTag("add_online_filter_btn")
-                    ) {
-                        Icon(Icons.Default.Public, contentDescription = null, tint = AdGuardBlueDns, modifier = Modifier.size(16.dp))
-                        Spacer(modifier = Modifier.width(6.dp))
-                        Text("Nguồn online", fontSize = 12.sp, fontWeight = FontWeight.Bold, color = AdGuardTextPrimary)
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = "Bộ lọc",
+                        fontSize = 19.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = AdGuardTextPrimary,
+                    )
+                    Text(
+                        text = "$enabledCount bộ lọc đang bật • ${"%,d".format(totalRules)} quy tắc",
+                        fontSize = 12.sp,
+                        color = AdGuardTextMuted,
+                    )
+                }
+                Box {
+                    IconButton(onClick = { showOverflow = true }) {
+                        Icon(Icons.Default.MoreVert, contentDescription = "Tuỳ chọn", tint = AdGuardTextSecondary)
                     }
-
-                    OutlinedButton(
-                        onClick = { viewModel.onIntent(AdGuardIntent.RefreshAllSubscriptions) },
-                        enabled = state.loadingMessage == null,
-                        shape = RoundedCornerShape(10.dp),
-                        border = BorderStroke(1.dp, AdGuardDarkOutline),
-                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp)
-                    ) {
-                        Icon(
-                            imageVector = Icons.Default.Sync,
-                            contentDescription = "Cập nhật",
-                            tint = AdGuardGreenLight,
-                            modifier = Modifier.size(16.dp)
-                        )
-                        Spacer(modifier = Modifier.width(6.dp))
-                        // Never print the progress text here: a long message is
-                        // what used to stretch this button out of its bounds.
-                        Text(
-                            text = if (state.loadingMessage == null) "Cập nhật" else "Đang tải…",
-                            fontSize = 12.sp,
-                            fontWeight = FontWeight.Bold,
-                            color = AdGuardGreenLight
+                    DropdownMenu(expanded = showOverflow, onDismissRequest = { showOverflow = false }) {
+                        DropdownMenuItem(
+                            text = { Text("Khôi phục mặc định", fontSize = 13.sp) },
+                            onClick = {
+                                showOverflow = false
+                                viewModel.onIntent(AdGuardIntent.RestoreDefaultFilters)
+                            },
+                            leadingIcon = {
+                                Icon(Icons.Default.Refresh, contentDescription = null, tint = AdGuardTextSecondary, modifier = Modifier.size(18.dp))
+                            },
                         )
                     }
                 }
             }
-
-            Spacer(modifier = Modifier.height(14.dp))
-
-            // Stats Card
-            val totalActiveRules = state.filterLists.filter { it.isEnabled }.sumOf { it.ruleCount }
-            Card(
-                modifier = Modifier.fillMaxWidth(),
-                shape = RoundedCornerShape(14.dp),
-                colors = CardDefaults.cardColors(containerColor = AdGuardDarkSurface),
-                border = CardDefaults.outlinedCardBorder().copy(brush = androidx.compose.ui.graphics.SolidColor(AdGuardDarkOutline))
-            ) {
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(16.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.SpaceBetween
-                ) {
-                    Column {
-                        Text(
-                            text = "Quy tắc đang lọc",
-                            fontSize = 11.sp,
-                            fontWeight = FontWeight.Bold,
-                            color = AdGuardTextSecondary
-                        )
-                        Spacer(modifier = Modifier.height(4.dp))
-                        Text(
-                            text = "%,d".format(totalActiveRules),
-                            fontSize = 24.sp,
-                            fontWeight = FontWeight.ExtraBold,
-                            color = AdGuardGreenPrimary,
-                            fontFamily = FontFamily.SansSerif
-                        )
-                        Text(
-                            text = "${state.filterLists.size} danh sách bộ lọc đang hoạt động",
-                            fontSize = 11.sp,
-                            color = AdGuardTextMuted
-                        )
-                    }
-
-                    Box(
-                        modifier = Modifier
-                            .size(46.dp)
-                            .clip(RoundedCornerShape(12.dp))
-                            .background(AdGuardGreenPrimary.copy(alpha = 0.15f)),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Icon(
-                            imageVector = Icons.Default.Layers,
-                            contentDescription = null,
-                            tint = AdGuardGreenPrimary,
-                            modifier = Modifier.size(24.dp)
-                        )
-                    }
-                }
-            }
-
-            Spacer(modifier = Modifier.height(16.dp))
-
-            // Subscriptions list
-            Text(
-                text = "Danh sách bộ lọc",
-                fontSize = 12.sp,
-                fontWeight = FontWeight.Bold,
-                color = AdGuardTextSecondary,
-            )
 
             Spacer(modifier = Modifier.height(10.dp))
 
-            LazyColumn(
-                modifier = Modifier.fillMaxSize(),
-                verticalArrangement = Arrangement.spacedBy(10.dp)
-            ) {
-                items(state.filterLists, key = { it.id }) { list ->
-                    FilterListCard(
-                        list = list,
-                        onToggle = { viewModel.onIntent(AdGuardIntent.ToggleFilterList(list.id, !list.isEnabled)) },
-                        onEditCustom = { viewModel.onIntent(AdGuardIntent.ShowCustomRuleEditor(true)) },
-                        onRefreshSub = { viewModel.onIntent(AdGuardIntent.RefreshSubscription(list.id)) },
-                        onDeleteSub = { viewModel.onIntent(AdGuardIntent.DeleteFilterList(list.id)) }
-                    )
-                }
-
-                item {
-                    Spacer(modifier = Modifier.height(72.dp))
-                }
-            }
-        }
-
-        // FAB to open friendly custom rules editor
-        FloatingActionButton(
-            onClick = { viewModel.onIntent(AdGuardIntent.ShowCustomRuleEditor(true)) },
-            containerColor = AdGuardGreenPrimary,
-            contentColor = Color.Black,
-            modifier = Modifier
-                .align(Alignment.BottomEnd)
-                .padding(20.dp)
-                .testTag("open_custom_rules_editor_fab")
-        ) {
-            Icon(Icons.Default.Edit, contentDescription = "Sửa quy tắc tùy chỉnh")
-        }
-    }
-
-    // Modal Sheet 1: Add Custom Online Filter Subscription
-    if (state.showOnlineSubDialog) {
-        AddOnlineFilterDialog(
-            onDismiss = { viewModel.onIntent(AdGuardIntent.ShowOnlineSubDialog(false)) },
-            onAdd = { name, url, category ->
-                viewModel.onIntent(AdGuardIntent.AddOnlineSubscription(name, url, category))
-            }
-        )
-    }
-
-    // Modal Sheet 2: Friendly Custom Rules Full-Featured Editor
-    if (state.showCustomRuleEditor) {
-        val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
-        val customFilter = state.filterLists.find { it.isCustom }
-        val currentRules = customFilter?.customRules ?: emptyList()
-
-        ModalBottomSheet(
-            onDismissRequest = { viewModel.onIntent(AdGuardIntent.ShowCustomRuleEditor(false)) },
-            sheetState = sheetState,
-            containerColor = AdGuardDarkSurface,
-            contentColor = AdGuardTextPrimary
-        ) {
-            FriendlyCustomRuleEditorSheet(
-                initialRules = currentRules,
-                onSaveAll = { newRules ->
-                    viewModel.onIntent(AdGuardIntent.UpdateAllCustomRules(newRules))
-                },
-                onClose = { viewModel.onIntent(AdGuardIntent.ShowCustomRuleEditor(false)) }
-            )
-        }
-    }
-}
-
-@Composable
-fun FilterListCard(
-    list: FilterList,
-    onToggle: () -> Unit,
-    onEditCustom: () -> Unit,
-    onRefreshSub: () -> Unit,
-    onDeleteSub: () -> Unit
-) {
-    Card(
-        modifier = Modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(12.dp),
-        colors = CardDefaults.cardColors(containerColor = AdGuardDarkSurface),
-        border = CardDefaults.outlinedCardBorder().copy(brush = androidx.compose.ui.graphics.SolidColor(AdGuardDarkOutline))
-    ) {
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(14.dp)
-        ) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Column(modifier = Modifier.weight(1f)) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Text(
-                            text = list.name,
-                            fontSize = 15.sp,
-                            fontWeight = FontWeight.Bold,
-                            color = AdGuardTextPrimary
-                        )
-                        Spacer(modifier = Modifier.width(6.dp))
-                        Box(
-                            modifier = Modifier
-                                .clip(RoundedCornerShape(4.dp))
-                                .background(AdGuardDarkSurfaceVariant)
-                                .padding(horizontal = 6.dp, vertical = 2.dp)
-                        ) {
-                            Text(
-                                text = "%,d quy tắc".format(list.ruleCount),
-                                fontSize = 10.sp,
-                                fontFamily = FontFamily.Monospace,
-                                color = AdGuardGreenLight
-                            )
-                        }
-                    }
-
-                    Spacer(modifier = Modifier.height(4.dp))
-
-                    Text(
-                        text = list.description,
-                        fontSize = 12.sp,
-                        color = AdGuardTextSecondary
-                    )
-
-                    if (list.isOnlineSubscription && list.subscriptionUrl != null) {
-                        Spacer(modifier = Modifier.height(4.dp))
-                        // The source, not a labelled field: a raw URL with an
-                        // "URL:" prefix is debug output, not a setting.
-                        Text(
-                            text = list.subscriptionUrl,
-                            fontSize = 10.sp,
-                            fontFamily = FontFamily.Monospace,
-                            color = AdGuardBlueDns,
-                            maxLines = 2,
-                            overflow = TextOverflow.Ellipsis
-                        )
-                    }
-                }
-
-                Switch(
-                    checked = list.isEnabled,
-                    onCheckedChange = { onToggle() },
-                    colors = SwitchDefaults.colors(
-                        checkedThumbColor = Color.White,
-                        checkedTrackColor = AdGuardGreenPrimary,
-                        uncheckedThumbColor = AdGuardTextMuted,
-                        uncheckedTrackColor = AdGuardDarkSurfaceVariant
-                    )
-                )
-            }
-
-            Spacer(modifier = Modifier.height(8.dp))
-
-            // Action row for Custom Rule or Online Subscriptions
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Text(
-                    text = "Cập nhật: ${list.lastUpdatedText}",
-                    fontSize = 10.sp,
-                    color = AdGuardTextMuted
-                )
-
-                Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                    if (list.isCustom) {
-                        Button(
-                            onClick = onEditCustom,
-                            colors = ButtonDefaults.buttonColors(containerColor = AdGuardDarkSurfaceVariant),
-                            shape = RoundedCornerShape(8.dp),
-                            modifier = Modifier.height(32.dp)
-                        ) {
-                            Icon(Icons.Default.Edit, contentDescription = null, tint = AdGuardGreenLight, modifier = Modifier.size(14.dp))
-                            Spacer(modifier = Modifier.width(4.dp))
-                            Text("Chỉnh sửa quy tắc", fontSize = 11.sp, color = AdGuardGreenLight, fontWeight = FontWeight.Bold)
-                        }
-                    }
-
-                    if (list.isOnlineSubscription) {
-                        IconButton(onClick = onRefreshSub, modifier = Modifier.size(32.dp)) {
-                            Icon(Icons.Default.Refresh, contentDescription = "Tải lại", tint = AdGuardBlueDns, modifier = Modifier.size(16.dp))
-                        }
-                        IconButton(onClick = onDeleteSub, modifier = Modifier.size(32.dp)) {
-                            Icon(Icons.Default.Delete, contentDescription = "Xóa", tint = AdGuardRedBlocked, modifier = Modifier.size(16.dp))
-                        }
-                    }
-                }
-            }
-        }
-    }
-}
-
-/**
- * Friendly Dialog to Add Online Filter Subscription with 1-click popular presets.
- */
-@Composable
-fun AddOnlineFilterDialog(
-    onDismiss: () -> Unit,
-    onAdd: (name: String, url: String, category: String) -> Unit
-) {
-    var name by remember { mutableStateOf("") }
-    var url by remember { mutableStateOf("") }
-    var category by remember { mutableStateOf("Chặn quảng cáo") }
-
-    val presetFilters = listOf(
-        PresetOnlineFilter("hostsVN (EasyList VN)", "https://raw.githubusercontent.com/bigdargon/hostsVN/master/hosts", "Việt Nam"),
-        PresetOnlineFilter("OISD Big DNS Filter", "https://big.oisd.nl", "Bảo mật & Toàn diện"),
-        PresetOnlineFilter("Peter Lowe's Blocklist", "https://pgl.yoyo.org/adservers/serverlist.php?hostformat=adblockplus", "Quảng cáo quốc tế"),
-        PresetOnlineFilter("HaGeZi Multi PRO", "https://raw.githubusercontent.com/hagezi/dns-blocklists/main/adblock/pro.txt", "DNS Chuyên sâu")
-    )
-
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        containerColor = AdGuardDarkSurface,
-        title = {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Icon(Icons.Default.Public, contentDescription = null, tint = AdGuardBlueDns, modifier = Modifier.size(22.dp))
-                Spacer(modifier = Modifier.width(8.dp))
-                Text(
-                    text = "Thêm bộ lọc Online tùy chỉnh",
-                    fontSize = 17.sp,
-                    fontWeight = FontWeight.Bold,
-                    color = AdGuardTextPrimary
-                )
-            }
-        },
-        text = {
-            Column {
-                Text(
-                    text = "Đăng ký danh sách lọc từ đường dẫn trực tuyến. Bộ lọc sẽ tự động cập nhật định kỳ.",
-                    fontSize = 12.sp,
-                    color = AdGuardTextSecondary
-                )
-
-                Spacer(modifier = Modifier.height(12.dp))
-
-                // Presets row
-                Text(
-                    text = "Gợi ý phổ biến (Chạm để điền nhanh):",
-                    fontSize = 11.sp,
-                    fontWeight = FontWeight.Bold,
-                    color = AdGuardTextMuted
-                )
-                Spacer(modifier = Modifier.height(6.dp))
-
-                LazyRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    items(presetFilters) { preset ->
-                        Box(
-                            modifier = Modifier
-                                .clip(RoundedCornerShape(8.dp))
-                                .background(AdGuardDarkSurfaceVariant)
-                                .clickable {
-                                    name = preset.name
-                                    url = preset.url
-                                    category = preset.category
-                                }
-                                .padding(horizontal = 10.dp, vertical = 6.dp)
-                        ) {
-                            Text(preset.name, fontSize = 11.sp, color = AdGuardBlueDns, fontWeight = FontWeight.SemiBold)
-                        }
-                    }
-                }
-
-                Spacer(modifier = Modifier.height(14.dp))
-
-                OutlinedTextField(
-                    value = name,
-                    onValueChange = { name = it },
-                    label = { Text("Tên bộ lọc") },
-                    placeholder = { Text("Ví dụ: EasyList Vietnam") },
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth(),
+            // Actions on their own row: two labelled buttons never fit next to
+            // the title on a narrow screen.
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedButton(
+                    onClick = { viewModel.onIntent(AdGuardIntent.ShowAddFilterDialog(true)) },
                     shape = RoundedCornerShape(10.dp),
-                    colors = OutlinedTextFieldDefaults.colors(
-                        focusedContainerColor = AdGuardDarkSurfaceVariant,
-                        unfocusedContainerColor = AdGuardDarkSurfaceVariant,
-                        focusedBorderColor = AdGuardBlueDns,
-                        unfocusedBorderColor = AdGuardDarkOutline,
-                        focusedTextColor = AdGuardTextPrimary,
-                        unfocusedTextColor = AdGuardTextPrimary
-                    )
-                )
-
-                Spacer(modifier = Modifier.height(10.dp))
-
-                OutlinedTextField(
-                    value = url,
-                    onValueChange = { url = it },
-                    label = { Text("URL đăng ký bộ lọc") },
-                    placeholder = { Text("https://example.com/filter.txt") },
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth(),
-                    shape = RoundedCornerShape(10.dp),
-                    colors = OutlinedTextFieldDefaults.colors(
-                        focusedContainerColor = AdGuardDarkSurfaceVariant,
-                        unfocusedContainerColor = AdGuardDarkSurfaceVariant,
-                        focusedBorderColor = AdGuardBlueDns,
-                        unfocusedBorderColor = AdGuardDarkOutline,
-                        focusedTextColor = AdGuardTextPrimary,
-                        unfocusedTextColor = AdGuardTextPrimary
-                    )
-                )
-            }
-        },
-        confirmButton = {
-            Button(
-                onClick = {
-                    if (url.isNotBlank()) {
-                        onAdd(name, url, category)
-                    }
-                },
-                colors = ButtonDefaults.buttonColors(containerColor = AdGuardBlueDns),
-                shape = RoundedCornerShape(8.dp)
-            ) {
-                Text("Đăng ký bộ lọc", color = Color.Black, fontWeight = FontWeight.Bold)
-            }
-        },
-        dismissButton = {
-            OutlinedButton(
-                onClick = onDismiss,
-                shape = RoundedCornerShape(8.dp)
-            ) {
-                Text("Hủy", color = AdGuardTextSecondary)
-            }
-        }
-    )
-}
-
-data class PresetOnlineFilter(val name: String, val url: String, val category: String)
-
-/**
- * Friendly Full-Featured Custom Rules Editor Modal Sheet.
- * Provides two modes:
- * 1. Visual Card Manager (Search, Delete, Type Badges)
- * 2. Raw Multi-line Editor with syntax helper chips and live validator.
- */
-@Composable
-fun FriendlyCustomRuleEditorSheet(
-    initialRules: List<String>,
-    onSaveAll: (List<String>) -> Unit,
-    onClose: () -> Unit
-) {
-    var selectedTab by remember { mutableIntStateOf(0) } // 0: Visual Cards, 1: Raw Text Editor
-    var rulesList by remember { mutableStateOf(initialRules) }
-    var rawText by remember { mutableStateOf(initialRules.joinToString("\n")) }
-    var newSingleRule by remember { mutableStateOf("") }
-    var searchQuery by remember { mutableStateOf("") }
-
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .padding(horizontal = 20.dp, vertical = 14.dp)
-    ) {
-        // Sheet Title & Close
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Column {
-                Text(
-                    text = "Quy tắc của bạn",
-                    fontSize = 16.sp,
-                    fontWeight = FontWeight.Black,
-                    color = AdGuardTextPrimary,
-                )
-                Text(
-                    text = "${rulesList.size} quy tắc người dùng đang lưu trong bộ nhớ",
-                    fontSize = 12.sp,
-                    color = AdGuardTextMuted
-                )
-            }
-
-            IconButton(onClick = onClose) {
-                Icon(Icons.Default.Close, contentDescription = "Đóng", tint = AdGuardTextSecondary)
-            }
-        }
-
-        Spacer(modifier = Modifier.height(12.dp))
-
-        // Mode Switcher Tabs
-        TabRow(
-            selectedTabIndex = selectedTab,
-            containerColor = AdGuardDarkSurfaceVariant,
-            contentColor = AdGuardGreenPrimary,
-            indicator = { tabPositions ->
-                TabRowDefaults.SecondaryIndicator(
-                    modifier = Modifier.tabIndicatorOffset(tabPositions[selectedTab]),
-                    color = AdGuardGreenPrimary
-                )
-            },
-            modifier = Modifier.clip(RoundedCornerShape(10.dp))
-        ) {
-            Tab(
-                selected = selectedTab == 0,
-                onClick = {
-                    selectedTab = 0
-                    // Sync from raw text if user edited there
-                    rulesList = rawText.lines().map { it.trim() }.filter { it.isNotEmpty() }
-                },
-                text = { Text("Quản lý trực quan (${rulesList.size})", fontSize = 12.sp, fontWeight = FontWeight.Bold) }
-            )
-            Tab(
-                selected = selectedTab == 1,
-                onClick = {
-                    selectedTab = 1
-                    // Sync to raw text
-                    rawText = rulesList.joinToString("\n")
-                },
-                text = { Text("Soạn thảo toàn văn (Raw)", fontSize = 12.sp, fontWeight = FontWeight.Bold) }
-            )
-        }
-
-        Spacer(modifier = Modifier.height(14.dp))
-
-        if (selectedTab == 0) {
-            // MODE 0: Visual Cards Mode
-            // Add new rule bar
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                OutlinedTextField(
-                    value = newSingleRule,
-                    onValueChange = { newSingleRule = it },
-                    placeholder = { Text("Nhập quy tắc: ||domain.com^ hoặc @@||cho-phep.com^", color = AdGuardTextMuted, fontSize = 12.sp) },
-                    singleLine = true,
-                    modifier = Modifier.weight(1f),
-                    shape = RoundedCornerShape(10.dp),
-                    colors = OutlinedTextFieldDefaults.colors(
-                        focusedContainerColor = AdGuardDarkSurfaceVariant,
-                        unfocusedContainerColor = AdGuardDarkSurfaceVariant,
-                        focusedBorderColor = AdGuardGreenPrimary,
-                        unfocusedBorderColor = AdGuardDarkOutline,
-                        focusedTextColor = AdGuardTextPrimary,
-                        unfocusedTextColor = AdGuardTextPrimary
-                    )
-                )
-
-                Spacer(modifier = Modifier.width(8.dp))
-
-                Button(
-                    onClick = {
-                        val trimmed = newSingleRule.trim()
-                        if (trimmed.isNotEmpty()) {
-                            rulesList = listOf(trimmed) + rulesList
-                            rawText = rulesList.joinToString("\n")
-                            newSingleRule = ""
-                            onSaveAll(rulesList)
-                        }
-                    },
-                    colors = ButtonDefaults.buttonColors(containerColor = AdGuardGreenPrimary),
-                    shape = RoundedCornerShape(10.dp),
-                    modifier = Modifier.height(52.dp)
+                    border = BorderStroke(1.dp, AdGuardDarkOutline),
+                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
+                    modifier = Modifier.testTag("add_online_filter_btn"),
                 ) {
-                    Icon(Icons.Default.Add, contentDescription = null, tint = Color.Black)
+                    Icon(Icons.Default.Add, contentDescription = null, tint = AdGuardBlueDns, modifier = Modifier.size(16.dp))
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text("Thêm bộ lọc", fontSize = 12.sp, fontWeight = FontWeight.Bold, color = AdGuardTextPrimary)
+                }
+
+                OutlinedButton(
+                    onClick = { viewModel.onIntent(AdGuardIntent.RefreshAllSubscriptions) },
+                    enabled = state.loadingMessage == null,
+                    shape = RoundedCornerShape(10.dp),
+                    border = BorderStroke(1.dp, AdGuardDarkOutline),
+                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Sync,
+                        contentDescription = "Cập nhật",
+                        tint = AdGuardGreenLight,
+                        modifier = Modifier.size(16.dp),
+                    )
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text(
+                        text = if (state.loadingMessage == null) "Cập nhật" else "Đang tải…",
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = AdGuardGreenLight,
+                    )
                 }
             }
 
             Spacer(modifier = Modifier.height(12.dp))
 
-            // Search in custom rules
             OutlinedTextField(
-                value = searchQuery,
-                onValueChange = { searchQuery = it },
-                placeholder = { Text("Lọc tìm quy tắc...", color = AdGuardTextMuted, fontSize = 12.sp) },
-                leadingIcon = { Icon(Icons.Default.Search, contentDescription = null, tint = AdGuardTextMuted) },
+                value = query,
+                onValueChange = { viewModel.onIntent(AdGuardIntent.FilterSearchQueryChanged(it)) },
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .testTag("filter_search_field"),
                 singleLine = true,
-                modifier = Modifier.fillMaxWidth(),
+                placeholder = { Text("Tìm bộ lọc theo tên…", color = AdGuardTextMuted, fontSize = 13.sp) },
+                leadingIcon = { Icon(Icons.Default.Search, contentDescription = null, tint = AdGuardTextMuted, modifier = Modifier.size(18.dp)) },
                 shape = RoundedCornerShape(10.dp),
                 colors = OutlinedTextFieldDefaults.colors(
-                    focusedContainerColor = AdGuardDarkSurfaceVariant,
-                    unfocusedContainerColor = AdGuardDarkSurfaceVariant,
+                    focusedContainerColor = AdGuardDarkSurface,
+                    unfocusedContainerColor = AdGuardDarkSurface,
                     focusedBorderColor = AdGuardGreenPrimary,
                     unfocusedBorderColor = AdGuardDarkOutline,
                     focusedTextColor = AdGuardTextPrimary,
-                    unfocusedTextColor = AdGuardTextPrimary
-                )
+                    unfocusedTextColor = AdGuardTextPrimary,
+                ),
             )
 
-            Spacer(modifier = Modifier.height(10.dp))
-
-            val filteredRules = rulesList.filter {
-                searchQuery.isBlank() || it.contains(searchQuery, ignoreCase = true)
-            }
+            Spacer(modifier = Modifier.height(12.dp))
 
             LazyColumn(
-                modifier = Modifier
-                    .weight(1f)
-                    .fillMaxWidth(),
-                verticalArrangement = Arrangement.spacedBy(6.dp)
+                modifier = Modifier.fillMaxSize(),
+                verticalArrangement = Arrangement.spacedBy(10.dp),
             ) {
-                items(filteredRules) { rule ->
-                    val isWhitelist = rule.startsWith("@@")
-                    val isRegex = rule.startsWith("/") && rule.endsWith("/")
-                    val badgeColor = if (isWhitelist) AdGuardGreenLight else if (isRegex) AdGuardPurpleAI else AdGuardRedBlocked
-                    val badgeText = if (isWhitelist) "CHO PHÉP" else if (isRegex) "REGEX" else "CHẶN"
-
-                    Card(
-                        modifier = Modifier.fillMaxWidth(),
-                        shape = RoundedCornerShape(10.dp),
-                        colors = CardDefaults.cardColors(containerColor = AdGuardDarkSurfaceVariant)
-                    ) {
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(horizontal = 12.dp, vertical = 10.dp),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Row(
-                                modifier = Modifier.weight(1f),
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Box(
-                                    modifier = Modifier
-                                        .clip(RoundedCornerShape(6.dp))
-                                        .background(badgeColor.copy(alpha = 0.15f))
-                                        .padding(horizontal = 6.dp, vertical = 2.dp)
-                                ) {
-                                    Text(badgeText, fontSize = 9.sp, fontWeight = FontWeight.Bold, color = badgeColor)
+                for (group in FilterGroup.entries) {
+                    val items = visibleCatalog.filter { it.groupId == group.id }
+                    if (items.isEmpty()) continue
+                    item(key = "group_${group.id}") {
+                        FilterGroupCard(
+                            group = group,
+                            lists = items,
+                            expanded = query.isNotBlank() || group.id in expandedGroups,
+                            onToggleExpand = {
+                                expandedGroups = if (group.id in expandedGroups) {
+                                    expandedGroups - group.id
+                                } else {
+                                    expandedGroups + group.id
                                 }
-                                Spacer(modifier = Modifier.width(10.dp))
-                                Text(
-                                    text = rule,
-                                    fontSize = 13.sp,
-                                    fontFamily = FontFamily.Monospace,
-                                    color = AdGuardTextPrimary
-                                )
-                            }
-
-                            IconButton(
-                                onClick = {
-                                    rulesList = rulesList.filter { it != rule }
-                                    rawText = rulesList.joinToString("\n")
-                                    onSaveAll(rulesList)
-                                },
-                                modifier = Modifier.size(28.dp)
-                            ) {
-                                Icon(Icons.Default.Delete, contentDescription = "Xóa", tint = AdGuardTextMuted, modifier = Modifier.size(16.dp))
-                            }
-                        }
+                            },
+                            onToggleList = { viewModel.onIntent(AdGuardIntent.ToggleFilterList(it.id, !it.isEnabled)) },
+                            onOpenList = { viewModel.onIntent(AdGuardIntent.InspectFilter(it.id)) },
+                        )
                     }
                 }
-            }
-        } else {
-            // MODE 1: Raw Text Multi-line Editor Mode
-            // Quick syntax chips
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(6.dp)
-            ) {
-                QuickSyntaxChip("+ ||domain^") { rawText += (if (rawText.isNotEmpty() && !rawText.endsWith("\n")) "\n" else "") + "||example.com^" }
-                QuickSyntaxChip("+ @@||whitelist^") { rawText += (if (rawText.isNotEmpty() && !rawText.endsWith("\n")) "\n" else "") + "@@||safe.com^" }
-                QuickSyntaxChip("+ /regex/") { rawText += (if (rawText.isNotEmpty() && !rawText.endsWith("\n")) "\n" else "") + "/.*[-_]telemetry\\..*/" }
-            }
 
-            Spacer(modifier = Modifier.height(10.dp))
-
-            OutlinedTextField(
-                value = rawText,
-                onValueChange = { rawText = it },
-                modifier = Modifier
-                    .weight(1f)
-                    .fillMaxWidth(),
-                shape = RoundedCornerShape(10.dp),
-                textStyle = androidx.compose.ui.text.TextStyle(
-                    fontFamily = FontFamily.Monospace,
-                    fontSize = 12.sp,
-                    color = AdGuardTextPrimary
-                ),
-                colors = OutlinedTextFieldDefaults.colors(
-                    focusedContainerColor = AdGuardDarkSurfaceVariant,
-                    unfocusedContainerColor = AdGuardDarkSurfaceVariant,
-                    focusedBorderColor = AdGuardGreenPrimary,
-                    unfocusedBorderColor = AdGuardDarkOutline
-                )
-            )
-
-            Spacer(modifier = Modifier.height(10.dp))
-
-            // Action row: Format & Clean + Save All
-            val linesCount = rawText.lines().map { it.trim() }.filter { it.isNotEmpty() && !it.startsWith("!") }.size
-
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Button(
-                    onClick = {
-                        val cleaned = rawText.lines()
-                            .map { it.trim() }
-                            .filter { it.isNotEmpty() }
-                            .distinct()
-                        rawText = cleaned.joinToString("\n")
-                    },
-                    colors = ButtonDefaults.buttonColors(containerColor = AdGuardDarkSurfaceVariant),
-                    shape = RoundedCornerShape(8.dp)
-                ) {
-                    Icon(Icons.Default.AutoFixHigh, contentDescription = null, tint = AdGuardTextSecondary, modifier = Modifier.size(14.dp))
-                    Spacer(modifier = Modifier.width(4.dp))
-                    Text("Dọn trùng lặp", fontSize = 11.sp, color = AdGuardTextSecondary)
+                item(key = "custom_filters") {
+                    CustomFiltersCard(
+                        lists = visibleCustom,
+                        onAdd = { viewModel.onIntent(AdGuardIntent.ShowAddFilterDialog(true)) },
+                        onToggleList = { viewModel.onIntent(AdGuardIntent.ToggleFilterList(it.id, !it.isEnabled)) },
+                        onOpenList = { viewModel.onIntent(AdGuardIntent.InspectFilter(it.id)) },
+                    )
                 }
 
-                Button(
-                    onClick = {
-                        val newRules = rawText.lines().map { it.trim() }.filter { it.isNotEmpty() && !it.startsWith("!") }
-                        rulesList = newRules
-                        onSaveAll(newRules)
-                    },
-                    colors = ButtonDefaults.buttonColors(containerColor = AdGuardGreenPrimary),
-                    shape = RoundedCornerShape(8.dp)
-                ) {
-                    Icon(Icons.Default.Check, contentDescription = null, tint = Color.Black, modifier = Modifier.size(16.dp))
-                    Spacer(modifier = Modifier.width(6.dp))
-                    Text("Lưu $linesCount quy tắc", color = Color.Black, fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                item(key = "extensions") {
+                    ExtensionsSection(
+                        scripts = state.userscripts,
+                        masterEnabled = state.scriptsMasterEnabled,
+                        onToggleMaster = { viewModel.onIntent(AdGuardIntent.ToggleScriptsMaster(it)) },
+                        onToggleScript = { script, enabled ->
+                            viewModel.onIntent(AdGuardIntent.ToggleScript(script.id, enabled))
+                        },
+                        onOpenScript = { viewModel.onIntent(AdGuardIntent.InspectScript(it.id)) },
+                        onAddScript = { viewModel.onIntent(AdGuardIntent.ShowAddScriptDialog(true)) },
+                    )
                 }
+
+                item(key = "user_rules") {
+                    UserRulesCard(
+                        count = userRulesCount,
+                        onOpen = { viewModel.onIntent(AdGuardIntent.ShowCustomRuleEditor(true)) },
+                    )
+                }
+
+                item { Spacer(modifier = Modifier.height(72.dp)) }
             }
         }
+    }
 
-        Spacer(modifier = Modifier.height(16.dp))
+    // ------------------------------------------------------------- dialogs
+
+    if (state.showAddFilterDialog) {
+        AddFilterDialog(
+            onDismiss = { viewModel.onIntent(AdGuardIntent.ShowAddFilterDialog(false)) },
+            onAdd = { name, url -> viewModel.onIntent(AdGuardIntent.AddCustomFilter(name, url)) },
+            onPickFile = {
+                viewModel.onIntent(AdGuardIntent.ShowAddFilterDialog(false))
+                filePicker.launch(arrayOf("text/plain", "text/*", "*/*"))
+            },
+        )
+    }
+
+    if (state.showAddScriptDialog) {
+        AddScriptDialog(
+            onDismiss = { viewModel.onIntent(AdGuardIntent.ShowAddScriptDialog(false)) },
+            onAdd = { name, url -> viewModel.onIntent(AdGuardIntent.AddScript(name, url)) },
+        )
+    }
+
+    if (state.showCustomRuleEditor) {
+        val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+        val currentRules = state.filterLists.firstOrNull { it.isCustom }?.customRules ?: emptyList()
+        ModalBottomSheet(
+            onDismissRequest = { viewModel.onIntent(AdGuardIntent.ShowCustomRuleEditor(false)) },
+            sheetState = sheetState,
+            containerColor = AdGuardDarkSurface,
+            contentColor = AdGuardTextPrimary,
+        ) {
+            FriendlyCustomRuleEditorSheet(
+                initialRules = currentRules,
+                onSaveAll = { newRules -> viewModel.onIntent(AdGuardIntent.UpdateAllCustomRules(newRules)) },
+                onClose = { viewModel.onIntent(AdGuardIntent.ShowCustomRuleEditor(false)) },
+            )
+        }
+    }
+
+    state.inspectedFilterId?.let { id ->
+        val list = state.filterLists.firstOrNull { it.id == id }
+        if (list != null) {
+            val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+            ModalBottomSheet(
+                onDismissRequest = { viewModel.onIntent(AdGuardIntent.InspectFilter(null)) },
+                sheetState = sheetState,
+                containerColor = AdGuardDarkSurface,
+                contentColor = AdGuardTextPrimary,
+            ) {
+                FilterDetailSheet(
+                    list = list,
+                    onToggle = { viewModel.onIntent(AdGuardIntent.ToggleFilterList(list.id, !list.isEnabled)) },
+                    onRefresh = { viewModel.onIntent(AdGuardIntent.RefreshSubscription(list.id)) },
+                    onDelete = {
+                        viewModel.onIntent(AdGuardIntent.DeleteFilterList(list.id))
+                        viewModel.onIntent(AdGuardIntent.InspectFilter(null))
+                    },
+                    onOpenHomepage = { url ->
+                        runCatching {
+                            context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)))
+                        }
+                    },
+                )
+            }
+        }
+    }
+
+    state.inspectedScriptId?.let { id ->
+        val script = state.userscripts.firstOrNull { it.id == id }
+        if (script != null) {
+            val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+            ModalBottomSheet(
+                onDismissRequest = { viewModel.onIntent(AdGuardIntent.InspectScript(null)) },
+                sheetState = sheetState,
+                containerColor = AdGuardDarkSurface,
+                contentColor = AdGuardTextPrimary,
+            ) {
+                ScriptDetailSheet(
+                    script = script,
+                    onToggle = { viewModel.onIntent(AdGuardIntent.ToggleScript(script.id, !script.isEnabled)) },
+                    onRefresh = { viewModel.onIntent(AdGuardIntent.RefreshScript(script.id)) },
+                    onDelete = {
+                        viewModel.onIntent(AdGuardIntent.DeleteScript(script.id))
+                        viewModel.onIntent(AdGuardIntent.InspectScript(null))
+                    },
+                )
+            }
+        }
+    }
+}
+
+// ------------------------------------------------------------- catalogue
+
+private fun groupIcon(group: FilterGroup): ImageVector = when (group) {
+    FilterGroup.ADS -> Icons.Default.Block
+    FilterGroup.PRIVACY -> Icons.Default.Lock
+    FilterGroup.SOCIAL -> Icons.Default.Share
+    FilterGroup.ANNOYANCES -> Icons.Default.NotificationsOff
+    FilterGroup.SECURITY -> Icons.Default.Shield
+    FilterGroup.OTHER -> Icons.Default.Science
+    FilterGroup.LANGUAGE -> Icons.Default.Language
+}
+
+@Composable
+private fun FilterGroupCard(
+    group: FilterGroup,
+    lists: List<FilterList>,
+    expanded: Boolean,
+    onToggleExpand: () -> Unit,
+    onToggleList: (FilterList) -> Unit,
+    onOpenList: (FilterList) -> Unit,
+) {
+    val enabled = lists.count { it.isEnabled }
+
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .testTag("filter_group_${group.id}"),
+        shape = RoundedCornerShape(14.dp),
+        colors = CardDefaults.cardColors(containerColor = AdGuardDarkSurface),
+        border = BorderStroke(1.dp, AdGuardDarkOutline),
+    ) {
+        Column {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable { onToggleExpand() }
+                    .padding(14.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Box(
+                    modifier = Modifier
+                        .size(38.dp)
+                        .clip(RoundedCornerShape(10.dp))
+                        .background(AdGuardGreenPrimary.copy(alpha = 0.12f)),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Icon(groupIcon(group), contentDescription = null, tint = AdGuardGreenPrimary, modifier = Modifier.size(20.dp))
+                }
+                Spacer(modifier = Modifier.width(12.dp))
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(group.title, fontSize = 13.sp, fontWeight = FontWeight.Bold, color = AdGuardTextPrimary)
+                    Text(group.subtitle, fontSize = 10.sp, color = AdGuardTextMuted)
+                }
+                Text(
+                    text = "$enabled/${lists.size}",
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    color = if (enabled > 0) AdGuardGreenPrimary else AdGuardTextMuted,
+                )
+                Spacer(modifier = Modifier.width(4.dp))
+                Icon(
+                    imageVector = if (expanded) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
+                    contentDescription = null,
+                    tint = AdGuardTextMuted,
+                    modifier = Modifier.size(20.dp),
+                )
+            }
+
+            if (expanded) {
+                for (list in lists) {
+                    FilterRow(
+                        list = list,
+                        onToggle = { onToggleList(list) },
+                        onClick = { onOpenList(list) },
+                    )
+                }
+                Spacer(modifier = Modifier.height(4.dp))
+            }
+        }
     }
 }
 
 @Composable
-fun QuickSyntaxChip(label: String, onClick: () -> Unit) {
-    Box(
+private fun FilterRow(
+    list: FilterList,
+    onToggle: () -> Unit,
+    onClick: () -> Unit,
+) {
+    Row(
         modifier = Modifier
-            .clip(RoundedCornerShape(6.dp))
-            .background(AdGuardDarkSurfaceVariant)
+            .fillMaxWidth()
             .clickable { onClick() }
-            .padding(horizontal = 8.dp, vertical = 4.dp)
+            .padding(start = 14.dp, end = 8.dp, top = 6.dp, bottom = 6.dp),
+        verticalAlignment = Alignment.CenterVertically,
     ) {
-        Text(text = label, fontSize = 11.sp, fontFamily = FontFamily.Monospace, color = AdGuardGreenLight, fontWeight = FontWeight.SemiBold)
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                text = list.name,
+                fontSize = 13.sp,
+                fontWeight = FontWeight.SemiBold,
+                color = AdGuardTextPrimary,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            Text(
+                text = "${"%,d".format(list.ruleCount)} quy tắc • ${list.lastUpdatedText}",
+                fontSize = 10.sp,
+                color = AdGuardTextMuted,
+            )
+        }
+        Switch(
+            checked = list.isEnabled,
+            onCheckedChange = { onToggle() },
+            colors = SwitchDefaults.colors(checkedTrackColor = AdGuardGreenPrimary),
+        )
+    }
+}
+
+// --------------------------------------------------------- custom + rules
+
+@Composable
+private fun CustomFiltersCard(
+    lists: List<FilterList>,
+    onAdd: () -> Unit,
+    onToggleList: (FilterList) -> Unit,
+    onOpenList: (FilterList) -> Unit,
+) {
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .testTag("custom_filters_section"),
+        shape = RoundedCornerShape(14.dp),
+        colors = CardDefaults.cardColors(containerColor = AdGuardDarkSurface),
+        border = BorderStroke(1.dp, AdGuardDarkOutline),
+    ) {
+        Column {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(14.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Box(
+                    modifier = Modifier
+                        .size(38.dp)
+                        .clip(RoundedCornerShape(10.dp))
+                        .background(AdGuardBlueDns.copy(alpha = 0.12f)),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Icon(Icons.Default.Public, contentDescription = null, tint = AdGuardBlueDns, modifier = Modifier.size(20.dp))
+                }
+                Spacer(modifier = Modifier.width(12.dp))
+                Column(modifier = Modifier.weight(1f)) {
+                    Text("Bộ lọc tùy chỉnh", fontSize = 13.sp, fontWeight = FontWeight.Bold, color = AdGuardTextPrimary)
+                    Text(
+                        "Danh sách bạn tự thêm từ URL hoặc tệp trong máy",
+                        fontSize = 10.sp,
+                        color = AdGuardTextMuted,
+                    )
+                }
+            }
+
+            if (lists.isEmpty()) {
+                Text(
+                    text = "Chưa có bộ lọc tùy chỉnh nào.",
+                    fontSize = 11.sp,
+                    color = AdGuardTextMuted,
+                    modifier = Modifier.padding(horizontal = 14.dp),
+                )
+            } else {
+                for (list in lists) {
+                    FilterRow(
+                        list = list,
+                        onToggle = { onToggleList(list) },
+                        onClick = { onOpenList(list) },
+                    )
+                }
+            }
+
+            TextButton(
+                onClick = onAdd,
+                modifier = Modifier.padding(start = 6.dp, bottom = 4.dp),
+            ) {
+                Icon(Icons.Default.Add, contentDescription = null, tint = AdGuardBlueDns, modifier = Modifier.size(16.dp))
+                Spacer(modifier = Modifier.width(6.dp))
+                Text("Thêm bộ lọc", fontSize = 12.sp, fontWeight = FontWeight.Bold, color = AdGuardBlueDns)
+            }
+        }
+    }
+}
+
+@Composable
+private fun UserRulesCard(
+    count: Int,
+    onOpen: () -> Unit,
+) {
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable { onOpen() }
+            .testTag("open_custom_rules_editor_fab"),
+        shape = RoundedCornerShape(14.dp),
+        colors = CardDefaults.cardColors(containerColor = AdGuardDarkSurface),
+        border = BorderStroke(1.dp, AdGuardDarkOutline),
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(14.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Box(
+                modifier = Modifier
+                    .size(38.dp)
+                    .clip(RoundedCornerShape(10.dp))
+                    .background(AdGuardGreenPrimary.copy(alpha = 0.12f)),
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(Icons.Default.Edit, contentDescription = null, tint = AdGuardGreenPrimary, modifier = Modifier.size(20.dp))
+            }
+            Spacer(modifier = Modifier.width(12.dp))
+            Column(modifier = Modifier.weight(1f)) {
+                Text("Quy tắc của bạn", fontSize = 13.sp, fontWeight = FontWeight.Bold, color = AdGuardTextPrimary)
+                Text("$count quy tắc chặn / cho phép tự viết", fontSize = 10.sp, color = AdGuardTextMuted)
+            }
+            Icon(Icons.Default.ChevronRight, contentDescription = null, tint = AdGuardTextMuted, modifier = Modifier.size(20.dp))
+        }
+    }
+}
+
+// ---------------------------------------------------------------- dialogs
+
+@Composable
+private fun AddFilterDialog(
+    onDismiss: () -> Unit,
+    onAdd: (String, String) -> Unit,
+    onPickFile: () -> Unit,
+) {
+    var name by remember { mutableStateOf("") }
+    var url by remember { mutableStateOf("") }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(Icons.Default.Public, contentDescription = null, tint = AdGuardBlueDns, modifier = Modifier.size(22.dp))
+                Spacer(modifier = Modifier.width(8.dp))
+                Text("Thêm bộ lọc tùy chỉnh", fontSize = 17.sp, fontWeight = FontWeight.Bold, color = AdGuardTextPrimary)
+            }
+        },
+        text = {
+            Column {
+                Text(
+                    text = "Dán đường dẫn danh sách lọc (AdGuard, EasyList, hosts…) hoặc chọn tệp có sẵn trong máy.",
+                    fontSize = 12.sp,
+                    color = AdGuardTextSecondary,
+                )
+
+                Spacer(modifier = Modifier.height(12.dp))
+
+                Text("Gợi ý phổ biến (chạm để điền nhanh):", fontSize = 11.sp, color = AdGuardTextMuted)
+                Spacer(modifier = Modifier.height(6.dp))
+                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    QuickSyntaxChip("ABPVN") {
+                        name = "ABPVN List"
+                        url = "https://raw.githubusercontent.com/abpvn/abpvn/master/filter/abpvn_adguard.txt"
+                    }
+                    QuickSyntaxChip("OISD Big") {
+                        name = "OISD Big"
+                        url = "https://big.oisd.nl/dnsmasq2"
+                    }
+                    QuickSyntaxChip("EasyList") {
+                        name = "EasyList"
+                        url = "https://easylist.to/easylist/easylist.txt"
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(12.dp))
+
+                OutlinedTextField(
+                    value = name,
+                    onValueChange = { name = it },
+                    label = { Text("Tên (không bắt buộc)", fontSize = 12.sp) },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(10.dp),
+                    colors = OutlinedTextFieldDefaults.colors(
+                        focusedBorderColor = AdGuardGreenPrimary,
+                        unfocusedBorderColor = AdGuardDarkOutline,
+                        focusedTextColor = AdGuardTextPrimary,
+                        unfocusedTextColor = AdGuardTextPrimary,
+                    ),
+                )
+
+                Spacer(modifier = Modifier.height(8.dp))
+
+                OutlinedTextField(
+                    value = url,
+                    onValueChange = { url = it },
+                    label = { Text("Đường dẫn (URL)", fontSize = 12.sp) },
+                    placeholder = { Text("https://…", fontSize = 12.sp, color = AdGuardTextMuted) },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(10.dp),
+                    colors = OutlinedTextFieldDefaults.colors(
+                        focusedBorderColor = AdGuardGreenPrimary,
+                        unfocusedBorderColor = AdGuardDarkOutline,
+                        focusedTextColor = AdGuardTextPrimary,
+                        unfocusedTextColor = AdGuardTextPrimary,
+                    ),
+                )
+
+                Spacer(modifier = Modifier.height(4.dp))
+
+                TextButton(onClick = onPickFile) {
+                    Icon(Icons.Default.UploadFile, contentDescription = null, tint = AdGuardGreenLight, modifier = Modifier.size(16.dp))
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text("Chọn tệp từ máy", fontSize = 12.sp, color = AdGuardGreenLight)
+                }
+            }
+        },
+        confirmButton = {
+            Button(
+                onClick = { if (url.isNotBlank()) onAdd(name, url) },
+                enabled = url.isNotBlank(),
+                colors = ButtonDefaults.buttonColors(containerColor = AdGuardBlueDns),
+                shape = RoundedCornerShape(8.dp),
+            ) {
+                Text("Thêm", color = Color.Black, fontWeight = FontWeight.Bold)
+            }
+        },
+        dismissButton = {
+            OutlinedButton(onClick = onDismiss, shape = RoundedCornerShape(8.dp)) {
+                Text("Hủy", color = AdGuardTextSecondary)
+            }
+        },
+    )
+}
+
+/** Bottom sheet with everything we know about one filter list. */
+@Composable
+fun FilterDetailSheet(
+    list: FilterList,
+    onToggle: () -> Unit,
+    onRefresh: () -> Unit,
+    onDelete: () -> Unit,
+    onOpenHomepage: (String) -> Unit,
+) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 20.dp, vertical = 12.dp),
+    ) {
+        Text(list.name, fontSize = 16.sp, fontWeight = FontWeight.Black, color = AdGuardTextPrimary)
+        if (list.description.isNotBlank()) {
+            Spacer(modifier = Modifier.height(4.dp))
+            Text(list.description, fontSize = 12.sp, color = AdGuardTextSecondary)
+        }
+
+        Spacer(modifier = Modifier.height(14.dp))
+
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text("Bật bộ lọc này", fontSize = 13.sp, fontWeight = FontWeight.Bold, color = AdGuardTextPrimary)
+                Text(
+                    text = if (list.isEnabled) "Đang lọc" else "Đang tắt",
+                    fontSize = 11.sp,
+                    color = AdGuardTextMuted,
+                )
+            }
+            Switch(
+                checked = list.isEnabled,
+                onCheckedChange = { onToggle() },
+                colors = SwitchDefaults.colors(checkedTrackColor = AdGuardGreenPrimary),
+            )
+        }
+
+        Spacer(modifier = Modifier.height(12.dp))
+
+        InfoRow("Nhóm", FilterGroup.fromId(list.groupId)?.title ?: "Tùy chỉnh")
+        InfoRow("Định dạng", if (list.format.equals("hosts", ignoreCase = true)) "Hosts" else "AdGuard / EasyList")
+        InfoRow("Quy tắc", "%,d".format(list.ruleCount))
+        InfoRow("Cập nhật", list.lastUpdatedText)
+        if (list.version.isNotBlank()) {
+            InfoRow("Phiên bản", list.version.take(24))
+        }
+
+        if (!list.subscriptionUrl.isNullOrBlank()) {
+            Spacer(modifier = Modifier.height(6.dp))
+            Text(
+                text = list.subscriptionUrl,
+                fontSize = 9.sp,
+                fontFamily = FontFamily.Monospace,
+                color = AdGuardTextMuted,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
+
+        Spacer(modifier = Modifier.height(16.dp))
+
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            if (!list.subscriptionUrl.isNullOrBlank()) {
+                OutlinedButton(onClick = onRefresh, shape = RoundedCornerShape(10.dp)) {
+                    Icon(Icons.Default.Sync, contentDescription = null, tint = AdGuardGreenLight, modifier = Modifier.size(16.dp))
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text("Cập nhật", fontSize = 12.sp, color = AdGuardGreenLight)
+                }
+            }
+            if (list.isUserAdded) {
+                OutlinedButton(onClick = onDelete, shape = RoundedCornerShape(10.dp)) {
+                    Icon(Icons.Default.Delete, contentDescription = null, tint = AdGuardRedBlocked, modifier = Modifier.size(16.dp))
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text("Xóa", fontSize = 12.sp, color = AdGuardRedBlocked)
+                }
+            }
+            if (!list.homepage.isNullOrBlank()) {
+                OutlinedButton(onClick = { onOpenHomepage(list.homepage) }, shape = RoundedCornerShape(10.dp)) {
+                    Icon(Icons.Default.Public, contentDescription = null, tint = AdGuardBlueDns, modifier = Modifier.size(16.dp))
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text("Trang chủ", fontSize = 12.sp, color = AdGuardBlueDns)
+                }
+            }
+        }
+
+        Spacer(modifier = Modifier.height(20.dp))
+    }
+}
+
+@Composable
+private fun InfoRow(label: String, value: String) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 3.dp),
+    ) {
+        Text(label, fontSize = 12.sp, color = AdGuardTextMuted, modifier = Modifier.width(110.dp))
+        Text(value, fontSize = 12.sp, color = AdGuardTextPrimary, modifier = Modifier.weight(1f))
     }
 }

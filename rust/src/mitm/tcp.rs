@@ -40,6 +40,13 @@ pub struct Flow {
     pub client_seq: u32,
     /// Client bytes received that still need an ACK from us.
     pub acked_seq: u32,
+    /// Highest ACK the client has sent for our data (in `my_seq` space).
+    /// Everything we send must stay within the window below this point.
+    pub client_ack: u32,
+    /// Receive window the client advertised last; 0 means "wait for an update".
+    pub client_window: u32,
+    /// Window scale factor the client's SYN negotiated (RFC 7323).
+    pub client_window_scale: u8,
     /// Sequence phía server (sau khi connect).
     pub peer_seq: u32,
     pub state: FlowState,
@@ -64,6 +71,12 @@ impl Flow {
             my_seq,
             client_seq: client_seq.wrapping_add(1),
             acked_seq: client_seq.wrapping_add(1),
+            // The SYN-ACK is one unacknowledged byte until the client's first
+            // packet acknowledges it; until a real window arrives, allow one
+            // window-sized flight so the handshake answers can go out.
+            client_ack: my_seq,
+            client_window: 65_535,
+            client_window_scale: 0,
             peer_seq: 0,
             state: FlowState::SynSeen,
             up_bytes: 0,
