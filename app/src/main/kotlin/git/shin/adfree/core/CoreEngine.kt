@@ -20,8 +20,8 @@ import java.security.cert.X509Certificate
  * Kotlin-side wrapper around the uniffi bindings (`adfree.kt`).
  *
  * All heavy lifting lives in native code: this class holds the TUN fd, the
- * already-`protect()`ed UDP sockets, the CA files on disk, and the few things
- * that need an Android context (logcat, filter files).
+ * already-`protect()`ed UDP sockets, and the few things that need an Android
+ * context (logcat, the certificate's trip to Downloads).
  */
 class CoreEngine {
 
@@ -29,14 +29,6 @@ class CoreEngine {
 
     /** UDP sockets used to forward DNS, `VpnService.protect()`ed so they do not loop. */
     private val upstreamSockets = mutableListOf<java.net.DatagramSocket>()
-
-    /** Shared HTTP client: a fresh one per download would waste a thread pool each time. */
-    private val httpClient by lazy {
-        okhttp3.OkHttpClient.Builder()
-            .connectTimeout(15, java.util.concurrent.TimeUnit.SECONDS)
-            .readTimeout(30, java.util.concurrent.TimeUnit.SECONDS)
-            .build()
-    }
 
     val version: String
         get() = runCatching { git.shin.adfree.core.coreVersion() }.getOrDefault("unknown")
@@ -154,21 +146,6 @@ class CoreEngine {
             .onFailure { Log.w(tag, "setLists failed", it) }
     }
 
-    /**
-     * Count the rule lines in a filter file (used by the UI when the file
-     * already exists on disk, so no re-download is needed).
-     */
-    fun countRules(file: File): Int = runCatching {
-        var count = 0
-        file.forEachLine { line ->
-            val t = line.trim()
-            if (t.isNotEmpty() && !t.startsWith("!") && !t.startsWith("[") && !t.startsWith("#")) {
-                count++
-            }
-        }
-        count
-    }.getOrDefault(0)
-
     /** Scan one host (Security Lab screen). */
     fun checkHost(host: String): HostVerdictBinding =
         runCatching { git.shin.adfree.core.coreCheckHost(host) }.getOrElse {
@@ -181,119 +158,77 @@ class CoreEngine {
         runCatching { git.shin.adfree.core.coreSetDohRanges(ranges) }
     }
 
-    /** Download one subscription to `filesDir/filters/<id>.txt`. */
+    /**
+     * Downloads one subscription into the store (`filters/<id>.txt`).
+     *
+     * The core owns the network call, the temp-file write, the rename and the
+     * header parsing; this only turns the outcome into UI wording. Blocking,
+     * so call it off the main thread.
+     */
     fun downloadList(list: git.shin.adfree.model.FilterList): DownloadResult {
         val url = list.subscriptionUrl ?: return DownloadResult(false, "Danh sách này không có URL")
-        val fetched = fetchUrl(url)
-        if (!fetched.ok || fetched.body == null) return DownloadResult(false, fetched.message)
-        val body = fetched.body
-        val file = listFileFor(list)
-        return try {
-            file.writeText(body)
-            val meta = parseListMeta(body)
-            val count = body.lines().count { line ->
-                val t = line.trim()
-                t.isNotEmpty() && !t.startsWith("!") && !t.startsWith("[") && !t.startsWith("#")
-            }
-            DownloadResult(
-                ok = true,
-                message = "Đã tải ${list.name} ($count quy tắc)",
-                lineCount = count.toLong(),
-                version = meta.version,
-                updatedText = meta.updatedText,
-                detectedFormat = meta.format,
-            )
-        } catch (e: Exception) {
-            DownloadResult(false, "Lỗi ghi tệp: ${e.javaClass.simpleName}")
-        }
+        val outcome = runCatching { git.shin.adfree.core.coreFilterFetch(list.id, url) }
+            .getOrElse { return DownloadResult(false, "Lỗi: ${it.javaClass.simpleName}") }
+        if (!outcome.ok) return DownloadResult(false, "Không tải được: ${outcome.message}")
+        return DownloadResult(
+            ok = true,
+            message = "Đã tải ${list.name} (${outcome.lineCount} quy tắc)",
+            lineCount = outcome.lineCount,
+            version = outcome.version,
+            updatedText = outcome.updatedText,
+            detectedFormat = outcome.detectedFormat,
+        )
     }
 
-    /** Plain GET with the app's User-Agent; filter lists and userscripts share it. */
-    fun fetchUrl(url: String): FetchResult {
-        return try {
-            val request = okhttp3.Request.Builder()
-                .url(url)
-                .header("User-Agent", USER_AGENT)
-                .build()
-            httpClient.newCall(request).execute().use { response ->
-                if (!response.isSuccessful) return FetchResult(false, "HTTP ${response.code}")
-                val body = response.body?.string().orEmpty()
-                if (body.isBlank()) return FetchResult(false, "Nội dung rỗng")
-                FetchResult(ok = true, message = "OK", body = body)
-            }
-        } catch (e: Exception) {
-            FetchResult(false, "Lỗi: ${e.javaClass.simpleName}")
-        }
-    }
+    /** Saves a list body the user imported from a file; same atomic write. */
+    fun saveListText(id: String, text: String): git.shin.adfree.core.AssetState? =
+        runCatching { git.shin.adfree.core.coreFilterSave(id, text) }.getOrNull()
 
     /**
-     * Header metadata AdGuard-style comments carry, plus a guess at the syntax.
-     * Hosts files look like `0.0.0.0 domain` lines instead of `||domain^`, and
-     * the two formats are parsed differently, so this matters.
+     * State of a downloaded list, or null when it is not on disk.
+     *
+     * `withMeta = false` skips reading the body: pass it when only the path or
+     * existence matters (pushing the engine's list, toggles).
      */
-    fun parseListMeta(text: String): ListMeta {
-        var version: String? = null
-        var updated: String? = null
-        var hostsLike = 0
-        var adblockLike = 0
-        var inspected = 0
-        for (line in text.lineSequence()) {
-            if (inspected++ > 400) break
-            val t = line.trim()
-            when {
-                t.startsWith("! Version:") -> version = t.substringAfter(':').trim().take(40)
-                t.startsWith("! TimeUpdated:") -> updated = formatIsoDate(t.substringAfter(':')) ?: updated
-                t.length < 3 || t.startsWith("!") || t.startsWith("#") || t.startsWith("[") -> {}
-                HOSTS_LINE.containsMatchIn(t) -> hostsLike++
-                else -> adblockLike++
-            }
-        }
-        val format = when {
-            hostsLike == 0 && adblockLike == 0 -> null
-            hostsLike > adblockLike -> "hosts"
-            else -> "standard"
-        }
-        return ListMeta(version, updated, format)
-    }
+    fun filterState(id: String, withMeta: Boolean = true): git.shin.adfree.core.AssetState? =
+        runCatching { git.shin.adfree.core.coreFilterState(id, withMeta) }.getOrNull()
 
-    /** Header metadata of a list already on disk (only the first 60 lines are read). */
-    fun readListMeta(file: File): ListMeta {
-        val head = runCatching {
-            file.bufferedReader().use { reader ->
-                val sb = StringBuilder()
-                var lines = 0
-                while (lines < 60) {
-                    val line = reader.readLine() ?: break
-                    sb.append(line).append('\n')
-                    lines++
-                }
-                sb.toString()
+    /** Deletes a list body. False when there was nothing to delete. */
+    fun filterRemove(id: String): Boolean =
+        runCatching { git.shin.adfree.core.coreFilterRemove(id) }.getOrDefault(false)
+
+    /** Downloads one userscript body into the store (`scripts/<id>.js`). */
+    fun scriptFetch(id: String, url: String): git.shin.adfree.core.DownloadOutcome =
+        runCatching { git.shin.adfree.core.coreScriptFetch(id, url) }
+            .getOrElse {
+                git.shin.adfree.core.DownloadOutcome(
+                    ok = false,
+                    message = "Lỗi: ${it.javaClass.simpleName}",
+                    lineCount = 0,
+                    version = null,
+                    updatedText = null,
+                    detectedFormat = null,
+                    sizeBytes = 0,
+                    modifiedMs = 0,
+                )
             }
-        }.getOrDefault("")
-        return parseListMeta(head)
-    }
+
+    /** State of a userscript body, or null when it is not on disk. */
+    fun scriptState(id: String): git.shin.adfree.core.AssetState? =
+        runCatching { git.shin.adfree.core.coreScriptState(id) }.getOrNull()
+
+    /** Deletes a userscript body. False when there was nothing to delete. */
+    fun scriptRemove(id: String): Boolean =
+        runCatching { git.shin.adfree.core.coreScriptRemove(id) }.getOrDefault(false)
+
+    /** The userscript body, for the core's script engine. */
+    fun scriptText(id: String): String? =
+        runCatching { git.shin.adfree.core.coreScriptText(id) }.getOrNull()
 
     /** "15/05/2025 23:04" from a file timestamp, for the list rows. */
-    fun fileDateText(file: File): String =
+    fun dateText(epochMs: Long): String =
         java.text.SimpleDateFormat("dd/MM/yyyy HH:mm", java.util.Locale.getDefault())
-            .format(java.util.Date(file.lastModified()))
-
-    private fun formatIsoDate(raw: String): String? = runCatching {
-        val cleaned = raw.trim().take(19)
-        val date = java.text.SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss", java.util.Locale.US).parse(cleaned)
-        java.text.SimpleDateFormat("dd/MM/yyyy HH:mm", java.util.Locale.US).format(date!!)
-    }.getOrNull()
-
-    fun listFileFor(list: git.shin.adfree.model.FilterList): File {
-        val dir = File(filesRoot(), "filters").apply { mkdirs() }
-        return File(dir, "${sanitizeId(list.id)}.txt")
-    }
-
-    /** Where a userscript body lives: `filesDir/scripts/<id>.js`. */
-    fun scriptFileFor(id: String): File {
-        val dir = File(filesRoot(), "scripts").apply { mkdirs() }
-        return File(dir, "${sanitizeId(id)}.js")
-    }
+            .format(java.util.Date(epochMs))
 
     /**
      * Installs the callback the core uses to `protect()` the TCP sockets it
@@ -313,43 +248,16 @@ class CoreEngine {
 
     // ------------------------------------------------------------------- MITM
 
-    /** Directory that holds the CA and filter files. */
-    private fun coreFilesDir(): File = File(filesRoot(), "core").apply { mkdirs() }
-
-    private fun caCertFile(): File = File(coreFilesDir(), "ca.pem")
-    private fun caKeyFile(): File = File(coreFilesDir(), "ca-key.pem")
-
     /**
-     * Returns the CA certificate PEM, creating the CA if needed.
-     *
-     * Both halves are persisted so the user installs the certificate once: the
-     * key is mode 600 and only readable by this app.
+     * Returns the CA certificate PEM, minting and persisting the pair in the
+     * store on first use. The private half stays under the core's directory,
+     * mode 600, and never leaves the device.
      */
-    fun ensureCa(): String {
-        val certFile = caCertFile()
-        val keyFile = caKeyFile()
-        if (certFile.exists() && keyFile.exists()) {
-            val cert = certFile.readText()
-            val key = keyFile.readText()
-            if (cert.isNotBlank() && key.isNotBlank() &&
-                runCatching { git.shin.adfree.core.coreRestoreCa(cert, key) }.getOrDefault(false)
-            ) {
-                return git.shin.adfree.core.coreCaPem()
-            }
-        }
-        val pem = runCatching { git.shin.adfree.core.coreGenerateCa() }.getOrDefault("")
-        if (pem.isNotEmpty()) {
-            val key = runCatching { git.shin.adfree.core.coreCaKeyPem() }.getOrDefault("")
-            certFile.writeText(pem)
-            if (key.isNotBlank()) keyFile.writeText(key)
-        }
-        return pem
-    }
+    fun ensureCa(): String = runCatching { git.shin.adfree.core.coreEnsureCa() }.getOrDefault("")
 
     /** Deletes the persisted CA so the next `ensureCa()` mints a fresh one. */
     fun resetCa() {
-        runCatching { caCertFile().delete() }
-        runCatching { caKeyFile().delete() }
+        runCatching { git.shin.adfree.core.coreResetCa() }
     }
 
     /**
@@ -565,22 +473,10 @@ class CoreEngine {
     companion object {
         private const val TAG = "AdFreeCore"
         private const val SOCKET_COUNT = 4
-        private const val USER_AGENT = "AdFree/1.0 (Android)"
         private var pendingStart = true
-
-        /** `0.0.0.0 example.com` / `127.0.0.1 example.com` host entries. */
-        private val HOSTS_LINE = Regex("""^(0\.0\.0\.0|127\.0\.0\.1|::1?|::)\s+\S+""")
 
         @Volatile
         var screenOffFlag = false
-
-        /** Where the app stores core files; injected by the DI container. */
-        var filesRootProvider: () -> String = { "/data/data/git.shin.adfree/files" }
-
-        fun filesRoot(): String = filesRootProvider()
-
-        fun sanitizeId(id: String): String =
-            id.map { if (it.isLetterOrDigit()) it else '_' }.joinToString("").take(64)
     }
 }
 
@@ -592,19 +488,4 @@ data class DownloadResult(
     val version: String? = null,
     val updatedText: String? = null,
     val detectedFormat: String? = null,
-)
-
-/** Raw HTTP GET result shared by list and script downloads. */
-data class FetchResult(
-    val ok: Boolean,
-    val message: String,
-    val body: String? = null,
-)
-
-/** Comment-header metadata of a filter list. */
-data class ListMeta(
-    val version: String?,
-    val updatedText: String?,
-    /** "hosts" or "standard"; null when the header was inconclusive. */
-    val format: String?,
 )

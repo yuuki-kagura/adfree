@@ -6,21 +6,6 @@ import git.shin.adfree.model.DnsBlockMode
 import git.shin.adfree.model.ProtectionSettings
 import org.json.JSONObject
 
-/** Where the settings blob is persisted; the Rust core owns the real one. */
-interface SettingsBlobStore {
-    fun get(): String?
-    fun set(json: String): Boolean
-}
-
-/** The blob as stored by the core, in its SQLite database. */
-object CoreSettingsBlobStore : SettingsBlobStore {
-    override fun get(): String? =
-        runCatching { git.shin.adfree.core.coreSettingsGet() }.getOrNull()
-
-    override fun set(json: String): Boolean =
-        runCatching { git.shin.adfree.core.coreSettingsSet(json) }.getOrDefault(false)
-}
-
 /**
  * The protection switches, kept across launches.
  *
@@ -37,7 +22,7 @@ object CoreSettingsBlobStore : SettingsBlobStore {
  */
 class SettingsPreferences(
     context: Context,
-    private val store: SettingsBlobStore = CoreSettingsBlobStore,
+    private val store: BlobStore = CoreSettingsBlobStore,
 ) {
 
     private val legacy = context.getSharedPreferences("adfree_settings", Context.MODE_PRIVATE)

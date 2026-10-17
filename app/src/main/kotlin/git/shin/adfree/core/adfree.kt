@@ -715,6 +715,20 @@ internal object IntegrityCheckingUniffiLib {
     ): Int
     external fun uniffi_adfree_core_checksum_func_core_drain_events(
     ): Int
+    external fun uniffi_adfree_core_checksum_func_core_ensure_ca(
+    ): Int
+    external fun uniffi_adfree_core_checksum_func_core_filter_fetch(
+    ): Int
+    external fun uniffi_adfree_core_checksum_func_core_filter_remove(
+    ): Int
+    external fun uniffi_adfree_core_checksum_func_core_filter_save(
+    ): Int
+    external fun uniffi_adfree_core_checksum_func_core_filter_state(
+    ): Int
+    external fun uniffi_adfree_core_checksum_func_core_filters_get(
+    ): Int
+    external fun uniffi_adfree_core_checksum_func_core_filters_set(
+    ): Int
     external fun uniffi_adfree_core_checksum_func_core_generate_ca(
     ): Int
     external fun uniffi_adfree_core_checksum_func_core_is_running(
@@ -731,9 +745,19 @@ internal object IntegrityCheckingUniffiLib {
     ): Int
     external fun uniffi_adfree_core_checksum_func_core_relay_count(
     ): Int
+    external fun uniffi_adfree_core_checksum_func_core_reset_ca(
+    ): Int
     external fun uniffi_adfree_core_checksum_func_core_reset_stats(
     ): Int
     external fun uniffi_adfree_core_checksum_func_core_restore_ca(
+    ): Int
+    external fun uniffi_adfree_core_checksum_func_core_script_fetch(
+    ): Int
+    external fun uniffi_adfree_core_checksum_func_core_script_remove(
+    ): Int
+    external fun uniffi_adfree_core_checksum_func_core_script_state(
+    ): Int
+    external fun uniffi_adfree_core_checksum_func_core_script_text(
     ): Int
     external fun uniffi_adfree_core_checksum_func_core_set_data_root(
     ): Int
@@ -816,6 +840,20 @@ internal object UniffiLib {
     ): Unit
     external fun uniffi_adfree_core_fn_func_core_drain_events(`max`: Int,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
+    external fun uniffi_adfree_core_fn_func_core_ensure_ca(uniffi_out_err: UniffiRustCallStatus, 
+    ): RustBuffer.ByValue
+    external fun uniffi_adfree_core_fn_func_core_filter_fetch(`id`: RustBuffer.ByValue,`url`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    ): RustBuffer.ByValue
+    external fun uniffi_adfree_core_fn_func_core_filter_remove(`id`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    ): Byte
+    external fun uniffi_adfree_core_fn_func_core_filter_save(`id`: RustBuffer.ByValue,`text`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    ): RustBuffer.ByValue
+    external fun uniffi_adfree_core_fn_func_core_filter_state(`id`: RustBuffer.ByValue,`withMeta`: Byte,uniffi_out_err: UniffiRustCallStatus, 
+    ): RustBuffer.ByValue
+    external fun uniffi_adfree_core_fn_func_core_filters_get(uniffi_out_err: UniffiRustCallStatus, 
+    ): RustBuffer.ByValue
+    external fun uniffi_adfree_core_fn_func_core_filters_set(`json`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    ): Byte
     external fun uniffi_adfree_core_fn_func_core_generate_ca(uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
     external fun uniffi_adfree_core_fn_func_core_is_running(uniffi_out_err: UniffiRustCallStatus, 
@@ -832,10 +870,20 @@ internal object UniffiLib {
     ): Unit
     external fun uniffi_adfree_core_fn_func_core_relay_count(uniffi_out_err: UniffiRustCallStatus, 
     ): Int
+    external fun uniffi_adfree_core_fn_func_core_reset_ca(uniffi_out_err: UniffiRustCallStatus, 
+    ): Unit
     external fun uniffi_adfree_core_fn_func_core_reset_stats(uniffi_out_err: UniffiRustCallStatus, 
     ): Unit
     external fun uniffi_adfree_core_fn_func_core_restore_ca(`certPem`: RustBuffer.ByValue,`keyPem`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): Byte
+    external fun uniffi_adfree_core_fn_func_core_script_fetch(`id`: RustBuffer.ByValue,`url`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    ): RustBuffer.ByValue
+    external fun uniffi_adfree_core_fn_func_core_script_remove(`id`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    ): Byte
+    external fun uniffi_adfree_core_fn_func_core_script_state(`id`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    ): RustBuffer.ByValue
+    external fun uniffi_adfree_core_fn_func_core_script_text(`id`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    ): RustBuffer.ByValue
     external fun uniffi_adfree_core_fn_func_core_set_data_root(`path`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): Byte
     external fun uniffi_adfree_core_fn_func_core_set_doh_ranges(`ranges`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
@@ -1014,6 +1062,27 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
     if ((lib.uniffi_adfree_core_checksum_func_core_drain_events() and 0xFFFF) != 38967) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
+    if ((lib.uniffi_adfree_core_checksum_func_core_ensure_ca() and 0xFFFF) != 62169) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if ((lib.uniffi_adfree_core_checksum_func_core_filter_fetch() and 0xFFFF) != 61610) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if ((lib.uniffi_adfree_core_checksum_func_core_filter_remove() and 0xFFFF) != 7070) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if ((lib.uniffi_adfree_core_checksum_func_core_filter_save() and 0xFFFF) != 46545) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if ((lib.uniffi_adfree_core_checksum_func_core_filter_state() and 0xFFFF) != 16434) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if ((lib.uniffi_adfree_core_checksum_func_core_filters_get() and 0xFFFF) != 42145) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if ((lib.uniffi_adfree_core_checksum_func_core_filters_set() and 0xFFFF) != 47458) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
     if ((lib.uniffi_adfree_core_checksum_func_core_generate_ca() and 0xFFFF) != 49008) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
@@ -1038,10 +1107,25 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
     if ((lib.uniffi_adfree_core_checksum_func_core_relay_count() and 0xFFFF) != 38928) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
+    if ((lib.uniffi_adfree_core_checksum_func_core_reset_ca() and 0xFFFF) != 56744) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
     if ((lib.uniffi_adfree_core_checksum_func_core_reset_stats() and 0xFFFF) != 20945) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if ((lib.uniffi_adfree_core_checksum_func_core_restore_ca() and 0xFFFF) != 62634) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if ((lib.uniffi_adfree_core_checksum_func_core_script_fetch() and 0xFFFF) != 11906) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if ((lib.uniffi_adfree_core_checksum_func_core_script_remove() and 0xFFFF) != 35935) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if ((lib.uniffi_adfree_core_checksum_func_core_script_state() and 0xFFFF) != 43374) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if ((lib.uniffi_adfree_core_checksum_func_core_script_text() and 0xFFFF) != 46210) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if ((lib.uniffi_adfree_core_checksum_func_core_set_data_root() and 0xFFFF) != 27462) {
@@ -1769,6 +1853,158 @@ public object FfiConverterTypeSocketProtector: FfiConverter<SocketProtector, Lon
 
 
 /**
+ * One downloaded file, as the UI sees it.
+ */
+data class AssetState (
+    /**
+     * Absolute path, for the filter-engine bindings.
+     */
+    var `path`: kotlin.String
+    , 
+    var `sizeBytes`: kotlin.Long
+    , 
+    var `modifiedMs`: kotlin.Long
+    , 
+    /**
+     * Rule lines: filters only, 0 for scripts.
+     */
+    var `lineCount`: kotlin.Long
+    , 
+    var `version`: kotlin.String?
+    , 
+    var `updatedText`: kotlin.String?
+    , 
+    var `detectedFormat`: kotlin.String?
+    
+){
+    
+
+    
+
+    
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeAssetState: FfiConverterRustBuffer<AssetState> {
+    override fun read(buf: ByteBuffer): AssetState {
+        return AssetState(
+            FfiConverterString.read(buf),
+            FfiConverterLong.read(buf),
+            FfiConverterLong.read(buf),
+            FfiConverterLong.read(buf),
+            FfiConverterOptionalString.read(buf),
+            FfiConverterOptionalString.read(buf),
+            FfiConverterOptionalString.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: AssetState) = (
+            FfiConverterString.allocationSize(value.`path`) +
+            FfiConverterLong.allocationSize(value.`sizeBytes`) +
+            FfiConverterLong.allocationSize(value.`modifiedMs`) +
+            FfiConverterLong.allocationSize(value.`lineCount`) +
+            FfiConverterOptionalString.allocationSize(value.`version`) +
+            FfiConverterOptionalString.allocationSize(value.`updatedText`) +
+            FfiConverterOptionalString.allocationSize(value.`detectedFormat`)
+    )
+
+    override fun write(value: AssetState, buf: ByteBuffer) {
+            FfiConverterString.write(value.`path`, buf)
+            FfiConverterLong.write(value.`sizeBytes`, buf)
+            FfiConverterLong.write(value.`modifiedMs`, buf)
+            FfiConverterLong.write(value.`lineCount`, buf)
+            FfiConverterOptionalString.write(value.`version`, buf)
+            FfiConverterOptionalString.write(value.`updatedText`, buf)
+            FfiConverterOptionalString.write(value.`detectedFormat`, buf)
+    }
+}
+
+
+
+/**
+ * Result of fetching (or saving) a filter list or userscript body.
+ */
+data class DownloadOutcome (
+    var `ok`: kotlin.Boolean
+    , 
+    /**
+     * Diagnostic when `ok` is false ("HTTP 404", "empty response"...).
+     */
+    var `message`: kotlin.String
+    , 
+    /**
+     * Rule lines: filters only, 0 for scripts.
+     */
+    var `lineCount`: kotlin.Long
+    , 
+    var `version`: kotlin.String?
+    , 
+    var `updatedText`: kotlin.String?
+    , 
+    /**
+     * "hosts" or "standard"; absent when the header was inconclusive.
+     */
+    var `detectedFormat`: kotlin.String?
+    , 
+    var `sizeBytes`: kotlin.Long
+    , 
+    var `modifiedMs`: kotlin.Long
+    
+){
+    
+
+    
+
+    
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeDownloadOutcome: FfiConverterRustBuffer<DownloadOutcome> {
+    override fun read(buf: ByteBuffer): DownloadOutcome {
+        return DownloadOutcome(
+            FfiConverterBoolean.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterLong.read(buf),
+            FfiConverterOptionalString.read(buf),
+            FfiConverterOptionalString.read(buf),
+            FfiConverterOptionalString.read(buf),
+            FfiConverterLong.read(buf),
+            FfiConverterLong.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: DownloadOutcome) = (
+            FfiConverterBoolean.allocationSize(value.`ok`) +
+            FfiConverterString.allocationSize(value.`message`) +
+            FfiConverterLong.allocationSize(value.`lineCount`) +
+            FfiConverterOptionalString.allocationSize(value.`version`) +
+            FfiConverterOptionalString.allocationSize(value.`updatedText`) +
+            FfiConverterOptionalString.allocationSize(value.`detectedFormat`) +
+            FfiConverterLong.allocationSize(value.`sizeBytes`) +
+            FfiConverterLong.allocationSize(value.`modifiedMs`)
+    )
+
+    override fun write(value: DownloadOutcome, buf: ByteBuffer) {
+            FfiConverterBoolean.write(value.`ok`, buf)
+            FfiConverterString.write(value.`message`, buf)
+            FfiConverterLong.write(value.`lineCount`, buf)
+            FfiConverterOptionalString.write(value.`version`, buf)
+            FfiConverterOptionalString.write(value.`updatedText`, buf)
+            FfiConverterOptionalString.write(value.`detectedFormat`, buf)
+            FfiConverterLong.write(value.`sizeBytes`, buf)
+            FfiConverterLong.write(value.`modifiedMs`, buf)
+    }
+}
+
+
+
+/**
  * Runtime knobs, mirrored from the app's `ProtectionSettings`.
  */
 data class EngineConfig (
@@ -2433,6 +2669,38 @@ public object FfiConverterOptionalString: FfiConverterRustBuffer<kotlin.String?>
 /**
  * @suppress
  */
+public object FfiConverterOptionalTypeAssetState: FfiConverterRustBuffer<AssetState?> {
+    override fun read(buf: ByteBuffer): AssetState? {
+        if (buf.get().toInt() == 0) {
+            return null
+        }
+        return FfiConverterTypeAssetState.read(buf)
+    }
+
+    override fun allocationSize(value: AssetState?): ULong {
+        if (value == null) {
+            return 1UL
+        } else {
+            return 1UL + FfiConverterTypeAssetState.allocationSize(value)
+        }
+    }
+
+    override fun write(value: AssetState?, buf: ByteBuffer) {
+        if (value == null) {
+            buf.put(0)
+        } else {
+            buf.put(1)
+            FfiConverterTypeAssetState.write(value, buf)
+        }
+    }
+}
+
+
+
+
+/**
+ * @suppress
+ */
 public object FfiConverterSequenceInt: FfiConverterRustBuffer<List<kotlin.Int>> {
     override fun read(buf: ByteBuffer): List<kotlin.Int> {
         val len = buf.getInt()
@@ -2671,6 +2939,113 @@ public object FfiConverterSequenceTypeScriptBinding: FfiConverterRustBuffer<List
     
 
         /**
+         * Loads the local CA from the store (minting and persisting the pair on
+         * first use) and returns its certificate PEM.
+         */ fun `coreEnsureCa`(): kotlin.String {
+            return FfiConverterString.lift(
+    uniffiRustCall() { _status ->
+    UniffiLib.uniffi_adfree_core_fn_func_core_ensure_ca(
+    
+        _status)
+}
+    )
+    }
+    
+
+        /**
+         * Downloads one filter list into the store (`filters/<id>.txt`), temp file +
+         * rename. Blocking: the platform calls it off its main thread.
+         */ fun `coreFilterFetch`(`id`: kotlin.String, `url`: kotlin.String): DownloadOutcome {
+            return FfiConverterTypeDownloadOutcome.lift(
+    uniffiRustCall() { _status ->
+    UniffiLib.uniffi_adfree_core_fn_func_core_filter_fetch(
+    
+        
+        FfiConverterString.lower(`id`),
+        FfiConverterString.lower(`url`),_status)
+}
+    )
+    }
+    
+
+        /**
+         * Deletes a filter list body. False when there was nothing to delete.
+         */ fun `coreFilterRemove`(`id`: kotlin.String): kotlin.Boolean {
+            return FfiConverterBoolean.lift(
+    uniffiRustCall() { _status ->
+    UniffiLib.uniffi_adfree_core_fn_func_core_filter_remove(
+    
+        
+        FfiConverterString.lower(`id`),_status)
+}
+    )
+    }
+    
+
+        /**
+         * Saves a list body the platform already has (imported from a file), with
+         * the same atomic write as a download.
+         */ fun `coreFilterSave`(`id`: kotlin.String, `text`: kotlin.String): AssetState? {
+            return FfiConverterOptionalTypeAssetState.lift(
+    uniffiRustCall() { _status ->
+    UniffiLib.uniffi_adfree_core_fn_func_core_filter_save(
+    
+        
+        FfiConverterString.lower(`id`),
+        FfiConverterString.lower(`text`),_status)
+}
+    )
+    }
+    
+
+        /**
+         * State of a filter list body, or `None` when it is not on disk.
+         *
+         * `with_meta = false` skips reading the body, so callers that only need the
+         * path (pushing the enabled lists to the engine after a toggle) do not
+         * re-read megabytes every time.
+         */ fun `coreFilterState`(`id`: kotlin.String, `withMeta`: kotlin.Boolean): AssetState? {
+            return FfiConverterOptionalTypeAssetState.lift(
+    uniffiRustCall() { _status ->
+    UniffiLib.uniffi_adfree_core_fn_func_core_filter_state(
+    
+        
+        FfiConverterString.lower(`id`),
+        FfiConverterBoolean.lower(`withMeta`),_status)
+}
+    )
+    }
+    
+
+        /**
+         * The opaque filter/script choices blob (enabled lists, custom lists, user
+         * rules, userscripts). The platform owns the JSON schema.
+         */ fun `coreFiltersGet`(): kotlin.String? {
+            return FfiConverterOptionalString.lift(
+    uniffiRustCall() { _status ->
+    UniffiLib.uniffi_adfree_core_fn_func_core_filters_get(
+    
+        _status)
+}
+    )
+    }
+    
+
+        /**
+         * Replaces the filter/script choices blob. False when the store is not open.
+         */ fun `coreFiltersSet`(`json`: kotlin.String): kotlin.Boolean {
+            return FfiConverterBoolean.lift(
+    uniffiRustCall() { _status ->
+    UniffiLib.uniffi_adfree_core_fn_func_core_filters_set(
+    
+        
+        FfiConverterString.lower(`json`),_status)
+}
+    )
+    }
+    
+
+        /**
          * Creates (or replaces) the local CA.
          *
          * The returned PEM is what the user has to install in the system trust store
@@ -2777,6 +3152,18 @@ public object FfiConverterSequenceTypeScriptBinding: FfiConverterRustBuffer<List
     )
     }
     
+
+        /**
+         * Drops the persisted CA pair; the next `core_ensure_ca` mints a fresh one.
+         */ fun `coreResetCa`()
+        = 
+    uniffiRustCall() { _status ->
+    UniffiLib.uniffi_adfree_core_fn_func_core_reset_ca(
+    
+        _status)
+}
+    
+    
  fun `coreResetStats`()
         = 
     uniffiRustCall() { _status ->
@@ -2797,6 +3184,63 @@ public object FfiConverterSequenceTypeScriptBinding: FfiConverterRustBuffer<List
         
         FfiConverterString.lower(`certPem`),
         FfiConverterString.lower(`keyPem`),_status)
+}
+    )
+    }
+    
+
+        /**
+         * Downloads one userscript body into the store (`scripts/<id>.js`).
+         */ fun `coreScriptFetch`(`id`: kotlin.String, `url`: kotlin.String): DownloadOutcome {
+            return FfiConverterTypeDownloadOutcome.lift(
+    uniffiRustCall() { _status ->
+    UniffiLib.uniffi_adfree_core_fn_func_core_script_fetch(
+    
+        
+        FfiConverterString.lower(`id`),
+        FfiConverterString.lower(`url`),_status)
+}
+    )
+    }
+    
+
+        /**
+         * Deletes a userscript body. False when there was nothing to delete.
+         */ fun `coreScriptRemove`(`id`: kotlin.String): kotlin.Boolean {
+            return FfiConverterBoolean.lift(
+    uniffiRustCall() { _status ->
+    UniffiLib.uniffi_adfree_core_fn_func_core_script_remove(
+    
+        
+        FfiConverterString.lower(`id`),_status)
+}
+    )
+    }
+    
+
+        /**
+         * State of a userscript body, or `None` when it is not on disk.
+         */ fun `coreScriptState`(`id`: kotlin.String): AssetState? {
+            return FfiConverterOptionalTypeAssetState.lift(
+    uniffiRustCall() { _status ->
+    UniffiLib.uniffi_adfree_core_fn_func_core_script_state(
+    
+        
+        FfiConverterString.lower(`id`),_status)
+}
+    )
+    }
+    
+
+        /**
+         * Body of a userscript, for the core's script engine.
+         */ fun `coreScriptText`(`id`: kotlin.String): kotlin.String? {
+            return FfiConverterOptionalString.lift(
+    uniffiRustCall() { _status ->
+    UniffiLib.uniffi_adfree_core_fn_func_core_script_text(
+    
+        
+        FfiConverterString.lower(`id`),_status)
 }
     )
     }

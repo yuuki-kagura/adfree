@@ -316,6 +316,66 @@ impl Core {
         }
     }
 
+    /// The opaque filter/script choices blob (schema owned by the platform).
+    pub fn filters_get(&self) -> Option<String> {
+        self.store.get().and_then(|s| s.filters_get())
+    }
+
+    pub fn filters_set(&self, json: &str) -> bool {
+        match self.store.get() {
+            Some(store) => store.filters_set(json).is_ok(),
+            None => false,
+        }
+    }
+
+    /// Loads the local CA from the store, or mints one and persists the pair
+    /// under `core/`. Returns the certificate PEM (empty without a store).
+    pub fn ensure_ca(&self) -> String {
+        let Some(store) = self.store.get() else {
+            return String::new();
+        };
+        let dir = store.core_dir();
+        let cert_path = dir.join("ca.pem");
+        let key_path = dir.join("ca-key.pem");
+        if let (Ok(cert), Ok(key)) = (
+            std::fs::read_to_string(&cert_path),
+            std::fs::read_to_string(&key_path),
+        ) {
+            if !cert.trim().is_empty() && !key.trim().is_empty() {
+                if let Ok(ca) = crate::mitm::ca::CertificateAuthority::from_pem(&cert, &key) {
+                    let pem = ca.cert_pem();
+                    self.set_mitm_ca(Arc::new(ca));
+                    return pem;
+                }
+                crate::logbuf::push("ensure_ca: persisted pair did not parse; minting a new one");
+            }
+        }
+        let Ok(ca) = crate::mitm::ca::CertificateAuthority::generate() else {
+            return String::new();
+        };
+        let (pem, key) = (ca.cert_pem(), ca.key_pem());
+        // The private half must not be readable by anything but this app, so
+        // it is created 0600 and only then renamed into place.
+        if write_atomic(&dir, "ca-key.pem.tmp", "ca-key.pem", &key, true)
+            && write_atomic(&dir, "ca.pem.tmp", "ca.pem", &pem, false)
+        {
+            // persisted for the next launch
+        }
+        self.set_mitm_ca(Arc::new(ca));
+        pem
+    }
+
+    /// Drops the persisted CA pair; the next [`Self::ensure_ca`] mints a fresh
+    /// one.
+    pub fn reset_ca(&self) {
+        let Some(store) = self.store.get() else {
+            return;
+        };
+        let dir = store.core_dir();
+        let _ = std::fs::remove_file(dir.join("ca.pem"));
+        let _ = std::fs::remove_file(dir.join("ca-key.pem"));
+    }
+
     pub fn uptime_ms(&self) -> u64 {
         now_ms().saturating_sub(self.started_at)
     }
@@ -2136,6 +2196,31 @@ fn parse_cidr(text: &str) -> Option<(IpKey, u8)> {
             Some((IpKey::V6(u128::from_be_bytes(v6.octets())), prefix))
         }
     }
+}
+
+/// Writes `contents` to `dir/name` through `tmp_name`, optionally 0600 from
+/// the first byte. False when the directory or the write refused.
+fn write_atomic(dir: &std::path::Path, tmp_name: &str, name: &str, contents: &str, private: bool) -> bool {
+    use std::io::Write as _;
+    use std::os::unix::fs::OpenOptionsExt as _;
+
+    if std::fs::create_dir_all(dir).is_err() {
+        return false;
+    }
+    let tmp = dir.join(tmp_name);
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create(true).truncate(true);
+    if private {
+        options.mode(0o600);
+    }
+    let Ok(mut file) = options.open(&tmp) else {
+        return false;
+    };
+    if file.write_all(contents.as_bytes()).is_err() {
+        let _ = std::fs::remove_file(&tmp);
+        return false;
+    }
+    std::fs::rename(&tmp, dir.join(name)).is_ok()
 }
 
 #[cfg(test)]

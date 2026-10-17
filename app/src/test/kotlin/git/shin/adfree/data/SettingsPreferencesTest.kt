@@ -24,7 +24,7 @@ class SettingsPreferencesTest {
     private val context: Context = ApplicationProvider.getApplicationContext()
 
     /** In-memory stand-in for the core's SQLite blob. */
-    private class FakeStore : SettingsBlobStore {
+    private class FakeStore : BlobStore {
         var value: String? = null
         var rejectsWrites = false
 

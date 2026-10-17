@@ -40,6 +40,10 @@ serde_json = "1"
 # Pure-Rust backend: no C toolchain in the Android cross build.
 flate2 = { version = "1", default-features = false, features = ["rust_backend"] }
 rusqlite = { version = "0.40.2", features = ["bundled"] }
+# Blocking HTTP for filter lists and userscripts. The core stays free of
+# async runtimes: the platform calls these from its own IO threads, and ureq
+# reuses the rustls/ring stack the MITM stage already builds on.
+ureq = { version = "2", default-features = false, features = ["tls", "gzip"] }
 
 [profile.release]
 opt-level = 3

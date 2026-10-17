@@ -142,24 +142,46 @@ impl Store {
         }
     }
 
-    // ------------------------------------------------------------- settings
+    // ------------------------------------------------------------- platform blobs
 
     /// The app's settings blob, exactly as it was saved.
     pub fn settings_get(&self) -> Option<String> {
+        self.blob_get(1)
+    }
+
+    /// Replaces the settings blob (atomic).
+    pub fn settings_set(&self, json: &str) -> Result<(), String> {
+        self.blob_set(1, json)
+    }
+
+    /// The filter/script choices blob (enabled lists, custom lists, user
+    /// rules, userscripts), exactly as the platform serialized it.
+    pub fn filters_get(&self) -> Option<String> {
+        self.blob_get(2)
+    }
+
+    pub fn filters_set(&self, json: &str) -> Result<(), String> {
+        self.blob_set(2, json)
+    }
+
+    /// Reads one platform blob by row id; the platform owns the schema and
+    /// the ids only need to be unique.
+    pub fn blob_get(&self, id: i64) -> Option<String> {
         self.db
             .lock()
-            .query_row("SELECT json FROM settings WHERE id = 1", [], |r| r.get(0))
+            .query_row("SELECT json FROM settings WHERE id = ?1", [id], |r| {
+                r.get(0)
+            })
             .ok()
     }
 
-    /// Replaces the settings blob (single row, atomic).
-    pub fn settings_set(&self, json: &str) -> Result<(), String> {
+    pub fn blob_set(&self, id: i64, json: &str) -> Result<(), String> {
         self.db
             .lock()
             .execute(
-                "INSERT INTO settings (id, json, updated_ms) VALUES (1, ?1, ?2)
+                "INSERT INTO settings (id, json, updated_ms) VALUES (?1, ?2, ?3)
                  ON CONFLICT(id) DO UPDATE SET json = excluded.json, updated_ms = excluded.updated_ms",
-                rusqlite::params![json, crate::util::now_ms() as i64],
+                rusqlite::params![id, json, crate::util::now_ms() as i64],
             )
             .map(|_| ())
             .map_err(|e| format!("settings write: {e}"))
@@ -197,6 +219,25 @@ fn migrate(conn: &Connection) -> Result<(), String> {
              COMMIT;",
         )
         .map_err(|e| format!("migrate schema to v1: {e}"))?;
+    }
+    if version < 2 {
+        // v2: the settings table becomes a generic blob table — filter and
+        // script choices live in row 2, so the "only id 1" check has to go.
+        conn.execute_batch(
+            "BEGIN;
+             ALTER TABLE settings RENAME TO settings_v1;
+             CREATE TABLE settings (
+                 id         INTEGER PRIMARY KEY,
+                 json       TEXT NOT NULL,
+                 updated_ms INTEGER NOT NULL
+             );
+             INSERT INTO settings (id, json, updated_ms)
+                 SELECT id, json, updated_ms FROM settings_v1;
+             DROP TABLE settings_v1;
+             PRAGMA user_version = 2;
+             COMMIT;",
+        )
+        .map_err(|e| format!("migrate schema to v2: {e}"))?;
     }
     Ok(())
 }
@@ -357,6 +398,34 @@ mod tests {
         assert_eq!(
             reopened.settings_get().as_deref(),
             Some("{\"protection\":false}")
+        );
+    }
+
+    #[test]
+    fn filter_choices_live_next_to_settings() {
+        let (store, dir) = temp_store("filters-blob");
+        assert_eq!(store.filters_get(), None);
+        store.settings_set("{\"protection\":true}").unwrap();
+        store.filters_set("{\"enabled\":[\"a\"]}").unwrap();
+        store
+            .filters_set("{\"enabled\":[\"a\",\"b\"]}")
+            .unwrap();
+        // Each blob keeps its own row: writing one never disturbs the other.
+        assert_eq!(store.settings_get().as_deref(), Some("{\"protection\":true}"));
+        assert_eq!(
+            store.filters_get().as_deref(),
+            Some("{\"enabled\":[\"a\",\"b\"]}")
+        );
+        drop(store);
+
+        let reopened = Store::open(&dir).expect("reopen");
+        assert_eq!(
+            reopened.filters_get().as_deref(),
+            Some("{\"enabled\":[\"a\",\"b\"]}")
+        );
+        assert_eq!(
+            reopened.settings_get().as_deref(),
+            Some("{\"protection\":true}")
         );
     }
 

@@ -4,6 +4,7 @@ import android.content.Context
 import android.util.Log
 import android.content.pm.ApplicationInfo
 import android.content.pm.PackageManager
+import git.shin.adfree.core.AssetState
 import git.shin.adfree.core.CoreEngine
 import git.shin.adfree.core.DownloadResult
 import git.shin.adfree.core.FilterListBinding
@@ -29,7 +30,6 @@ import kotlinx.coroutines.flow.drop
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import java.io.File
 
 /**
  * Single source of truth.
@@ -377,9 +377,9 @@ class AdGuardRepository(
     /** Recounts files already on disk and downloads the enabled lists without one. */
     private suspend fun refreshFilesAndDownload(lists: List<FilterList>) {
         for (list in lists) {
-            val file = engine.listFileFor(list)
-            if (file.exists()) {
-                applyFileStats(list.id, file)
+            val state = withContext(Dispatchers.IO) { engine.filterState(list.id) }
+            if (state != null) {
+                applyFileStats(list.id, state)
                 continue
             }
             if (!list.isEnabled || list.subscriptionUrl.isNullOrBlank()) continue
@@ -389,17 +389,15 @@ class AdGuardRepository(
         }
     }
 
-    /** Refreshes count/date/version of one list from its file on disk (no network). */
-    private suspend fun applyFileStats(listId: String, file: File) {
-        val count = withContext(Dispatchers.IO) { engine.countRules(file) }
-        val meta = withContext(Dispatchers.IO) { engine.readListMeta(file) }
+    /** Refreshes count/date/version of one list from its stored body (no network). */
+    private fun applyFileStats(listId: String, state: git.shin.adfree.core.AssetState) {
         _filterLists.update { current ->
             current.map {
                 if (it.id == listId) {
                     it.copy(
-                        ruleCount = count,
-                        lastUpdatedText = meta.updatedText ?: engine.fileDateText(file),
-                        version = meta.version ?: it.version,
+                        ruleCount = state.lineCount.toInt(),
+                        lastUpdatedText = state.updatedText ?: engine.dateText(state.modifiedMs),
+                        version = state.version ?: it.version,
                     )
                 } else it
             }
@@ -428,7 +426,9 @@ class AdGuardRepository(
                 lists.map { if (it.id == listId) it.copy(isEnabled = enabled) else it }
             }
             val list = _filterLists.value.firstOrNull { it.id == listId }
-            if (enabled && list != null && !list.isCustom && !engine.listFileFor(list).exists() &&
+            val missingBody = list != null &&
+                withContext(Dispatchers.IO) { engine.filterState(list.id, withMeta = false) == null }
+            if (enabled && list != null && !list.isCustom && missingBody &&
                 !list.subscriptionUrl.isNullOrBlank()
             ) {
                 _loadingMessage.value = "Đang tải ${list.name}…"
@@ -548,27 +548,22 @@ class AdGuardRepository(
                 groupId = "custom",
                 isUserAdded = true,
             )
-            val file = engine.listFileFor(list)
-            val writeFailure = withContext(Dispatchers.IO) {
-                runCatching { file.writeText(text) }.exceptionOrNull()
-            }
-            if (writeFailure != null) {
-                showTransientStatus("Lỗi ghi tệp: ${writeFailure.javaClass.simpleName}")
+            val state = withContext(Dispatchers.IO) { engine.saveListText(list.id, text) }
+            if (state == null) {
+                showTransientStatus("Lỗi ghi tệp: không lưu được bộ lọc")
                 return@launch
             }
-            val meta = engine.parseListMeta(text)
-            val count = withContext(Dispatchers.IO) { engine.countRules(file) }
             _filterLists.update {
                 it + list.copy(
-                    ruleCount = count,
+                    ruleCount = state.lineCount.toInt(),
                     lastUpdatedText = "Vừa nhập",
-                    version = meta.version ?: "standard",
-                    format = meta.format ?: list.format,
+                    version = state.version ?: "standard",
+                    format = state.detectedFormat ?: list.format,
                 )
             }
             saveFilterChoices()
             pushListsToEngine()
-            showTransientStatus("Đã thêm ${list.name} ($count quy tắc)")
+            showTransientStatus("Đã thêm ${list.name} (${state.lineCount} quy tắc)")
         }
     }
 
@@ -578,7 +573,7 @@ class AdGuardRepository(
         if (!target.isUserAdded) return
         _filterLists.update { lists -> lists.filter { it.id != id } }
         scope.launch {
-            withContext(Dispatchers.IO) { runCatching { engine.listFileFor(target).delete() } }
+            withContext(Dispatchers.IO) { runCatching { engine.filterRemove(target.id) } }
             saveFilterChoices()
             pushListsToEngine()
         }
@@ -595,7 +590,7 @@ class AdGuardRepository(
             }
             val missing = _filterLists.value.filter {
                 it.isEnabled && !it.isCustom && !it.subscriptionUrl.isNullOrBlank() &&
-                    !engine.listFileFor(it).exists()
+                    engine.filterState(it.id, withMeta = false) == null
             }
             for (list in missing) {
                 _loadingMessage.value = "Đang tải ${list.name}…"
@@ -717,14 +712,13 @@ class AdGuardRepository(
     private fun pushListsToEngine() {
         val lists = _filterLists.value
         val bindings = lists.filter { it.isEnabled && !it.isCustom }.mapNotNull { list ->
-            val file = engine.listFileFor(list)
-            if (!file.exists()) return@mapNotNull null
+            val state = engine.filterState(list.id, withMeta = false) ?: return@mapNotNull null
             FilterListBinding(
                 id = list.stableId(),
                 name = list.name,
                 url = list.subscriptionUrl.orEmpty(),
                 enabled = true,
-                path = file.absolutePath,
+                path = state.path,
                 format = if (list.format.equals("hosts", ignoreCase = true)) 1 else 0,
                 category = list.categoryIndex(),
                 ruleCount = list.ruleCount.toLong(),
@@ -828,27 +822,27 @@ class AdGuardRepository(
             val scripts = mutableListOf<UserScriptInfo>()
             for (entry in UserScriptCatalog.scripts) {
                 val state = stored.firstOrNull { it.id == entry.id }
-                val file = engine.scriptFileFor(entry.id)
+                val asset = withContext(Dispatchers.IO) { engine.scriptState(entry.id) }
                 scripts += UserScriptInfo(
                     id = entry.id,
                     name = entry.name,
                     description = entry.description,
                     url = entry.url,
                     isEnabled = state?.enabled ?: false,
-                    sizeBytes = file.length(),
-                    lastUpdatedText = if (file.exists()) engine.fileDateText(file) else "Chưa tải",
+                    sizeBytes = asset?.sizeBytes ?: 0,
+                    lastUpdatedText = asset?.let { engine.dateText(it.modifiedMs) } ?: "Chưa tải",
                 )
             }
             for (state in stored.filter { s -> UserScriptCatalog.scripts.none { it.id == s.id } }) {
-                val file = engine.scriptFileFor(state.id)
+                val asset = withContext(Dispatchers.IO) { engine.scriptState(state.id) }
                 scripts += UserScriptInfo(
                     id = state.id,
                     name = state.name,
                     description = state.description,
                     url = state.url,
                     isEnabled = state.enabled,
-                    sizeBytes = file.length(),
-                    lastUpdatedText = if (file.exists()) engine.fileDateText(file) else "Chưa tải",
+                    sizeBytes = asset?.sizeBytes ?: 0,
+                    lastUpdatedText = asset?.let { engine.dateText(it.modifiedMs) } ?: "Chưa tải",
                     isUserAdded = true,
                 )
             }
@@ -872,7 +866,7 @@ class AdGuardRepository(
             val script = _userscripts.value.firstOrNull { it.id == id }
             // Catalogue scripts start without a body: enabling one fetches it.
             if (enabled && script != null && script.url.isNotBlank() &&
-                !engine.scriptFileFor(script.id).exists()
+                withContext(Dispatchers.IO) { engine.scriptState(script.id) } == null
             ) {
                 _loadingMessage.value = "Đang tải ${script.name}…"
                 showTransientStatus(downloadScriptBody(script))
@@ -916,26 +910,22 @@ class AdGuardRepository(
         }
     }
 
-    /** Downloads one script body to disk; returns the result line for the UI. */
+    /** Downloads one script body to the store; returns the result line for the UI. */
     private suspend fun downloadScriptBody(script: UserScriptInfo): String {
         if (script.url.isBlank()) return "Tiện ích này không có URL"
-        val fetched = withContext(Dispatchers.IO) { engine.fetchUrl(script.url) }
-        if (!fetched.ok || fetched.body == null) {
-            return "Không tải được ${script.name}: ${fetched.message}"
-        }
-        val file = engine.scriptFileFor(script.id)
-        val writeFailure = withContext(Dispatchers.IO) {
-            runCatching { file.writeText(fetched.body) }.exceptionOrNull()
-        }
-        if (writeFailure != null) return "Lỗi ghi tệp: ${writeFailure.javaClass.simpleName}"
+        val outcome = withContext(Dispatchers.IO) { engine.scriptFetch(script.id, script.url) }
+        if (!outcome.ok) return "Không tải được ${script.name}: ${outcome.message}"
         _userscripts.update { list ->
             list.map {
                 if (it.id == script.id) {
-                    it.copy(sizeBytes = file.length(), lastUpdatedText = engine.fileDateText(file))
+                    it.copy(
+                        sizeBytes = outcome.sizeBytes,
+                        lastUpdatedText = engine.dateText(outcome.modifiedMs),
+                    )
                 } else it
             }
         }
-        return "Đã tải ${script.name} (${file.length() / 1024} KB)"
+        return "Đã tải ${script.name} (${outcome.sizeBytes / 1024} KB)"
     }
 
     /** Removes a user-added script (catalogue entries are toggled off, not deleted). */
@@ -944,7 +934,7 @@ class AdGuardRepository(
         if (!target.isUserAdded) return
         _userscripts.update { list -> list.filter { it.id != id } }
         scope.launch {
-            withContext(Dispatchers.IO) { runCatching { engine.scriptFileFor(id).delete() } }
+            withContext(Dispatchers.IO) { runCatching { engine.scriptRemove(id) } }
             saveScripts()
             pushScriptsToCore()
         }
@@ -961,11 +951,10 @@ class AdGuardRepository(
     /** Hands the core every script with its body; the master switch rides along. */
     private fun pushScriptsToCore() {
         val bindings = _userscripts.value.mapNotNull { script ->
-            val file = engine.scriptFileFor(script.id)
-            if (!file.exists()) return@mapNotNull null
+            val body = engine.scriptText(script.id) ?: return@mapNotNull null
             ScriptBinding(
                 name = script.name,
-                body = runCatching { file.readText() }.getOrDefault(""),
+                body = body,
                 enabled = script.isEnabled,
             )
         }.filter { it.body.isNotBlank() }
@@ -989,9 +978,6 @@ class AdGuardRepository(
     fun dismissLoading() {
         _loadingMessage.value = null
     }
-
-    /** The engine's log now lives in memory; there are no fake files. */
-    fun filterListsDir(): File = File(context.filesDir, "filters").apply { mkdirs() }
 
     private companion object {
         private const val TAG = "AdFreeRepo"

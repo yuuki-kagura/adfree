@@ -445,6 +445,191 @@ pub fn core_settings_set(json: String) -> bool {
     guard(false, || crate::core().settings_set(&json))
 }
 
+/// The opaque filter/script choices blob (enabled lists, custom lists, user
+/// rules, userscripts). The platform owns the JSON schema.
+#[uniffi::export]
+pub fn core_filters_get() -> Option<String> {
+    guard(None, || crate::core().filters_get())
+}
+
+/// Replaces the filter/script choices blob. False when the store is not open.
+#[uniffi::export]
+pub fn core_filters_set(json: String) -> bool {
+    guard(false, || crate::core().filters_set(&json))
+}
+
+// --------------------------------------------------------------------- assets
+
+/// Result of fetching (or saving) a filter list or userscript body.
+#[derive(uniffi::Record, Clone, Debug, Default)]
+pub struct DownloadOutcome {
+    pub ok: bool,
+    /// Diagnostic when `ok` is false ("HTTP 404", "empty response"...).
+    pub message: String,
+    /// Rule lines: filters only, 0 for scripts.
+    pub line_count: i64,
+    pub version: Option<String>,
+    pub updated_text: Option<String>,
+    /// "hosts" or "standard"; absent when the header was inconclusive.
+    pub detected_format: Option<String>,
+    pub size_bytes: i64,
+    pub modified_ms: i64,
+}
+
+/// One downloaded file, as the UI sees it.
+#[derive(uniffi::Record, Clone, Debug, Default)]
+pub struct AssetState {
+    /// Absolute path, for the filter-engine bindings.
+    pub path: String,
+    pub size_bytes: i64,
+    pub modified_ms: i64,
+    /// Rule lines: filters only, 0 for scripts.
+    pub line_count: i64,
+    pub version: Option<String>,
+    pub updated_text: Option<String>,
+    pub detected_format: Option<String>,
+}
+
+fn download_failure(message: &str) -> DownloadOutcome {
+    DownloadOutcome {
+        ok: false,
+        message: message.to_string(),
+        ..DownloadOutcome::default()
+    }
+}
+
+fn to_outcome(o: crate::assets::Outcome) -> DownloadOutcome {
+    DownloadOutcome {
+        ok: true,
+        message: String::new(),
+        line_count: o.line_count,
+        version: o.version,
+        updated_text: o.updated_text,
+        detected_format: o.detected_format,
+        size_bytes: o.size_bytes,
+        modified_ms: o.modified_ms,
+    }
+}
+
+fn to_asset_state(o: crate::assets::Outcome) -> AssetState {
+    AssetState {
+        path: o.path.to_string_lossy().into_owned(),
+        size_bytes: o.size_bytes,
+        modified_ms: o.modified_ms,
+        line_count: o.line_count,
+        version: o.version,
+        updated_text: o.updated_text,
+        detected_format: o.detected_format,
+    }
+}
+
+/// Downloads one filter list into the store (`filters/<id>.txt`), temp file +
+/// rename. Blocking: the platform calls it off its main thread.
+#[uniffi::export]
+pub fn core_filter_fetch(id: String, url: String) -> DownloadOutcome {
+    guard(download_failure("store is not open"), || {
+        let Some(store) = crate::core().store() else {
+            return download_failure("store is not open");
+        };
+        match crate::assets::fetch(&store.filters_dir(), &id, "txt", &url, true) {
+            Ok(o) => to_outcome(o),
+            Err(e) => download_failure(&e),
+        }
+    })
+}
+
+/// Saves a list body the platform already has (imported from a file), with
+/// the same atomic write as a download.
+#[uniffi::export]
+pub fn core_filter_save(id: String, text: String) -> Option<AssetState> {
+    guard(None, || {
+        let store = crate::core().store()?;
+        let dir = store.filters_dir();
+        crate::assets::save(&dir, &id, "txt", &text).ok()?;
+        crate::assets::state(&dir, &id, "txt", true).map(to_asset_state)
+    })
+}
+
+/// State of a filter list body, or `None` when it is not on disk.
+///
+/// `with_meta = false` skips reading the body, so callers that only need the
+/// path (pushing the enabled lists to the engine after a toggle) do not
+/// re-read megabytes every time.
+#[uniffi::export]
+pub fn core_filter_state(id: String, with_meta: bool) -> Option<AssetState> {
+    guard(None, || {
+        let store = crate::core().store()?;
+        crate::assets::state(&store.filters_dir(), &id, "txt", with_meta).map(to_asset_state)
+    })
+}
+
+/// Deletes a filter list body. False when there was nothing to delete.
+#[uniffi::export]
+pub fn core_filter_remove(id: String) -> bool {
+    guard(false, || {
+        let Some(store) = crate::core().store() else {
+            return false;
+        };
+        crate::assets::remove(&store.filters_dir(), &id, "txt")
+    })
+}
+
+/// Downloads one userscript body into the store (`scripts/<id>.js`).
+#[uniffi::export]
+pub fn core_script_fetch(id: String, url: String) -> DownloadOutcome {
+    guard(download_failure("store is not open"), || {
+        let Some(store) = crate::core().store() else {
+            return download_failure("store is not open");
+        };
+        match crate::assets::fetch(&store.scripts_dir(), &id, "js", &url, false) {
+            Ok(o) => to_outcome(o),
+            Err(e) => download_failure(&e),
+        }
+    })
+}
+
+/// State of a userscript body, or `None` when it is not on disk.
+#[uniffi::export]
+pub fn core_script_state(id: String) -> Option<AssetState> {
+    guard(None, || {
+        let store = crate::core().store()?;
+        crate::assets::state(&store.scripts_dir(), &id, "js", false).map(to_asset_state)
+    })
+}
+
+/// Deletes a userscript body. False when there was nothing to delete.
+#[uniffi::export]
+pub fn core_script_remove(id: String) -> bool {
+    guard(false, || {
+        let Some(store) = crate::core().store() else {
+            return false;
+        };
+        crate::assets::remove(&store.scripts_dir(), &id, "js")
+    })
+}
+
+/// Body of a userscript, for the core's script engine.
+#[uniffi::export]
+pub fn core_script_text(id: String) -> Option<String> {
+    guard(None, || {
+        let store = crate::core().store()?;
+        crate::assets::read_text(&store.scripts_dir(), &id, "js")
+    })
+}
+
+/// Loads the local CA from the store (minting and persisting the pair on
+/// first use) and returns its certificate PEM.
+#[uniffi::export]
+pub fn core_ensure_ca() -> String {
+    guard(String::new(), || crate::core().ensure_ca())
+}
+
+/// Drops the persisted CA pair; the next `core_ensure_ca` mints a fresh one.
+#[uniffi::export]
+pub fn core_reset_ca() {
+    guard((), || crate::core().reset_ca())
+}
+
 /// Internal diagnostics buffered by the core (bad resolver, unreadable list...).
 #[uniffi::export]
 pub fn core_take_log_lines() -> Vec<String> {
