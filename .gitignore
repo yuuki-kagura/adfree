@@ -25,3 +25,8 @@ app/src/main/jniLibs/
 captures/
 .externalNativeBuild/
 .cxx/
+
+# Local-only: agent/tool data and the reference APK kept for inspection
+.claude/
+.codegraph/
+adguard.apk

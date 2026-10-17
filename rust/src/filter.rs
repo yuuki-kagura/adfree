@@ -19,12 +19,14 @@
 //! `Send + Sync`.
 
 use crate::fxhash::hash_str;
+use adblock::cosmetic_filter_cache::ProceduralOrActionFilter;
 use adblock::engine::Engine;
 use adblock::lists::{FilterFormat, FilterSet, ParseOptions, RuleTypes};
 use adblock::request::Request;
+use adblock::resources::Resource;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, OnceLock, RwLock};
 
 /// Format of a subscription file.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -58,6 +60,56 @@ pub const CAT_AD: u8 = 0;
 pub const CAT_TRACKER: u8 = 1;
 pub const CAT_ANALYTICS: u8 = 2;
 pub const CAT_SOCIAL: u8 = 3;
+
+/// Caps on one page's cosmetic payload. A page must never download megabytes
+/// of rules because a subscription went wild; AdGuard caps the same way.
+const MAX_HIDE_SELECTORS: usize = 6000;
+const MAX_STYLE_RULES: usize = 400;
+const MAX_PROCEDURAL: usize = 400;
+const MAX_SCRIPTLET_BYTES: usize = 128 * 1024;
+const MAX_GENERIC_SELECTORS: usize = 3000;
+
+/// Scriptlet implementations (AdGuard's, compiled into the binary).
+///
+/// The `adblock` crate ships no scriptlets of its own: it assembles
+/// `#%#//scriptlet(...)` rules only when the host provides the resource table.
+/// The table is embedded at build time and parsed once, on the first rebuild.
+fn scriptlet_resources() -> &'static Vec<Resource> {
+    static RESOURCES: OnceLock<Vec<Resource>> = OnceLock::new();
+    RESOURCES.get_or_init(|| {
+        serde_json::from_str(include_str!("../assets/scriptlets.json")).unwrap_or_else(|e| {
+            crate::logbuf::push(&format!("scriptlets: bad embedded resource table: {e}"));
+            Vec::new()
+        })
+    })
+}
+
+/// Cosmetic filtering payload for one page, ready for the content script.
+#[derive(Debug, Default)]
+pub struct CosmeticResources {
+    /// `##` selectors to hide (`display: none !important`).
+    pub hide_selectors: Vec<String>,
+    /// `#$#` style rules reducible to plain CSS: `(selector, declarations)`.
+    pub style_rules: Vec<(String, String)>,
+    /// `#?#` / action rules that need in-page JS, as JSON for the runtime.
+    pub procedural: Vec<String>,
+    /// `#%#//scriptlet(...)` invocations, assembled with their functions.
+    pub scriptlets: String,
+    /// A `$generichide` exception is in play: skip the class/id lookup.
+    pub generichide: bool,
+    /// Selectors excepted by `#@#`: pass to [`FilterEngine::generic_selectors`].
+    pub exceptions: Vec<String>,
+}
+
+impl CosmeticResources {
+    /// True when there is nothing to hand to a page.
+    pub fn is_empty(&self) -> bool {
+        self.hide_selectors.is_empty()
+            && self.style_rules.is_empty()
+            && self.procedural.is_empty()
+            && self.scriptlets.is_empty()
+    }
+}
 pub const CAT_ANNOYANCE: u8 = 4;
 pub const CAT_MALWARE: u8 = 5;
 pub const CAT_CUSTOM: u8 = 6;
@@ -260,6 +312,11 @@ impl FilterEngine {
                             ListFormat::Hosts => FilterFormat::Hosts,
                             ListFormat::Standard => FilterFormat::Standard,
                         };
+                        let text = if list.format == ListFormat::Standard {
+                            convert_adguard_cosmetics(text)
+                        } else {
+                            text
+                        };
                         let counted = count_rules(&text);
                         let record = set.add_filter_list(
                             text,
@@ -304,7 +361,10 @@ impl FilterEngine {
                 .cloned()
                 .collect::<Vec<_>>()
                 .join("\n");
-            let record = set.add_filter_list(joined, ParseOptions::default());
+            let record = set.add_filter_list(
+                convert_adguard_cosmetics(joined),
+                ParseOptions::default(),
+            );
             sources.push(SourceMapEntry {
                 source_index: record.source_index as u32,
                 list_id: 0,
@@ -313,7 +373,11 @@ impl FilterEngine {
             });
         }
 
-        let engine = Engine::new_with_filter_set(set);
+        let mut engine = Engine::new_with_filter_set(set);
+        // Scriptlets: `#%#//scriptlet(...)` rules are only assembled when the
+        // engine knows the implementations, so the table goes in before any
+        // page asks for its cosmetic resources.
+        engine.use_resources(scriptlet_resources().iter().cloned());
         let memory_bytes = engine.serialize().len();
         let generation = self.generation.fetch_add(1, Ordering::SeqCst) + 1;
         let compiled = Arc::new(Compiled {
@@ -356,6 +420,80 @@ impl FilterEngine {
     pub fn active_rules(&self) -> u64 {
         let compiled = self.inner.read().unwrap();
         compiled.rule_count
+    }
+
+    /// Cosmetic rules that apply to `url`: element hiding, style actions,
+    /// procedural rules and scriptlets.
+    ///
+    /// The caller passes the page URL (`https://host/` is enough: cosmetic
+    /// matching is hostname-based, exactly like AdGuard's own engine).
+    pub fn cosmetic_resources(&self, url: &str) -> CosmeticResources {
+        // Clone the Arc out of the lock: a rebuild can then swap engines
+        // without this call holding the read guard.
+        let compiled = self.inner.read().unwrap().clone();
+        let raw = compiled.engine.url_cosmetic_resources(url);
+
+        let mut hide_selectors: Vec<String> = raw.hide_selectors.into_iter().collect();
+        let mut style_rules = Vec::new();
+        let mut procedural = Vec::new();
+        for entry in raw.procedural_actions {
+            let Ok(parsed) = serde_json::from_str::<ProceduralOrActionFilter>(&entry) else {
+                continue;
+            };
+            match parsed.as_css() {
+                // `as_css` folds the default hide action back to plain CSS.
+                Some((selector, style)) if style == "display: none !important" => {
+                    hide_selectors.push(selector)
+                }
+                Some((selector, style)) => {
+                    if style_rules.len() < MAX_STYLE_RULES {
+                        style_rules.push((selector, style));
+                    }
+                }
+                None => {
+                    if procedural.len() < MAX_PROCEDURAL {
+                        procedural.push(entry);
+                    }
+                }
+            }
+        }
+        hide_selectors.truncate(MAX_HIDE_SELECTORS);
+
+        CosmeticResources {
+            hide_selectors,
+            style_rules,
+            procedural,
+            scriptlets: if raw.injected_script.len() <= MAX_SCRIPTLET_BYTES {
+                raw.injected_script
+            } else {
+                String::new()
+            },
+            generichide: raw.generichide,
+            exceptions: raw.exceptions.into_iter().collect(),
+        }
+    }
+
+    /// Generic `##.class` / `## #id` rules matching the tokens a page uses.
+    ///
+    /// These rules are not tied to a hostname, so the page's own classes and
+    /// ids decide which ones apply; `exceptions` is the `#@#` list from
+    /// [`Self::cosmetic_resources`].
+    pub fn generic_selectors(
+        &self,
+        classes: &[String],
+        ids: &[String],
+        exceptions: &[String],
+    ) -> Vec<String> {
+        if classes.is_empty() && ids.is_empty() {
+            return Vec::new();
+        }
+        let compiled = self.inner.read().unwrap().clone();
+        let exceptions: std::collections::HashSet<String> = exceptions.iter().cloned().collect();
+        let mut selectors = compiled
+            .engine
+            .hidden_class_id_selectors(classes, ids, &exceptions);
+        selectors.truncate(MAX_GENERIC_SELECTORS);
+        selectors
     }
 
     pub fn build_time_ms(&self) -> u64 {
@@ -437,6 +575,50 @@ impl FilterEngine {
 #[inline]
 fn normalise_host(host: &str) -> &str {
     host.trim().trim_end_matches('.')
+}
+
+/// Rewrites AdGuard-only cosmetic syntax into the uBO/ABP forms the engine
+/// understands, line for line (so source-map line numbers stay aligned):
+///
+/// * `#%#//scriptlet(args)` / `#@%#//scriptlet(args)` → `##+js(args)` / `#@#+js(args)`
+/// * `#$#sel { css }` / `#@$#sel { css }` → `##sel { css }` / `#@#sel { css }`
+/// * `#$?#` / `#@$?#` (extended style) → `#?#` / `#@?#`
+///
+/// Anything else (`#%#` raw JS, `##^`, `$$`) is left untouched: the engine
+/// drops what it cannot parse, and a wrong rewrite would be worse than a
+/// dropped rule.
+fn convert_adguard_cosmetics(text: String) -> String {
+    if !text.contains("#%#") && !text.contains("#$#") {
+        return text;
+    }
+    let mut out = String::with_capacity(text.len() + 64);
+    for line in text.lines() {
+        convert_adguard_line(line, &mut out);
+        out.push('\n');
+    }
+    out
+}
+
+fn convert_adguard_line(line: &str, out: &mut String) {
+    // Scriptlets first: their args may contain `#$#`-looking text.
+    for (from, to) in [("#@%#//scriptlet(", "#@#+js("), ("#%#//scriptlet(", "##+js(")] {
+        if let Some(pos) = line.find(from) {
+            out.push_str(&line[..pos]);
+            out.push_str(to);
+            out.push_str(&line[pos + from.len()..]);
+            return;
+        }
+    }
+    // Longer markers first: `#@$?#` must not be matched as `#@$#`.
+    for (from, to) in [("#@$?#", "#@?#"), ("#$?#", "#?#"), ("#@$#", "#@#"), ("#$#", "##")] {
+        if let Some(pos) = line.find(from) {
+            out.push_str(&line[..pos]);
+            out.push_str(to);
+            out.push_str(&line[pos + from.len()..]);
+            return;
+        }
+    }
+    out.push_str(line);
 }
 
 /// Number of rule-looking lines in a list. The `adblock` engine does not expose
@@ -683,4 +865,85 @@ mod tests {
         fe.rebuild(&default_lists(), &[]);
         assert!(fe.generation() > g1);
     }
+
+    fn cosmetic_engine(body: &str) -> FilterEngine {
+        let fe = FilterEngine::new();
+        fe.rebuild(
+            &[temp_list("cosmetic.txt", body, ListFormat::Standard, 3)],
+            &[],
+        );
+        fe
+    }
+
+    #[test]
+    fn embedded_scriptlet_table_is_well_formed() {
+        let resources = scriptlet_resources();
+        assert!(resources.len() >= 90, "only {} scriptlets", resources.len());
+        assert!(resources.iter().all(|r| r.name.ends_with(".js")));
+        assert!(resources.iter().all(|r| !r.content.is_empty()));
+        // The AdGuard bundle names the implementation function after the rule.
+        let by_name = |n: &str| resources.iter().find(|r| r.name == n);
+        assert!(by_name("set-constant.js").is_some());
+        assert!(by_name("abort-on-property-read.js").is_some());
+    }
+
+    #[test]
+    fn cosmetic_rules_reach_the_page_payload() {
+        let fe = cosmetic_engine(
+            "! Title: cosmetic\n\
+             example.com##.ad-box\n\
+             example.com##.keep-me\n\
+             example.com#@#.keep-me\n\
+             example.com#$#.banner { margin: 0 }\n\
+             ##.adsbygoogle\n\
+             example.com#?#.late:has-text(Sponsored)\n",
+        );
+        let res = fe.cosmetic_resources("https://example.com/");
+        assert!(
+            res.hide_selectors.iter().any(|s| s == ".ad-box"),
+            "{:?}",
+            res.hide_selectors
+        );
+        assert!(
+            !res.hide_selectors.iter().any(|s| s == ".keep-me"),
+            "an #@# exception must win"
+        );
+        assert!(
+            res.style_rules
+                .iter()
+                .any(|(s, css)| s == ".banner" && css.contains("margin")),
+            "{:?}",
+            res.style_rules
+        );
+        assert!(
+            res.procedural.iter().any(|p| p.contains("has-text")),
+            "{:?}",
+            res.procedural
+        );
+        // Generic class/id rules only fire for tokens the page actually uses.
+        let generic = fe.generic_selectors(&["adsbygoogle".to_string()], &[], &res.exceptions);
+        assert!(generic.iter().any(|s| s == ".adsbygoogle"), "{generic:?}");
+        let none = fe.generic_selectors(&["unused-token".to_string()], &[], &res.exceptions);
+        assert!(none.is_empty(), "{none:?}");
+    }
+
+    #[test]
+    fn scriptlet_rules_are_assembled_from_embedded_resources() {
+        let fe = cosmetic_engine("example.com#%#//scriptlet('set-constant', 'foo', 'bar')\n");
+        let res = fe.cosmetic_resources("https://example.com/");
+        assert!(
+            res.scriptlets.contains("setConstant(\"foo\", \"bar\")"),
+            "{}",
+            res.scriptlets
+        );
+        // The function definition is emitted alongside the invocation.
+        assert!(
+            res.scriptlets.contains("function setConstant()"),
+            "{}",
+            res.scriptlets
+        );
+        // A host the rule does not target gets nothing.
+        assert!(fe.cosmetic_resources("https://other.test/").is_empty());
+    }
 }
+

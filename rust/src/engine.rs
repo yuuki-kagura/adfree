@@ -37,7 +37,7 @@ use crate::upstream::Upstream;
 use crate::util::{now_ms, now_ns};
 use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
 use std::os::unix::io::RawFd;
-use std::sync::atomic::{AtomicBool, AtomicI32, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI32, AtomicU16, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock, RwLock};
 
 /// Read size for the TUN descriptor.
@@ -202,6 +202,18 @@ pub struct Core {
     workers: Mutex<Vec<std::thread::JoinHandle<()>>>,
     /// App callback that routes engine-created sockets around the VPN.
     socket_protector: Mutex<Option<Arc<dyn crate::api::SocketProtector>>>,
+    /// TLS config for the upstream half of an intercepted connection.
+    /// Replaceable so the engine's own tests can trust a loopback origin.
+    upstream_config: RwLock<Arc<rustls::ClientConfig>>,
+    /// Port whose flows are TLS-terminated. Always 443 in production; the
+    /// end-to-end tests point it at a loopback origin instead (binding 443
+    /// needs privileges the test runner does not have).
+    pub(crate) mitm_port: AtomicU16,
+    /// Packets produced for the tun, collected only in tests: the end-to-end
+    /// tests drive the packet loop without a device, and this is where
+    /// client-bound segments would land.
+    #[cfg(test)]
+    pub outbox: Mutex<Vec<Vec<u8>>>,
 }
 
 static CORE: OnceLock<Core> = OnceLock::new();
@@ -249,6 +261,10 @@ impl Core {
             udp_nat: Mutex::new(UdpNat::new()),
             workers: Mutex::new(Vec::new()),
             socket_protector: Mutex::new(None),
+            upstream_config: RwLock::new(crate::mitm::tls::client_config()),
+            mitm_port: AtomicU16::new(crate::mitm::relay::MITM_PORT),
+            #[cfg(test)]
+            outbox: Mutex::new(Vec::new()),
         }
     }
 
@@ -810,7 +826,7 @@ impl Core {
         // those. Without a CA the flow is still relayed, just not filtered
         // (protecting the user beats breaking their pages).
         let session = if cfg.mitm_enabled
-            && crate::mitm::relay::is_mitm_port(pkt.dst_port)
+            && pkt.dst_port == self.mitm_port.load(Ordering::Relaxed)
             && self.mitm_ca.read().unwrap().has_ca()
         {
             let (script_path, script_body) = {
@@ -819,11 +835,16 @@ impl Core {
             };
             match crate::mitm::proxy::ProxySession::new_pending(
                 self.mitm_resolver(),
-                crate::mitm::tls::client_config(),
+                self.upstream_tls_config(),
                 script_path,
                 script_body,
             ) {
-                Ok(proxy) => Some(proxy),
+                Ok(mut proxy) => {
+                    // Cosmetic filtering rides along with HTTPS filtering:
+                    // same opt-in, same CA gate, nothing extra to configure.
+                    proxy.set_cosmetic(self.filter.clone());
+                    Some(proxy)
+                }
                 Err(e) => {
                     crate::logbuf::push(&format!("open tls session: {e}"));
                     None
@@ -1295,6 +1316,12 @@ impl Core {
     // ------------------------------------------------------------------ I/O
 
     fn write_raw(&self, bytes: &[u8]) -> bool {
+        #[cfg(test)]
+        {
+            // No tun in tests: collect instead of dropping, so a test can see
+            // exactly what the device would have received.
+            self.outbox.lock().unwrap().push(bytes.to_vec());
+        }
         let fd = self.tun_fd.load(Ordering::SeqCst);
         if fd <= 0 {
             return false;
@@ -1425,8 +1452,35 @@ impl Core {
             .clone()
     }
 
+    /// TLS config for the upstream half of an intercepted connection.
+    pub fn upstream_tls_config(&self) -> Arc<rustls::ClientConfig> {
+        self.upstream_config.read().unwrap().clone()
+    }
+
+    /// Overrides the upstream trust anchors. The engine's end-to-end tests use
+    /// this to talk to a loopback origin the system store cannot know about.
+    #[doc(hidden)]
+    pub fn set_upstream_tls_config(&self, config: Arc<rustls::ClientConfig>) {
+        *self.upstream_config.write().unwrap() = config;
+    }
+
     pub fn relay_count(&self) -> usize {
         self.relays.lock().unwrap().len()
+    }
+
+    /// One pass of the forwarder loop without a tun: polls the wake eventfd,
+    /// the DNS sockets, every relay and UDP mapping, and dispatches whatever
+    /// is ready. Tests use it to move bytes between synthetic client packets
+    /// and the peer socket; in production the forwarder thread owns this.
+    #[cfg(test)]
+    pub fn pump_once(&self, timeout_ms: libc::c_int) {
+        self.wait_for_events(timeout_ms);
+    }
+
+    /// Drains the packets [`Self::write_raw`] collected for the tun.
+    #[cfg(test)]
+    pub fn take_outbox(&self) -> Vec<Vec<u8>> {
+        std::mem::take(&mut self.outbox.lock().unwrap())
     }
 
     /// Installs a new CA and drops the cached resolver.

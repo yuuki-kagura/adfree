@@ -4,7 +4,7 @@
 //! conversation end to end. These tests therefore focus on what this module adds
 //! on top of TLS: the response rewriter that injects scripts into HTML.
 
-use super::proxy::{take_script_request, ProxySession};
+use super::proxy::{take_local_request, ProxySession};
 use super::*;
 use crate::mitm::ca::CertificateAuthority;
 use crate::mitm::tls::{open_session, SniCertResolver};
@@ -30,7 +30,7 @@ fn build_proxy(ca: &CertificateAuthority, script: &str) -> ProxySession {
 fn script_request_is_answered_locally() {
     let mut buffer = b"GET /adfree-user.js HTTP/1.1\r\nHost: origin.example.com\r\n\r\n".to_vec();
     let response =
-        take_script_request("/adfree-user.js", "let x = 1;", &mut buffer).expect("served");
+        take_local_request("/adfree-user.js", "let x = 1;", None, &mut buffer).expect("served");
     assert!(buffer.is_empty(), "the request is consumed");
     let text = String::from_utf8(response).expect("utf8");
     assert!(text.starts_with("HTTP/1.1 200 OK\r\n"));
@@ -42,22 +42,22 @@ fn script_request_is_answered_locally() {
 #[test]
 fn script_request_ignores_other_requests() {
     let mut buffer = b"GET /index.html HTTP/1.1\r\nHost: x\r\n\r\n".to_vec();
-    assert!(take_script_request("/adfree-user.js", "let x = 1;", &mut buffer).is_none());
+    assert!(take_local_request("/adfree-user.js", "let x = 1;", None, &mut buffer).is_none());
     assert!(!buffer.is_empty(), "untouched");
 }
 
 #[test]
 fn script_request_waits_for_the_full_head() {
     let mut buffer = b"GET /adfree-user.js HTTP/1.1\r\nHost: x\r\n".to_vec();
-    assert!(take_script_request("/adfree-user.js", "let x = 1;", &mut buffer).is_none());
+    assert!(take_local_request("/adfree-user.js", "let x = 1;", None, &mut buffer).is_none());
     buffer.extend_from_slice(b"\r\n");
-    assert!(take_script_request("/adfree-user.js", "let x = 1;", &mut buffer).is_some());
+    assert!(take_local_request("/adfree-user.js", "let x = 1;", None, &mut buffer).is_some());
 }
 
 #[test]
 fn script_request_serves_only_when_enabled() {
     let mut buffer = b"GET /adfree-user.js HTTP/1.1\r\n\r\n".to_vec();
-    assert!(take_script_request("/adfree-user.js", "", &mut buffer).is_none());
+    assert!(take_local_request("/adfree-user.js", "", None, &mut buffer).is_none());
     assert!(!buffer.is_empty());
 }
 
@@ -77,12 +77,12 @@ fn injects_into_html_and_fixes_content_length() {
     let mut proxy = build_proxy(&ca, "/adfree-user.js");
 
     // A partial head must be buffered, not flushed.
-    let (out, injected) = proxy.rewrite_response_for_test(b"HTTP/1.1 200 OK\r\nContent-Ty");
+    let (out, injected) = proxy.rewrite_response(b"HTTP/1.1 200 OK\r\nContent-Ty");
     assert!(out.is_empty(), "a partial head must be buffered");
     assert_eq!(injected, 0);
 
     let body = "<html><head></head><body>ad</body></html>";
-    let (out, injected) = proxy.rewrite_response_for_test(&html_response(body));
+    let (out, injected) = proxy.rewrite_response(&html_response(body));
     assert_eq!(injected, expected_tag().len(), "the whole tag is added");
 
     let text = String::from_utf8(out).expect("utf8");
@@ -104,12 +104,12 @@ fn response_split_across_reads_is_reassembled() {
     let head = &full[..full.len() - body.len()];
 
     // Chunk 1: everything but the body.
-    let (out, injected) = proxy.rewrite_response_for_test(head);
+    let (out, injected) = proxy.rewrite_response(head);
     assert!(out.is_empty(), "head only: wait for the body");
     assert_eq!(injected, 0);
 
     // Chunk 2: the body.
-    let (out, injected) = proxy.rewrite_response_for_test(body.as_bytes());
+    let (out, injected) = proxy.rewrite_response(body.as_bytes());
     assert_eq!(injected, expected_tag().len());
 
     let text = String::from_utf8(out).expect("utf8");
@@ -119,36 +119,159 @@ fn response_split_across_reads_is_reassembled() {
 }
 
 #[test]
+fn gzip_responses_are_decoded_rewritten_and_recompressed() {
+    let ca = CertificateAuthority::generate().expect("ca");
+    let mut proxy = build_proxy(&ca, "/adfree-user.js");
+
+    let body = "<html><head></head><body>ad</body></html>";
+    let gz = http::gzip_encode(body.as_bytes()).expect("gzip");
+    let mut response = Vec::new();
+    response.extend_from_slice(b"HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Encoding: gzip\r\nContent-Length: ");
+    response.extend_from_slice(gz.len().to_string().as_bytes());
+    response.extend_from_slice(b"\r\n\r\n");
+    response.extend_from_slice(&gz);
+
+    let (out, injected) = proxy.rewrite_response(&response);
+    assert_eq!(injected, expected_tag().len(), "the tag is added to the page");
+
+    let split = http::head_end(&out).expect("head");
+    let head = String::from_utf8(out[..split].to_vec()).expect("utf8");
+    assert!(head.contains("Content-Encoding: gzip\r\n"), "{head}");
+    // The body stays compressed, and decodes back to the injected HTML.
+    let plain = http::decode_body(&out[split..], http::Encoding::Gzip).expect("decoded");
+    let decoded = String::from_utf8(plain).expect("utf8");
+    assert!(decoded.contains(expected_tag()), "{decoded}");
+    assert_eq!(
+        http::parse_response_head(&out[..split]).content_length,
+        Some(out.len() - split)
+    );
+}
+#[test]
+fn undecodable_bodies_pass_through() {
+    let ca = CertificateAuthority::generate().expect("ca");
+    let mut proxy = build_proxy(&ca, "/adfree-user.js");
+
+    // Not gzip at all, despite the header: nothing about it is ours to touch.
+    let response = b"HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Encoding: gzip\r\nContent-Length: 12\r\n\r\n\x1f\x8b\x08\x00\x00\x00\x00\x00\x00\x03\x00\x00";
+    let (out, injected) = proxy.rewrite_response(response);
+    assert_eq!(injected, 0, "an undecodable body must not be rewritten");
+    assert_eq!(out, response);
+
+    // brotli/zstd are readable by the client but not by us.
+    let br = b"HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Encoding: br\r\nContent-Length: 3\r\n\r\nabc";
+    let (out, injected) = proxy.rewrite_response(br);
+    assert_eq!(injected, 0);
+    assert_eq!(out, br);
+}
+
+#[test]
+fn chunked_responses_become_identity_with_a_length() {
+    let ca = CertificateAuthority::generate().expect("ca");
+    let mut proxy = build_proxy(&ca, "/adfree-user.js");
+
+    let body = "<html><head></head><body>ad</body></html>";
+    let mut response = Vec::new();
+    response.extend_from_slice(
+        b"HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nTransfer-Encoding: chunked\r\n\r\n",
+    );
+    response.extend_from_slice(format!("{:x}\r\n", body.len()).as_bytes());
+    response.extend_from_slice(body.as_bytes());
+    response.extend_from_slice(b"\r\n0\r\n\r\n");
+
+    let (out, injected) = proxy.rewrite_response(&response);
+    assert_eq!(injected, expected_tag().len());
+
+    let text = String::from_utf8(out.clone()).expect("utf8");
+    assert!(!text.contains("Transfer-Encoding"), "{text}");
+    let split = http::head_end(&out).expect("head");
+    let new_len = body.len() + expected_tag().len();
+    assert_eq!(
+        http::parse_response_head(&out[..split]).content_length,
+        Some(new_len)
+    );
+    assert_eq!(out.len() - split, new_len, "the body is not chunked anymore");
+    assert!(String::from_utf8(out[split..].to_vec())
+        .expect("utf8")
+        .contains(expected_tag()));
+}
+
+/// The regression this stage exists for: a body that arrives in several reads
+/// must not get a `content-length` computed from a prefix of itself.
+#[test]
+fn multi_read_bodies_get_the_full_length() {
+    let ca = CertificateAuthority::generate().expect("ca");
+    let mut proxy = build_proxy(&ca, "/adfree-user.js");
+
+    // Below the streaming threshold: held whole, so the length stays exact.
+    let filler = "x".repeat(20 * 1024);
+    let body = format!("<html><head></head><body>{filler}</body></html>");
+    let response = html_response(&body);
+
+    // Dribble it in, exactly how the packet path would hand it over.
+    let mut out = Vec::new();
+    let mut injected = 0;
+    for chunk in response.chunks(1024) {
+        let (part, count) = proxy.rewrite_response(chunk);
+        out.extend_from_slice(&part);
+        injected += count;
+    }
+    assert_eq!(injected, expected_tag().len());
+
+    let split = http::head_end(&out).expect("head");
+    let declared = http::parse_response_head(&out[..split])
+        .content_length
+        .expect("content-length");
+    assert_eq!(declared, out.len() - split, "the declared length is the real one");
+    let text = String::from_utf8(out[split..].to_vec()).expect("utf8");
+    assert!(text.contains(expected_tag()));
+    assert!(text.ends_with("</body></html>"), "the body must be complete");
+}
+
+#[test]
+fn several_responses_on_one_connection_are_each_rewritten() {
+    let ca = CertificateAuthority::generate().expect("ca");
+    let mut proxy = build_proxy(&ca, "/adfree-user.js");
+
+    // Two keep-alive responses in one read.
+    let mut response = html_response("<html><head></head><body>one</body></html>");
+    response.extend_from_slice(&html_response(
+        "<html><head></head><body>two</body></html>",
+    ));
+    let (out, injected) = proxy.rewrite_response(&response);
+    assert_eq!(injected, expected_tag().len() * 2, "both bodies got a tag");
+
+    let text = String::from_utf8(out).expect("utf8");
+    assert_eq!(text.matches(expected_tag()).count(), 2);
+    assert_eq!(text.matches("HTTP/1.1 200 OK").count(), 2);
+}
+
+#[test]
+fn bodyless_responses_do_not_hold_the_connection() {
+    let ca = CertificateAuthority::generate().expect("ca");
+    let mut proxy = build_proxy(&ca, "/adfree-user.js");
+
+    // A 304 advertises a length but never sends a body; the next response must
+    // still be found.
+    let mut response = b"HTTP/1.1 304 Not Modified\r\nContent-Length: 4242\r\n\r\n".to_vec();
+    response.extend_from_slice(&html_response(
+        "<html><head></head><body>after</body></html>",
+    ));
+    let (out, injected) = proxy.rewrite_response(&response);
+    assert_eq!(injected, expected_tag().len());
+    let text = String::from_utf8(out).expect("utf8");
+    assert!(text.contains("304 Not Modified"));
+    assert!(text.contains(expected_tag()));
+}
+
+#[test]
 fn json_responses_pass_through_byte_for_byte() {
     let ca = CertificateAuthority::generate().expect("ca");
     let mut proxy = build_proxy(&ca, "/adfree-user.js");
 
     let response = b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 7\r\n\r\n{\"a\":1}";
-    let (out, injected) = proxy.rewrite_response_for_test(response);
+    let (out, injected) = proxy.rewrite_response(response);
     assert_eq!(injected, 0, "JSON must not be touched");
     assert_eq!(out, response, "the body must arrive unchanged");
-}
-
-#[test]
-fn compressed_responses_are_left_alone() {
-    let ca = CertificateAuthority::generate().expect("ca");
-    let mut proxy = build_proxy(&ca, "/adfree-user.js");
-
-    let response = b"HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Encoding: gzip\r\nContent-Length: 12\r\n\r\n\x1f\x8b\x08\x00\x00\x00\x00\x00\x00\x03\x00\x00";
-    let (out, injected) = proxy.rewrite_response_for_test(response);
-    assert_eq!(injected, 0, "gzip must not be rewritten");
-    assert_eq!(out, response);
-}
-
-#[test]
-fn chunked_responses_are_left_alone() {
-    let ca = CertificateAuthority::generate().expect("ca");
-    let mut proxy = build_proxy(&ca, "/adfree-user.js");
-
-    let response = b"HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nTransfer-Encoding: chunked\r\n\r\n5\r\nhello\r\n0\r\n\r\n";
-    let (out, injected) = proxy.rewrite_response_for_test(response);
-    assert_eq!(injected, 0, "chunked bodies have no length to fix");
-    assert_eq!(out, response);
 }
 
 #[test]
@@ -157,7 +280,7 @@ fn empty_script_url_disables_the_rewriter() {
     let mut proxy = build_proxy(&ca, "");
 
     let body = "<html><head></head></html>";
-    let (out, injected) = proxy.rewrite_response_for_test(&html_response(body));
+    let (out, injected) = proxy.rewrite_response(&html_response(body));
     assert_eq!(injected, 0);
     assert_eq!(out, html_response(body));
 }
@@ -170,7 +293,7 @@ fn oversized_bodies_are_flushed_unchanged() {
     let mut response = Vec::new();
     response.extend_from_slice(b"HTTP/1.1 200 OK\r\nContent-Type: text/html\r\n\r\n");
     response.extend(std::iter::repeat_n(b'a', http::MAX_INJECTABLE_BODY + 64));
-    let (out, injected) = proxy.rewrite_response_for_test(&response);
+    let (out, injected) = proxy.rewrite_response(&response);
     assert_eq!(injected, 0);
     assert_eq!(out.len(), response.len(), "must flush unchanged");
 }
@@ -633,4 +756,286 @@ fn a_fragmented_client_hello_still_opens_the_session() {
         !out.to_peer.is_empty(),
         "the upstream hello must be drained once the server handshake is done"
     );
+}
+
+/// A filler that does not compress away: a repeated character would shrink the
+/// page to nothing and never reach the streaming path.
+fn noisy(len: usize) -> String {
+    let mut seed = 0x2545_f491_4f6c_dd1du64;
+    (0..len)
+        .map(|_| {
+            seed = seed
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
+            (b'a' + ((seed >> 33) % 26) as u8) as char
+        })
+        .collect()
+}
+
+/// De-chunks (and, when `gzip`, decodes) a streamed response, the way a client
+/// would: returns `(head, page)`.
+fn read_streamed(out: &[u8], gzip: bool) -> (String, String) {
+    let split = http::head_end(out).expect("head");
+    let head = String::from_utf8(out[..split].to_vec()).expect("utf8 head");
+    let mut payload = Vec::new();
+    let mut framing = http::DechunkState::new();
+    assert!(
+        framing.push(&out[split..], &mut payload).expect("chunks"),
+        "the streamed body must end with a terminating chunk"
+    );
+    assert!(framing.leftover().is_empty(), "no trailing bytes");
+    let plain = if gzip {
+        let mut decoded = Vec::new();
+        let mut decoder = http::GunzipState::new();
+        decoder
+            .push(&payload, &mut decoded)
+            .expect("the body must be gzip");
+        assert!(decoder.is_done(), "the gzip stream must be complete");
+        decoded
+    } else {
+        payload
+    };
+    (head, String::from_utf8(plain).expect("utf8 page"))
+}
+
+/// A page too long to hold whole: the body is streamed to the client as it is
+/// edited instead of being buffered until the end of the response.
+#[test]
+fn a_long_identity_body_streams_with_the_tag_in_it() {
+    let ca = CertificateAuthority::generate().expect("ca");
+    let mut proxy = build_proxy(&ca, "/adfree-user.js");
+
+    let filler = "y".repeat(120 * 1024);
+    let body = format!("<html><head><title>t</title></head><body>{filler}</body></html>");
+    let response = html_response(&body);
+
+    let mut out = Vec::new();
+    let mut injected = 0;
+    for chunk in response.chunks(7 * 1024) {
+        let (part, count) = proxy.rewrite_response(chunk);
+        out.extend_from_slice(&part);
+        injected += count;
+    }
+    assert_eq!(injected, expected_tag().len());
+
+    let (head, page) = read_streamed(&out, false);
+    let lower = head.to_lowercase();
+    assert!(head.starts_with("HTTP/1.1 200 OK"), "{head}");
+    assert!(lower.contains("transfer-encoding: chunked"), "{head}");
+    assert!(!lower.contains("content-length"), "framing must be chunked: {head}");
+
+    let tag = page.find(expected_tag()).expect("the tag must be in the page");
+    let head_close = page.find("</head>").expect("</head>");
+    assert!(tag < head_close, "the tag must land before </head>");
+    assert!(page.ends_with("</body></html>"), "the body must be complete");
+    assert_eq!(page.len(), body.len() + expected_tag().len());
+}
+
+#[test]
+fn a_long_gzip_body_streams_still_compressed() {
+    let ca = CertificateAuthority::generate().expect("ca");
+    let mut proxy = build_proxy(&ca, "/adfree-user.js");
+
+    let filler = noisy(120 * 1024);
+    let body = format!("<html><head><title>t</title></head><body>{filler}</body></html>");
+    let gzipped = http::gzip_encode(body.as_bytes()).expect("gzip");
+    let mut response = Vec::new();
+    response.extend_from_slice(b"HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Encoding: gzip\r\nContent-Length: ");
+    response.extend_from_slice(gzipped.len().to_string().as_bytes());
+    response.extend_from_slice(b"\r\n\r\n");
+    response.extend_from_slice(&gzipped);
+
+    let mut out = Vec::new();
+    let mut injected = 0;
+    for chunk in response.chunks(3 * 1024) {
+        let (part, count) = proxy.rewrite_response(chunk);
+        out.extend_from_slice(&part);
+        injected += count;
+    }
+    assert_eq!(injected, expected_tag().len());
+
+    let (head, page) = read_streamed(&out, true);
+    let lower = head.to_lowercase();
+    assert!(lower.contains("transfer-encoding: chunked"), "{head}");
+    assert!(lower.contains("content-encoding: gzip"), "must stay compressed: {head}");
+    assert!(!lower.contains("content-length"), "{head}");
+    assert!(page.contains(expected_tag()));
+    assert!(page.ends_with("</body></html>"));
+    assert_eq!(page.len(), body.len() + expected_tag().len());
+}
+
+/// The shape a real site serves: chunked *and* compressed, bytes arriving a
+/// few at a time.
+#[test]
+fn a_chunked_gzip_body_streams() {
+    let ca = CertificateAuthority::generate().expect("ca");
+    let mut proxy = build_proxy(&ca, "/adfree-user.js");
+
+    let filler = noisy(96 * 1024);
+    let body = format!("<html><head></head><body>{filler}</body></html>");
+    let gzipped = http::gzip_encode(body.as_bytes()).expect("gzip");
+    let mut response = Vec::new();
+    response.extend_from_slice(
+        b"HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Encoding: gzip\r\nTransfer-Encoding: chunked\r\n\r\n",
+    );
+    // Two chunks of compressed data, the way an origin writes them out.
+    let half = gzipped.len() / 2;
+    for piece in [&gzipped[..half], &gzipped[half..]] {
+        response.extend_from_slice(format!("{:x}\r\n", piece.len()).as_bytes());
+        response.extend_from_slice(piece);
+        response.extend_from_slice(b"\r\n");
+    }
+    response.extend_from_slice(b"0\r\n\r\n");
+
+    let mut out = Vec::new();
+    let mut injected = 0;
+    for chunk in response.chunks(997) {
+        let (part, count) = proxy.rewrite_response(chunk);
+        out.extend_from_slice(&part);
+        injected += count;
+    }
+    assert_eq!(injected, expected_tag().len());
+
+    let (head, page) = read_streamed(&out, true);
+    assert!(head.to_lowercase().contains("content-encoding: gzip"));
+    assert!(page.contains(expected_tag()));
+    assert!(page.ends_with("</body></html>"));
+    assert_eq!(page.len(), body.len() + expected_tag().len());
+}
+
+/// The streaming encoder must write a gzip stream the *library* decoder accepts
+/// too, not only the one this crate reads back.
+#[test]
+fn the_streamed_gzip_body_is_valid_gzip() {
+    let ca = CertificateAuthority::generate().expect("ca");
+    let mut proxy = build_proxy(&ca, "/adfree-user.js");
+
+    let filler = noisy(96 * 1024);
+    let body = format!("<html><head></head><body>{filler}</body></html>");
+    let gzipped = http::gzip_encode(body.as_bytes()).expect("gzip");
+    let mut response = Vec::new();
+    response.extend_from_slice(b"HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Encoding: gzip\r\nContent-Length: ");
+    response.extend_from_slice(gzipped.len().to_string().as_bytes());
+    response.extend_from_slice(b"\r\n\r\n");
+    response.extend_from_slice(&gzipped);
+
+    let (out, _) = proxy.rewrite_response(&response);
+    let split = http::head_end(&out).expect("head");
+    let mut payload = Vec::new();
+    let mut framing = http::DechunkState::new();
+    assert!(framing.push(&out[split..], &mut payload).expect("chunks"));
+    let plain = http::decode_body(&payload, http::Encoding::Gzip).expect("flate2 must accept it");
+    let page = String::from_utf8(plain).expect("utf8");
+    assert!(page.contains(expected_tag()));
+    assert!(page.ends_with("</body></html>"));
+}
+
+/// The exact shape that broke a real page: the network hands over bytes that
+/// end precisely where a chunk's payload ends, so the CRLF closing it starts
+/// the next read. The framing decoder has to keep that state.
+#[test]
+fn chunked_bodies_cut_at_the_payload_end_still_stream() {
+    let ca = CertificateAuthority::generate().expect("ca");
+    let mut proxy = build_proxy(&ca, "/adfree-user.js");
+
+    let filler = noisy(96 * 1024);
+    let body = format!("<html><head></head><body>{filler}</body></html>");
+    let gzipped = http::gzip_encode(body.as_bytes()).expect("gzip");
+    let head = b"HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Encoding: gzip\r\nTransfer-Encoding: chunked\r\n\r\n";
+
+    // Pieces of the wire stream: the head, then for every chunk its size line
+    // and payload in one read and the CRLF in the next.
+    let mut pieces: Vec<Vec<u8>> = vec![head.to_vec()];
+    for piece in gzipped.chunks(3 * 1024) {
+        let mut size_and_payload = format!("{:x}\r\n", piece.len()).into_bytes();
+        size_and_payload.extend_from_slice(piece);
+        pieces.push(size_and_payload);
+        pieces.push(b"\r\n".to_vec());
+    }
+    pieces.push(b"0\r\n\r\n".to_vec());
+
+    let mut out = Vec::new();
+    let mut injected = 0;
+    for piece in &pieces {
+        let (part, count) = proxy.rewrite_response(piece);
+        out.extend_from_slice(&part);
+        injected += count;
+    }
+    assert_eq!(injected, expected_tag().len());
+
+    let (head, page) = read_streamed(&out, true);
+    assert!(head.to_lowercase().contains("transfer-encoding: chunked"));
+    assert!(page.contains(expected_tag()));
+    assert!(page.ends_with("</body></html>"));
+    assert_eq!(page.len(), body.len() + expected_tag().len());
+}
+
+/// Cosmetic filtering has to run even when the proxy found no rules of its own:
+/// the runtime is what asks for the class/id tokens it meets, which is the only
+/// way a *streamed* page gets covered — the proxy only ever saw its head. This
+/// is the shape a real Wikipedia page has.
+#[test]
+fn the_page_runtime_is_injected_even_without_a_payload() {
+    let ca = CertificateAuthority::generate().expect("ca");
+    let mut proxy = build_proxy(&ca, "/adfree-user.js");
+
+    // A list whose rules match nothing on the page that follows.
+    let dir = std::env::temp_dir().join("adfree-proxy-tests");
+    std::fs::create_dir_all(&dir).expect("temp dir");
+    let path = dir.join("no-match-list.txt");
+    std::fs::write(&path, "other.test##.ad-box\n").expect("write list");
+    let engine = Arc::new(crate::filter::FilterEngine::new());
+    engine.rebuild(
+        &[crate::filter::FilterListInfo {
+            id: 1,
+            name: "no-match".to_string(),
+            url: String::new(),
+            enabled: true,
+            local_path: Some(path),
+            format: crate::filter::ListFormat::Standard,
+            category: 0,
+            rule_count: 0,
+            last_error: None,
+        }],
+        &[],
+    );
+    proxy.cosmetic = Some(engine);
+
+    let body = "<html><head><title>t</title></head><body>plain text</body></html>";
+    let (out, injected) = proxy.rewrite_response(&html_response(body));
+    let text = String::from_utf8(out).expect("utf8");
+    assert!(
+        text.contains("<script src=\"/adfree-page.js\"></script>"),
+        "the runtime must go out: {text}"
+    );
+    assert!(
+        !text.contains("window.__adfree_page"),
+        "there is no payload to send for this page: {text}"
+    );
+    assert!(text.contains(expected_tag()), "{text}");
+    assert!(injected > 0);
+}
+
+/// A redirect body is never rendered, so nothing is injected into it: an 11 KB
+/// payload on every hop would be paid for nothing.
+#[test]
+fn redirect_bodies_are_left_alone() {
+    let ca = CertificateAuthority::generate().expect("ca");
+    let mut proxy = build_proxy(&ca, "/adfree-user.js");
+    let body = "<html><head><title>Moved</title></head><body>go</body></html>";
+    let mut raw = Vec::new();
+    raw.extend_from_slice(
+        b"HTTP/1.1 301 Moved Permanently\r\nLocation: https://elsewhere.test/\r\nContent-Type: text/html\r\nContent-Length: ",
+    );
+    raw.extend_from_slice(body.len().to_string().as_bytes());
+    raw.extend_from_slice(b"\r\n\r\n");
+    raw.extend_from_slice(body.as_bytes());
+
+    let (out, injected) = proxy.rewrite_response(&raw);
+    assert_eq!(injected, 0);
+    assert!(
+        out.windows(body.len()).any(|w| w == body.as_bytes()),
+        "the body must travel untouched"
+    );
+    assert!(!out.windows(6).any(|w| w == b"adfree"));
 }

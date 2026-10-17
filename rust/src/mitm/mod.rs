@@ -18,6 +18,9 @@ pub mod tcp;
 pub mod tls;
 
 #[cfg(test)]
+mod e2e_tests;
+
+#[cfg(test)]
 mod proxy_tests;
 
 #[cfg(test)]
