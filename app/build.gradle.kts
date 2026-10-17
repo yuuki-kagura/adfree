@@ -169,7 +169,11 @@ val rustTargetDir: String = (project.findProperty("rustTargetDir") as String?)
     ?: System.getenv("ADFREE_RUST_TARGET_DIR")
     ?: rootProject.layout.buildDirectory.dir("rust-target").get().asFile.absolutePath
 
-val skipNative: Boolean = (project.findProperty("skipNative") as String?).toBoolean()
+val skipNative: Boolean = (project.findProperty("skipNative") as String?)
+    // Gradle hands a bare `-PskipNative` an empty string, which `.toBoolean()`
+    // reads as false; "present and not false" matches what the flag promises.
+    ?.let { it.lowercase() != "false" }
+    ?: false
 
 val ndkDir: String = sequenceOf(
     project.findProperty("ndkDir") as String?,
