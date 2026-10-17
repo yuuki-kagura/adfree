@@ -17,7 +17,9 @@ class NetworkRequestLogTest {
         list: String = "AdGuard DNS filter",
         latencyNs: Int = 12_000,
         bytesSaved: Int = 48_000,
+        id: Long = 1L,
     ) = LogEvent(
+        id = id,
         tsMs = 1_700_000_000_000L,
         action = action,
         category = 0,
@@ -32,7 +34,7 @@ class NetworkRequestLogTest {
 
     @Test
     fun `blocked dns events map to the right status and protocol`() {
-        val log = NetworkRequestLog.from(event(CoreActions.BLOCKED.toInt()), 1L)
+        val log = NetworkRequestLog.from(event(CoreActions.BLOCKED.toInt()))
         assertEquals(FilterStatus.BLOCKED, log.status)
         assertEquals(ProtocolType.DNS_UDP, log.protocol)
         assertEquals("ads.example.com", log.domain)
@@ -46,7 +48,7 @@ class NetworkRequestLogTest {
 
     @Test
     fun `tcp reset events map to tcp protocol`() {
-        val log = NetworkRequestLog.from(event(CoreActions.TCP_RESET.toInt()), 2L)
+        val log = NetworkRequestLog.from(event(CoreActions.TCP_RESET.toInt()))
         assertEquals(FilterStatus.BLOCKED, log.status)
         assertEquals(ProtocolType.TCP, log.protocol)
         assertTrue(log.dataSavedBytes > 0)
@@ -54,7 +56,7 @@ class NetworkRequestLogTest {
 
     @Test
     fun `quic drops map to quic`() {
-        val log = NetworkRequestLog.from(event(CoreActions.QUIC_DROP.toInt()), 3L)
+        val log = NetworkRequestLog.from(event(CoreActions.QUIC_DROP.toInt()))
         assertEquals(ProtocolType.QUIC, log.protocol)
     }
 
@@ -62,7 +64,6 @@ class NetworkRequestLogTest {
     fun `allowed events keep no rule`() {
         val log = NetworkRequestLog.from(
             event(CoreActions.ALLOWED.toInt(), rule = "", list = "", bytesSaved = 0),
-            4L,
         )
         assertEquals(FilterStatus.ALLOWED, log.status)
         assertNull(log.matchedRule)
@@ -73,8 +74,14 @@ class NetworkRequestLogTest {
 
     @Test
     fun `category index maps to the ui label`() {
-        val tracker = NetworkRequestLog.from(event(CoreActions.TCP_RESET.toInt()), 5L)
+        val tracker = NetworkRequestLog.from(event(CoreActions.TCP_RESET.toInt()))
         assertEquals(RequestCategory.AD, tracker.category)
         assertEquals("Tracker & Telemetry", RequestCategory.TRACKER.label)
+    }
+
+    @Test
+    fun `database row id becomes the list key`() {
+        val log = NetworkRequestLog.from(event(CoreActions.BLOCKED.toInt(), id = 42L))
+        assertEquals(42L, log.id)
     }
 }

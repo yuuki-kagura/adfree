@@ -529,10 +529,21 @@ class CoreEngine {
 
     fun resetStats() = runCatching { git.shin.adfree.core.coreResetStats() }
 
-    fun drainEvents(max: Int): List<LogEvent> =
-        runCatching { git.shin.adfree.core.coreDrainEvents(max) }.getOrDefault(emptyList())
+    // ------------------------------------------------ persisted request log
 
-    fun clearEvents() = runCatching { git.shin.adfree.core.coreClearEvents() }
+    /**
+     * One page of the log stored in SQLite, newest first. Rust caps a page at
+     * 500 rows; the app keeps its own, smaller page size.
+     */
+    fun logPage(offset: Int, limit: Int): List<LogEvent> =
+        runCatching { git.shin.adfree.core.coreLogPage(offset.toUInt(), limit.toUInt()) }
+            .getOrDefault(emptyList())
+
+    /** Total rows in the persisted log (0 while the store is not open). */
+    fun logCount(): Long = runCatching { git.shin.adfree.core.coreLogCount() }.getOrDefault(0L)
+
+    /** Empties the persisted log, queued rows included. */
+    fun logClear() = runCatching { git.shin.adfree.core.coreLogClear() }
 
     // ------------------------------------------------------------ log plumbing
 

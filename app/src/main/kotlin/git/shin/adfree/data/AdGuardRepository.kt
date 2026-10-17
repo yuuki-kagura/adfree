@@ -30,7 +30,6 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
-import java.util.concurrent.atomic.AtomicLong
 
 /**
  * Single source of truth.
@@ -44,7 +43,6 @@ class AdGuardRepository(
     private val engine: CoreEngine,
 ) {
     private val scope = CoroutineScope(Dispatchers.Default)
-    private val logIds = AtomicLong(0)
 
     private val _settings = MutableStateFlow(ProtectionSettings())
     val settings: StateFlow<ProtectionSettings> = _settings.asStateFlow()
@@ -54,6 +52,20 @@ class AdGuardRepository(
 
     private val _logs = MutableStateFlow<List<NetworkRequestLog>>(emptyList())
     val logs: StateFlow<List<NetworkRequestLog>> = _logs.asStateFlow()
+
+    private val _logTotal = MutableStateFlow(0L)
+    val logTotal: StateFlow<Long> = _logTotal.asStateFlow()
+
+    /** How many of the newest rows the UI mirrors; grows one page per tap. */
+    private var logWindow = LOG_PAGE_SIZE
+    private var lastLogCount = -1L
+
+    /**
+     * False while the log screen is scrolled into history: fresh rows would
+     * keep pushing the rows under the user's finger, so the window freezes
+     * until they scroll back to the top.
+     */
+    private var logTailing = true
 
     private val _filterLists = MutableStateFlow<List<FilterList>>(emptyList())
     val filterLists: StateFlow<List<FilterList>> = _filterLists.asStateFlow()
@@ -132,35 +144,61 @@ class AdGuardRepository(
 
     /**
      * One tick every 500ms with the screen on, 2s when off. This is the
-     * app's entire UI cost: two atomic reads plus one log decode.
+     * app's entire UI cost: two atomic reads plus a COUNT(*) on the log.
      */
     private fun startStatsPoller() {
         scope.launch {
-            var lastLogTs = 0L
             while (true) {
                 val snapshot = engine.stats()
                 _stats.value = snapshot.toUiStats(engine.isBuilding())
                 // Native warnings are buffered natively so the packet threads
                 // never do I/O; drain them here or they are lost.
                 engine.flushNativeLogLines()
-                val events = engine.drainEvents(256)
-                if (events.isNotEmpty()) {
-                    val entries = mutableListOf<NetworkRequestLog>()
-                    for (event in events) {
-                        if (event.tsMs == lastLogTs) continue
-                        lastLogTs = event.tsMs
-                        entries += NetworkRequestLog.from(event, logIds.getAndIncrement())
-                    }
-                    if (entries.isNotEmpty()) {
-                        // Newest first, capped at 300 entries in RAM.
-                        _logs.update { current ->
-                            (entries.reversed() + current).take(MAX_LOG_ENTRIES)
-                        }
-                    }
-                }
+                refreshLogIfChanged()
                 delay(if (engine.isScreenOff()) 2_000 else 500)
             }
         }
+    }
+
+    /**
+     * Mirrors the newest slice of the database log. COUNT(*) is cheap, so a
+     * tick only pays for rows once the writer actually persisted something.
+     * While the user has paged back into history the window stays put, so the
+     * rows under their finger do not shift every time traffic arrives.
+     */
+    private fun refreshLogIfChanged() {
+        val total = engine.logCount()
+        if (total == lastLogCount) return
+        lastLogCount = total
+        _logTotal.value = total
+        if (!logTailing) return
+        reloadLogWindow()
+    }
+
+    /** The log screen reports its scroll state here; see [logTailing]. */
+    fun setLogTailing(tailing: Boolean) {
+        if (tailing == logTailing) return
+        logTailing = tailing
+        if (tailing) reloadLogWindow()
+    }
+
+    private fun reloadLogWindow() {
+        val rows = ArrayList<NetworkRequestLog>(logWindow)
+        var offset = 0
+        while (offset < logWindow) {
+            val page = engine.logPage(offset, LOG_PAGE_SIZE)
+            rows += page.map(NetworkRequestLog::from)
+            if (page.size < LOG_PAGE_SIZE) break
+            offset += page.size
+        }
+        _logs.value = rows
+    }
+
+    /** Shows one more page of older rows under the ones already on screen. */
+    fun loadMoreLogs() {
+        if (_logs.value.size >= _logTotal.value || logWindow >= MAX_LOG_ROWS) return
+        logWindow += LOG_PAGE_SIZE
+        reloadLogWindow()
     }
 
     private fun StatsSnapshot.toUiStats(building: Boolean): ProtectionStats {
@@ -656,13 +694,17 @@ class AdGuardRepository(
     }
 
     fun clearLogs() {
+        logWindow = LOG_PAGE_SIZE
+        lastLogCount = 0
+        _logTotal.value = 0
         _logs.value = emptyList()
-        engine.clearEvents()
+        // DELETE may touch 200k rows; keep it off the caller's thread.
+        scope.launch { engine.logClear() }
     }
 
     fun resetStats() {
         engine.resetStats()
-        _logs.value = emptyList()
+        clearLogs()
     }
 
     /**
@@ -953,7 +995,12 @@ class AdGuardRepository(
 
     private companion object {
         private const val TAG = "AdFreeRepo"
-        private const val MAX_LOG_ENTRIES = 300
+
+        /** Rows fetched per page; the log screen loads more on demand. */
+        private const val LOG_PAGE_SIZE = 200
+
+        /** Ceiling for the in-RAM window so paging cannot grow without bound. */
+        private const val MAX_LOG_ROWS = 2_000
         private const val MAX_APPS_SHOWN = 250
         private const val BUILTIN_CUSTOM = "builtin_custom"
 

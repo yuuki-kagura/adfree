@@ -168,6 +168,9 @@ pub struct HostVerdictBinding {
 /// One line of the Activity log.
 #[derive(uniffi::Record, Clone, Debug, Default)]
 pub struct LogEvent {
+    /// SQLite rowid, stable across page reads; 0 for events that only exist in
+    /// the live ring (drained before they were persisted).
+    pub id: i64,
     pub ts_ms: i64,
     /// 0 = allowed, 1 = blocked, 2 = TCP reset, 3 = UDP drop, 4 = QUIC drop.
     pub action: i32,
@@ -184,6 +187,7 @@ pub struct LogEvent {
 impl From<&events::Event> for LogEvent {
     fn from(e: &events::Event) -> Self {
         LogEvent {
+            id: 0,
             ts_ms: e.ts_ms as i64,
             action: e.action as i32,
             category: e.category as i32,
@@ -201,6 +205,7 @@ impl From<&events::Event> for LogEvent {
 impl From<&crate::store::LogRow> for LogEvent {
     fn from(r: &crate::store::LogRow) -> Self {
         LogEvent {
+            id: r.id,
             ts_ms: r.ts_ms,
             action: r.action as i32,
             category: r.category as i32,

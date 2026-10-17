@@ -1969,6 +1969,12 @@ public object FfiConverterTypeHostVerdictBinding: FfiConverterRustBuffer<HostVer
  * One line of the Activity log.
  */
 data class LogEvent (
+    /**
+     * SQLite rowid, stable across page reads; 0 for events that only exist in
+     * the live ring (drained before they were persisted).
+     */
+    var `id`: kotlin.Long
+    , 
     var `tsMs`: kotlin.Long
     , 
     /**
@@ -2008,6 +2014,7 @@ public object FfiConverterTypeLogEvent: FfiConverterRustBuffer<LogEvent> {
     override fun read(buf: ByteBuffer): LogEvent {
         return LogEvent(
             FfiConverterLong.read(buf),
+            FfiConverterLong.read(buf),
             FfiConverterInt.read(buf),
             FfiConverterInt.read(buf),
             FfiConverterString.read(buf),
@@ -2021,6 +2028,7 @@ public object FfiConverterTypeLogEvent: FfiConverterRustBuffer<LogEvent> {
     }
 
     override fun allocationSize(value: LogEvent) = (
+            FfiConverterLong.allocationSize(value.`id`) +
             FfiConverterLong.allocationSize(value.`tsMs`) +
             FfiConverterInt.allocationSize(value.`action`) +
             FfiConverterInt.allocationSize(value.`category`) +
@@ -2034,6 +2042,7 @@ public object FfiConverterTypeLogEvent: FfiConverterRustBuffer<LogEvent> {
     )
 
     override fun write(value: LogEvent, buf: ByteBuffer) {
+            FfiConverterLong.write(value.`id`, buf)
             FfiConverterLong.write(value.`tsMs`, buf)
             FfiConverterInt.write(value.`action`, buf)
             FfiConverterInt.write(value.`category`, buf)

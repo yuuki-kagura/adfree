@@ -79,12 +79,18 @@ class AdGuardViewModel(
 
     val uiState: StateFlow<AdGuardUiState> = combine(
         combine(
-            _currentTab,
-            repository.settings,
-            repository.stats,
+            combine(
+                _currentTab,
+                repository.settings,
+                repository.stats,
+            ) { tab, settings, stats -> Triple(tab, settings, stats) },
             repository.logs,
+            repository.logTotal,
             _searchQuery,
-        ) { tab, settings, stats, logs, query -> UiPartA(tab, settings, stats, logs, query) },
+        ) { head, logs, total, query ->
+            val (tab, settings, stats) = head
+            UiPartA(tab, settings, stats, logs, total, query)
+        },
         combine(
             _statusFilter,
             repository.filterLists,
@@ -155,6 +161,7 @@ class AdGuardViewModel(
             stats = a.stats,
             logs = a.logs,
             filteredLogs = logs,
+            logTotal = a.logTotal,
             filterLists = b.filters,
             appFirewallRules = apps,
             dnsProviders = b.dns,
@@ -292,6 +299,8 @@ class AdGuardViewModel(
             is AdGuardIntent.AppCategoryFilterChanged -> _appCategoryFilter.value = intent.filter
             is AdGuardIntent.ClearLogs -> repository.clearLogs()
             is AdGuardIntent.ResetStats -> repository.resetStats()
+            is AdGuardIntent.LoadMoreLogs -> repository.loadMoreLogs()
+            is AdGuardIntent.SetLogTailing -> repository.setLogTailing(intent.tailing)
             is AdGuardIntent.ShowCustomRuleDialog -> _showCustomRuleDialog.value = intent.show
             is AdGuardIntent.ShowCustomRuleEditor -> _showCustomRuleEditor.value = intent.show
             is AdGuardIntent.FilterSearchQueryChanged -> _filterSearchQuery.value = intent.query
@@ -455,6 +464,7 @@ class AdGuardViewModel(
         val settings: ProtectionSettings,
         val stats: ProtectionStats,
         val logs: List<NetworkRequestLog>,
+        val logTotal: Long,
         val query: String,
     )
 

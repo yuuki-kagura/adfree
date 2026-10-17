@@ -52,7 +52,7 @@ data class NetworkRequestLog(
 ) {
     companion object {
         /** Convert a [git.shin.adfree.core.LogEvent] into a UI model. */
-        fun from(event: git.shin.adfree.core.LogEvent, id: Long): NetworkRequestLog {
+        fun from(event: git.shin.adfree.core.LogEvent): NetworkRequestLog {
             val action = event.action
             val status = when (action) {
                 CoreActions.ALLOWED.toInt() -> FilterStatus.ALLOWED
@@ -68,7 +68,7 @@ data class NetworkRequestLog(
             }
             val latencyMicros = event.latencyNs.toLong() / 1_000L
             return NetworkRequestLog(
-                id = id,
+                id = event.id,
                 timestampMs = event.tsMs,
                 domain = event.domain,
                 ipAddress = event.ip,

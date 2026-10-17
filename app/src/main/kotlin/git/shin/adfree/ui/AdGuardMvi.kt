@@ -18,6 +18,7 @@ data class AdGuardUiState(
     val stats: ProtectionStats = ProtectionStats(),
     val logs: List<NetworkRequestLog> = emptyList(),
     val filteredLogs: List<NetworkRequestLog> = emptyList(),
+    val logTotal: Long = 0L,
     val filterLists: List<FilterList> = emptyList(),
     val appFirewallRules: List<AppFirewallRule> = emptyList(),
     val dnsProviders: List<DnsProvider> = emptyList(),
@@ -84,6 +85,10 @@ sealed interface AdGuardIntent {
     data class AppCategoryFilterChanged(val filter: String?) : AdGuardIntent
     data object ClearLogs : AdGuardIntent
     data object ResetStats : AdGuardIntent
+    data object LoadMoreLogs : AdGuardIntent
+
+    /** Sent by the log screen as it is scrolled to its top (or away from it). */
+    data class SetLogTailing(val tailing: Boolean) : AdGuardIntent
     data class ShowCustomRuleDialog(val show: Boolean) : AdGuardIntent
     data class ShowCustomRuleEditor(val show: Boolean) : AdGuardIntent
     data class FilterSearchQueryChanged(val query: String) : AdGuardIntent

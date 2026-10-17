@@ -86,6 +86,9 @@ pub fn channel() -> (Sender, Receiver<Msg>) {
 /// One row of `log_events`, owned (only the writer thread allocates rows).
 #[derive(Clone, Debug)]
 pub struct LogRow {
+    /// SQLite rowid (0 before the row has been inserted). The UI uses it as a
+    /// stable list key across pages.
+    pub id: i64,
     pub ts_ms: i64,
     pub action: i64,
     pub category: i64,
@@ -101,6 +104,8 @@ pub struct LogRow {
 impl From<&Event> for LogRow {
     fn from(e: &Event) -> LogRow {
         LogRow {
+            // Assigned by SQLite; only reads ever see a non-zero id.
+            id: 0,
             ts_ms: e.ts_ms as i64,
             action: e.action as i64,
             category: e.category as i64,
@@ -195,7 +200,7 @@ fn write_batch(db: &Db, rows: &[LogRow]) -> rusqlite::Result<()> {
     tx.commit()
 }
 
-const COLUMNS: &str = "ts_ms, action, category, domain, ip, rule, list_name, \
+const COLUMNS: &str = "id, ts_ms, action, category, domain, ip, rule, list_name, \
                        latency_ns, bytes_saved, ipv6";
 
 const INSERT_SQL: &str = "INSERT INTO log_events \
@@ -209,16 +214,17 @@ pub(super) fn page(db: &Db, offset: u32, limit: u32) -> rusqlite::Result<Vec<Log
     let mut stmt = conn.prepare_cached(&sql)?;
     let rows = stmt.query_map([limit as i64, offset as i64], |r| {
         Ok(LogRow {
-            ts_ms: r.get(0)?,
-            action: r.get(1)?,
-            category: r.get(2)?,
-            domain: r.get(3)?,
-            ip: r.get(4)?,
-            rule: r.get(5)?,
-            list_name: r.get(6)?,
-            latency_ns: r.get(7)?,
-            bytes_saved: r.get(8)?,
-            ipv6: r.get(9)?,
+            id: r.get(0)?,
+            ts_ms: r.get(1)?,
+            action: r.get(2)?,
+            category: r.get(3)?,
+            domain: r.get(4)?,
+            ip: r.get(5)?,
+            rule: r.get(6)?,
+            list_name: r.get(7)?,
+            latency_ns: r.get(8)?,
+            bytes_saved: r.get(9)?,
+            ipv6: r.get(10)?,
         })
     })?;
     rows.collect()
