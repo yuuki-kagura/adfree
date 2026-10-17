@@ -26,6 +26,7 @@ pub mod fxhash;
 pub mod logbuf;
 pub mod packet;
 pub mod stats;
+pub mod store;
 pub mod udpnat;
 pub mod uidmap;
 pub mod upstream;

@@ -42,6 +42,14 @@ pub struct StatsSnapshot {
     pub rss_kb: i64,
     pub loop_iterations: i64,
     pub busy_ns: i64,
+    /// Time inside rustls (HTTPS filtering): all feeds, plus the share of it
+    /// spent while a handshake was still running.
+    pub tls_ns: i64,
+    pub handshake_ns: i64,
+    /// Time spent rewriting response bodies (decompress, inject, recompress).
+    pub rewrite_ns: i64,
+    /// Log rows dropped because the database writer could not keep up.
+    pub log_dropped: i64,
     pub events_pending: i64,
     pub events_dropped: i64,
     pub filter_build_ms: i64,
@@ -75,6 +83,10 @@ impl From<VpnStats> for StatsSnapshot {
             rss_kb: s.rss_kb as i64,
             loop_iterations: s.loop_iterations as i64,
             busy_ns: s.busy_ns as i64,
+            tls_ns: s.tls_ns as i64,
+            handshake_ns: s.handshake_ns as i64,
+            rewrite_ns: s.rewrite_ns as i64,
+            log_dropped: s.log_dropped as i64,
             events_pending: s.events_pending as i64,
             events_dropped: s.events_dropped as i64,
             filter_build_ms: s.filter_build_ms as i64,
@@ -182,6 +194,23 @@ impl From<&events::Event> for LogEvent {
             latency_ns: e.latency_ns as i32,
             bytes_saved: e.bytes_saved as i32,
             ipv6: e.flags & 0b01 != 0,
+        }
+    }
+}
+
+impl From<&crate::store::LogRow> for LogEvent {
+    fn from(r: &crate::store::LogRow) -> Self {
+        LogEvent {
+            ts_ms: r.ts_ms,
+            action: r.action as i32,
+            category: r.category as i32,
+            domain: r.domain.clone(),
+            ip: r.ip.clone(),
+            rule: r.rule.clone(),
+            list_name: r.list_name.clone(),
+            latency_ns: r.latency_ns as i32,
+            bytes_saved: r.bytes_saved as i32,
+            ipv6: r.ipv6,
         }
     }
 }
@@ -351,6 +380,50 @@ pub fn core_drain_events(max: i32) -> Vec<LogEvent> {
 #[uniffi::export]
 pub fn core_clear_events() {
     guard((), || crate::core().clear_events())
+}
+
+// ------------------------------------------------------------------- store
+
+/// Hands the core the directory it owns: filter bodies, script bodies, the CA
+/// and the database all live under it. The platform calls this once with the
+/// app's files directory; later calls are a no-op, so a reconnect never
+/// re-opens a live store. Returns false when the directory cannot be used —
+/// the core then keeps running without persistence.
+#[uniffi::export]
+pub fn core_set_data_root(path: String) -> bool {
+    guard(false, || crate::core().set_data_root(&path))
+}
+
+/// One page of the persisted request log, newest first. Pages are indexed, so
+/// the UI can keep asking while the user scrolls.
+#[uniffi::export]
+pub fn core_log_page(offset: u32, limit: u32) -> Vec<LogEvent> {
+    guard(Vec::new(), || match crate::core().store() {
+        Some(store) => store
+            .log_page(offset, limit)
+            .iter()
+            .map(LogEvent::from)
+            .collect(),
+        None => Vec::new(),
+    })
+}
+
+/// Total rows in the persisted request log (0 while the store is not open).
+#[uniffi::export]
+pub fn core_log_count() -> i64 {
+    guard(0, || match crate::core().store() {
+        Some(store) => store.log_count() as i64,
+        None => 0,
+    })
+}
+
+/// Empties the request log: the database and the live in-memory tail.
+#[uniffi::export]
+pub fn core_log_clear() -> bool {
+    guard(false, || {
+        crate::core().clear_log();
+        true
+    })
 }
 
 /// Internal diagnostics buffered by the core (bad resolver, unreadable list...).

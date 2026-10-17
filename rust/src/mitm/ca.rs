@@ -12,10 +12,13 @@
 //! the chain [leaf, stored_CA_der] still verifies.
 //!
 //! ECDSA P-256: fast key generation (no DNS-path stall), strong enough for
-//! modern TLS, and leaves are cached per host so the cost is paid once.
+//! modern TLS, and leaves are cached per host so the cost is paid once. Every
+//! host shares one leaf key (see [`leaf_key`]): generating one per host would
+//! run a keygen inside the packet loop, and a page opening a dozen connections
+//! would stack a dozen keygens behind each other.
 
 use std::collections::HashMap;
-use std::sync::Mutex;
+use std::sync::{Mutex, OnceLock};
 
 /// The local CA: mints leaf certs for the hosts we intercept.
 ///
@@ -135,7 +138,7 @@ impl CertificateAuthority {
             return Ok(hit.clone());
         }
 
-        let leaf_key = rcgen::KeyPair::generate().map_err(|e| format!("leaf keygen: {e}"))?;
+        let leaf_key = leaf_key()?;
         let mut params =
             rcgen::CertificateParams::new(vec![host.clone()]).map_err(|e| format!("params: {e}"))?;
         // Same as the CA: the DN is what a "view certificate" screen shows, so
@@ -157,7 +160,7 @@ impl CertificateAuthority {
 
         // Signed by our CA: (khoá leaf, CA object, khoá CA).
         let cert = params
-            .signed_by(&leaf_key, &self.ca_object, &self.ca_key)
+            .signed_by(leaf_key, &self.ca_object, &self.ca_key)
             .map_err(|e| format!("sign leaf: {e}"))?;
 
         let issued = IssuedCert {
@@ -181,6 +184,20 @@ impl CertificateAuthority {
         // A CA object always carries BasicConstraints in its params.
         !self.cert_der.is_empty()
     }
+}
+
+/// One leaf key for every host.
+///
+/// What has to differ per certificate is its name (SAN) and validity, not the
+/// key: mitmproxy and AdGuard ship a single leaf key for exactly this reason.
+/// Generating one per host would run a keygen inside the packet path, and a
+/// page opening a dozen connections would serialise a dozen keygens behind the
+/// accept loop.
+fn leaf_key() -> Result<&'static rcgen::KeyPair, String> {
+    static KEY: OnceLock<Option<rcgen::KeyPair>> = OnceLock::new();
+    KEY.get_or_init(|| rcgen::KeyPair::generate().ok())
+        .as_ref()
+        .ok_or_else(|| "leaf keygen failed".to_string())
 }
 
 /// Self-sign a CA object and return its DER.

@@ -20,6 +20,10 @@ class AdGuardAppContainer(private val context: Context) {
     val coreEngine: CoreEngine by lazy {
         CoreEngine().also {
             git.shin.adfree.core.CoreEngine.filesRootProvider = { context.filesDir.absolutePath }
+            // The core owns everything under the app's files directory from
+            // here on: filters, scripts, the CA and the request-log database.
+            // The call is idempotent, so a later restart is a no-op.
+            runCatching { git.shin.adfree.core.coreSetDataRoot(context.filesDir.absolutePath) }
         }
     }
 

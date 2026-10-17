@@ -13,9 +13,11 @@ use crate::mitm::http;
 use crate::mitm::tls::{
     self, feed_client, feed_client_wire, feed_server, send_to_client, FlowResolver, TlsSession,
 };
+use crate::stats::Stats;
 use rustls::{ClientConfig, ServerConnection};
 use std::collections::VecDeque;
 use std::sync::Arc;
+use std::time::Instant;
 
 /// Upper bound on client bytes buffered while waiting for the ClientHello.
 /// A hello is a few KB; anything beyond this is not TLS we can terminate and
@@ -99,6 +101,21 @@ struct PendingState {
     raw: Vec<u8>,
 }
 
+/// Records one TLS half's cost in the engine counters. `handshake` marks
+/// feeds that ran while the half was still handshaking: key agreements are the
+/// expensive part, and separating them tells whether the cost is one-time
+/// connection setup or steady-state encryption (the worker-pool question).
+fn record_tls(stats: Option<&Stats>, started: Instant, handshake: bool) {
+    let Some(stats) = stats else {
+        return;
+    };
+    let ns = started.elapsed().as_nanos() as u64;
+    stats.add(&stats.tls_ns, ns);
+    if handshake {
+        stats.add(&stats.handshake_ns, ns);
+    }
+}
+
 /// One intercepted connection.
 pub struct ProxySession {
     state: ProxyState,
@@ -125,6 +142,9 @@ pub struct ProxySession {
     pub script_body: Arc<str>,
     /// Cosmetic filtering: rules are computed per page when set.
     pub cosmetic: Option<Arc<FilterEngine>>,
+    /// Hot counters of the owning engine, for the TLS and rewrite timings the
+    /// HTTPS path adds. `None` when no engine owns the session (tests).
+    stats: Option<Arc<Stats>>,
 }
 
 /// Where a connection's response stream stands.
@@ -274,6 +294,7 @@ impl ProxySession {
             script_tag_src,
             script_body,
             cosmetic: None,
+            stats: None,
         }
     }
 
@@ -309,6 +330,7 @@ impl ProxySession {
             script_tag_src,
             script_body,
             cosmetic: None,
+            stats: None,
         })
     }
 
@@ -316,6 +338,12 @@ impl ProxySession {
     /// computed from `filter` and injected alongside the user scripts.
     pub fn set_cosmetic(&mut self, filter: Arc<FilterEngine>) {
         self.cosmetic = Some(filter);
+    }
+
+    /// Points the session at the engine's counters so TLS and rewrite costs
+    /// show up in the stats the UI already polls.
+    pub fn set_stats(&mut self, stats: Arc<Stats>) {
+        self.stats = Some(stats);
     }
 
     /// The SNI captured from the ClientHello, once it has arrived.
@@ -355,7 +383,10 @@ impl ProxySession {
             }),
             ProxyState::Pending { .. } => self.pending_client_payload(payload),
             ProxyState::Active(session) => {
+                let started = Instant::now();
+                let handshaking = tls::server_handshaking(&session.server);
                 let plain = feed_server(&mut session.server, payload)?;
+                record_tls(self.stats.as_deref(), started, handshaking);
                 self.after_client_feed(plain)
             }
         }
@@ -370,7 +401,10 @@ impl ProxySession {
             return Ok(self.splice_pending_verbatim());
         }
         state.raw.extend_from_slice(payload);
+        let started = Instant::now();
+        let handshaking = tls::server_handshaking(&state.server);
         let fed = feed_server(&mut state.server, payload);
+        record_tls(self.stats.as_deref(), started, handshaking);
         let captured = state.resolver.captured();
         match fed {
             Err(e) => {
@@ -482,6 +516,7 @@ impl ProxySession {
             &self.script_src,
             &self.script_body,
             self.cosmetic.as_deref().zip(self.captured.as_deref()),
+            self.stats.as_deref(),
             &mut self.head_requests,
             &mut outcome,
         )?;
@@ -501,6 +536,7 @@ impl ProxySession {
         serve_path: &str,
         script_body: &str,
         cosmetic: Option<(&FilterEngine, &str)>,
+        stats: Option<&Stats>,
         head_requests: &mut VecDeque<http::RequestInfo>,
         outcome: &mut Outcome,
     ) -> Result<(), String> {
@@ -509,9 +545,12 @@ impl ProxySession {
         }
         if !tls::server_handshaking(&session.server) {
             while let Some(local) = take_local_request(serve_path, script_body, cosmetic, buffer) {
+                let started = Instant::now();
+                let handshaking = tls::server_handshaking(&session.server);
                 outcome
                     .to_client
                     .extend(send_to_client(&mut session.server, &local)?);
+                record_tls(stats, started, handshaking);
             }
         }
         // A buffer that starts with a method is a request head, not the tail of
@@ -526,7 +565,10 @@ impl ProxySession {
         }
         let request = std::mem::take(buffer);
         if !request.is_empty() {
+            let started = Instant::now();
+            let handshaking = tls::client_handshaking(&session.client);
             outcome.to_peer.extend(feed_client(&mut session.client, &request)?);
+            record_tls(stats, started, handshaking);
         }
         Ok(())
     }
@@ -545,7 +587,10 @@ impl ProxySession {
                 Ok(Outcome::default())
             }
             ProxyState::Active(session) => {
+                let started = Instant::now();
+                let handshaking = tls::client_handshaking(&session.client);
                 let plain = feed_client_wire(&mut session.client, payload)?;
+                record_tls(self.stats.as_deref(), started, handshaking);
                 self.after_peer_wire(plain)
             }
         }
@@ -567,6 +612,7 @@ impl ProxySession {
                 &self.script_src,
                 &self.script_body,
                 self.cosmetic.as_deref().zip(self.captured.as_deref()),
+                self.stats.as_deref(),
                 &mut self.head_requests,
                 &mut outcome,
             )?;
@@ -577,16 +623,23 @@ impl ProxySession {
             }
         }
         // Decrypt, edit, re-encrypt for the client.
+        let rewrite_started = Instant::now();
         let (edited, injected) = self.rewrite_response(&plain);
+        if let Some(stats) = self.stats.as_deref() {
+            stats.add(&stats.rewrite_ns, rewrite_started.elapsed().as_nanos() as u64);
+        }
         outcome.injected = injected;
         if let ProxyState::Active(session) = &mut self.state {
             // Append, never replace: flush_client_requests may already have
             // queued the locally served script for this very round, and a
             // handshake bookkeeping record (NewSessionTicket) can still be
             // waiting even when there is no body to forward.
+            let started = Instant::now();
+            let handshaking = tls::server_handshaking(&session.server);
             outcome
                 .to_client
                 .extend(send_to_client(&mut session.server, &edited)?);
+            record_tls(self.stats.as_deref(), started, handshaking);
             outcome
                 .to_client
                 .extend(tls::take_server_outbound(&mut session.server));

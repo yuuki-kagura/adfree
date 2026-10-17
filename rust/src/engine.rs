@@ -154,6 +154,10 @@ pub struct VpnStats {
     pub rss_kb: u64,
     pub loop_iterations: u64,
     pub busy_ns: u64,
+    pub tls_ns: u64,
+    pub handshake_ns: u64,
+    pub rewrite_ns: u64,
+    pub log_dropped: u64,
     pub events_pending: u64,
     pub events_dropped: u64,
     pub filter_build_ms: u64,
@@ -176,8 +180,12 @@ pub struct Core {
     wake_fd: RawFd,
     conntrack: Mutex<ConnTable>,
     doh_ips: RwLock<CidrSet>,
-    stats: Stats,
+    stats: Arc<Stats>,
     events: Mutex<EventLog>,
+    /// Writable data directory handed down once by the platform: the request
+    /// log database and (later) everything else the app persists. `None` until
+    /// `set_data_root` runs, and tests run without it.
+    store: OnceLock<Arc<crate::store::Store>>,
     uidmap: Mutex<UidMap>,
     screen_off: AtomicBool,
     running: AtomicBool,
@@ -242,8 +250,9 @@ impl Core {
             wake_fd: unsafe { libc::eventfd(0, libc::EFD_CLOEXEC | libc::EFD_NONBLOCK) },
             conntrack: Mutex::new(ConnTable::new()),
             doh_ips: RwLock::new(default_doh_cidrs()),
-            stats: Stats::new(),
+            stats: Arc::new(Stats::new()),
             events: Mutex::new(EventLog::default()),
+            store: OnceLock::new(),
             uidmap: Mutex::new(UidMap::new()),
             screen_off: AtomicBool::new(false),
             running: AtomicBool::new(false),
@@ -270,6 +279,27 @@ impl Core {
 
     pub fn stats(&self) -> &Stats {
         &self.stats
+    }
+
+    /// Opens the writable data root (files + database). The platform calls
+    /// this once, as soon as it knows the app's file directory; every later
+    /// call is a no-op, so a reconnect never re-opens a live store.
+    pub fn set_data_root(&self, path: &str) -> bool {
+        if self.store.get().is_some() {
+            return true;
+        }
+        match crate::store::Store::open(std::path::Path::new(path)) {
+            Ok(store) => self.store.set(Arc::new(store)).is_ok(),
+            Err(e) => {
+                crate::logbuf::push(&format!("store open: {e}"));
+                false
+            }
+        }
+    }
+
+    /// The store, once the platform has handed the data root down.
+    pub fn store(&self) -> Option<&Arc<crate::store::Store>> {
+        self.store.get()
     }
 
     pub fn uptime_ms(&self) -> u64 {
@@ -843,6 +873,9 @@ impl Core {
                     // Cosmetic filtering rides along with HTTPS filtering:
                     // same opt-in, same CA gate, nothing extra to configure.
                     proxy.set_cosmetic(self.filter.clone());
+                    // Timing counters (TLS cost, rewrite cost) land in the same
+                    // snapshot the UI already polls once a second.
+                    proxy.set_stats(Arc::clone(&self.stats));
                     Some(proxy)
                 }
                 Err(e) => {
@@ -1352,6 +1385,13 @@ impl Core {
         if self.is_screen_off() && self.cfg.read().unwrap().eco_mode {
             return;
         }
+        // Durable copy first: the ring is only the live tail the UI polls, so
+        // the record survives even while a UI reader holds the ring lock.
+        if let Some(store) = self.store.get() {
+            if !store.log_enqueue(&event) {
+                self.stats.inc(&self.stats.log_dropped);
+            }
+        }
         let Ok(mut log) = self.events.try_lock() else {
             return;
         };
@@ -1377,6 +1417,14 @@ impl Core {
         if let Ok(mut log) = self.events.try_lock() {
             log.clear();
         }
+    }
+
+    /// Empties the request log everywhere: the database and the live ring.
+    pub fn clear_log(&self) {
+        if let Some(store) = self.store.get() {
+            store.log_clear();
+        }
+        self.clear_events();
     }
 
     pub fn events_pending(&self) -> u64 {
@@ -1417,6 +1465,10 @@ impl Core {
             rss_kb: s.rss_kb,
             loop_iterations: s.loop_iterations,
             busy_ns: s.busy_ns,
+            tls_ns: s.tls_ns,
+            handshake_ns: s.handshake_ns,
+            rewrite_ns: s.rewrite_ns,
+            log_dropped: s.log_dropped,
             events_pending: self.events_pending(),
             events_dropped: self.events_dropped(),
             filter_build_ms: self.filter.build_time_ms(),

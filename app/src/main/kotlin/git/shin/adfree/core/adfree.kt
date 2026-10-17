@@ -719,6 +719,12 @@ internal object IntegrityCheckingUniffiLib {
     ): Int
     external fun uniffi_adfree_core_checksum_func_core_is_running(
     ): Int
+    external fun uniffi_adfree_core_checksum_func_core_log_clear(
+    ): Int
+    external fun uniffi_adfree_core_checksum_func_core_log_count(
+    ): Int
+    external fun uniffi_adfree_core_checksum_func_core_log_page(
+    ): Int
     external fun uniffi_adfree_core_checksum_func_core_mitm_status(
     ): Int
     external fun uniffi_adfree_core_checksum_func_core_protect_sockets(
@@ -728,6 +734,8 @@ internal object IntegrityCheckingUniffiLib {
     external fun uniffi_adfree_core_checksum_func_core_reset_stats(
     ): Int
     external fun uniffi_adfree_core_checksum_func_core_restore_ca(
+    ): Int
+    external fun uniffi_adfree_core_checksum_func_core_set_data_root(
     ): Int
     external fun uniffi_adfree_core_checksum_func_core_set_doh_ranges(
     ): Int
@@ -808,6 +816,12 @@ internal object UniffiLib {
     ): RustBuffer.ByValue
     external fun uniffi_adfree_core_fn_func_core_is_running(uniffi_out_err: UniffiRustCallStatus, 
     ): Byte
+    external fun uniffi_adfree_core_fn_func_core_log_clear(uniffi_out_err: UniffiRustCallStatus, 
+    ): Byte
+    external fun uniffi_adfree_core_fn_func_core_log_count(uniffi_out_err: UniffiRustCallStatus, 
+    ): Long
+    external fun uniffi_adfree_core_fn_func_core_log_page(`offset`: Int,`limit`: Int,uniffi_out_err: UniffiRustCallStatus, 
+    ): RustBuffer.ByValue
     external fun uniffi_adfree_core_fn_func_core_mitm_status(uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
     external fun uniffi_adfree_core_fn_func_core_protect_sockets(`fds`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
@@ -817,6 +831,8 @@ internal object UniffiLib {
     external fun uniffi_adfree_core_fn_func_core_reset_stats(uniffi_out_err: UniffiRustCallStatus, 
     ): Unit
     external fun uniffi_adfree_core_fn_func_core_restore_ca(`certPem`: RustBuffer.ByValue,`keyPem`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    ): Byte
+    external fun uniffi_adfree_core_fn_func_core_set_data_root(`path`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): Byte
     external fun uniffi_adfree_core_fn_func_core_set_doh_ranges(`ranges`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): Byte
@@ -996,6 +1012,15 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
     if ((lib.uniffi_adfree_core_checksum_func_core_is_running() and 0xFFFF) != 16453) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
+    if ((lib.uniffi_adfree_core_checksum_func_core_log_clear() and 0xFFFF) != 63140) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if ((lib.uniffi_adfree_core_checksum_func_core_log_count() and 0xFFFF) != 55963) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if ((lib.uniffi_adfree_core_checksum_func_core_log_page() and 0xFFFF) != 45424) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
     if ((lib.uniffi_adfree_core_checksum_func_core_mitm_status() and 0xFFFF) != 1875) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
@@ -1009,6 +1034,9 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if ((lib.uniffi_adfree_core_checksum_func_core_restore_ca() and 0xFFFF) != 62634) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if ((lib.uniffi_adfree_core_checksum_func_core_set_data_root() and 0xFFFF) != 27462) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if ((lib.uniffi_adfree_core_checksum_func_core_set_doh_ranges() and 0xFFFF) != 51723) {
@@ -2191,6 +2219,24 @@ data class StatsSnapshot (
     , 
     var `busyNs`: kotlin.Long
     , 
+    /**
+     * Time inside rustls (HTTPS filtering): all feeds, plus the share of it
+     * spent while a handshake was still running.
+     */
+    var `tlsNs`: kotlin.Long
+    , 
+    var `handshakeNs`: kotlin.Long
+    , 
+    /**
+     * Time spent rewriting response bodies (decompress, inject, recompress).
+     */
+    var `rewriteNs`: kotlin.Long
+    , 
+    /**
+     * Log rows dropped because the database writer could not keep up.
+     */
+    var `logDropped`: kotlin.Long
+    , 
     var `eventsPending`: kotlin.Long
     , 
     var `eventsDropped`: kotlin.Long
@@ -2247,6 +2293,10 @@ public object FfiConverterTypeStatsSnapshot: FfiConverterRustBuffer<StatsSnapsho
             FfiConverterLong.read(buf),
             FfiConverterLong.read(buf),
             FfiConverterLong.read(buf),
+            FfiConverterLong.read(buf),
+            FfiConverterLong.read(buf),
+            FfiConverterLong.read(buf),
+            FfiConverterLong.read(buf),
             FfiConverterBoolean.read(buf),
         )
     }
@@ -2273,6 +2323,10 @@ public object FfiConverterTypeStatsSnapshot: FfiConverterRustBuffer<StatsSnapsho
             FfiConverterLong.allocationSize(value.`rssKb`) +
             FfiConverterLong.allocationSize(value.`loopIterations`) +
             FfiConverterLong.allocationSize(value.`busyNs`) +
+            FfiConverterLong.allocationSize(value.`tlsNs`) +
+            FfiConverterLong.allocationSize(value.`handshakeNs`) +
+            FfiConverterLong.allocationSize(value.`rewriteNs`) +
+            FfiConverterLong.allocationSize(value.`logDropped`) +
             FfiConverterLong.allocationSize(value.`eventsPending`) +
             FfiConverterLong.allocationSize(value.`eventsDropped`) +
             FfiConverterLong.allocationSize(value.`filterBuildMs`) +
@@ -2304,6 +2358,10 @@ public object FfiConverterTypeStatsSnapshot: FfiConverterRustBuffer<StatsSnapsho
             FfiConverterLong.write(value.`rssKb`, buf)
             FfiConverterLong.write(value.`loopIterations`, buf)
             FfiConverterLong.write(value.`busyNs`, buf)
+            FfiConverterLong.write(value.`tlsNs`, buf)
+            FfiConverterLong.write(value.`handshakeNs`, buf)
+            FfiConverterLong.write(value.`rewriteNs`, buf)
+            FfiConverterLong.write(value.`logDropped`, buf)
             FfiConverterLong.write(value.`eventsPending`, buf)
             FfiConverterLong.write(value.`eventsDropped`, buf)
             FfiConverterLong.write(value.`filterBuildMs`, buf)
@@ -2584,6 +2642,48 @@ public object FfiConverterSequenceTypeScriptBinding: FfiConverterRustBuffer<List
     
 
         /**
+         * Empties the request log: the database and the live in-memory tail.
+         */ fun `coreLogClear`(): kotlin.Boolean {
+            return FfiConverterBoolean.lift(
+    uniffiRustCall() { _status ->
+    UniffiLib.uniffi_adfree_core_fn_func_core_log_clear(
+    
+        _status)
+}
+    )
+    }
+    
+
+        /**
+         * Total rows in the persisted request log (0 while the store is not open).
+         */ fun `coreLogCount`(): kotlin.Long {
+            return FfiConverterLong.lift(
+    uniffiRustCall() { _status ->
+    UniffiLib.uniffi_adfree_core_fn_func_core_log_count(
+    
+        _status)
+}
+    )
+    }
+    
+
+        /**
+         * One page of the persisted request log, newest first. Pages are indexed, so
+         * the UI can keep asking while the user scrolls.
+         */ fun `coreLogPage`(`offset`: kotlin.UInt, `limit`: kotlin.UInt): List<LogEvent> {
+            return FfiConverterSequenceTypeLogEvent.lift(
+    uniffiRustCall() { _status ->
+    UniffiLib.uniffi_adfree_core_fn_func_core_log_page(
+    
+        
+        FfiConverterUInt.lower(`offset`),
+        FfiConverterUInt.lower(`limit`),_status)
+}
+    )
+    }
+    
+
+        /**
          * Current MITM status, for the UI.
          */ fun `coreMitmStatus`(): MitmStatus {
             return FfiConverterTypeMitmStatus.lift(
@@ -2642,6 +2742,24 @@ public object FfiConverterSequenceTypeScriptBinding: FfiConverterRustBuffer<List
         
         FfiConverterString.lower(`certPem`),
         FfiConverterString.lower(`keyPem`),_status)
+}
+    )
+    }
+    
+
+        /**
+         * Hands the core the directory it owns: filter bodies, script bodies, the CA
+         * and the database all live under it. The platform calls this once with the
+         * app's files directory; later calls are a no-op, so a reconnect never
+         * re-opens a live store. Returns false when the directory cannot be used —
+         * the core then keeps running without persistence.
+         */ fun `coreSetDataRoot`(`path`: kotlin.String): kotlin.Boolean {
+            return FfiConverterBoolean.lift(
+    uniffiRustCall() { _status ->
+    UniffiLib.uniffi_adfree_core_fn_func_core_set_data_root(
+    
+        
+        FfiConverterString.lower(`path`),_status)
 }
     )
     }

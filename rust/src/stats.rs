@@ -47,6 +47,16 @@ pub struct Stats {
     /// `process_packet`, used to show how little CPU the engine actually burns.
     pub loop_iterations: AtomicU64,
     pub busy_ns: AtomicU64,
+    /// Time inside rustls: encrypting, decrypting and driving the handshakes
+    /// of intercepted connections. `handshake_ns` is the share spent while a
+    /// handshake was still running — key agreements are the expensive half.
+    pub tls_ns: AtomicU64,
+    pub handshake_ns: AtomicU64,
+    /// Time rewriting response bodies for cosmetic filtering: decompressing,
+    /// scanning for injection points and recompressing.
+    pub rewrite_ns: AtomicU64,
+    /// Log rows dropped because the database writer could not keep up.
+    pub log_dropped: AtomicU64,
 }
 
 impl Stats {
@@ -98,6 +108,10 @@ impl Stats {
             &self.cache_hits,
             &self.loop_iterations,
             &self.busy_ns,
+            &self.tls_ns,
+            &self.handshake_ns,
+            &self.rewrite_ns,
+            &self.log_dropped,
         ] {
             counter.store(0, Ordering::Relaxed);
         }
@@ -159,6 +173,10 @@ impl Stats {
             rss_kb: self.get(&self.rss_kb),
             loop_iterations: self.get(&self.loop_iterations),
             busy_ns: self.get(&self.busy_ns),
+            tls_ns: self.get(&self.tls_ns),
+            handshake_ns: self.get(&self.handshake_ns),
+            rewrite_ns: self.get(&self.rewrite_ns),
+            log_dropped: self.get(&self.log_dropped),
         }
     }
 }
@@ -190,6 +208,10 @@ pub struct StatsSnapshot {
     pub rss_kb: u64,
     pub loop_iterations: u64,
     pub busy_ns: u64,
+    pub tls_ns: u64,
+    pub handshake_ns: u64,
+    pub rewrite_ns: u64,
+    pub log_dropped: u64,
 }
 
 /// Reads the resident set size of this process from `/proc/self/statm`.
