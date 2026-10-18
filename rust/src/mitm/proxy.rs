@@ -820,7 +820,9 @@ impl ProxySession {
 
         // `$urlblock` (and `$document`, which implies it): the page asked for
         // its own requests not to be blocked. The page is the document itself,
-        // or the referrer of a subresource.
+        // or the referrer of a subresource. AdGuard spells the coverage out —
+        // blocking, redirects *and* `$removeparam` — so the whole decision is
+        // skipped for such a page.
         let page_host = if request_type == "document" {
             crate::filter::url_host(&url)
         } else {
@@ -833,8 +835,13 @@ impl ProxySession {
         let verdict = filter.check_url(&url, &source, request_type, &method);
         if !verdict.blocked {
             // A `$removeparam` rule: the request still goes out, with the
-            // parameters the list dropped taken off.
-            if let Some(rewritten) = verdict.rewritten_url.as_deref() {
+            // parameters the list dropped taken off. AdGuard applies these to
+            // GET, HEAD and OPTIONS only, so anything else keeps its query.
+            if let Some(rewritten) = verdict
+                .rewritten_url
+                .as_deref()
+                .filter(|_| rewritable(&method))
+            {
                 if let Some(new_target) = origin_form(rewritten) {
                     if new_target != target {
                         buffer.splice(..head_end, rebuilt_head(&buffer[..head_end], &new_target));
@@ -1919,6 +1926,14 @@ pub(super) fn rebuilt_head(head: &[u8], target: &str) -> Vec<u8> {
     rebuilt.extend_from_slice(format!("{method} {target} {version}").as_bytes());
     rebuilt.extend_from_slice(&head[line_end..]);
     rebuilt
+}
+
+/// Whether `$removeparam` may touch this request.
+///
+/// AdGuard applies the modifier to GET, HEAD and OPTIONS only; anything else
+/// keeps its query untouched.
+pub(super) fn rewritable(method: &str) -> bool {
+    matches!(method, "GET" | "HEAD" | "OPTIONS")
 }
 
 /// FNV-1a over the bytes: a cheap, stable content hash for cache busting.

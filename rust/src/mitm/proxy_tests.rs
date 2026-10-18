@@ -6,7 +6,8 @@
 
 use super::proxy::{
     blocked_response, closing_response, content_hash, local_asset, origin_form, redirect_response,
-    rebuilt_head, request_facts, request_url, take_local_request, ProxySession, HIDE_PATH,
+    rebuilt_head, request_facts, request_url, rewritable, take_local_request, ProxySession,
+    HIDE_PATH,
 };
 use super::*;
 use crate::mitm::ca::CertificateAuthority;
@@ -1351,6 +1352,10 @@ fn a_rewritten_head_only_changes_the_target() {
     );
     // A line we cannot make sense of is handed back untouched.
     assert_eq!(rebuilt_head(b"garbage\r\n\r\n", "/x"), b"garbage\r\n\r\n");
+
+    // `$removeparam` is AdGuard's GET/HEAD/OPTIONS affair.
+    assert!(rewritable("GET") && rewritable("HEAD") && rewritable("OPTIONS"));
+    assert!(!rewritable("POST") && !rewritable("DELETE"));
 }
 
 /// The two answers the URL rules produce locally: an empty block and the

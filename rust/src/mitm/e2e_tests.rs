@@ -959,9 +959,12 @@ const URL_LIST: &str = "! Title: e2e url rules\n\
                         ||shop.test/api^$removeparam=secret\n";
 
 /// The same block, but the page holds a `$urlblock`: its own requests are the
-/// site's business, not the lists'.
+/// site's business, not the lists'. AdGuard's coverage is spelled out as
+/// blocking, redirects *and* `$removeparam`, so the rule carrying it stands
+/// down for such a page as well.
 const URLBLOCK_LIST: &str = "! Title: e2e urlblock\n\
                              ||shop.test/ads/tracker.js$script\n\
+                             ||shop.test/api^$removeparam=secret\n\
                              @@||shop.test^$urlblock\n";
 
 /// The rules that need a whole URL fire on the HTTPS path: a path-scoped block
@@ -1093,6 +1096,29 @@ fn a_urlblock_exception_lets_the_pages_own_requests_through() {
         head.starts_with("HTTP/1.1 204"),
         "a page without the exception must still be covered: {head}"
     );
+
+    // AdGuard spells the exception's coverage out: blocking, redirects and
+    // `$removeparam` all stand down for such a page, so the query survives.
+    let (head, _) = request_with(
+        &mut tcp,
+        &mut conn,
+        "/api?secret=1&keep=2",
+        "Sec-Fetch-Dest: empty\r\nReferer: https://shop.test/\r\n",
+    );
+    assert!(
+        head.starts_with("HTTP/1.1 404"),
+        "the page's own request reaches the origin: {head}"
+    );
+    let seen = origin.requests.lock().expect("requests");
+    let api = seen
+        .iter()
+        .find(|r| r.contains("/api"))
+        .expect("the request reached the origin");
+    assert!(
+        api.starts_with("GET /api?secret=1&keep=2 "),
+        "a $urlblock page keeps its query: {api:?}"
+    );
+    drop(seen);
     tcp.close();
 }
 
