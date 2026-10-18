@@ -1249,44 +1249,58 @@ impl ProxySession {
     fn injection_snippet(&self, body: &[u8], nonce: &str) -> Vec<u8> {
         let mut out = Vec::new();
         if let Some(filter) = self.cosmetic.as_deref() {
-            // Without a hostname there are no rules to look up (a session that
-            // never saw a ClientHello keeps only the runtime).
-            if let Some(host) = self.captured.as_deref() {
-                // What the rules hide goes out as a stylesheet, not as inline
-                // data: the same 11 KB of all-site selectors applies to every
-                // page of a site, and this way the browser fetches it once and
-                // keeps it. It is fetched from the app's own origin, where the
-                // page's service worker cannot answer in our place.
-                if let Some((href, _)) = hide_stylesheet(filter, host) {
-                    out.extend_from_slice(
-                        http::style_link_tag(&local_asset(&href), "adfree-hide", nonce).as_bytes(),
-                    );
+            let switches = self
+                .captured
+                .as_deref()
+                .map(|host| filter.cosmetic_switches_for(host))
+                .unwrap_or_default();
+            // A page the lists unblocked (`$document`, or `$elemhide` together
+            // with `$jsinject`) has nothing left to hide, look up or inject:
+            // every tag would be a fetch for nothing. The user's own script is
+            // not the lists' to switch off, and still goes out below.
+            if !(switches.elemhide && switches.jsinject) {
+                // Without a hostname there are no rules to look up (a session
+                // that never saw a ClientHello keeps only the runtime).
+                if let Some(host) = self.captured.as_deref() {
+                    // What the rules hide goes out as a stylesheet, not as inline
+                    // data: the same 11 KB of all-site selectors applies to every
+                    // page of a site, and this way the browser fetches it once and
+                    // keeps it. It is fetched from the app's own origin, where the
+                    // page's service worker cannot answer in our place.
+                    if let Some((href, _)) = hide_stylesheet(filter, host) {
+                        out.extend_from_slice(
+                            http::style_link_tag(&local_asset(&href), "adfree-hide", nonce)
+                                .as_bytes(),
+                        );
+                    }
+                    if let Some(data) = self.cosmetic_payload(filter, host, body) {
+                        out.extend_from_slice(
+                            format!("<script{}>window.__adfree_page=", http::nonce_attr(nonce))
+                                .as_bytes(),
+                        );
+                        out.extend_from_slice(data.as_bytes());
+                        out.extend_from_slice(b";</script>");
+                    }
                 }
-                if let Some(data) = self.cosmetic_payload(filter, host, body) {
-                    out.extend_from_slice(
-                        format!("<script{}>window.__adfree_page=", http::nonce_attr(nonce))
-                            .as_bytes(),
-                    );
-                    out.extend_from_slice(data.as_bytes());
-                    out.extend_from_slice(b";</script>");
-                }
+                // The runtime goes out whenever cosmetic filtering runs, payload or
+                // not: it is what finds rules for the tokens the proxy never saw,
+                // which on a streamed page is everything past the anchor.
+                // Not deferred: the hiding stylesheet must land before the body
+                // renders, and every answer comes from the app itself.
+                // `dmn=` is what tells the cross-origin runtime which host's rules
+                // its lookups are for (AdGuard's content script carries the same
+                // parameter).
+                let runtime = match self.captured.as_deref() {
+                    Some(host) => versioned_path(
+                        &format!("{PAGE_SCRIPT_PATH}?dmn={host}"),
+                        content_hash(PAGE_RUNTIME.as_bytes()),
+                    ),
+                    None => versioned_path(PAGE_SCRIPT_PATH, content_hash(PAGE_RUNTIME.as_bytes())),
+                };
+                out.extend_from_slice(
+                    http::script_tag(&local_asset(&runtime), false, nonce).as_bytes(),
+                );
             }
-            // The runtime goes out whenever cosmetic filtering runs, payload or
-            // not: it is what finds rules for the tokens the proxy never saw,
-            // which on a streamed page is everything past the anchor.
-            // Not deferred: the hiding stylesheet must land before the body
-            // renders, and every answer comes from the app itself.
-            // `dmn=` is what tells the cross-origin runtime which host's rules
-            // its lookups are for (AdGuard's content script carries the same
-            // parameter).
-            let runtime = match self.captured.as_deref() {
-                Some(host) => versioned_path(
-                    &format!("{PAGE_SCRIPT_PATH}?dmn={host}"),
-                    content_hash(PAGE_RUNTIME.as_bytes()),
-                ),
-                None => versioned_path(PAGE_SCRIPT_PATH, content_hash(PAGE_RUNTIME.as_bytes())),
-            };
-            out.extend_from_slice(http::script_tag(&local_asset(&runtime), false, nonce).as_bytes());
         }
         if !self.script_src.is_empty() {
             out.extend_from_slice(http::script_tag(&self.script_tag_src, true, nonce).as_bytes());

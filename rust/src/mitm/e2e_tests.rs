@@ -597,11 +597,31 @@ const HTML: &str = "<!doctype html><html><head><title>e2e</title></head>\
                     <div class=\"adsbygoogle\" id=\"slot-1\">ad</div>\
                     <p class=\"sponsored\">Sponsored content</p></body></html>";
 
+/// The same shapes, plus the exception the engine drops: the page must come
+/// out with nothing to hide and nothing to look up, but scriptlets stay.
+const ELEMHIDE_LIST: &str = "! Title: e2e elemhide\n\
+                             shop.test##.ad-box\n\
+                             ##.adsbygoogle\n\
+                             shop.test#?#.sponsored:has-text(Sponsored)\n\
+                             shop.test#%#//scriptlet('set-constant', 'adBlocked', 'true')\n\
+                             @@||shop.test^$elemhide\n";
+
+/// A site-wide unblock: no cosmetic tag may go out at all, not even the
+/// runtime — there is nothing for it to find.
+const DOCUMENT_LIST: &str = "! Title: e2e document\n\
+                             shop.test##.ad-box\n\
+                             shop.test#%#//scriptlet('set-constant', 'adBlocked', 'true')\n\
+                             @@||shop.test^$document\n";
+
 fn setup_core(origin: &Origin) -> (Arc<Core>, Vec<u8>) {
-    setup_core_named(origin, "e2e")
+    setup_core_with_list(origin, "e2e", LIST)
 }
 
 fn setup_core_named(origin: &Origin, tag: &str) -> (Arc<Core>, Vec<u8>) {
+    setup_core_with_list(origin, tag, LIST)
+}
+
+fn setup_core_with_list(origin: &Origin, tag: &str, list: &str) -> (Arc<Core>, Vec<u8>) {
     let core = Arc::new(Core::new());
     core.set_socket_protector(Arc::new(AllowAll));
     core.set_config(Config {
@@ -627,7 +647,7 @@ fn setup_core_named(origin: &Origin, tag: &str) -> (Arc<Core>, Vec<u8>) {
     let dir = std::env::temp_dir().join("adfree-e2e");
     std::fs::create_dir_all(&dir).expect("temp dir");
     let path = dir.join(format!("{tag}-list.txt"));
-    std::fs::write(&path, LIST).expect("write list");
+    std::fs::write(&path, list).expect("write list");
     core.set_lists(
         vec![FilterListInfo {
             id: 1,
@@ -802,6 +822,100 @@ fn cosmetic_filtering_rides_the_packet_path() {
         super::proxy::content_hash(css.as_bytes()),
         "the URL must hash the bytes that are served"
     );
+
+    tcp.close();
+}
+
+/// An `@@||host^$elemhide` exception is one the engine rejects, so the app
+/// reads it out of the list itself: the page gets no hiding stylesheet, no
+/// style/procedural/generic payload and an empty lookup, while the scriptlet —
+/// `$elemhide` is not `$jsinject` — still goes out.
+#[test]
+fn an_elemhide_exception_clears_the_page() {
+    let origin = start_origin(HTML);
+    let (core, ca_der) = setup_core_with_list(&origin, "elemhide", ELEMHIDE_LIST);
+
+    let mut tcp = Client::connect(core.clone(), origin.port);
+    let mut conn = handshake(&mut tcp, client_config(ca_der));
+    assert!(!conn.is_handshaking(), "the MITM handshake must complete");
+
+    let (head, body) = request_with(
+        &mut tcp,
+        &mut conn,
+        "/",
+        "Accept: text/html,application/xhtml+xml\r\nAccept-Encoding: gzip, deflate\r\n",
+    );
+    assert!(head.starts_with("HTTP/1.1 200"), "{head}");
+    let page = page_text(&head, &body);
+    assert!(
+        !page.contains("adfree-hide"),
+        "no hiding stylesheet may be linked: {page}"
+    );
+    assert!(
+        !page.contains("display:none"),
+        "no CSS may travel inline instead: {page}"
+    );
+    assert!(
+        page.contains("adfree-page.js"),
+        "the runtime tag is still injected: {page}"
+    );
+    assert!(
+        page.contains("\"dynamic\":false"),
+        "the lookup must be declared off: {page}"
+    );
+    for key in ["\"style\"", "\"generic\"", "\"procedural\""] {
+        assert!(!page.contains(key), "{key} must be gone: {page}");
+    }
+    assert!(
+        page.contains("setConstant"),
+        "`$elemhide` is not `$jsinject`, the scriptlet stays: {page}"
+    );
+    assert!(page.contains("Sponsored content"), "the page itself is intact");
+
+    // The lookup endpoint answers empty: `$elemhide` covers generic rules too.
+    let (head, body) = request(
+        &mut tcp,
+        &mut conn,
+        "/adfree-generic.js?c=adsbygoogle%20sponsored&i=slot-1",
+    );
+    assert!(head.starts_with("HTTP/1.1 200"), "{head}");
+    assert_eq!(
+        String::from_utf8_lossy(&body),
+        "[]",
+        "generic tokens must come back empty"
+    );
+
+    tcp.close();
+}
+
+/// `@@||host^$document` unblocks the whole site: no cosmetic tag goes out at
+/// all — not even the runtime, which would find nothing — while the user's own
+/// script is not the lists' to switch off.
+#[test]
+fn a_document_exception_takes_every_cosmetic_tag_out() {
+    let origin = start_origin(HTML);
+    let (core, ca_der) = setup_core_with_list(&origin, "document", DOCUMENT_LIST);
+
+    let mut tcp = Client::connect(core.clone(), origin.port);
+    let mut conn = handshake(&mut tcp, client_config(ca_der));
+    assert!(!conn.is_handshaking(), "the MITM handshake must complete");
+
+    let (head, body) = request_with(
+        &mut tcp,
+        &mut conn,
+        "/",
+        "Accept: text/html,application/xhtml+xml\r\nAccept-Encoding: gzip, deflate\r\n",
+    );
+    assert!(head.starts_with("HTTP/1.1 200"), "{head}");
+    let page = page_text(&head, &body);
+    for tag in ["adfree-hide", "adfree-page.js", "window.__adfree_page"] {
+        assert!(!page.contains(tag), "{tag} must not be injected: {page}");
+    }
+    assert!(
+        page.contains("adfree-user.js"),
+        "the user script still goes out: {page}"
+    );
+    assert!(page.contains("Sponsored content"), "the page itself is intact");
 
     tcp.close();
 }

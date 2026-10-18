@@ -24,6 +24,7 @@ use adblock::engine::Engine;
 use adblock::lists::{FilterFormat, FilterSet, ParseOptions, RuleTypes};
 use adblock::request::Request;
 use adblock::resources::Resource;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, OnceLock, RwLock};
@@ -110,6 +111,30 @@ impl CosmeticResources {
             && self.scriptlets.is_empty()
     }
 }
+/// Cosmetic work a page's exception rules switch off.
+///
+/// The engine itself knows `$generichide` only; the rest are scanned out of
+/// the list text by [`scan_cosmetic_exceptions`] and applied when a page asks
+/// for its cosmetic resources. See [`FilterEngine::cosmetic_switches_for`].
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub struct CosmeticSwitches {
+    /// `$elemhide` (alias `$ehide`): no element hiding, specific or generic.
+    pub elemhide: bool,
+    /// `$specifichide` (alias `$shide`): no rules bound to the page's own
+    /// domain. Generic rules stay.
+    pub specifichide: bool,
+    /// `$jsinject`: no scriptlets.
+    pub jsinject: bool,
+}
+
+impl CosmeticSwitches {
+    fn merge(&mut self, other: CosmeticSwitches) {
+        self.elemhide |= other.elemhide;
+        self.specifichide |= other.specifichide;
+        self.jsinject |= other.jsinject;
+    }
+}
+
 pub const CAT_ANNOYANCE: u8 = 4;
 pub const CAT_MALWARE: u8 = 5;
 pub const CAT_CUSTOM: u8 = 6;
@@ -260,6 +285,9 @@ struct Compiled {
     memory_bytes: usize,
     sources: Vec<SourceMapEntry>,
     rule_count: u64,
+    /// Cosmetic switches from the loaded exceptions, by hostname (see
+    /// [`scan_cosmetic_exceptions`]). Empty on a stock engine.
+    cosmetic_switches: HashMap<String, CosmeticSwitches>,
 }
 
 pub struct FilterEngine {
@@ -286,6 +314,7 @@ impl FilterEngine {
                 memory_bytes: 0,
                 sources: Vec::new(),
                 rule_count: 0,
+                cosmetic_switches: HashMap::new(),
             })),
             cache: RwLock::new(DecisionCache::new(1 << 15)),
             build_ns: AtomicU64::new(0),
@@ -302,6 +331,7 @@ impl FilterEngine {
         let mut sources: Vec<SourceMapEntry> = Vec::with_capacity(lists.len() + 1);
         let mut rule_count = 0u64;
         let mut errors: Vec<String> = Vec::new();
+        let mut cosmetic_exceptions = CosmeticExceptionScan::default();
 
         for list in lists.iter().filter(|l| l.enabled) {
             let Some(path) = &list.local_path else { continue };
@@ -312,10 +342,15 @@ impl FilterEngine {
                             ListFormat::Hosts => FilterFormat::Hosts,
                             ListFormat::Standard => FilterFormat::Standard,
                         };
-                        let text = if list.format == ListFormat::Standard {
-                            convert_adguard_cosmetics(text)
-                        } else {
-                            text
+                        let text = match list.format {
+                            ListFormat::Standard => {
+                                // Exception rules the engine drops, read here
+                                // (conversion only rewrites cosmetic markers,
+                                // network rules pass through untouched).
+                                scan_cosmetic_exceptions(&text, &mut cosmetic_exceptions);
+                                convert_adguard_cosmetics(text)
+                            }
+                            ListFormat::Hosts => text,
                         };
                         let counted = count_rules(&text);
                         let record = set.add_filter_list(
@@ -361,6 +396,7 @@ impl FilterEngine {
                 .cloned()
                 .collect::<Vec<_>>()
                 .join("\n");
+            scan_cosmetic_exceptions(&joined, &mut cosmetic_exceptions);
             let record = set.add_filter_list(
                 convert_adguard_cosmetics(joined),
                 ParseOptions::default(),
@@ -386,6 +422,7 @@ impl FilterEngine {
             memory_bytes,
             sources,
             rule_count,
+            cosmetic_switches: cosmetic_exceptions.resolve(),
         });
         *self.inner.write().unwrap() = compiled;
         self.cache.write().unwrap().clear();
@@ -422,15 +459,26 @@ impl FilterEngine {
         compiled.rule_count
     }
 
+    /// What the loaded exceptions switch off for `host`'s pages. `||host^`
+    /// covers everything below the host, so the lookup walks the page host's
+    /// domain suffixes. Also the switches are already folded into
+    /// [`Self::cosmetic_resources`]; this is for callers that only want the
+    /// flags (the injection snippet builds every tag itself).
+    pub fn cosmetic_switches_for(&self, host: &str) -> CosmeticSwitches {
+        switches_for(&self.compiled(), host)
+    }
+
     /// Cosmetic rules that apply to `url`: element hiding, style actions,
     /// procedural rules and scriptlets.
     ///
     /// The caller passes the page URL (`https://host/` is enough: cosmetic
-    /// matching is hostname-based, exactly like AdGuard's own engine).
+    /// matching is hostname-based, exactly like AdGuard's own engine). What
+    /// the lists' exceptions switch off is already applied.
     pub fn cosmetic_resources(&self, url: &str) -> CosmeticResources {
         // Clone the Arc out of the lock: a rebuild can then swap engines
         // without this call holding the read guard.
         let compiled = self.inner.read().unwrap().clone();
+        let switches = switches_for(&compiled, url_host(url));
         let raw = compiled.engine.url_cosmetic_resources(url);
 
         let mut hide_selectors: Vec<String> = raw.hide_selectors.into_iter().collect();
@@ -457,18 +505,47 @@ impl FilterEngine {
                 }
             }
         }
+        let mut scriptlets = raw.injected_script;
+
+        if switches.elemhide {
+            // `$elemhide`: no cosmetic rule at all, specific or generic.
+            // Scriptlets stay — those are `$jsinject`'s business.
+            hide_selectors.clear();
+            style_rules.clear();
+            procedural.clear();
+        } else if switches.specifichide {
+            // `$specifichide`: only what is bound to the page's own domain
+            // goes away. Asked about a hostname no list targets, the engine
+            // returns exactly the generic part, which the page keeps;
+            // procedural and scriptlet rules are always hostname-bound, so
+            // they simply go.
+            let generic = compiled.engine.url_cosmetic_resources(GENERIC_ONLY_URL);
+            let excepted: std::collections::HashSet<&str> =
+                raw.exceptions.iter().map(String::as_str).collect();
+            hide_selectors = generic
+                .hide_selectors
+                .into_iter()
+                .filter(|selector| !excepted.contains(selector.as_str()))
+                .collect();
+            style_rules.clear();
+            procedural.clear();
+            scriptlets.clear();
+        }
+        if switches.jsinject {
+            scriptlets.clear();
+        }
+        if scriptlets.len() > MAX_SCRIPTLET_BYTES {
+            scriptlets.clear();
+        }
         hide_selectors.truncate(MAX_HIDE_SELECTORS);
 
         CosmeticResources {
             hide_selectors,
             style_rules,
             procedural,
-            scriptlets: if raw.injected_script.len() <= MAX_SCRIPTLET_BYTES {
-                raw.injected_script
-            } else {
-                String::new()
-            },
-            generichide: raw.generichide,
+            scriptlets,
+            // `$elemhide` covers the generic half too: nothing left to look up.
+            generichide: raw.generichide || switches.elemhide,
             exceptions: raw.exceptions.into_iter().collect(),
         }
     }
@@ -590,6 +667,156 @@ impl FilterEngine {
 #[inline]
 fn normalise_host(host: &str) -> &str {
     host.trim().trim_end_matches('.')
+}
+
+/// A URL no filter list can target: asked about it, the engine answers with
+/// exactly the rules that are not bound to a hostname, which is what
+/// `$specifichide` keeps.
+const GENERIC_ONLY_URL: &str = "https://adfree.invalid/";
+
+/// The exception rules read out of the list text, before the engine's own
+/// (host-only) parse throws them away.
+///
+/// `$badfilter` cancels the rule it mirrors, so additions and cancellations are
+/// collected as exact `(host, switches)` pairs and matched at the end: a cancel
+/// works whichever list the rule it cancels sits in, and whichever order the
+/// two were read.
+#[derive(Default)]
+struct CosmeticExceptionScan {
+    adds: HashSet<(String, CosmeticSwitches)>,
+    cancels: HashSet<(String, CosmeticSwitches)>,
+}
+
+impl CosmeticExceptionScan {
+    /// Folds the surviving rules into a host-keyed map.
+    fn resolve(&self) -> HashMap<String, CosmeticSwitches> {
+        let mut out: HashMap<String, CosmeticSwitches> = HashMap::new();
+        for (host, switches) in &self.adds {
+            if self.cancels.contains(&(host.clone(), *switches)) {
+                continue;
+            }
+            out.entry(host.clone()).or_default().merge(*switches);
+        }
+        out
+    }
+}
+
+/// Collects the exceptions that switch cosmetic work off, keyed by hostname.
+///
+/// The engine rejects rules carrying `$elemhide`, `$specifichide` or
+/// `$jsinject` (it only implements `$generichide`), and a `$document`
+/// exception implies those three — so a list asking for a site to be left
+/// alone would otherwise keep getting it hidden.
+///
+/// Only `@@` rules with a plain `||host^` pattern count: rules with a path, a
+/// wildcard or a `$domain=` constraint scope the exception more finely than a
+/// hostname can express, and applying those too widely would hide *less* than
+/// the list asked for — they are skipped instead.
+fn scan_cosmetic_exceptions(text: &str, into: &mut CosmeticExceptionScan) {
+    for line in text.lines() {
+        let Some(rest) = line.trim().strip_prefix("@@") else {
+            continue;
+        };
+        let Some((pattern, options)) = split_rule_options(rest) else {
+            continue;
+        };
+        let mut switches = CosmeticSwitches::default();
+        let mut scoped = false;
+        let mut cancel = false;
+        for option in options.split(',') {
+            match option.trim() {
+                "elemhide" | "ehide" => switches.elemhide = true,
+                "specifichide" | "shide" => switches.specifichide = true,
+                "jsinject" => switches.jsinject = true,
+                // `$document` unblocks the whole site; AdGuard spells it out
+                // as `$elemhide` + `$jsinject` (+ request-level modifiers this
+                // app does not implement).
+                "document" | "doc" => {
+                    switches.elemhide = true;
+                    switches.specifichide = true;
+                    switches.jsinject = true;
+                }
+                "badfilter" => cancel = true,
+                option if option.starts_with("domain=") => scoped = true,
+                // `~`-negations and every other modifier change nothing here.
+                _ => {}
+            }
+        }
+        if scoped || switches == CosmeticSwitches::default() {
+            continue;
+        }
+        if let Some(host) = exception_host(pattern) {
+            let pair = (host, switches);
+            if cancel {
+                into.cancels.insert(pair);
+            } else {
+                into.adds.insert(pair);
+            }
+        }
+    }
+}
+
+/// Splits `pattern$opt,opt` at the first `$` that is not backslash-escaped.
+fn split_rule_options(rule: &str) -> Option<(&str, &str)> {
+    let mut escaped = false;
+    for (idx, ch) in rule.char_indices() {
+        if ch == '$' && !escaped {
+            return Some((&rule[..idx], &rule[idx + 1..]));
+        }
+        escaped = ch == '\\' && !escaped;
+    }
+    None
+}
+
+/// The hostname a `||host^` pattern names; `None` for anything else (regex,
+/// wildcard, path, port), which a hostname-keyed switch cannot represent.
+fn exception_host(pattern: &str) -> Option<String> {
+    let rest = pattern.strip_prefix("||")?;
+    let mut end = rest.len();
+    for (idx, ch) in rest.char_indices() {
+        match ch {
+            '^' => {
+                end = idx;
+                break;
+            }
+            // A path makes the rule narrower than its hostname.
+            '/' => return None,
+            _ if ch.is_ascii_alphanumeric() || ch == '.' || ch == '-' => {}
+            _ => return None,
+        }
+    }
+    let host = rest[..end].trim_end_matches('.');
+    (!host.is_empty()).then(|| host.to_ascii_lowercase())
+}
+
+/// The host of a URL, without scheme, port or path.
+fn url_host(url: &str) -> &str {
+    let rest = url.split_once("://").map_or(url, |(_, rest)| rest);
+    let end = rest.find(['/', '?', '#']).unwrap_or(rest.len());
+    let host = &rest[..end];
+    host.split(':').next().unwrap_or(host)
+}
+
+/// The switches `host` inherits from the engine's exception rules. `||host^`
+/// covers everything below the host, so the page host is walked suffix by
+/// suffix and every hit folds in.
+fn switches_for(compiled: &Compiled, host: &str) -> CosmeticSwitches {
+    if compiled.cosmetic_switches.is_empty() {
+        return CosmeticSwitches::default();
+    }
+    let host = normalise_host(host).to_ascii_lowercase();
+    let mut switches = CosmeticSwitches::default();
+    let mut rest = host.as_str();
+    loop {
+        if let Some(found) = compiled.cosmetic_switches.get(rest) {
+            switches.merge(*found);
+        }
+        match rest.split_once('.') {
+            Some((_, tail)) => rest = tail,
+            None => break,
+        }
+    }
+    switches
 }
 
 /// Rewrites AdGuard-only cosmetic syntax into the uBO/ABP forms the engine
@@ -882,9 +1109,16 @@ mod tests {
     }
 
     fn cosmetic_engine(body: &str) -> FilterEngine {
+        // One file per call: the tests run in parallel and each engine reads
+        // the list at rebuild time.
+        static NEXT: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+        let name = format!(
+            "cosmetic-{}.txt",
+            NEXT.fetch_add(1, std::sync::atomic::Ordering::SeqCst)
+        );
         let fe = FilterEngine::new();
         fe.rebuild(
-            &[temp_list("cosmetic.txt", body, ListFormat::Standard, 3)],
+            &[temp_list(&name, body, ListFormat::Standard, 3)],
             &[],
         );
         fe
@@ -990,6 +1224,209 @@ mod tests {
         );
         // A host the rule does not target gets nothing.
         assert!(fe.cosmetic_resources("https://other.test/").is_empty());
+    }
+
+    #[test]
+    fn scanner_reads_only_the_host_wide_exceptions() {
+        let mut scan = CosmeticExceptionScan::default();
+        scan_cosmetic_exceptions(
+            "! comment\n\
+             @@||plain.test^$elemhide\n\
+             @@||alias.test^$ehide\n\
+             @@||shide.test^$shide\n\
+             @@||both.test^$specifichide,ehide\n\
+             @@||js.test^$jsinject\n\
+             @@||doc.test^$document\n\
+             @@||doc-alias.test^$doc\n\
+             @@||bare.test$elemhide\n\
+             @@||negated.test^$~elemhide\n\
+             @@||scoped.test^$elemhide,domain=other.test\n\
+             @@||path.test/some/page$elemhide\n\
+             @@||wild.*^$elemhide\n\
+             @@/rege?x/$elemhide\n\
+             @@||cancel.test^$elemhide,badfilter\n\
+             ||block.test^$elemhide\n",
+            &mut scan,
+        );
+        assert_eq!(
+            scan.cancels.len(),
+            1,
+            "a `$badfilter` is a cancellation: {:?}",
+            scan.cancels
+        );
+        let map = scan.resolve();
+        let on = |host: &str| map.get(host).copied().unwrap_or_default();
+        let elemhide = CosmeticSwitches {
+            elemhide: true,
+            ..Default::default()
+        };
+        assert_eq!(on("plain.test"), elemhide);
+        assert_eq!(on("alias.test"), elemhide);
+        assert_eq!(on("bare.test"), elemhide);
+        assert_eq!(
+            on("shide.test"),
+            CosmeticSwitches {
+                specifichide: true,
+                ..Default::default()
+            }
+        );
+        assert_eq!(
+            on("both.test"),
+            CosmeticSwitches {
+                elemhide: true,
+                specifichide: true,
+                ..Default::default()
+            }
+        );
+        assert_eq!(
+            on("js.test"),
+            CosmeticSwitches {
+                jsinject: true,
+                ..Default::default()
+            }
+        );
+        let all = CosmeticSwitches {
+            elemhide: true,
+            specifichide: true,
+            jsinject: true,
+        };
+        assert_eq!(on("doc.test"), all);
+        assert_eq!(on("doc-alias.test"), all);
+        // Negations, `$domain=` scoping, paths, wildcards and regexes are all
+        // narrower than a hostname: skipped, never applied too widely.
+        assert_eq!(map.len(), 8, "{map:?}");
+    }
+
+    #[test]
+    fn elemhide_switches_every_cosmetic_rule_off() {
+        let fe = cosmetic_engine(
+            "shop.test##.ad-box\n\
+             ##div[data-ad]\n\
+             shop.test#%#//scriptlet('set-constant', 'foo', 'bar')\n\
+             @@||shop.test^$elemhide\n",
+        );
+        let res = fe.cosmetic_resources("https://shop.test/");
+        assert!(res.hide_selectors.is_empty(), "{:?}", res.hide_selectors);
+        assert!(res.style_rules.is_empty(), "{:?}", res.style_rules);
+        assert!(res.procedural.is_empty(), "{:?}", res.procedural);
+        assert!(res.generichide, "the class/id lookup must be off too");
+        assert!(
+            res.scriptlets.contains("setConstant"),
+            "`$elemhide` is not `$jsinject`: {}",
+            res.scriptlets
+        );
+        // `||host^` covers subdomains...
+        let sub = fe.cosmetic_resources("https://www.shop.test/");
+        assert!(
+            sub.hide_selectors.is_empty(),
+            "a subdomain inherits the exception: {:?}",
+            sub.hide_selectors
+        );
+        // ...and nothing else.
+        let other = fe.cosmetic_resources("https://other.test/");
+        assert!(
+            other.hide_selectors.iter().any(|s| s == "div[data-ad]"),
+            "generic rules must still reach other hosts: {:?}",
+            other.hide_selectors
+        );
+    }
+
+    #[test]
+    fn specifichide_keeps_only_the_generic_half() {
+        let body = "quiet.test##.banner\n\
+                    ##div[data-ad]\n\
+                    quiet.test#?#.late:has-text(Sponsored)\n\
+                    quiet.test#%#//scriptlet('set-constant', 'foo', 'bar')\n";
+        let before = cosmetic_engine(body);
+        let res = before.cosmetic_resources("https://quiet.test/");
+        assert!(
+            res.hide_selectors.iter().any(|s| s == ".banner"),
+            "the specific rule applies while nothing excepts it: {:?}",
+            res.hide_selectors
+        );
+        assert!(!res.procedural.is_empty() && !res.scriptlets.is_empty());
+
+        let after = cosmetic_engine(&format!("{body}@@||quiet.test^$specifichide\n"));
+        let res = after.cosmetic_resources("https://quiet.test/");
+        assert_eq!(
+            res.hide_selectors,
+            vec!["div[data-ad]".to_string()],
+            "only the generic selector stays"
+        );
+        assert!(res.procedural.is_empty(), "procedural rules are hostname-bound");
+        assert!(res.scriptlets.is_empty(), "scriptlets are hostname-bound");
+        assert!(!res.generichide, "the class/id lookup still runs");
+    }
+
+    #[test]
+    fn jsinject_and_document_exceptions_switch_their_own_parts() {
+        let fe = cosmetic_engine(
+            "passive.test##.banner\n\
+             passive.test#%#//scriptlet('set-constant', 'foo', 'bar')\n\
+             @@||passive.test^$jsinject\n\
+             dead.test##.banner\n\
+             dead.test#%#//scriptlet('set-constant', 'foo', 'bar')\n\
+             @@||dead.test^$document\n",
+        );
+        let passive = fe.cosmetic_resources("https://passive.test/");
+        assert!(
+            passive.hide_selectors.iter().any(|s| s == ".banner"),
+            "$jsinject must not touch hiding: {:?}",
+            passive.hide_selectors
+        );
+        assert!(passive.scriptlets.is_empty(), "$jsinject must drop scriptlets");
+        assert!(!passive.generichide);
+
+        let dead = fe.cosmetic_resources("https://dead.test/");
+        assert!(dead.is_empty(), "$document leaves nothing to inject: {dead:?}");
+        assert!(dead.generichide, "$document covers the generic half too");
+    }
+
+    #[test]
+    fn a_user_rule_can_switch_cosmetics_off() {
+        let fe = FilterEngine::new();
+        fe.rebuild(&[], &["@@||news.test^$elemhide".to_string()]);
+        assert_eq!(
+            fe.cosmetic_switches_for("sub.news.test"),
+            CosmeticSwitches {
+                elemhide: true,
+                ..Default::default()
+            }
+        );
+        assert_eq!(
+            fe.cosmetic_switches_for("other.test"),
+            CosmeticSwitches::default()
+        );
+    }
+
+    #[test]
+    fn badfilter_cancels_the_rule_it_mirrors() {
+        let fe = cosmetic_engine(
+            "cancel.test##.ad-box\n\
+             @@||cancel.test^$elemhide\n\
+             @@||cancel.test^$elemhide,badfilter\n",
+        );
+        let res = fe.cosmetic_resources("https://cancel.test/");
+        assert!(
+            res.hide_selectors.iter().any(|s| s == ".ad-box"),
+            "`$badfilter` cancels the exception: {:?}",
+            res.hide_selectors
+        );
+        assert!(!res.generichide);
+
+        // A cancellation only matches the rule it mirrors.
+        let fe = cosmetic_engine(
+            "kept.test##.ad-box\n\
+             @@||kept.test^$elemhide\n\
+             @@||kept.test^$jsinject,badfilter\n",
+        );
+        let res = fe.cosmetic_resources("https://kept.test/");
+        assert!(
+            res.hide_selectors.is_empty(),
+            "the `$elemhide` rule stands: {:?}",
+            res.hide_selectors
+        );
+        assert!(res.generichide);
     }
 }
 
