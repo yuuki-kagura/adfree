@@ -1305,7 +1305,7 @@ fn request_types_follow_sec_fetch_dest() {
             .request_type()
     };
     assert_eq!(of("document"), "document");
-    assert_eq!(of("iframe"), "sub_frame");
+    assert_eq!(of("iframe"), "subdocument");
     assert_eq!(of("script"), "script");
     assert_eq!(of("style"), "stylesheet");
     assert_eq!(of("empty"), "xmlhttprequest");

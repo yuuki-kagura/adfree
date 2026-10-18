@@ -8,7 +8,7 @@
 //! Everything is non-blocking and returns the payloads to write back, so the
 //! packet loop stays in charge of TCP segmentation and never blocks a syscall.
 
-use crate::filter::{FilterEngine, Replace};
+use crate::filter::{FilterEngine, HeaderEdit, Replace};
 use crate::mitm::http;
 use crate::mitm::tls::{
     self, feed_client, feed_client_wire, feed_server, send_to_client, FlowResolver, TlsSession,
@@ -241,6 +241,19 @@ struct ResponseEdit {
     /// The `$replace` rule the request matched: its response body is rewritten
     /// instead of the request being blocked. `None` on every other request.
     replace: Option<Arc<Replace>>,
+    /// The `$csp` / `$permissions` / `$removeheader` rules the request
+    /// matched: applied to the response head when it comes back.
+    headers: Option<Arc<HeaderEdit>>,
+}
+
+/// What one forwarded request carries back from the filter: the response body
+/// rewrite it matched, if any, and the header edits its response needs.
+#[derive(Default)]
+struct RequestPlan {
+    /// The `$replace` rule: its response body is rewritten when it comes back.
+    replace: Option<Arc<Replace>>,
+    /// Header edits, computed once, here, and held until the response arrives.
+    headers: Option<Arc<HeaderEdit>>,
 }
 
 /// State for a response whose body is streamed to the client as it is edited.
@@ -782,9 +795,10 @@ impl ProxySession {
         if tls::client_handshaking(&session.client) || buffer.is_empty() {
             return Ok(());
         }
-        // The `$replace` rule this request matched, if any: the response body
-        // is rewritten when it comes back.
-        let mut replace = None;
+        // What the filter decided for this request: a `$replace` rule means the
+        // response body is rewritten when it comes back, header rules mean the
+        // response head is edited (and the request head may already have been).
+        let mut plan = RequestPlan::default();
         if !tls::server_handshaking(&session.server) {
             while let Some(local) =
                 take_local_request(serve_path, script_body, filter, session_host, buffer)
@@ -799,7 +813,7 @@ impl ProxySession {
             // The same loop answers a request the *network* rules want stopped
             // or rewritten: the head is the only place the URL exists.
             if let Some(filter) = filter {
-                replace = Self::filter_url_request(
+                plan = Self::filter_url_request(
                     session,
                     buffer,
                     filter,
@@ -815,8 +829,12 @@ impl ProxySession {
         // look like (a HEAD has no body, an HTTP/1.0 client cannot take a
         // chunked one) and stop HTML negotiations the rewriter cannot follow.
         if let Some(info) = http::request_info(buffer) {
-            let forced = replace.is_some();
-            head_requests.push_back(ResponseEdit { info, replace });
+            let forced = plan.replace.is_some();
+            head_requests.push_back(ResponseEdit {
+                info,
+                replace: plan.replace,
+                headers: plan.headers,
+            });
             if let Some(fixed) = http::drop_undecodable_encodings(buffer, forced) {
                 *buffer = fixed;
             }
@@ -850,30 +868,30 @@ impl ProxySession {
         stats: Option<&Stats>,
         sink: Option<MitmSink>,
         outcome: &mut Outcome,
-    ) -> Result<Option<Arc<Replace>>, String> {
-        let Some(head_end) = header_end(buffer) else {
-            return Ok(None);
+    ) -> Result<RequestPlan, String> {
+        let Some(mut head_end) = header_end(buffer) else {
+            return Ok(RequestPlan::default());
         };
         // Everything the filter needs is copied out of the head up front: the
         // buffer is edited (or drained) below, which ends the borrow.
         let Some(facts) = request_facts(&buffer[..head_end]) else {
-            return Ok(None);
+            return Ok(RequestPlan::default());
         };
         if facts.has_body {
-            return Ok(None);
+            return Ok(RequestPlan::default());
         }
         if !facts.target.starts_with('/')
             && !facts.target.starts_with("http://")
             && !facts.target.starts_with("https://")
         {
-            return Ok(None);
+            return Ok(RequestPlan::default());
         }
         let Some(host) = session_host
             .map(str::to_string)
             .or_else(|| facts.authority.map(str::to_string))
             .filter(|host| !host.is_empty())
         else {
-            return Ok(None);
+            return Ok(RequestPlan::default());
         };
         let url = request_url(&facts, &host);
         let target = facts.target.to_string();
@@ -901,7 +919,31 @@ impl ProxySession {
             crate::filter::url_host(&source)
         };
         if !page_host.is_empty() && filter.cosmetic_switches_for(page_host).urlblock {
-            return Ok(None);
+            return Ok(RequestPlan::default());
+        }
+
+        // The response-header rules (`$csp`, `$permissions`, `$removeheader`)
+        // are matched once, here, and ride on the plan: the response they shape
+        // is the next thing to come back. The request-side half of
+        // `$removeheader` happens now, while the head is here — the rest waits.
+        let mut plan = RequestPlan::default();
+        if filter.has_header_rules() {
+            if let Some(edit) = filter.header_edit(&url, &source, request_type, &method) {
+                // `drop_headers` is `None` when none of the names is there, so
+                // the request is spliced only when it actually changes.
+                if let Some(fixed) =
+                    http::drop_headers(&buffer[..head_end], &edit.remove_request)
+                {
+                    let old_end = head_end;
+                    head_end = fixed.len();
+                    buffer.splice(..old_end, fixed);
+                    crate::logbuf::push(&format!(
+                        "mitm {host}: request headers dropped: {}",
+                        edit.remove_request.join(", ")
+                    ));
+                }
+                plan.headers = Some(Arc::new(edit));
+            }
         }
 
         // `$replace`: the response body is rewritten *instead of* the request
@@ -910,7 +952,8 @@ impl ProxySession {
         // out untouched; the response is picked up again when it comes back.
         if filter.has_replace() {
             if let Some(rule) = filter.replace_for(&url, &source, request_type, &method) {
-                return Ok(Some(rule));
+                plan.replace = Some(rule);
+                return Ok(plan);
             }
         }
 
@@ -956,7 +999,7 @@ impl ProxySession {
                                     category: 0,
                                 });
                             }
-                            return Ok(None);
+                            return Ok(RequestPlan::default());
                         }
                     } else if rewritable(&method) {
                         if let Some(new_target) = origin_form(&edit.url) {
@@ -1003,7 +1046,7 @@ impl ProxySession {
                         ));
                     }
                 }
-                return Ok(None);
+                return Ok(plan);
             }
         }
 
@@ -1038,7 +1081,7 @@ impl ProxySession {
                 category: verdict.category,
             });
         }
-        Ok(None)
+        Ok(RequestPlan::default())
     }
 
     /// Answers whatever the client asks the local injection origin.
@@ -1166,7 +1209,13 @@ impl ProxySession {
     /// Returns the bytes to hand to the client and how many bytes the rewrite
     /// added. Split out so it can be tested without a live TLS handshake.
     pub fn rewrite_response(&mut self, plain: &[u8]) -> (Vec<u8>, usize) {
-        if self.script_src.is_empty() && self.cosmetic.is_none() {
+        // Nothing to hide and no header to edit: the connection bypasses the
+        // rewriter entirely. Header edits alone still need it — they are what
+        // `$csp`, `$permissions` and `$removeheader` matched.
+        if self.script_src.is_empty()
+            && self.cosmetic.is_none()
+            && !self.head_requests.iter().any(|req| req.headers.is_some())
+        {
             return (plain.to_vec(), 0);
         }
         if !plain.is_empty() {
@@ -1197,6 +1246,34 @@ impl ProxySession {
                         continue;
                     }
                     let req = self.head_requests.pop_front().unwrap_or_default();
+                    // The header edits the request matched are applied as the
+                    // head goes out — before anything decides what to do with
+                    // the body, so an injected `$csp` value is rewritten with
+                    // the injected nonce like any policy the origin wrote.
+                    let mut head = head;
+                    if let Some(edit) = &req.headers {
+                        let done = http::apply_response_headers(
+                            &mut head,
+                            &edit.remove_response,
+                            &edit.csp,
+                            &edit.permissions,
+                        );
+                        let host = self.captured.as_deref().unwrap_or("?");
+                        if !done.dropped.is_empty() {
+                            crate::logbuf::push(&format!(
+                                "mitm {host}: response headers dropped: {} by {} rule(s)",
+                                done.dropped.join(", "),
+                                edit.rules.len(),
+                            ));
+                        }
+                        if !done.added.is_empty() {
+                            crate::logbuf::push(&format!(
+                                "mitm {host}: response gained {} by {} rule(s)",
+                                done.added.join(", "),
+                                edit.rules.len(),
+                            ));
+                        }
+                    }
                     // A response to HEAD advertises the length of the body it
                     // would have carried, and then carries no body at all.
                     if info.bodyless() || req.info.head {
@@ -1219,7 +1296,11 @@ impl ProxySession {
                         http::Encoding::Identity | http::Encoding::Gzip | http::Encoding::Deflate
                     );
                     let editable = decodable && framing.is_some() && !req.info.http10;
-                    let html_edit = info.html && renderable && editable;
+                    // Injection has something to do only when the page runtime
+                    // or the cosmetic rules are in play; a connection that is
+                    // here for header edits alone must not hold bodies back.
+                    let can_inject = !self.script_src.is_empty() || self.cosmetic.is_some();
+                    let html_edit = can_inject && info.html && renderable && editable;
                     // `$replace` only ever looks at text bodies: media,
                     // images and downloads travel untouched.
                     let replace = req.replace.filter(|_| info.text && editable);
@@ -2066,7 +2147,7 @@ impl RequestFacts<'_> {
     pub(super) fn request_type(&self) -> &'static str {
         match self.dest.unwrap_or("") {
             "document" => "document",
-            "iframe" | "frame" => "sub_frame",
+            "iframe" | "frame" => "subdocument",
             "script" => "script",
             "style" => "stylesheet",
             "image" | "imageset" => "image",

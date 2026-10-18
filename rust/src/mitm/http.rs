@@ -796,6 +796,117 @@ pub fn drop_undecodable_encodings(buf: &[u8], force: bool) -> Option<Vec<u8>> {
     Some(out)
 }
 
+/// Takes the named headers out of a message head (`CRLFCRLF` included).
+///
+/// The name of a header is its part before the first `:`, compared
+/// case-insensitively and whole (`x-frame-options` never matches
+/// `x-frame-options-report`). A header line that folds onto the next line
+/// (`obs-fold`) loses its continuation with it, so no orphan bytes are left
+/// behind. Returns `None` when none of the names is there: the caller keeps
+/// the head it had.
+pub fn drop_headers(head: &[u8], names: &[String]) -> Option<Vec<u8>> {
+    drop_header_lines(head, names).map(|(out, _)| out)
+}
+
+/// [`drop_headers`], also reporting the names it actually found (lowercased).
+fn drop_header_lines(head: &[u8], names: &[String]) -> Option<(Vec<u8>, Vec<String>)> {
+    if names.is_empty() {
+        return None;
+    }
+    let mut out = Vec::with_capacity(head.len());
+    let mut dropped: Vec<String> = Vec::new();
+    // Whether the previous line was dropped and a folded continuation of it
+    // may still be coming.
+    let mut in_folded = false;
+    for line in head.split_inclusive(|b| *b == b'\n') {
+        if line.first().is_some_and(|b| *b == b' ' || *b == b'\t') {
+            if in_folded {
+                continue;
+            }
+        } else if let Some(name) = header_line_name(line) {
+            in_folded = names
+                .iter()
+                .any(|header| header.eq_ignore_ascii_case(name.as_str()));
+            if in_folded {
+                if !dropped.contains(&name) {
+                    dropped.push(name);
+                }
+                continue;
+            }
+        } else {
+            in_folded = false;
+        }
+        out.extend_from_slice(line);
+    }
+    if dropped.is_empty() {
+        return None;
+    }
+    Some((out, dropped))
+}
+
+/// The lowercased name of a header line, or `None` when the line is not one —
+/// a continuation line, the blank line that ends the head, or a line with
+/// whitespace where a header name must be.
+fn header_line_name(line: &[u8]) -> Option<String> {
+    let end = line.iter().position(|b| *b == b':')?;
+    if end == 0 || line[..end].contains(&b' ') || line[..end].contains(&b'\t') {
+        return None;
+    }
+    Some(String::from_utf8_lossy(&line[..end]).to_ascii_lowercase())
+}
+
+/// What [`apply_response_headers`] did to one head, for the log line.
+#[derive(Debug, Default)]
+pub struct HeadEdits {
+    /// Names actually taken out of the head (lowercased).
+    pub dropped: Vec<String>,
+    /// Canonical names appended to the head.
+    pub added: Vec<String>,
+}
+
+/// Applies the response-header modifiers to a head: `$removeheader` names go
+/// away, `$csp` and `$permissions` values are appended as header lines of
+/// their own.
+///
+/// Everything stays inside the header block — its framing (`content-length`,
+/// `transfer-encoding`) is off limits to `$removeheader` — so the new lines go
+/// in just before the blank line that ends it. A head without that blank line
+/// is not a head this can edit.
+pub fn apply_response_headers(
+    head: &mut Vec<u8>,
+    drop: &[String],
+    csp: &[String],
+    permissions: &[String],
+) -> HeadEdits {
+    let mut edits = HeadEdits::default();
+    if let Some((out, dropped)) = drop_header_lines(head, drop) {
+        *head = out;
+        edits.dropped = dropped;
+    }
+    if !(head.ends_with(b"\r\n\r\n") || head.ends_with(b"\n\n")) {
+        return edits;
+    }
+    let ending = if head.ends_with(b"\r\n") { "\r\n" } else { "\n" };
+    let mut lines = String::new();
+    for value in csp {
+        lines.push_str("Content-Security-Policy: ");
+        lines.push_str(value);
+        lines.push_str(ending);
+        edits.added.push("Content-Security-Policy".to_string());
+    }
+    for value in permissions {
+        lines.push_str("Permissions-Policy: ");
+        lines.push_str(value);
+        lines.push_str(ending);
+        edits.added.push("Permissions-Policy".to_string());
+    }
+    if !lines.is_empty() {
+        let at = head.len() - ending.len();
+        head.splice(at..at, lines.into_bytes());
+    }
+    edits
+}
+
 /// True when the head carries an `accept` header mentioning `text/html`.
 pub fn head_accepts_html(head: &[u8]) -> bool {
     for line in head.split_inclusive(|b| *b == b'\n') {
@@ -2229,5 +2340,67 @@ mod tests {
         let body = b"<html><body><header>x</header><p>y";
         let pos = injection_point(body).expect("a point");
         assert_eq!(pos, b"<html><body>".len());
+    }
+
+    #[test]
+    fn drop_headers_takes_the_line_and_its_continuations() {
+        let head = b"HTTP/1.1 200 OK\r\nSet-Cookie: a=1\r\nX-Drop: one\r\n folded onto it\r\nX-Keep: 3\r\n\r\n";
+        let out = drop_headers(head, &["x-drop".to_string()]).expect("the line is there");
+        assert_eq!(
+            String::from_utf8(out).unwrap(),
+            "HTTP/1.1 200 OK\r\nSet-Cookie: a=1\r\nX-Keep: 3\r\n\r\n"
+        );
+    }
+
+    #[test]
+    fn drop_headers_matches_whole_names_case_insensitively() {
+        let head = b"HTTP/1.1 200 OK\r\nX-Frame-Options-Report: 1\r\nX-Frame-Options: DENY\r\n\r\n";
+        let out = drop_headers(head, &["X-Frame-Options".to_string()]).expect("one line matches");
+        assert_eq!(
+            String::from_utf8(out).unwrap(),
+            "HTTP/1.1 200 OK\r\nX-Frame-Options-Report: 1\r\n\r\n"
+        );
+        assert!(drop_headers(head, &["missing".to_string()]).is_none());
+        assert!(drop_headers(head, &[]).is_none());
+    }
+
+    #[test]
+    fn apply_response_headers_appends_before_the_blank_line() {
+        let mut head = b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nX-Drop: 1\r\n\r\n".to_vec();
+        let edits = apply_response_headers(
+            &mut head,
+            &["x-drop".to_string()],
+            &["worker-src 'none'".to_string()],
+            &["browsing-topics=()".to_string(), "usb=()".to_string()],
+        );
+        assert_eq!(
+            String::from_utf8(head).unwrap(),
+            "HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\
+             Content-Security-Policy: worker-src 'none'\r\n\
+             Permissions-Policy: browsing-topics=()\r\n\
+             Permissions-Policy: usb=()\r\n\r\n"
+        );
+        assert_eq!(edits.dropped, vec!["x-drop".to_string()]);
+        assert_eq!(
+            edits.added,
+            vec![
+                "Content-Security-Policy".to_string(),
+                "Permissions-Policy".to_string(),
+                "Permissions-Policy".to_string()
+            ]
+        );
+    }
+
+    #[test]
+    fn apply_response_headers_leaves_an_unframed_head_alone() {
+        // No blank line, no place to put a header: nothing is appended.
+        let mut head = b"HTTP/1.1 200 OK\r\nX-Drop: 1".to_vec();
+        let edits =
+            apply_response_headers(&mut head, &[], &["worker-src 'none'".to_string()], &[]);
+        assert!(edits.added.is_empty());
+        assert_eq!(
+            String::from_utf8(head).unwrap(),
+            "HTTP/1.1 200 OK\r\nX-Drop: 1"
+        );
     }
 }

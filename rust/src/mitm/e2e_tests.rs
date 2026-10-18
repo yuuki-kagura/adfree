@@ -321,6 +321,12 @@ fn start_origin_mode(html: &'static str, mode: OriginBody) -> Origin {
                 .into_bytes();
                 out.extend_from_slice(&gz);
                 out
+            } else if line.starts_with("GET /go ") {
+                // A redirect a `$removeheader=location` rule is about to
+                // disarm: the client must see it without the target.
+                b"HTTP/1.1 302 Found\r\nLocation: https://track.test/next\r\n\
+                  Content-Length: 0\r\nConnection: keep-alive\r\n\r\n"
+                    .to_vec()
             } else if line.starts_with("GET / ") {
                 match mode {
                     OriginBody::Plain => format!(
@@ -1096,6 +1102,76 @@ fn url_rules_are_applied_on_the_https_path() {
         .map(|i| i + 4)
         .expect("the head must be complete");
     assert_eq!(raw.len(), end, "a HEAD answer must carry no body: {head}");
+
+    tcp.close();
+}
+
+/// The response-header rules: the policies the answer gains, the headers it
+/// loses, and the request-header half of `$removeheader`.
+const HEADER_LIST: &str = "! Title: e2e header rules\n\
+                           ||shop.test/ad.js$csp=worker-src 'none'\n\
+                           ||shop.test/ad.js$permissions=browsing-topics=(),document\n\
+                           ||shop.test/ad.js$removeheader=request:accept-language\n\
+                           ||shop.test/go$removeheader=location\n";
+
+/// `$csp`, `$permissions` and `$removeheader` shape the exchange itself: the
+/// policies are appended to the response head, the named request header never
+/// reaches the origin, and a redirect arrives without the target a client
+/// would follow. None of it touches the body.
+#[test]
+fn header_rules_shape_the_https_exchange() {
+    let origin = start_origin(HTML);
+    let (core, ca_der) = setup_core_with_list(&origin, "header", HEADER_LIST);
+
+    let mut tcp = Client::connect(core.clone(), origin.port);
+    let mut conn = handshake(&mut tcp, client_config(ca_der));
+    assert!(!conn.is_handshaking(), "the MITM handshake must complete");
+
+    // 1. The request goes out one header lighter, and the response comes back
+    //    two policies richer — the values ride the same request.
+    let (head, body) = request_with(
+        &mut tcp,
+        &mut conn,
+        "/ad.js",
+        "Sec-Fetch-Dest: document\r\nAccept-Language: en-US\r\nReferer: https://shop.test/\r\n",
+    );
+    assert!(head.starts_with("HTTP/1.1 200"), "{head}");
+    assert_eq!(body, SCRIPT.as_bytes(), "the body must come through untouched");
+    let lower = head.to_lowercase();
+    assert!(
+        lower.contains("content-security-policy: worker-src 'none'"),
+        "the $csp value must be appended: {head}"
+    );
+    assert!(
+        lower.contains("permissions-policy: browsing-topics=()"),
+        "the $permissions value must be appended: {head}"
+    );
+    assert!(
+        lower.contains("content-type: application/javascript"),
+        "the origin's own headers stay: {head}"
+    );
+    {
+        let seen = origin.requests.lock().expect("requests");
+        let ad = seen.last().expect("the request reached the origin");
+        assert!(
+            !ad.to_lowercase().contains("accept-language"),
+            "the dropped request header must be gone: {ad:?}"
+        );
+    }
+
+    // 2. `$removeheader=location`: the redirect arrives without its target, so
+    //    a client that would have followed it stays where it is.
+    let (head, _) = request_with(
+        &mut tcp,
+        &mut conn,
+        "/go",
+        "Sec-Fetch-Dest: document\r\nReferer: https://shop.test/\r\n",
+    );
+    assert!(head.starts_with("HTTP/1.1 302"), "{head}");
+    assert!(
+        !head.to_lowercase().contains("location:"),
+        "the header must be gone: {head}"
+    );
 
     tcp.close();
 }

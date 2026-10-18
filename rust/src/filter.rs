@@ -574,10 +574,11 @@ struct Compiled {
     /// `$replace` rules, found by [`scan_replace_rules`]. `None` when no
     /// loaded list carries one.
     replace: Option<ReplaceEngine>,
-    /// Request-URL modifiers (`$urltransform`, the `$removeparam` shapes the
-    /// crate refuses), found by [`scan_url_rules`]. `None` when no loaded list
-    /// carries one.
-    url_rules: Option<UrlRules>,
+    /// The modifiers the crate refuses (`$urltransform`, the `$removeparam`
+    /// shapes it does not implement, and the response-header ones: `$csp`,
+    /// `$permissions`, `$removeheader`), found by [`scan_modifier_rules`].
+    /// `None` when no loaded list carries one.
+    modifier_rules: Option<ModifierRules>,
 }
 
 /// The `$replace` rules of the loaded lists, with the engine that finds them.
@@ -630,7 +631,7 @@ impl FilterEngine {
                 rule_count: 0,
                 cosmetic_switches: HashMap::new(),
                 replace: None,
-                url_rules: None,
+                modifier_rules: None,
             })),
             cache: RwLock::new(DecisionCache::new(1 << 15)),
             build_ns: AtomicU64::new(0),
@@ -649,7 +650,7 @@ impl FilterEngine {
         let mut errors: Vec<String> = Vec::new();
         let mut cosmetic_exceptions = CosmeticExceptionScan::default();
         let mut replace_scan = ReplaceScan::default();
-        let mut url_scan = UrlScan::default();
+        let mut url_scan = ModifierScan::default();
 
         for list in lists.iter().filter(|l| l.enabled) {
             let Some(path) = &list.local_path else {
@@ -669,7 +670,7 @@ impl FilterEngine {
                                 // network rules pass through untouched).
                                 scan_cosmetic_exceptions(&text, &mut cosmetic_exceptions);
                                 scan_replace_rules(&text, &mut replace_scan);
-                                scan_url_rules(&text, &mut url_scan);
+                                scan_modifier_rules(&text, &mut url_scan);
                                 convert_adguard_cosmetics(text)
                             }
                             ListFormat::Hosts => text,
@@ -720,7 +721,7 @@ impl FilterEngine {
                 .join("\n");
             scan_cosmetic_exceptions(&joined, &mut cosmetic_exceptions);
             scan_replace_rules(&joined, &mut replace_scan);
-            scan_url_rules(&joined, &mut url_scan);
+            scan_modifier_rules(&joined, &mut url_scan);
             let record = set.add_filter_list(
                 convert_adguard_cosmetics(joined),
                 ParseOptions::default(),
@@ -759,12 +760,17 @@ impl FilterEngine {
                 replace.dropped,
             ));
         }
-        let url_rules = build_url_rules(url_scan);
-        if let Some(url_rules) = url_rules.as_ref() {
+        let modifier_rules = build_modifier_rules(url_scan);
+        if let Some(rules) = modifier_rules.as_ref() {
+            let url = rules
+                .rules
+                .iter()
+                .filter(|rule| rule.family.is_url())
+                .count();
             crate::logbuf::push(&format!(
-                "filter: {} URL modifier rules ({} dropped)",
-                url_rules.rules.len(),
-                url_rules.dropped,
+                "filter: {url} URL modifier rules + {} header modifier rules ({} dropped)",
+                rules.rules.len() - url,
+                rules.dropped,
             ));
         }
         let compiled = Arc::new(Compiled {
@@ -775,7 +781,7 @@ impl FilterEngine {
             rule_count,
             cosmetic_switches: cosmetic_exceptions.resolve(),
             replace,
-            url_rules,
+            modifier_rules,
         });
         *self.inner.write().unwrap() = compiled;
         self.cache.write().unwrap().clear();
@@ -1019,7 +1025,7 @@ impl FilterEngine {
     /// exactly like the DNS layer does.
     ///
     /// `request_type` is one of the crate's names (`document`, `script`,
-    /// `sub_frame`, `image`, `stylesheet`, `xmlhttprequest`, `media`, ...).
+    /// `subdocument`, `image`, `stylesheet`, `xmlhttprequest`, `media`, ...).
     pub fn check_url(
         &self,
         url: &str,
@@ -1537,12 +1543,12 @@ fn is_replace_token(token: &str) -> bool {
 /// The rule the crate is actually given: the pattern, the options the crate
 /// understands, and — for the probe engines — the redirect that names where the
 /// rule's identity comes back in.
-fn probe_line(pattern: &str, options: &[&str], redirect: Option<&str>) -> String {
+fn probe_line(pattern: &str, options: &[impl AsRef<str>], redirect: Option<&str>) -> String {
     let mut parts: Vec<String> = Vec::with_capacity(options.len() + 1);
     if let Some(name) = redirect {
         parts.push(format!("redirect={name}"));
     }
-    parts.extend(options.iter().map(|option| (*option).to_string()));
+    parts.extend(options.iter().map(|option| option.as_ref().to_string()));
     if parts.is_empty() {
         return pattern.to_string();
     }
@@ -1609,21 +1615,34 @@ fn replace_redirect_index(data_url: &str) -> Option<usize> {
 /// `adfree-urledit-<index>` (the shared fast path uses `adfree-urledit-any`,
 /// an exception line `adfree-urledit-ex`), and the resource body carries the
 /// index back exactly the way [`REPLACE_RESOURCE_PREFIX`] does it.
-const URL_RESOURCE_PREFIX: &str = "adfree-urledit-";
+const MODIFIER_RESOURCE_PREFIX: &str = "adfree-urledit-";
 
-/// Which modifier a URL rule carries. Values are only comparable within one
+/// Which modifier a rule carries. Values are only comparable within one
 /// family: `@@...$removeparam=param` cancels `$removeparam` rules, never a
-/// `$urltransform` that happens to repeat the value.
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum UrlFamily {
+/// `$urltransform` that happens to repeat the value. The last three are the
+/// response-header modifiers: they change what the client reads back instead of
+/// what the origin is asked for.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum ModifierFamily {
     Transform,
     RemoveParam,
+    Csp,
+    Permissions,
+    RemoveHeader,
 }
 
-/// One request-URL modifier rule, with its payload compiled.
-struct UrlRule {
-    family: UrlFamily,
-    kind: UrlRuleKind,
+impl ModifierFamily {
+    /// Whether the family rewrites the request URL — the two the HTTPS path
+    /// runs through [`FilterEngine::url_edit`].
+    fn is_url(self) -> bool {
+        matches!(self, ModifierFamily::Transform | ModifierFamily::RemoveParam)
+    }
+}
+
+/// One request-header/response-header rule, with its payload compiled.
+struct ModifierRule {
+    family: ModifierFamily,
+    kind: ModifierKind,
     /// The rule exactly as the list wrote it: the log shows it.
     text: String,
     /// The modifier value as written: what a valued exception cancels, and the
@@ -1632,12 +1651,85 @@ struct UrlRule {
     /// The rule names an explicit `$method`: a whole-URL transform is then not
     /// held back to GET the way it is by default.
     has_method: bool,
+    /// The rule names `$subdocument`: `$permissions` is the one family that
+    /// reads this, because subframes may only be affected by a rule that asks
+    /// for them.
+    subdocument: bool,
 }
 
-enum UrlRuleKind {
+enum ModifierKind {
     Transform(UrlTransform),
     RemoveParam(RemoveParam),
+    /// The `Content-Security-Policy` value the response gains.
+    Csp(String),
+    /// The `Permissions-Policy` value the response gains.
+    Permissions(String),
+    RemoveHeader(HeaderName),
 }
+
+/// One `$removeheader` payload: the header to take out, and the direction.
+struct HeaderName {
+    /// Lowercased: HTTP header names are case-insensitive, and so is the
+    /// comparison an exception makes.
+    name: String,
+    /// `request:`-prefixed — the header is taken off the request the origin
+    /// sees, not off the response the client sees.
+    request: bool,
+}
+
+/// Headers `$removeheader` refuses to touch, the reference's own list: they
+/// carry framing, CORS or security meaning, and a list taking one out is a
+/// list that did not mean to. A value naming one is dropped with the rule.
+const FORBIDDEN_HEADERS: &[&str] = &[
+    "access-control-allow-origin",
+    "access-control-allow-credentials",
+    "access-control-allow-headers",
+    "access-control-allow-methods",
+    "access-control-expose-headers",
+    "access-control-max-age",
+    "access-control-request-headers",
+    "access-control-request-method",
+    "origin",
+    "timing-allow-origin",
+    "allow",
+    "cross-origin-embedder-policy",
+    "cross-origin-opener-policy",
+    "cross-origin-resource-policy",
+    "content-security-policy",
+    "content-security-policy-report-only",
+    "expect-ct",
+    "feature-policy",
+    "origin-isolation",
+    "strict-transport-security",
+    "upgrade-insecure-requests",
+    "x-content-type-options",
+    "x-download-options",
+    "x-frame-options",
+    "x-permitted-cross-domain-policies",
+    "x-powered-by",
+    "x-xss-protection",
+    "public-key-pins",
+    "public-key-pins-report-only",
+    "sec-websocket-key",
+    "sec-websocket-extensions",
+    "sec-websocket-accept",
+    "sec-websocket-protocol",
+    "sec-websocket-version",
+    "p3p",
+    "sec-fetch-mode",
+    "sec-fetch-dest",
+    "sec-fetch-site",
+    "sec-fetch-user",
+    "referrer-policy",
+    "content-type",
+    "content-length",
+    "accept",
+    "accept-encoding",
+    "host",
+    "connection",
+    "transfer-encoding",
+    "upgrade",
+];
 
 /// One `$urltransform` rule's pipeline, ready to run on a request URL.
 ///
@@ -1684,28 +1776,94 @@ enum RemoveParam {
     NotRegex(regex::Regex),
 }
 
-/// The URL modifier rules one list text carries.
+/// The modifier rules one list text carries.
 #[derive(Default)]
-struct UrlScan {
-    /// Per-rule probe lines, index-matched with `rules`.
-    probe: Vec<String>,
-    /// The same lines with one shared redirect resource: the fast path.
-    any: Vec<String>,
-    rules: Vec<UrlRule>,
-    /// Exception lines: `(family, value, line)`. An empty value cancels every
-    /// rule of its family; a valued one cancels the rules repeating it.
-    exceptions: Vec<(UrlFamily, String, String)>,
+struct ModifierScan {
+    /// Rules held until the `$badfilter` pass has looked at them (it needs the
+    /// whole set, lists and user rules alike, before a rule can be called).
+    pending: Vec<PendingRule>,
+    /// Exceptions, waiting to be folded into the per-rule engines. An empty
+    /// value cancels every rule of its family; a valued one cancels the rules
+    /// repeating it. `$permissions` also compares whether the two are
+    /// `$subdocument`-scoped.
+    exceptions: Vec<ExceptionRule>,
+    /// `$badfilter` rules: they never apply themselves, they take other rules
+    /// off the set.
+    badfilters: Vec<CancelMaterial>,
     dropped: u32,
 }
 
-/// How many URL modifier rules one build keeps. Each rule gets its own probe
+/// One rule the scan read, before `$badfilter` has had its say.
+struct PendingRule {
+    rule: ModifierRule,
+    /// The pattern the probe matches on (`*` when the list wrote none: an
+    /// empty pattern and `*` say the same thing).
+    pattern: String,
+    /// The options the probe line carries: the ones the crate implements, the
+    /// family token gone, the default types spelled out.
+    options: Vec<String>,
+    /// What a `$badfilter` rule compares (see [`CancelMaterial`]).
+    cancel: CancelMaterial,
+}
+
+/// One exception rule, ready to be folded into the probes it cancels.
+struct ExceptionRule {
+    family: ModifierFamily,
+    value: String,
+    /// The rule names `$subdocument` (or its alias).
+    subdocument: bool,
+    pattern: String,
+    options: Vec<String>,
+}
+
+/// What `$badfilter` compares, following the reference's `negatesBadfilter`:
+/// the two rules match when they are the same kind of rule (blocking against
+/// blocking, exception against exception), match the same pattern, carry the
+/// same option *names* — values are not part of it, so a `$csp` badfilter takes
+/// out every `$csp` rule with that pattern, whichever directive it sets — the
+/// same request types, and compatible domain lists.
+struct CancelMaterial {
+    exception: bool,
+    pattern: String,
+    /// Option names, values dropped, aliases canonical, `badfilter` gone,
+    /// split by sense.
+    options: (Vec<String>, Vec<String>),
+    /// Type options, canonical, split by sense.
+    types: (Vec<String>, Vec<String>),
+    /// `domain=` as written; `None` when the rule names none. A permitted list
+    /// cancels when the two intersect.
+    domains: Option<Vec<String>>,
+    /// `~domain=`, compared as written.
+    denied: Option<Vec<String>>,
+    /// `denyallow=`, compared as written.
+    denyallow: Option<Vec<String>>,
+}
+
+impl CancelMaterial {
+    /// Whether `self` (a `$badfilter` rule) takes `other` off the set.
+    fn cancels(&self, other: &CancelMaterial) -> bool {
+        self.exception == other.exception
+            && self.pattern == other.pattern
+            && self.options == other.options
+            && self.types == other.types
+            && match (&self.domains, &other.domains) {
+                (None, None) => true,
+                (Some(mine), Some(theirs)) => mine.iter().any(|domain| theirs.contains(domain)),
+                _ => false,
+            }
+            && self.denied == other.denied
+            && self.denyallow == other.denyallow
+    }
+}
+
+/// How many modifier rules one build keeps. Each rule gets its own probe
 /// engine, and no real list comes close; a list trying to push past this is
 /// capped rather than allowed to build thousands of engines.
 const URL_RULES_MAX: usize = 256;
 
-/// The URL modifier rules of the loaded lists, with the engines that find them.
-struct UrlRules {
-    rules: Vec<UrlRule>,
+/// The modifier rules of the loaded lists, with the engines that find them.
+struct ModifierRules {
+    rules: Vec<ModifierRule>,
     /// One engine per rule: the rule's own pattern with its exceptions folded
     /// in, so `should_block` here means "this rule applies to this request".
     probes: Vec<Engine>,
@@ -1724,35 +1882,71 @@ pub struct UrlEdit {
     pub rules: Vec<String>,
 }
 
+/// What the response-header modifiers do to one request, from
+/// [`FilterEngine::header_edit`].
+///
+/// This is the plan the HTTPS path holds for the answer: the headers the
+/// response gains, and the ones it or the request going out lose.
+#[derive(Default)]
+pub struct HeaderEdit {
+    /// `Content-Security-Policy` values to append, one header each, in the
+    /// order the lists wrote them.
+    pub csp: Vec<String>,
+    /// `Permissions-Policy` values to append.
+    pub permissions: Vec<String>,
+    /// Response headers to take out (lowercased names).
+    pub remove_response: Vec<String>,
+    /// Request headers to take out before the request goes out (lowercased).
+    pub remove_request: Vec<String>,
+    /// The rules that fired, for the log line.
+    pub rules: Vec<String>,
+}
+
 /// Reads the rules the crate refuses because of their modifier: `$urltransform`
-/// (the request URL is rewritten before it goes out) and the `$removeparam`
-/// shapes it does not implement (bare, `~`, and `/regexp/`; only `=name` ever
-/// reached the crate).
-fn scan_url_rules(text: &str, scan: &mut UrlScan) {
+/// and the `$removeparam` shapes it does not implement (bare, `~`, and
+/// `/regexp/`; only `=name` ever reached the crate) rewrite the request URL,
+/// while `$csp`, `$permissions` and `$removeheader` shape the answer. Their
+/// `$badfilter` rules are read here too — these rules live outside the crate's
+/// engine, so its own badfilter pass never sees them.
+fn scan_modifier_rules(text: &str, scan: &mut ModifierScan) {
     for line in text.lines() {
         let line = line.trim();
         if line.is_empty() || line.starts_with(['!', '[', '#']) {
             continue;
         }
+        // A `#` before the `$` says the line is a cosmetic rule that mentions
+        // a modifier name by accident (`##div:has-text($csp…)`), and a pattern
+        // with a `#` in it is one no list writes.
+        if let (Some(hash), Some(dollar)) = (line.find('#'), line.find('$')) {
+            if hash < dollar {
+                continue;
+            }
+        }
         let exception = line.starts_with("@@");
         let rule = line.strip_prefix("@@").unwrap_or(line);
-        let Some((pattern, tokens)) = split_url_rule(rule) else {
+        let Some((pattern, tokens)) = split_modifier_rule(rule) else {
             continue;
         };
-        // One rule, one modifier: a `$urltransform` and a `$removeparam` in the
-        // same rule have no defined combination, and no list writes one.
+        // An empty pattern and `*` say the same thing: every URL matches.
+        let pattern = if pattern.is_empty() { "*" } else { pattern };
+        // One rule, one modifier: two modifier families in the same rule have
+        // no defined combination, and no list writes one.
         let families: Vec<&str> = tokens
             .iter()
             .copied()
-            .filter(|token| is_url_family_token(token))
+            .filter(|token| is_modifier_token(token))
             .collect();
         if families.len() != 1 {
             scan.dropped += 1;
             continue;
         }
         let token = families[0];
-        let family = url_family_of(token);
+        let family = modifier_family_of(token);
         let value = token.split_once('=').map(|(_, value)| value).unwrap_or("");
+        let badfilter = tokens.iter().any(|token| {
+            let bare = token.trim_start_matches('~');
+            bare.split('=').next().unwrap_or(bare) == "badfilter"
+        });
 
         // The options the crate implements exactly, so the probe matches the
         // rule the way the list meant it; the family token is where the
@@ -1762,9 +1956,15 @@ fn scan_url_rules(text: &str, scan: &mut UrlScan) {
         for token in &tokens {
             let bare = token.trim_start_matches('~');
             let name = bare.split('=').next().unwrap_or(bare);
-            if name.is_empty() || is_url_family_token(token) {
+            if name.is_empty() || is_modifier_token(token) {
                 // The family token itself carries where its probe's answer
                 // goes, so it is not kept as an option.
+                continue;
+            }
+            if name == "badfilter" {
+                // The cancellation marker is not an option a probe may carry;
+                // its rule never applies itself. What it cancels is recorded
+                // below, out of the same option list ([`CancelMaterial`]).
                 continue;
             }
             if name == "to" {
@@ -1806,80 +2006,77 @@ fn scan_url_rules(text: &str, scan: &mut UrlScan) {
             scan.dropped += 1;
             continue;
         }
-        let mut options = kept.clone();
+        let mut options: Vec<String> = kept.iter().map(|token| token.to_string()).collect();
         if !has_positive_type(&kept) {
-            options.push(default_types(family));
+            options.push(default_types(family).to_string());
         }
         let has_method = kept
             .iter()
             .any(|token| token.trim_start_matches('~').split('=').next() == Some("method"));
+        let subdocument = kept.iter().any(|token| {
+            !token.starts_with('~')
+                && matches!(
+                    token.split('=').next().unwrap_or(token),
+                    "subdocument" | "frame"
+                )
+        });
 
+        // The payload: a blocking rule whose modifier this engine cannot read
+        // is a rule it must not half-run. An exception carries no payload — its
+        // value only labels the rules it cancels — so for one this is a
+        // validity question, and an empty value is always legal there.
+        let kind = payload(family, value);
+        if kind.is_none() && !(exception && value.trim().is_empty()) {
+            scan.dropped += 1;
+            continue;
+        }
+        if badfilter {
+            // A `$badfilter` rule never applies itself: it waits until every
+            // list has been read, then takes the rules it matches off the set.
+            scan.badfilters.push(cancel_material(exception, pattern, &tokens));
+            continue;
+        }
         if exception {
-            // Stored as the exception line it is: these lines are only ever
-            // folded into the per-rule engines, where the crate has to see a
-            // rule cancelled by what the list cancelled it with.
-            let line = probe_line(pattern, &options, Some(&format!("{URL_RESOURCE_PREFIX}ex")));
-            scan.exceptions
-                .push((family, value.to_string(), format!("@@{line}")));
+            scan.exceptions.push(ExceptionRule {
+                family,
+                value: value.to_string(),
+                subdocument,
+                pattern: pattern.to_string(),
+                options,
+            });
             continue;
         }
-        if family == UrlFamily::Transform && value.is_empty() {
-            // A blocking `$urltransform` with no value transforms nothing;
-            // only an exception may leave the value out.
+        if scan.pending.len() >= URL_RULES_MAX {
             scan.dropped += 1;
             continue;
         }
-        let index = scan.rules.len();
-        if index >= URL_RULES_MAX {
-            scan.dropped += 1;
-            continue;
-        }
-        let kind = match family {
-            UrlFamily::Transform => match UrlTransform::parse(value) {
-                Some(transform) => UrlRuleKind::Transform(transform),
-                None => {
-                    scan.dropped += 1;
-                    continue;
-                }
+        scan.pending.push(PendingRule {
+            rule: ModifierRule {
+                family,
+                kind: kind.expect("a blocking rule has a payload"),
+                text: rule.to_string(),
+                value: value.to_string(),
+                has_method,
+                subdocument,
             },
-            UrlFamily::RemoveParam => match RemoveParam::parse(value) {
-                Some(remove) => UrlRuleKind::RemoveParam(remove),
-                None => {
-                    scan.dropped += 1;
-                    continue;
-                }
-            },
-        };
-        scan.probe.push(probe_line(
-            pattern,
-            &options,
-            Some(&format!("{URL_RESOURCE_PREFIX}{index}")),
-        ));
-        scan.any.push(probe_line(
-            pattern,
-            &options,
-            Some(&format!("{URL_RESOURCE_PREFIX}any")),
-        ));
-        scan.rules.push(UrlRule {
-            family,
-            kind,
-            text: rule.to_string(),
-            value: value.to_string(),
-            has_method,
+            pattern: pattern.to_string(),
+            options,
+            cancel: cancel_material(exception, pattern, &tokens),
         });
     }
 }
 
-/// Splits `pattern$option,option,...` at the `$` that starts a URL modifier
-/// list. The pattern itself may contain a `$`, so the split is the first `$`
-/// after which one of the family tokens shows up.
-fn split_url_rule(text: &str) -> Option<(&str, Vec<&str>)> {
+/// Splits `pattern$option,option,...` at the `$` that starts a modifier list.
+/// The pattern itself may contain a `$`, so the split is the first `$` after
+/// which one of the family tokens shows up. A rule that starts with the `$`
+/// has no pattern at all — every URL matches it.
+fn split_modifier_rule(text: &str) -> Option<(&str, Vec<&str>)> {
     let mut search = 0;
     while let Some(offset) = text[search..].find('$') {
         let index = search + offset;
         let pattern = &text[..index];
         let tokens = split_options(&text[index + 1..]);
-        if !pattern.is_empty() && tokens.iter().any(|token| is_url_family_token(token)) {
+        if tokens.iter().any(|token| is_modifier_token(token)) {
             return Some((pattern, tokens));
         }
         search = index + 1;
@@ -1887,19 +2084,174 @@ fn split_url_rule(text: &str) -> Option<(&str, Vec<&str>)> {
     None
 }
 
-fn is_url_family_token(token: &str) -> bool {
+/// A token carrying one of the modifiers this engine reads itself: the crate
+/// refuses every one of them, so they are matched here.
+fn is_modifier_token(token: &str) -> bool {
     matches!(
         token.split('=').next().unwrap_or(token),
-        "urltransform" | "removeparam" | "queryprune"
+        "urltransform"
+            | "removeparam"
+            | "queryprune"
+            | "csp"
+            | "permissions"
+            | "removeheader"
     )
 }
 
-fn url_family_of(token: &str) -> UrlFamily {
-    if token.split('=').next() == Some("urltransform") {
-        UrlFamily::Transform
-    } else {
-        UrlFamily::RemoveParam
+fn modifier_family_of(token: &str) -> ModifierFamily {
+    match token.split('=').next() {
+        Some("urltransform") => ModifierFamily::Transform,
+        Some("csp") => ModifierFamily::Csp,
+        Some("permissions") => ModifierFamily::Permissions,
+        Some("removeheader") => ModifierFamily::RemoveHeader,
+        _ => ModifierFamily::RemoveParam,
     }
+}
+
+/// The payload of one modifier rule, or `None` when the value means something
+/// this engine will not run: a rule that cannot run is a rule that must not
+/// half-run.
+fn payload(family: ModifierFamily, value: &str) -> Option<ModifierKind> {
+    match family {
+        ModifierFamily::Transform => UrlTransform::parse(value).map(ModifierKind::Transform),
+        ModifierFamily::RemoveParam => RemoveParam::parse(value).map(ModifierKind::RemoveParam),
+        ModifierFamily::Csp => csp_payload(value).map(ModifierKind::Csp),
+        ModifierFamily::Permissions => permissions_payload(value).map(ModifierKind::Permissions),
+        ModifierFamily::RemoveHeader => removeheader_payload(value).map(ModifierKind::RemoveHeader),
+    }
+}
+
+/// Reads a `$csp` value: the policy the response gains.
+///
+/// A `report-*` directive turns the header into an observer rather than a
+/// policy — the reference refuses the rule, and so does this — and an empty
+/// value is no policy at all, so only an exception may leave it out.
+fn csp_payload(value: &str) -> Option<String> {
+    if value.trim().is_empty() || value.to_ascii_lowercase().contains("report-") {
+        return None;
+    }
+    Some(value.to_string())
+}
+
+/// Reads a `$permissions` value. A rule may spell several policies with `|` or
+/// an escaped comma, and both read as the separator the header itself uses.
+fn permissions_payload(value: &str) -> Option<String> {
+    let normalised = value.replace("\\,", ",").replace('|', ",");
+    if normalised.trim().is_empty() {
+        return None;
+    }
+    Some(normalised)
+}
+
+/// Reads a `$removeheader` value: `request:name` takes the header off the
+/// request the origin sees, a bare name off the response the client sees.
+/// A header the list may not touch, or a name carrying a `:` of its own, makes
+/// the rule invalid — the reference refuses those, and so does this.
+fn removeheader_payload(value: &str) -> Option<HeaderName> {
+    let lower = value.trim().to_ascii_lowercase();
+    let (request, name) = match lower.strip_prefix("request:") {
+        Some(name) => (true, name),
+        None => (false, lower.as_str()),
+    };
+    if name.is_empty() || name.contains(':') || FORBIDDEN_HEADERS.contains(&name) {
+        return None;
+    }
+    Some(HeaderName {
+        name: name.to_string(),
+        request,
+    })
+}
+
+/// Reads the option list the way `$badfilter` compares it (see
+/// [`CancelMaterial`]).
+fn cancel_material(exception: bool, pattern: &str, tokens: &[&str]) -> CancelMaterial {
+    let mut options: (Vec<String>, Vec<String>) = (Vec::new(), Vec::new());
+    let mut types: (Vec<String>, Vec<String>) = (Vec::new(), Vec::new());
+    let mut domains = None;
+    let mut denied = None;
+    let mut denyallow = None;
+    for token in tokens {
+        let (name, negated) = canonical_option(token);
+        if name.is_empty() || name == "badfilter" {
+            continue;
+        }
+        let value = token.split_once('=').map(|(_, value)| value).unwrap_or("");
+        match name.as_str() {
+            "domain" => {
+                let list: Vec<String> = value.split('|').map(str::to_string).collect();
+                if negated {
+                    denied = Some(list);
+                } else {
+                    domains = Some(list);
+                }
+            }
+            "denyallow" => {
+                denyallow = Some(value.split('|').map(str::to_string).collect());
+            }
+            _ => {
+                let bucket = if is_type_name(&name) { &mut types } else { &mut options };
+                let side = if negated { &mut bucket.1 } else { &mut bucket.0 };
+                side.push(name);
+            }
+        }
+    }
+    for bucket in [&mut options, &mut types] {
+        bucket.0.sort();
+        bucket.0.dedup();
+        bucket.1.sort();
+        bucket.1.dedup();
+    }
+    CancelMaterial {
+        exception,
+        pattern: pattern.to_string(),
+        options,
+        types,
+        domains,
+        denied,
+        denyallow,
+    }
+}
+
+/// Canonical `(name, negated)` for the `$badfilter` compare: aliases collapse
+/// onto the name they stand for, and the first-party spellings collapse onto
+/// the third-party flag they set, the way the reference's parser reads them.
+fn canonical_option(token: &str) -> (String, bool) {
+    let negated = token.starts_with('~');
+    let bare = token.trim_start_matches('~');
+    let name = bare.split('=').next().unwrap_or(bare);
+    let (name, negated) = match name {
+        "1p" | "first-party" => ("third-party", !negated),
+        "3p" => ("third-party", negated),
+        "doc" => ("document", negated),
+        "frame" => ("subdocument", negated),
+        "css" => ("stylesheet", negated),
+        "xhr" => ("xmlhttprequest", negated),
+        "beacon" => ("ping", negated),
+        "queryprune" => ("removeparam", negated),
+        other => (other, negated),
+    };
+    (name.to_string(), negated)
+}
+
+/// The canonical names that set a request type rather than an option flag.
+fn is_type_name(name: &str) -> bool {
+    matches!(
+        name,
+        "document"
+            | "subdocument"
+            | "script"
+            | "stylesheet"
+            | "image"
+            | "media"
+            | "object"
+            | "object-subrequest"
+            | "other"
+            | "ping"
+            | "xmlhttprequest"
+            | "websocket"
+            | "font"
+            | "all"
+    )
 }
 
 /// The request-type options a rule may name.
@@ -1934,18 +2286,18 @@ fn has_positive_type(tokens: &[&str]) -> bool {
     })
 }
 
-/// The request types a URL modifier covers when the list names none.
+/// The request types a modifier rule covers when the list names none.
 ///
 /// AdGuard's own engine and its MV3 converter agree on the split: a
-/// `$urltransform` without type options covers every request type, document
-/// navigations included, while `$removeparam` (and `$permissions`) covers only
-/// the documents — a `document`-typed request, top-level or a frame. The crate
-/// would leave documents out of a line that names no type, so the default has
-/// to be spelled out on the probe line.
-fn default_types(family: UrlFamily) -> &'static str {
+/// `$urltransform`, `$csp` or `$removeheader` without type options covers every
+/// request type, document navigations included, while `$removeparam` and
+/// `$permissions` cover only the documents — a `document`-typed request,
+/// top-level or a frame. The crate would leave documents out of a line that
+/// names no type, so the default has to be spelled out on the probe line.
+fn default_types(family: ModifierFamily) -> &'static str {
     match family {
-        UrlFamily::Transform => "all",
-        UrlFamily::RemoveParam => "document,subdocument",
+        ModifierFamily::Transform | ModifierFamily::Csp | ModifierFamily::RemoveHeader => "all",
+        ModifierFamily::RemoveParam | ModifierFamily::Permissions => "document,subdocument",
     }
 }
 
@@ -2299,46 +2651,93 @@ fn page_vetoed(compiled: &Compiled, url: &str, source: &str, request_type: &str)
         .unwrap_or(false)
 }
 
-/// Builds the engines a list's URL modifier rules need, or `None` when the
-/// loaded lists carry none.
-fn build_url_rules(scan: UrlScan) -> Option<UrlRules> {
-    if scan.rules.is_empty() {
+/// Builds the engines a list's modifier rules need, or `None` when the loaded
+/// lists carry none.
+fn build_modifier_rules(scan: ModifierScan) -> Option<ModifierRules> {
+    let ModifierScan {
+        pending,
+        exceptions,
+        badfilters,
+        dropped,
+    } = scan;
+    // `$badfilter` has the last word on which rules live: a rule one of them
+    // matches never applies.
+    let pending: Vec<PendingRule> = pending
+        .into_iter()
+        .filter(|rule| !badfilters.iter().any(|filter| filter.cancels(&rule.cancel)))
+        .collect();
+    if pending.is_empty() {
         return None;
     }
+    let mut any_lines = Vec::with_capacity(pending.len());
+    let mut probes = Vec::with_capacity(pending.len());
+    let mut rules = Vec::with_capacity(pending.len());
+    for (index, pending) in pending.into_iter().enumerate() {
+        let PendingRule {
+            rule,
+            pattern,
+            options,
+            ..
+        } = pending;
+        let probe = probe_line(
+            &pattern,
+            &options,
+            Some(&format!("{MODIFIER_RESOURCE_PREFIX}{index}")),
+        );
+        // An exception is folded into the engine of every rule it can cancel:
+        // the crate has to see the rule cancelled by what the list cancelled
+        // it with. An empty value cancels every rule of its family, a valued
+        // one the rules repeating it. `$permissions` also compares whether the
+        // two are `$subdocument`-scoped — a subframe may only be affected by a
+        // rule that asks for it — so a document-scoped exception does not
+        // touch a subframe rule, or the other way round.
+        let mut lines = vec![probe];
+        lines.extend(
+            exceptions
+                .iter()
+                .filter(|exception| {
+                    exception.family == rule.family
+                        && (exception.value.is_empty() || exception.value == rule.value)
+                        && (rule.family != ModifierFamily::Permissions
+                            || exception.subdocument == rule.subdocument)
+                })
+                .map(|exception| {
+                    let line = probe_line(
+                        &exception.pattern,
+                        &exception.options,
+                        Some(&format!("{MODIFIER_RESOURCE_PREFIX}ex")),
+                    );
+                    format!("@@{line}")
+                }),
+        );
+        let mut set = FilterSet::new(false);
+        set.add_filter_list(lines.join("\n"), ParseOptions::default());
+        let mut engine = Engine::new_with_filter_set(set);
+        engine.use_resources([
+            url_resource(
+                &format!("{MODIFIER_RESOURCE_PREFIX}{index}"),
+                &index.to_string(),
+            ),
+            url_resource(&format!("{MODIFIER_RESOURCE_PREFIX}ex"), "0"),
+        ]);
+        probes.push(engine);
+        any_lines.push(probe_line(
+            &pattern,
+            &options,
+            Some(&format!("{MODIFIER_RESOURCE_PREFIX}any")),
+        ));
+        rules.push(rule);
+    }
     let mut any_set = FilterSet::new(false);
-    any_set.add_filter_list(scan.any.join("\n"), ParseOptions::default());
+    any_set.add_filter_list(any_lines.join("\n"), ParseOptions::default());
     let mut any = Engine::new_with_filter_set(any_set);
-    any.use_resources([url_resource(&format!("{URL_RESOURCE_PREFIX}any"), "0")]);
+    any.use_resources([url_resource(&format!("{MODIFIER_RESOURCE_PREFIX}any"), "0")]);
 
-    let probes = scan
-        .rules
-        .iter()
-        .enumerate()
-        .map(|(index, rule)| {
-            let mut lines: Vec<&str> = vec![scan.probe[index].as_str()];
-            lines.extend(
-                scan.exceptions
-                    .iter()
-                    .filter(|(family, value, _)| {
-                        *family == rule.family && (value.is_empty() || *value == rule.value)
-                    })
-                    .map(|(_, _, line)| line.as_str()),
-            );
-            let mut set = FilterSet::new(false);
-            set.add_filter_list(lines.join("\n"), ParseOptions::default());
-            let mut engine = Engine::new_with_filter_set(set);
-            engine.use_resources([
-                url_resource(&format!("{URL_RESOURCE_PREFIX}{index}"), &index.to_string()),
-                url_resource(&format!("{URL_RESOURCE_PREFIX}ex"), "0"),
-            ]);
-            engine
-        })
-        .collect();
-    Some(UrlRules {
-        rules: scan.rules,
+    Some(ModifierRules {
+        rules,
         probes,
         any,
-        dropped: scan.dropped,
+        dropped,
     })
 }
 
@@ -2356,17 +2755,51 @@ fn url_resource(name: &str, body: &str) -> Resource {
 }
 
 impl FilterEngine {
-    /// Whether the loaded lists carry URL modifiers the HTTPS path runs.
+    /// Whether the loaded lists carry request-URL modifiers the HTTPS path
+    /// runs.
     pub fn has_url_rules(&self) -> bool {
-        self.compiled().url_rules.is_some()
+        self.compiled()
+            .modifier_rules
+            .as_ref()
+            .is_some_and(|rules| rules.rules.iter().any(|rule| rule.family.is_url()))
+    }
+
+    /// Whether they carry response-header modifiers (`$csp`, `$permissions`,
+    /// `$removeheader`).
+    pub fn has_header_rules(&self) -> bool {
+        self.compiled()
+            .modifier_rules
+            .as_ref()
+            .is_some_and(|rules| rules.rules.iter().any(|rule| !rule.family.is_url()))
     }
 
     /// How many URL modifier rules the loaded lists carry (diagnostics).
     pub fn url_rules_count(&self) -> u64 {
         self.compiled()
-            .url_rules
+            .modifier_rules
             .as_ref()
-            .map(|rules| rules.rules.len() as u64)
+            .map(|rules| {
+                rules
+                    .rules
+                    .iter()
+                    .filter(|rule| rule.family.is_url())
+                    .count() as u64
+            })
+            .unwrap_or(0)
+    }
+
+    /// How many header modifier rules they carry (diagnostics).
+    pub fn header_rules_count(&self) -> u64 {
+        self.compiled()
+            .modifier_rules
+            .as_ref()
+            .map(|rules| {
+                rules
+                    .rules
+                    .iter()
+                    .filter(|rule| !rule.family.is_url())
+                    .count() as u64
+            })
             .unwrap_or(0)
     }
 
@@ -2392,7 +2825,7 @@ impl FilterEngine {
         method: &str,
     ) -> Option<UrlEdit> {
         let compiled = self.compiled();
-        let rules = compiled.url_rules.as_ref()?;
+        let rules = compiled.modifier_rules.as_ref()?;
         if page_vetoed(&compiled, url, source, request_type) {
             return None;
         }
@@ -2405,7 +2838,7 @@ impl FilterEngine {
             .check_network_request(&request)
             .redirect
             .as_ref()?;
-        let matched = |request: &Request| -> Vec<&UrlRule> {
+        let matched = |request: &Request| -> Vec<&ModifierRule> {
             rules
                 .rules
                 .iter()
@@ -2417,13 +2850,13 @@ impl FilterEngine {
 
         let mut current = url.to_string();
         let mut fired: Vec<String> = Vec::new();
-        let mut transforms: Vec<&UrlRule> = matched(&request)
+        let mut transforms: Vec<&ModifierRule> = matched(&request)
             .into_iter()
-            .filter(|rule| rule.family == UrlFamily::Transform)
+            .filter(|rule| rule.family == ModifierFamily::Transform)
             .collect();
         transforms.sort_by(|a, b| a.value.cmp(&b.value));
         for rule in transforms {
-            let UrlRuleKind::Transform(transform) = &rule.kind else {
+            let ModifierKind::Transform(transform) = &rule.kind else {
                 continue;
             };
             // A rule that may change the origin only ever matches a GET:
@@ -2453,10 +2886,10 @@ impl FilterEngine {
                 .flatten();
             let request = rewritten.as_ref().unwrap_or(&request);
             for rule in matched(request) {
-                if rule.family != UrlFamily::RemoveParam {
+                if rule.family != ModifierFamily::RemoveParam {
                     continue;
                 }
-                let UrlRuleKind::RemoveParam(remove) = &rule.kind else {
+                let ModifierKind::RemoveParam(remove) = &rule.kind else {
                     continue;
                 };
                 if let Some(next) = remove.apply(&current) {
@@ -2474,6 +2907,75 @@ impl FilterEngine {
             url: current,
             rules: fired,
         })
+    }
+
+    /// The response-header modifiers that apply to one request, as a plan for
+    /// the answer.
+    ///
+    /// A rule that matches the request changes the response that request
+    /// produces: `$csp` and `$permissions` values are appended as headers, and
+    /// `$removeheader` names are taken out — of the response, or of the request
+    /// itself when the value says `request:`. A value is appended once however
+    /// many lists repeat it, the way the reference keeps one rule per directive,
+    /// and `$permissions` only applies to a request of the same scope as the
+    /// rule: a rule that does not name `$subdocument` speaks about documents, a
+    /// frame is only affected by one that does.
+    ///
+    /// A page that switched content modification off (`$content`, an empty
+    /// `$replace`) still gets its headers edited: those switches are about what
+    /// the *page* runs, these modifiers are network filtering, and the reference
+    /// keeps them in services of their own.
+    pub fn header_edit(
+        &self,
+        url: &str,
+        source: &str,
+        request_type: &str,
+        method: &str,
+    ) -> Option<HeaderEdit> {
+        let compiled = self.compiled();
+        let rules = compiled.modifier_rules.as_ref()?;
+        let request = Request::new(url, source, request_type, method).ok()?;
+        // The same fast path as the URL edit: a miss means no rule of any
+        // family can match, whatever the exceptions say.
+        rules.any.check_network_request(&request).redirect.as_ref()?;
+        let subdocument = request_type == "subdocument";
+        let mut edit = HeaderEdit::default();
+        for (rule, engine) in rules.rules.iter().zip(rules.probes.iter()) {
+            if rule.family.is_url() || !engine.check_network_request(&request).should_block() {
+                continue;
+            }
+            match &rule.kind {
+                ModifierKind::Csp(value) => {
+                    if edit.csp.contains(value) {
+                        continue;
+                    }
+                    edit.csp.push(value.clone());
+                }
+                ModifierKind::Permissions(value) => {
+                    if rule.subdocument != subdocument || edit.permissions.contains(value) {
+                        continue;
+                    }
+                    edit.permissions.push(value.clone());
+                }
+                ModifierKind::RemoveHeader(header) => {
+                    let list = if header.request {
+                        &mut edit.remove_request
+                    } else {
+                        &mut edit.remove_response
+                    };
+                    if list.contains(&header.name) {
+                        continue;
+                    }
+                    list.push(header.name.clone());
+                }
+                ModifierKind::Transform(_) | ModifierKind::RemoveParam(_) => continue,
+            }
+            edit.rules.push(rule.text.clone());
+        }
+        if edit.rules.is_empty() {
+            return None;
+        }
+        Some(edit)
     }
 }
 
@@ -2965,6 +3467,206 @@ mod tests {
         );
         assert_eq!(fe.url_rules_count(), 0);
         assert!(url_of(&fe, "https://shop.test/go-a", "document").is_none());
+    }
+
+    /// The header plan one request gets, the way the HTTPS path asks for it: a
+    /// document is its own source, a subresource stands on the page that asked.
+    fn header_of(fe: &FilterEngine, url: &str, kind: &str) -> Option<HeaderEdit> {
+        let source = if kind == "document" {
+            url
+        } else {
+            "https://page.test/"
+        };
+        fe.header_edit(url, source, kind, "GET")
+    }
+
+    #[test]
+    fn csp_values_are_appended_and_domain_scoped() {
+        // The real list shapes: one policy per rule, `domain=` scoping it to
+        // the sites the lists meant, the value travelling as written.
+        let fe = cosmetic_engine(
+            "$csp=script-src 'self' 'unsafe-inline',domain=thumbs.pro\n\
+             ||video.test^$csp=worker-src 'none'\n",
+        );
+        assert!(fe.has_header_rules());
+        assert_eq!(fe.header_rules_count(), 2);
+        assert_eq!(fe.url_rules_count(), 0);
+        let edit =
+            header_of(&fe, "https://thumbs.pro/watch", "document").expect("the rule fires");
+        assert_eq!(
+            edit.csp,
+            vec!["script-src 'self' 'unsafe-inline'".to_string()]
+        );
+        assert_eq!(edit.rules.len(), 1);
+        // The domain option scopes the rule to that page: another site is none
+        // of its business.
+        assert!(header_of(&fe, "https://other.test/watch", "document").is_none());
+        let edit = header_of(&fe, "https://video.test/player", "script").expect("the rule fires");
+        assert_eq!(edit.csp, vec!["worker-src 'none'".to_string()]);
+        assert!(edit.permissions.is_empty() && edit.remove_response.is_empty());
+    }
+
+    #[test]
+    fn csp_exceptions_cancel_by_value_and_by_family() {
+        // A valued exception cancels exactly the rule whose value it repeats,
+        // the way the ag-base and easylist pairs interact.
+        let fe = cosmetic_engine(
+            "||video.test^$csp=worker-src 'none'\n\
+             ||video.test^$csp=frame-ancestors 'none'\n\
+             @@||video.test^$csp=worker-src 'none'\n",
+        );
+        let edit =
+            header_of(&fe, "https://video.test/player", "document").expect("one rule stands");
+        assert_eq!(edit.csp, vec!["frame-ancestors 'none'".to_string()]);
+        assert_eq!(edit.rules.len(), 1);
+        // One with no value cancels the whole family for the page it names.
+        let fe = cosmetic_engine(
+            "||video.test^$csp=worker-src 'none'\n\
+             @@||video.test^$csp\n",
+        );
+        assert!(header_of(&fe, "https://video.test/player", "document").is_none());
+        // The page the exception names is what scopes it.
+        let fe = cosmetic_engine(
+            "||video.test^$csp=worker-src 'none'\n\
+             @@||other.test^$csp\n",
+        );
+        assert!(header_of(&fe, "https://video.test/player", "document").is_some());
+    }
+
+    #[test]
+    fn permissions_rules_speak_to_their_own_scope() {
+        // The real tracking-protection shapes: every document loses the
+        // interest-group APIs, and the shopify allowlist cancels one rule on
+        // the pages it names, and only there.
+        let fe = cosmetic_engine(
+            "/.*/$permissions=join-ad-interest-group=(),document\n\
+             /.*/$permissions=browsing-topics=(),document\n\
+             @@||shop.test/authentication/$permissions=browsing-topics=()\n",
+        );
+        let edit = header_of(&fe, "https://shop.test/authentication/login", "document")
+            .expect("the other rule fires");
+        assert_eq!(
+            edit.permissions,
+            vec!["join-ad-interest-group=()".to_string()]
+        );
+        let edit = header_of(&fe, "https://other.test/", "document").expect("both fire here");
+        assert_eq!(
+            edit.permissions,
+            vec![
+                "join-ad-interest-group=()".to_string(),
+                "browsing-topics=()".to_string()
+            ]
+        );
+        // A frame is not a document: a rule that does not ask for frames never
+        // reaches into one...
+        assert!(header_of(&fe, "https://other.test/frame", "subdocument").is_none());
+        // ...and a rule that asks for frames never reaches a document.
+        let fe = cosmetic_engine("||frame.test^$permissions=geolocation=(),subdocument\n");
+        assert!(header_of(&fe, "https://frame.test/frame", "subdocument").is_some());
+        assert!(header_of(&fe, "https://frame.test/", "document").is_none());
+    }
+
+    #[test]
+    fn permissions_separators_are_normalised_for_the_header() {
+        // The lists write several policies with `|` or an escaped comma; the
+        // header itself uses commas.
+        let fe = cosmetic_engine(
+            "$domain=news.test,permissions=geolocation=()|camera=()\n\
+             ||news.test^$permissions=usb=()\\,serial=()\n",
+        );
+        let edit = header_of(&fe, "https://news.test/", "document").expect("both rules fire");
+        assert_eq!(
+            edit.permissions,
+            vec![
+                "geolocation=(),camera=()".to_string(),
+                "usb=(),serial=()".to_string()
+            ]
+        );
+    }
+
+    #[test]
+    fn removeheader_names_are_lowercased_and_keep_their_direction() {
+        let fe = cosmetic_engine(
+            "||go.xlivrdr.com^$removeheader=Location\n\
+             ||api.test^$removeheader=request:X-Requested-With\n",
+        );
+        assert!(fe.has_header_rules());
+        assert_eq!(fe.header_rules_count(), 2);
+        assert!(!fe.has_url_rules());
+        let edit = header_of(&fe, "https://go.xlivrdr.com/abc", "document").expect("fires");
+        assert_eq!(edit.remove_response, vec!["location".to_string()]);
+        assert!(edit.remove_request.is_empty());
+        let edit = header_of(&fe, "https://api.test/v1", "xmlhttprequest").expect("fires");
+        assert_eq!(edit.remove_request, vec!["x-requested-with".to_string()]);
+        assert!(edit.remove_response.is_empty());
+    }
+
+    #[test]
+    fn header_rules_the_engine_cannot_run_are_dropped() {
+        // `report-*` turns a `$csp` value into an observer rather than a
+        // policy, `$header` is a shape this engine does not implement,
+        // forbidden or colon-carrying `$removeheader` names cannot be touched,
+        // and a blocking rule with no value says nothing: nothing half-runs.
+        let fe = cosmetic_engine(
+            "||video.test^$csp=default-src 'self'; report-uri https://x.test/collect\n\
+             ||video.test^$csp=worker-src 'none',$header=set-cookie:/x/\n\
+             ||video.test^$removeheader=content-type\n\
+             ||video.test^$removeheader=request:dnt:1\n\
+             ||video.test^$permissions\n\
+             ||video.test^$removeheader\n",
+        );
+        assert!(!fe.has_header_rules());
+        assert_eq!(fe.header_rules_count(), 0);
+        assert!(header_of(&fe, "https://video.test/", "document").is_none());
+    }
+
+    #[test]
+    fn badfilter_cancels_modifier_rules_across_lists() {
+        // The ag-base rule cancels the easylist copy: `$badfilter` compares
+        // option names, not values, and the scan runs over every list before
+        // any of them applies.
+        let fe = engine(vec![
+            temp_list(
+                "cancel-a.txt",
+                "||thegay.test^$csp=default-src 'self' *.ahcdn.com,badfilter\n",
+                ListFormat::Standard,
+                11,
+            ),
+            temp_list(
+                "cancel-b.txt",
+                "||thegay.test^$csp=default-src 'self' *.other.com\n",
+                ListFormat::Standard,
+                12,
+            ),
+        ]);
+        assert!(!fe.has_header_rules());
+        assert_eq!(fe.header_rules_count(), 0);
+        assert!(header_of(&fe, "https://thegay.test/", "document").is_none());
+        // A `$removeheader` badfilter only cancels its own family.
+        let fe = cosmetic_engine(
+            "||video.test^$removeheader=location\n\
+             ||video.test^$csp=worker-src 'none'\n\
+             ||video.test^$removeheader=location,badfilter\n",
+        );
+        let edit = header_of(&fe, "https://video.test/", "document").expect("the csp rule stands");
+        assert!(edit.remove_response.is_empty());
+        assert_eq!(edit.csp, vec!["worker-src 'none'".to_string()]);
+    }
+
+    #[test]
+    fn repeated_header_values_are_appended_once() {
+        // The lists repeat each other; each value reaches the header once, and
+        // a repeated rule does not count twice.
+        let fe = cosmetic_engine(
+            "||video.test^$csp=worker-src 'none'\n\
+             ||video.test^$csp=worker-src 'none'\n\
+             ||video.test^$removeheader=Location\n\
+             ||video.test^$removeheader=location\n",
+        );
+        let edit = header_of(&fe, "https://video.test/", "document").expect("fires");
+        assert_eq!(edit.csp, vec!["worker-src 'none'".to_string()]);
+        assert_eq!(edit.remove_response, vec!["location".to_string()]);
+        assert_eq!(edit.rules.len(), 2, "one per distinct value");
     }
 
     /// Whether any `$replace` rule covers a request, the way the HTTPS path
