@@ -574,6 +574,10 @@ struct Compiled {
     /// `$replace` rules, found by [`scan_replace_rules`]. `None` when no
     /// loaded list carries one.
     replace: Option<ReplaceEngine>,
+    /// Request-URL modifiers (`$urltransform`, the `$removeparam` shapes the
+    /// crate refuses), found by [`scan_url_rules`]. `None` when no loaded list
+    /// carries one.
+    url_rules: Option<UrlRules>,
 }
 
 /// The `$replace` rules of the loaded lists, with the engine that finds them.
@@ -626,6 +630,7 @@ impl FilterEngine {
                 rule_count: 0,
                 cosmetic_switches: HashMap::new(),
                 replace: None,
+                url_rules: None,
             })),
             cache: RwLock::new(DecisionCache::new(1 << 15)),
             build_ns: AtomicU64::new(0),
@@ -644,9 +649,12 @@ impl FilterEngine {
         let mut errors: Vec<String> = Vec::new();
         let mut cosmetic_exceptions = CosmeticExceptionScan::default();
         let mut replace_scan = ReplaceScan::default();
+        let mut url_scan = UrlScan::default();
 
         for list in lists.iter().filter(|l| l.enabled) {
-            let Some(path) = &list.local_path else { continue };
+            let Some(path) = &list.local_path else {
+                continue;
+            };
             match std::fs::read(path) {
                 Ok(bytes) => match String::from_utf8(bytes) {
                     Ok(text) => {
@@ -661,6 +669,7 @@ impl FilterEngine {
                                 // network rules pass through untouched).
                                 scan_cosmetic_exceptions(&text, &mut cosmetic_exceptions);
                                 scan_replace_rules(&text, &mut replace_scan);
+                                scan_url_rules(&text, &mut url_scan);
                                 convert_adguard_cosmetics(text)
                             }
                             ListFormat::Hosts => text,
@@ -711,6 +720,7 @@ impl FilterEngine {
                 .join("\n");
             scan_cosmetic_exceptions(&joined, &mut cosmetic_exceptions);
             scan_replace_rules(&joined, &mut replace_scan);
+            scan_url_rules(&joined, &mut url_scan);
             let record = set.add_filter_list(
                 convert_adguard_cosmetics(joined),
                 ParseOptions::default(),
@@ -749,6 +759,14 @@ impl FilterEngine {
                 replace.dropped,
             ));
         }
+        let url_rules = build_url_rules(url_scan);
+        if let Some(url_rules) = url_rules.as_ref() {
+            crate::logbuf::push(&format!(
+                "filter: {} URL modifier rules ({} dropped)",
+                url_rules.rules.len(),
+                url_rules.dropped,
+            ));
+        }
         let compiled = Arc::new(Compiled {
             engine,
             generation,
@@ -757,6 +775,7 @@ impl FilterEngine {
             rule_count,
             cosmetic_switches: cosmetic_exceptions.resolve(),
             replace,
+            url_rules,
         });
         *self.inner.write().unwrap() = compiled;
         self.cache.write().unwrap().clear();
@@ -1066,28 +1085,15 @@ impl FilterEngine {
         let compiled = self.compiled();
         let replace = compiled.replace.as_ref()?;
         let probe = replace.probe.as_ref()?;
+        if page_vetoed(&compiled, url, source, request_type) {
+            return None;
+        }
         let request = Request::new(url, source, request_type, method).ok()?;
         let result = probe.check_network_request(&request);
         let rule = replace
             .rules
             .get(replace_redirect_index(result.redirect.as_deref()?)?)?
             .clone();
-        if let Some(veto) = replace.veto.as_ref() {
-            // The exceptions name *pages*, so a subresource is asked about the
-            // document it came from. `other` keeps the crate from reading a
-            // path-scoped pattern as "not a document": a page URL is the only
-            // URL the rule is about, whatever the request type is.
-            let page = if request_type == "document" || source.is_empty() {
-                url
-            } else {
-                source
-            };
-            if let Ok(request) = Request::new(page, page, "other", "GET") {
-                if veto.check_network_request(&request).should_block() {
-                    return None;
-                }
-            }
-        }
         Some(rule)
     }
 
@@ -1426,8 +1432,11 @@ fn scan_replace_rules(text: &str, scan: &mut ReplaceScan) {
             scan.dropped += 1;
             continue;
         }
-        scan.probe
-            .push(probe_line(pattern, &kept, Some(scan.probe.len())));
+        scan.probe.push(probe_line(
+            pattern,
+            &kept,
+            Some(&format!("{REPLACE_RESOURCE_PREFIX}{}", scan.probe.len())),
+        ));
         scan.payloads.push(payload.to_string());
     }
 }
@@ -1466,23 +1475,43 @@ fn split_options(options: &str) -> Vec<&str> {
     let mut tokens = Vec::new();
     let mut start = 0usize;
     let mut index = 0usize;
-    // Inside a `replace=/…` value: how many of its slashes have been seen.
-    let mut payload_slashes: Option<u32> = None;
+    // Inside a `/…/`-bracketed modifier value: how many of its slashes have
+    // been seen, and how many close the bracketed part of the value.
+    // `replace`/`urltransform` values carry two or more slashes before the
+    // unescaped commas are free to split again, `removeparam=/regexp/` closes
+    // at the first one. Escaped commas are handled for every value.
+    let mut payload_slashes: Option<(u32, u32)> = None;
     while index < bytes.len() {
-        if index == start && options[start..].starts_with("replace=/") {
-            payload_slashes = Some(0);
-            index = start + "replace=/".len();
-            continue;
+        if index == start {
+            let payload = ["replace=/", "urltransform=/"]
+                .iter()
+                .find_map(|prefix| {
+                    options[start..]
+                        .starts_with(prefix)
+                        .then_some((prefix.len(), 2))
+                })
+                .or_else(|| {
+                    ["removeparam=/", "queryprune=/"].iter().find_map(|prefix| {
+                        options[start..]
+                            .starts_with(prefix)
+                            .then_some((prefix.len(), 1))
+                    })
+                });
+            if let Some((len, closes)) = payload {
+                payload_slashes = Some((0, closes));
+                index = start + len;
+                continue;
+            }
         }
         let byte = bytes[index];
         if byte == b'\\' && index + 1 < bytes.len() {
             index += 2;
             continue;
         }
-        if let Some(slashes) = payload_slashes.as_mut() {
+        if let Some((slashes, closes)) = payload_slashes.as_mut() {
             if byte == b'/' {
                 *slashes += 1;
-                if *slashes == 2 {
+                if slashes == closes {
                     payload_slashes = None;
                 }
             }
@@ -1506,13 +1535,12 @@ fn is_replace_token(token: &str) -> bool {
 }
 
 /// The rule the crate is actually given: the pattern, the options the crate
-/// understands, and — for the probe engine — the redirect that names the
-/// rule's index.
-fn probe_line(pattern: &str, options: &[&str], index: Option<usize>) -> String {
+/// understands, and — for the probe engines — the redirect that names where the
+/// rule's identity comes back in.
+fn probe_line(pattern: &str, options: &[&str], redirect: Option<&str>) -> String {
     let mut parts: Vec<String> = Vec::with_capacity(options.len() + 1);
-    if let Some(index) = index {
-        parts.push(format!("{REPLACE_RESOURCE_PREFIX}{index}"));
-        parts[0].insert_str(0, "redirect=");
+    if let Some(name) = redirect {
+        parts.push(format!("redirect={name}"));
     }
     parts.extend(options.iter().map(|option| (*option).to_string()));
     if parts.is_empty() {
@@ -1569,6 +1597,884 @@ fn replace_redirect_index(data_url: &str) -> Option<usize> {
     let (_, encoded) = data_url.strip_prefix("data:")?.split_once(',')?;
     let bytes = BASE64.decode(encoded).ok()?;
     std::str::from_utf8(&bytes).ok()?.parse().ok()
+}
+
+// ---------------------------------------------------------------------------
+// Request-URL modifiers the crate does not implement
+// ---------------------------------------------------------------------------
+
+/// Where a URL rule's index redirect rides.
+///
+/// The per-rule probe engines answer with a `$redirect` to
+/// `adfree-urledit-<index>` (the shared fast path uses `adfree-urledit-any`,
+/// an exception line `adfree-urledit-ex`), and the resource body carries the
+/// index back exactly the way [`REPLACE_RESOURCE_PREFIX`] does it.
+const URL_RESOURCE_PREFIX: &str = "adfree-urledit-";
+
+/// Which modifier a URL rule carries. Values are only comparable within one
+/// family: `@@...$removeparam=param` cancels `$removeparam` rules, never a
+/// `$urltransform` that happens to repeat the value.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum UrlFamily {
+    Transform,
+    RemoveParam,
+}
+
+/// One request-URL modifier rule, with its payload compiled.
+struct UrlRule {
+    family: UrlFamily,
+    kind: UrlRuleKind,
+    /// The rule exactly as the list wrote it: the log shows it.
+    text: String,
+    /// The modifier value as written: what a valued exception cancels, and the
+    /// order `$urltransform` rules apply in.
+    value: String,
+    /// The rule names an explicit `$method`: a whole-URL transform is then not
+    /// held back to GET the way it is by default.
+    has_method: bool,
+}
+
+enum UrlRuleKind {
+    Transform(UrlTransform),
+    RemoveParam(RemoveParam),
+}
+
+/// One `$urltransform` rule's pipeline, ready to run on a request URL.
+///
+/// The value is `|`-separated stages: `/regexp/replacement/flags` or `/`-
+/// delimited substitutes, plus `pct` and `b64` decodes. Normally only the path
+/// and query are the input — a value beginning with `/^http` hands over the
+/// whole URL instead, which is how the list cleans an affiliate redirect down
+/// to its destination.
+struct UrlTransform {
+    /// The whole URL is the pipeline's input, so the transformation may change
+    /// the origin: the rule's first substitute reaches for it (`/^http…`),
+    /// which is how the list cleans an affiliate redirect down to its
+    /// destination. Such a rule only matches GET requests.
+    full: bool,
+    stages: Vec<Transform>,
+}
+
+enum Transform {
+    Substitute(Substitute),
+    /// Percent-decode what the pipeline has produced so far.
+    Pct,
+    /// Base64-decode it (either alphabet).
+    B64,
+}
+
+/// One `name/regexp/replacement` stage of a `$urltransform`.
+struct Substitute {
+    regex: regex::Regex,
+    replacement: String,
+    /// This substitute's regexp was anchored at `^http`, so it can only mean
+    /// anything when the pipeline sees the whole URL.
+    whole_url: bool,
+}
+
+/// One `$removeparam` rule, compiled.
+enum RemoveParam {
+    /// Naked `$removeparam`: every parameter goes.
+    All,
+    /// `$removeparam=name`; `~` inverts the sense of both named forms.
+    Name(String),
+    NotName(String),
+    /// `$removeparam=/regexp/[i]`, matched against `name=value`.
+    Regex(regex::Regex),
+    NotRegex(regex::Regex),
+}
+
+/// The URL modifier rules one list text carries.
+#[derive(Default)]
+struct UrlScan {
+    /// Per-rule probe lines, index-matched with `rules`.
+    probe: Vec<String>,
+    /// The same lines with one shared redirect resource: the fast path.
+    any: Vec<String>,
+    rules: Vec<UrlRule>,
+    /// Exception lines: `(family, value, line)`. An empty value cancels every
+    /// rule of its family; a valued one cancels the rules repeating it.
+    exceptions: Vec<(UrlFamily, String, String)>,
+    dropped: u32,
+}
+
+/// How many URL modifier rules one build keeps. Each rule gets its own probe
+/// engine, and no real list comes close; a list trying to push past this is
+/// capped rather than allowed to build thousands of engines.
+const URL_RULES_MAX: usize = 256;
+
+/// The URL modifier rules of the loaded lists, with the engines that find them.
+struct UrlRules {
+    rules: Vec<UrlRule>,
+    /// One engine per rule: the rule's own pattern with its exceptions folded
+    /// in, so `should_block` here means "this rule applies to this request".
+    probes: Vec<Engine>,
+    /// Every rule in one engine, one shared resource: a miss means no rule of
+    /// any family can possibly apply, whatever the exceptions say.
+    any: Engine,
+    dropped: u32,
+}
+
+/// What the URL-level modifiers do to one request, from
+/// [`FilterEngine::url_edit`].
+pub struct UrlEdit {
+    /// The URL the request must go out as.
+    pub url: String,
+    /// The rules that fired, in application order (the log shows them).
+    pub rules: Vec<String>,
+}
+
+/// Reads the rules the crate refuses because of their modifier: `$urltransform`
+/// (the request URL is rewritten before it goes out) and the `$removeparam`
+/// shapes it does not implement (bare, `~`, and `/regexp/`; only `=name` ever
+/// reached the crate).
+fn scan_url_rules(text: &str, scan: &mut UrlScan) {
+    for line in text.lines() {
+        let line = line.trim();
+        if line.is_empty() || line.starts_with(['!', '[', '#']) {
+            continue;
+        }
+        let exception = line.starts_with("@@");
+        let rule = line.strip_prefix("@@").unwrap_or(line);
+        let Some((pattern, tokens)) = split_url_rule(rule) else {
+            continue;
+        };
+        // One rule, one modifier: a `$urltransform` and a `$removeparam` in the
+        // same rule have no defined combination, and no list writes one.
+        let families: Vec<&str> = tokens
+            .iter()
+            .copied()
+            .filter(|token| is_url_family_token(token))
+            .collect();
+        if families.len() != 1 {
+            scan.dropped += 1;
+            continue;
+        }
+        let token = families[0];
+        let family = url_family_of(token);
+        let value = token.split_once('=').map(|(_, value)| value).unwrap_or("");
+
+        // The options the crate implements exactly, so the probe matches the
+        // rule the way the list meant it; the family token is where the
+        // redirect goes, and nothing else would parse.
+        let mut kept: Vec<&str> = Vec::new();
+        let mut faithful = true;
+        for token in &tokens {
+            let bare = token.trim_start_matches('~');
+            let name = bare.split('=').next().unwrap_or(bare);
+            if name.is_empty() || is_url_family_token(token) {
+                // The family token itself carries where its probe's answer
+                // goes, so it is not kept as an option.
+                continue;
+            }
+            if name == "to" {
+                // The crate parses `$to` and then leaves the rule out of every
+                // list, so pointing a probe at it would never match: the rule
+                // is dropped instead of living on as a dead one.
+                faithful = false;
+                continue;
+            }
+            if name == "method" {
+                // The crate knows GET, HEAD and POST; a rule asking for any
+                // other method (or to exclude one) would come out wider than
+                // the list wrote it.
+                let methods_ok = !token.starts_with('~')
+                    && bare
+                        .split_once('=')
+                        .map(|(_, value)| {
+                            !value.is_empty()
+                                && value.split('|').all(|method| {
+                                    matches!(
+                                        method.trim().to_ascii_lowercase().as_str(),
+                                        "get" | "head" | "post"
+                                    )
+                                })
+                        })
+                        .unwrap_or(false);
+                if !methods_ok {
+                    faithful = false;
+                    continue;
+                }
+            }
+            if KEPT_OPTIONS.contains(&name) {
+                kept.push(token);
+            } else {
+                faithful = false;
+            }
+        }
+        if !faithful {
+            scan.dropped += 1;
+            continue;
+        }
+        let mut options = kept.clone();
+        if !has_positive_type(&kept) {
+            options.push(default_types(family));
+        }
+        let has_method = kept
+            .iter()
+            .any(|token| token.trim_start_matches('~').split('=').next() == Some("method"));
+
+        if exception {
+            // Stored as the exception line it is: these lines are only ever
+            // folded into the per-rule engines, where the crate has to see a
+            // rule cancelled by what the list cancelled it with.
+            let line = probe_line(pattern, &options, Some(&format!("{URL_RESOURCE_PREFIX}ex")));
+            scan.exceptions
+                .push((family, value.to_string(), format!("@@{line}")));
+            continue;
+        }
+        if family == UrlFamily::Transform && value.is_empty() {
+            // A blocking `$urltransform` with no value transforms nothing;
+            // only an exception may leave the value out.
+            scan.dropped += 1;
+            continue;
+        }
+        let index = scan.rules.len();
+        if index >= URL_RULES_MAX {
+            scan.dropped += 1;
+            continue;
+        }
+        let kind = match family {
+            UrlFamily::Transform => match UrlTransform::parse(value) {
+                Some(transform) => UrlRuleKind::Transform(transform),
+                None => {
+                    scan.dropped += 1;
+                    continue;
+                }
+            },
+            UrlFamily::RemoveParam => match RemoveParam::parse(value) {
+                Some(remove) => UrlRuleKind::RemoveParam(remove),
+                None => {
+                    scan.dropped += 1;
+                    continue;
+                }
+            },
+        };
+        scan.probe.push(probe_line(
+            pattern,
+            &options,
+            Some(&format!("{URL_RESOURCE_PREFIX}{index}")),
+        ));
+        scan.any.push(probe_line(
+            pattern,
+            &options,
+            Some(&format!("{URL_RESOURCE_PREFIX}any")),
+        ));
+        scan.rules.push(UrlRule {
+            family,
+            kind,
+            text: rule.to_string(),
+            value: value.to_string(),
+            has_method,
+        });
+    }
+}
+
+/// Splits `pattern$option,option,...` at the `$` that starts a URL modifier
+/// list. The pattern itself may contain a `$`, so the split is the first `$`
+/// after which one of the family tokens shows up.
+fn split_url_rule(text: &str) -> Option<(&str, Vec<&str>)> {
+    let mut search = 0;
+    while let Some(offset) = text[search..].find('$') {
+        let index = search + offset;
+        let pattern = &text[..index];
+        let tokens = split_options(&text[index + 1..]);
+        if !pattern.is_empty() && tokens.iter().any(|token| is_url_family_token(token)) {
+            return Some((pattern, tokens));
+        }
+        search = index + 1;
+    }
+    None
+}
+
+fn is_url_family_token(token: &str) -> bool {
+    matches!(
+        token.split('=').next().unwrap_or(token),
+        "urltransform" | "removeparam" | "queryprune"
+    )
+}
+
+fn url_family_of(token: &str) -> UrlFamily {
+    if token.split('=').next() == Some("urltransform") {
+        UrlFamily::Transform
+    } else {
+        UrlFamily::RemoveParam
+    }
+}
+
+/// The request-type options a rule may name.
+const TYPE_OPTIONS: &[&str] = &[
+    "document",
+    "doc",
+    "subdocument",
+    "frame",
+    "script",
+    "stylesheet",
+    "css",
+    "image",
+    "media",
+    "object",
+    "object-subrequest",
+    "other",
+    "ping",
+    "beacon",
+    "xmlhttprequest",
+    "xhr",
+    "websocket",
+    "font",
+    "all",
+];
+
+fn has_positive_type(tokens: &[&str]) -> bool {
+    tokens.iter().any(|token| {
+        if token.starts_with('~') {
+            return false;
+        }
+        TYPE_OPTIONS.contains(&token.split('=').next().unwrap_or(token))
+    })
+}
+
+/// The request types a URL modifier covers when the list names none.
+///
+/// AdGuard's own engine and its MV3 converter agree on the split: a
+/// `$urltransform` without type options covers every request type, document
+/// navigations included, while `$removeparam` (and `$permissions`) covers only
+/// the documents — a `document`-typed request, top-level or a frame. The crate
+/// would leave documents out of a line that names no type, so the default has
+/// to be spelled out on the probe line.
+fn default_types(family: UrlFamily) -> &'static str {
+    match family {
+        UrlFamily::Transform => "all",
+        UrlFamily::RemoveParam => "document,subdocument",
+    }
+}
+
+impl UrlTransform {
+    /// Reads a `$urltransform` value, or `None` when a stage means something
+    /// this engine cannot run: a rule that cannot run is a rule that must not
+    /// half-run.
+    fn parse(value: &str) -> Option<UrlTransform> {
+        // The whole URL is the pipeline's input when the first substitute
+        // reaches for it (`/^http…`): a rule that starts by reading the tracker
+        // URL is a rule about where the request really goes. Later substitutes
+        // do not get to make that call — AdGuard decides it on the first one,
+        // and the real rules are written for it.
+        let mut full = false;
+        let mut decided = false;
+        let mut stages = Vec::new();
+        for stage in split_transform_stages(value) {
+            let stage = stage.trim();
+            match stage {
+                "" => {}
+                "pct" => stages.push(Transform::Pct),
+                "b64" => stages.push(Transform::B64),
+                _ => {
+                    let substitute = Substitute::parse(stage)?;
+                    if !decided {
+                        full = substitute.whole_url;
+                        decided = true;
+                    }
+                    stages.push(Transform::Substitute(substitute));
+                }
+            }
+        }
+        if stages.is_empty() {
+            return None;
+        }
+        Some(UrlTransform { full, stages })
+    }
+
+    /// The transformed URL, or `None` when the pipeline cannot produce one the
+    /// request could legally go out as.
+    fn apply(&self, url: &str) -> Option<String> {
+        let mut current = if self.full {
+            url.to_string()
+        } else {
+            path_and_query(url)?.to_string()
+        };
+        for stage in &self.stages {
+            match stage {
+                Transform::Pct => current = percent_decode(&current),
+                Transform::B64 => {
+                    if let Some(decoded) = base64_decode_any(&current) {
+                        current = decoded;
+                    }
+                }
+                Transform::Substitute(substitute) => {
+                    // Every occurrence, the way `$replace` and CoreLibs do it:
+                    // the real affiliate rules depend on it (`/%2F/\//` clears
+                    // all three escapes an encoded destination carries).
+                    current = substitute
+                        .regex
+                        .replace_all(&current, substitute.replacement.as_str())
+                        .into_owned();
+                }
+            }
+        }
+        if self.full {
+            // The rule reached for the whole URL, so it may move the request to
+            // another origin — but only to a URL a request could go out as.
+            // AdGuard accepts exactly the streaming-and-web schemes here.
+            let scheme_ok = ["http://", "https://", "ws://", "wss://"]
+                .iter()
+                .any(|scheme| current.starts_with(scheme));
+            (scheme_ok && !current.contains(char::is_whitespace)).then_some(current)
+        } else if current.starts_with('/') {
+            Some(format!("{}{current}", origin_of(url)?))
+        } else {
+            None
+        }
+    }
+}
+
+/// Splits a `$urltransform` value into its `|`-separated stages.
+///
+/// A pipe inside a `/regexp/replacement/flags` substitute is a regex
+/// alternation, not a separator: a stage that opens with `/` runs until its
+/// third unescaped slash, the way AdGuard's own splitter reads it.
+fn split_transform_stages(value: &str) -> Vec<&str> {
+    let mut stages = Vec::new();
+    let mut start = 0usize;
+    let mut slashes = 0u8;
+    let mut in_substitute = false;
+    let mut escaped = false;
+    for (index, c) in value.char_indices() {
+        if escaped {
+            escaped = false;
+            continue;
+        }
+        match c {
+            '\\' => escaped = true,
+            '|' if !in_substitute => {
+                stages.push(&value[start..index]);
+                start = index + 1;
+                slashes = 0;
+                in_substitute = false;
+            }
+            '/' => {
+                if !in_substitute && index == start {
+                    in_substitute = true;
+                    slashes = 0;
+                }
+                if in_substitute {
+                    slashes += 1;
+                    if slashes >= 3 {
+                        in_substitute = false;
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    stages.push(&value[start..]);
+    stages
+}
+
+impl Substitute {
+    /// Reads `/regexp/replacement/flags`, the shape every real `$urltransform`
+    /// stage uses.
+    fn parse(stage: &str) -> Option<Substitute> {
+        // `$` is the modifier separator in a rule, so a stage writes `\$` both
+        // for a backreference and for the end-of-string anchor — and the
+        // transform reads both as the `$` they stand for.
+        let stage = stage.replace("\\$", "$");
+        let rest = stage.strip_prefix('/')?;
+        let (pattern, rest) = split_unescaped(rest, '/')?;
+        let (replacement, flags) = split_unescaped(rest, '/')?;
+        let prefix = inline_flags(flags)?;
+        let regex = regex::Regex::new(&format!("{prefix}{}", unescape_pattern(pattern))).ok()?;
+        Some(Substitute {
+            regex,
+            replacement: unescape_replacement(replacement),
+            whole_url: pattern.starts_with("^http"),
+        })
+    }
+}
+
+impl RemoveParam {
+    fn parse(value: &str) -> Option<RemoveParam> {
+        if value.is_empty() {
+            return Some(RemoveParam::All);
+        }
+        let (negated, rest) = match value.strip_prefix('~') {
+            Some(rest) => (true, rest),
+            None => (false, value),
+        };
+        if let Some(regex) = parse_slash_regex(rest) {
+            return Some(if negated {
+                RemoveParam::NotRegex(regex)
+            } else {
+                RemoveParam::Regex(regex)
+            });
+        }
+        if rest.is_empty() {
+            return None;
+        }
+        Some(if negated {
+            RemoveParam::NotName(rest.to_string())
+        } else {
+            RemoveParam::Name(rest.to_string())
+        })
+    }
+
+    /// The URL with the parameters this rule drops taken off, or `None` when
+    /// it drops none.
+    fn apply(&self, url: &str) -> Option<String> {
+        let query_start = url.find('?')?;
+        let (path, rest) = url.split_at(query_start);
+        let rest = &rest[1..];
+        let (query, fragment) = match rest.find('#') {
+            Some(index) => (&rest[..index], &rest[index..]),
+            None => (rest, ""),
+        };
+        if query.is_empty() {
+            return None;
+        }
+        if matches!(self, RemoveParam::All) {
+            // AdGuard cuts everything after the path here, fragment included.
+            return Some(path.to_string());
+        }
+        let mut kept: Vec<&str> = Vec::new();
+        let mut removed = false;
+        for pair in query.split('&') {
+            // The parameter is judged as the `name=value` string the docs
+            // describe — a bare name reads as `name=`. It is judged twice: as
+            // written, and percent-decoded, so a regexp written for readable
+            // parameters still finds them escaped in the URL.
+            let test = if pair.contains('=') {
+                pair.to_string()
+            } else {
+                format!("{pair}=")
+            };
+            let decoded = percent_decode(&test);
+            let drop = match self {
+                RemoveParam::All => unreachable!("handled above"),
+                RemoveParam::Name(name) => named(&test, name) || named(&decoded, name),
+                RemoveParam::NotName(name) => !named(&test, name) && !named(&decoded, name),
+                RemoveParam::Regex(regex) => regex.is_match(&test) || regex.is_match(&decoded),
+                RemoveParam::NotRegex(regex) => !regex.is_match(&test) && !regex.is_match(&decoded),
+            };
+            if drop {
+                removed = true;
+            } else {
+                kept.push(pair);
+            }
+        }
+        if !removed {
+            return None;
+        }
+        // Removing parameters normalizes the query the way AdGuard does: the
+        // holes and the empty `=value` leftovers go too.
+        let kept: Vec<&str> = kept
+            .into_iter()
+            .filter(|pair| !pair.is_empty() && !pair.starts_with('='))
+            .collect();
+        let mut out = String::with_capacity(url.len());
+        out.push_str(path);
+        if !kept.is_empty() {
+            out.push('?');
+            out.push_str(&kept.join("&"));
+        }
+        out.push_str(fragment);
+        Some(out)
+    }
+}
+
+/// Whether a `name=value` string carries the named parameter: the comparison
+/// AdGuard writes as `^name=`.
+fn named(test: &str, name: &str) -> bool {
+    test.len() > name.len() && test.starts_with(name) && test.as_bytes()[name.len()] == b'='
+}
+
+/// Reads `/regexp/` (optionally `/regexp/i`), the `$removeparam` regular
+/// expression shape.
+fn parse_slash_regex(text: &str) -> Option<regex::Regex> {
+    let rest = text.strip_prefix('/')?;
+    let mut end = None;
+    let mut escaped = false;
+    for (index, c) in rest.char_indices() {
+        if escaped {
+            escaped = false;
+            continue;
+        }
+        match c {
+            '\\' => escaped = true,
+            '/' => end = Some(index),
+            _ => {}
+        }
+    }
+    let end = end?;
+    let flags = &rest[end + 1..];
+    if !flags.chars().all(|flag| flag == 'i') {
+        return None;
+    }
+    let prefix = if flags.is_empty() { "" } else { "(?i)" };
+    regex::Regex::new(&format!("{prefix}{}", unescape_pattern(&rest[..end]))).ok()
+}
+
+/// Percent-decodes a URL fragment. A `%` that does not start a valid escape is
+/// left alone, and bytes that do not form UTF-8 are kept as they are.
+fn percent_decode(text: &str) -> String {
+    let bytes = text.as_bytes();
+    let mut out: Vec<u8> = Vec::with_capacity(bytes.len());
+    let mut index = 0usize;
+    while index < bytes.len() {
+        if bytes[index] == b'%' && index + 2 < bytes.len() {
+            if let Ok(hex) = std::str::from_utf8(&bytes[index + 1..index + 3]) {
+                if let Ok(byte) = u8::from_str_radix(hex, 16) {
+                    out.push(byte);
+                    index += 3;
+                    continue;
+                }
+            }
+        }
+        out.push(bytes[index]);
+        index += 1;
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}
+
+/// Base64-decodes text, trying the standard and URL-safe alphabets, padded or
+/// not: the `b64` stage of `$urltransform` takes either.
+fn base64_decode_any(text: &str) -> Option<String> {
+    use base64::engine::general_purpose::{STANDARD_NO_PAD, URL_SAFE, URL_SAFE_NO_PAD};
+    let text = text.trim();
+    for engine in [BASE64, STANDARD_NO_PAD, URL_SAFE, URL_SAFE_NO_PAD] {
+        if let Ok(bytes) = engine.decode(text) {
+            if let Ok(decoded) = String::from_utf8(bytes) {
+                return Some(decoded);
+            }
+        }
+    }
+    None
+}
+
+/// The path-and-query half of an absolute URL: what a `$urltransform`
+/// substitute works on unless the rule asks for the whole URL.
+fn path_and_query(url: &str) -> Option<&str> {
+    let rest = url.split_once("://")?.1;
+    let start = rest.find(['/', '?', '#'])?;
+    Some(&rest[start..])
+}
+
+/// The `scheme://authority` head of an absolute URL.
+fn origin_of(url: &str) -> Option<&str> {
+    let scheme_end = url.find("://")? + 3;
+    let rest = &url[scheme_end..];
+    let authority_end = rest.find(['/', '?', '#']).unwrap_or(rest.len());
+    Some(&url[..scheme_end + authority_end])
+}
+
+/// Whether two absolute URLs share scheme and authority. A `$urltransform`
+/// that changes them moves the request to another origin, which is answered
+/// with a redirect instead of a rewrite.
+pub fn same_origin(a: &str, b: &str) -> bool {
+    match (origin_of(a), origin_of(b)) {
+        (Some(a), Some(b)) => a.eq_ignore_ascii_case(b),
+        _ => false,
+    }
+}
+
+/// Whether a page exception (`$content`, or an empty `$replace`) switches
+/// content modification off for the page a request belongs to.
+fn page_vetoed(compiled: &Compiled, url: &str, source: &str, request_type: &str) -> bool {
+    let Some(veto) = compiled
+        .replace
+        .as_ref()
+        .and_then(|replace| replace.veto.as_ref())
+    else {
+        return false;
+    };
+    // The exceptions name *pages*, so a subresource is asked about the document
+    // it came from. `other` keeps the crate from reading a path-scoped pattern
+    // as "not a document": a page URL is the only URL the rule is about,
+    // whatever the request type is.
+    let page = if request_type == "document" || source.is_empty() {
+        url
+    } else {
+        source
+    };
+    Request::new(page, page, "other", "GET")
+        .map(|request| veto.check_network_request(&request).should_block())
+        .unwrap_or(false)
+}
+
+/// Builds the engines a list's URL modifier rules need, or `None` when the
+/// loaded lists carry none.
+fn build_url_rules(scan: UrlScan) -> Option<UrlRules> {
+    if scan.rules.is_empty() {
+        return None;
+    }
+    let mut any_set = FilterSet::new(false);
+    any_set.add_filter_list(scan.any.join("\n"), ParseOptions::default());
+    let mut any = Engine::new_with_filter_set(any_set);
+    any.use_resources([url_resource(&format!("{URL_RESOURCE_PREFIX}any"), "0")]);
+
+    let probes = scan
+        .rules
+        .iter()
+        .enumerate()
+        .map(|(index, rule)| {
+            let mut lines: Vec<&str> = vec![scan.probe[index].as_str()];
+            lines.extend(
+                scan.exceptions
+                    .iter()
+                    .filter(|(family, value, _)| {
+                        *family == rule.family && (value.is_empty() || *value == rule.value)
+                    })
+                    .map(|(_, _, line)| line.as_str()),
+            );
+            let mut set = FilterSet::new(false);
+            set.add_filter_list(lines.join("\n"), ParseOptions::default());
+            let mut engine = Engine::new_with_filter_set(set);
+            engine.use_resources([
+                url_resource(&format!("{URL_RESOURCE_PREFIX}{index}"), &index.to_string()),
+                url_resource(&format!("{URL_RESOURCE_PREFIX}ex"), "0"),
+            ]);
+            engine
+        })
+        .collect();
+    Some(UrlRules {
+        rules: scan.rules,
+        probes,
+        any,
+        dropped: scan.dropped,
+    })
+}
+
+/// One probe resource: the body is what the crate hands back when the redirect
+/// fires, the name is what the rule points at.
+fn url_resource(name: &str, body: &str) -> Resource {
+    Resource {
+        name: name.to_string(),
+        aliases: Vec::new(),
+        kind: ResourceType::Mime(MimeType::TextPlain),
+        content: BASE64.encode(body),
+        dependencies: Vec::new(),
+        permission: Default::default(),
+    }
+}
+
+impl FilterEngine {
+    /// Whether the loaded lists carry URL modifiers the HTTPS path runs.
+    pub fn has_url_rules(&self) -> bool {
+        self.compiled().url_rules.is_some()
+    }
+
+    /// How many URL modifier rules the loaded lists carry (diagnostics).
+    pub fn url_rules_count(&self) -> u64 {
+        self.compiled()
+            .url_rules
+            .as_ref()
+            .map(|rules| rules.rules.len() as u64)
+            .unwrap_or(0)
+    }
+
+    /// The request-URL modifiers that apply to one request, applied.
+    ///
+    /// `$urltransform` runs first, in the order AdGuard applies matching rules
+    /// in: by the modifier value the rules carry, each rule on what the one
+    /// before it left. A whole-URL transform then leaves `$removeparam` to work
+    /// on the rewritten request — it is matched again, the way a rewritten
+    /// request is matched against the rest of the rules — while a rule a page
+    /// exception cancels — `@@` with the same value, or with none — never
+    /// fires: the value comparison lives inside each probe engine, so the
+    /// crate's own exception handling answers it.
+    ///
+    /// The methods hold two rules back, both AdGuard's own: a whole-URL
+    /// transform only ever matches a GET, and `$removeparam` only reads the
+    /// methods a parameter change cannot break.
+    pub fn url_edit(
+        &self,
+        url: &str,
+        source: &str,
+        request_type: &str,
+        method: &str,
+    ) -> Option<UrlEdit> {
+        let compiled = self.compiled();
+        let rules = compiled.url_rules.as_ref()?;
+        if page_vetoed(&compiled, url, source, request_type) {
+            return None;
+        }
+        let request = Request::new(url, source, request_type, method).ok()?;
+        // The fast path: no rule of any family can match, whatever the
+        // exceptions say, so the per-rule engines are never asked. Every probe
+        // line carries a `$redirect`, so a hit comes back as one.
+        rules
+            .any
+            .check_network_request(&request)
+            .redirect
+            .as_ref()?;
+        let matched = |request: &Request| -> Vec<&UrlRule> {
+            rules
+                .rules
+                .iter()
+                .zip(rules.probes.iter())
+                .filter(|(_, engine)| engine.check_network_request(request).should_block())
+                .map(|(rule, _)| rule)
+                .collect()
+        };
+
+        let mut current = url.to_string();
+        let mut fired: Vec<String> = Vec::new();
+        let mut transforms: Vec<&UrlRule> = matched(&request)
+            .into_iter()
+            .filter(|rule| rule.family == UrlFamily::Transform)
+            .collect();
+        transforms.sort_by(|a, b| a.value.cmp(&b.value));
+        for rule in transforms {
+            let UrlRuleKind::Transform(transform) = &rule.kind else {
+                continue;
+            };
+            // A rule that may change the origin only ever matches a GET:
+            // anything else cannot take the redirect it would have to answer
+            // with, so it is not applied at all.
+            if transform.full && !rule.has_method && !method.eq_ignore_ascii_case("GET") {
+                continue;
+            }
+            if let Some(next) = transform.apply(&current) {
+                if next != current {
+                    current = next;
+                    fired.push(rule.text.clone());
+                }
+            }
+        }
+
+        // AdGuard purges parameters of the requests a rewrite cannot break:
+        // GETs and HEADs, and the bodies a form sends with them. A PUT or a
+        // DELETE is left exactly as the client wrote it.
+        let purging = matches!(
+            method.to_ascii_uppercase().as_str(),
+            "GET" | "HEAD" | "POST" | "OPTIONS"
+        );
+        if purging {
+            let rewritten = (current != url)
+                .then(|| Request::new(&current, source, request_type, method).ok())
+                .flatten();
+            let request = rewritten.as_ref().unwrap_or(&request);
+            for rule in matched(request) {
+                if rule.family != UrlFamily::RemoveParam {
+                    continue;
+                }
+                let UrlRuleKind::RemoveParam(remove) = &rule.kind else {
+                    continue;
+                };
+                if let Some(next) = remove.apply(&current) {
+                    if next != current {
+                        current = next;
+                        fired.push(rule.text.clone());
+                    }
+                }
+            }
+        }
+        if fired.is_empty() {
+            return None;
+        }
+        Some(UrlEdit {
+            url: current,
+            rules: fired,
+        })
+    }
 }
 
 /// Number of rule-looking lines in a list. The `adblock` engine does not expose
@@ -1827,6 +2733,238 @@ mod tests {
             "GET",
         );
         assert_eq!(v.rewritten_url, None);
+    }
+
+    /// One request through the URL modifiers, the way the HTTPS path runs
+    /// them: what the request goes out as, or nothing when no rule fires.
+    fn url_of(fe: &FilterEngine, url: &str, kind: &str) -> Option<String> {
+        fe.url_edit(url, "https://page.test/", kind, "GET")
+            .map(|edit| edit.url)
+    }
+
+    #[test]
+    fn urltransform_reaches_the_destination_of_a_tracker_link() {
+        // The tradedoubler shape: a decode, then the substitute that reads the
+        // whole URL — the first substitute decides the mode — then a decode of
+        // what it left behind.
+        let fe = cosmetic_engine(
+            "||clk.tradedoubler.com/click?*url=$urltransform=pct|/^https?:\\/\\/(?:[a-z0-9-]+\\.)*?.*\\.tradedoubler\\.com.*[?&]url=([^&]*).*/\\$1/|pct\n",
+        );
+        assert_eq!(fe.url_rules_count(), 1);
+        let url = "https://clk.tradedoubler.com/click?p=1&url=https%3A%2F%2Fwww.store.test%2Fdeep%2F%3Fq%3D1&x=2";
+        let edit = fe
+            .url_edit(url, "https://page.test/", "document", "GET")
+            .expect("the rule fires");
+        assert_eq!(edit.url, "https://www.store.test/deep/?q=1");
+        assert_eq!(edit.rules.len(), 1);
+        // The transformation moved the request to another origin, which only
+        // an answer the client can follow can do.
+        assert!(!same_origin(url, &edit.url));
+    }
+
+    #[test]
+    fn urltransform_stays_on_the_page_path_when_the_first_substitute_does() {
+        // The effiliation trio: the two decodes are path-only stages and sort
+        // first, so they leave the tracker URL readable; the third rule is its
+        // own full-URL pipeline — its first substitute reaches for the whole
+        // URL — and hands back the destination.
+        let fe = cosmetic_engine(
+            "||track.effiliation.com/servlet/effi.redir$urltransform=/%2F/\\//\n\
+             ||track.effiliation.com/servlet/effi.redir$urltransform=/%3A/:/\n\
+             ||track.effiliation.com/servlet/effi.redir$urltransform=/^https?:\\/\\/(?:[a-z0-9-]+\\.)*?track\\.effiliation\\.com.*[?&]url=(.+)$/\\$1/\n",
+        );
+        assert_eq!(fe.url_rules_count(), 3);
+        let url = "https://track.effiliation.com/servlet/effi.redir?id=1&url=http%3A%2F%2Fshop.test%2Fdeep%2Fpage";
+        let edit = fe
+            .url_edit(url, "https://page.test/", "document", "GET")
+            .expect("the rules fire");
+        assert_eq!(edit.url, "http://shop.test/deep/page");
+        assert_eq!(edit.rules.len(), 3, "{:?}", edit.rules);
+        // The destination is another origin, so the HTTPS path answers a
+        // redirect rather than rewriting the request in place.
+        assert!(!same_origin(url, &edit.url));
+    }
+
+    #[test]
+    fn a_path_only_transform_decodes_in_place() {
+        // A rule whose first substitute is not anchored at `^http` works on
+        // the path, and the origin stays whatever it was.
+        let fe = cosmetic_engine("||shop.test/go$urltransform=/%2F/\\//\n");
+        let url = "https://shop.test/go?next=%2Fdeep%2Fpage";
+        let edit = fe
+            .url_edit(url, "https://page.test/", "document", "GET")
+            .expect("the rule fires");
+        assert_eq!(edit.url, "https://shop.test/go?next=/deep/page");
+        assert!(same_origin(url, &edit.url));
+    }
+
+    #[test]
+    fn a_whole_url_transform_waits_for_a_get() {
+        let fe = cosmetic_engine(
+            "||shop.test/go$urltransform=/^http.*url=(https?:\\/\\/[^&]*)$/\\$1/\n",
+        );
+        let url = "https://shop.test/go?url=https://ok.test/x";
+        let edit = fe
+            .url_edit(url, "https://page.test/", "document", "GET")
+            .expect("GET fires");
+        assert_eq!(edit.url, "https://ok.test/x");
+        assert!(fe
+            .url_edit(url, "https://page.test/", "document", "POST")
+            .is_none());
+        // A path-only transform is not held back the same way.
+        let fe = cosmetic_engine("||shop.test/go$urltransform=/-a/-b/\n");
+        assert_eq!(
+            url_of(&fe, "https://shop.test/go-a", "document").as_deref(),
+            Some("https://shop.test/go-b")
+        );
+        // An explicit `$method` is the rule setting its own terms.
+        let fe = cosmetic_engine(
+            "||shop.test/go$method=POST,urltransform=/^http.*url=(https?:\\/\\/[^&]*)$/\\$1/\n",
+        );
+        assert!(fe
+            .url_edit(url, "https://page.test/", "document", "POST")
+            .is_some());
+        assert!(fe
+            .url_edit(url, "https://page.test/", "document", "GET")
+            .is_none());
+    }
+
+    #[test]
+    fn removeparam_shapes_the_crate_refuses_still_run() {
+        // The bare shape takes every parameter off, and — with no type option —
+        // only a document or a frame is offered to it.
+        let fe = cosmetic_engine("&siteid=*&adid=$removeparam\n");
+        assert_eq!(
+            url_of(
+                &fe,
+                "https://shop.test/pixel?y=1&siteid=7&adid=3&x=1",
+                "subdocument"
+            )
+            .as_deref(),
+            Some("https://shop.test/pixel")
+        );
+        assert!(url_of(&fe, "https://shop.test/pixel?y=1&siteid=7&adid=3", "image").is_none());
+        // The regexp shape reads the parameter normalized to `name=value`, as
+        // written and percent-decoded.
+        let fe = cosmetic_engine("||shop.test/api$removeparam=/^secret_.*$/\n");
+        assert_eq!(
+            url_of(
+                &fe,
+                "https://shop.test/api?secret_a=1&keep=2&secret_b=3",
+                "document"
+            )
+            .as_deref(),
+            Some("https://shop.test/api?keep=2")
+        );
+        assert_eq!(
+            url_of(&fe, "https://shop.test/api?secret%5Fa=1", "document").as_deref(),
+            Some("https://shop.test/api")
+        );
+        // Negation keeps exactly the parameter it names.
+        let fe = cosmetic_engine("||shop.test/api$removeparam=~keep\n");
+        assert_eq!(
+            url_of(&fe, "https://shop.test/api?keep=1&a=2", "document").as_deref(),
+            Some("https://shop.test/api?keep=1")
+        );
+        // `=name`, the shape the crate implements, runs here too: the family
+        // keeps one order and one exception story.
+        let fe = cosmetic_engine("||shop.test/api$removeparam=secret\n");
+        assert_eq!(
+            url_of(&fe, "https://shop.test/api?secret=1&keep=2", "document").as_deref(),
+            Some("https://shop.test/api?keep=2")
+        );
+        // No parameter change on the methods a rewrite can break.
+        assert!(fe
+            .url_edit(
+                "https://shop.test/api?secret=1",
+                "https://page.test/",
+                "document",
+                "DELETE"
+            )
+            .is_none());
+    }
+
+    #[test]
+    fn url_modifier_exceptions_cancel_rule_by_rule() {
+        // An exception carrying a value cancels exactly the rule with that
+        // value: the other removal still happens.
+        let fe = cosmetic_engine(
+            "||shop.test/api$removeparam=secret\n\
+             ||shop.test/api$removeparam=track\n\
+             @@||shop.test^$removeparam=secret\n",
+        );
+        assert_eq!(
+            url_of(
+                &fe,
+                "https://shop.test/api?secret=1&track=2&keep=3",
+                "document"
+            )
+            .as_deref(),
+            Some("https://shop.test/api?secret=1&keep=3")
+        );
+        // An exception with no value cancels the whole family.
+        let fe = cosmetic_engine(
+            "||shop.test/api$removeparam=secret\n\
+             @@||shop.test^$removeparam\n",
+        );
+        assert!(url_of(&fe, "https://shop.test/api?secret=1", "document").is_none());
+        // The page the exception names is what scopes it.
+        let fe = cosmetic_engine(
+            "||shop.test/go$urltransform=/-a/-b/\n\
+             @@||other.test^$urltransform\n",
+        );
+        assert_eq!(
+            url_of(&fe, "https://shop.test/go-a", "document").as_deref(),
+            Some("https://shop.test/go-b")
+        );
+        // A plain exception is about blocking, not about the URL modifiers.
+        let fe = cosmetic_engine(
+            "||shop.test/go$urltransform=/-a/-b/\n\
+             @@||shop.test^\n",
+        );
+        assert!(url_of(&fe, "https://shop.test/go-a", "document").is_some());
+    }
+
+    #[test]
+    fn urltransforms_run_before_the_parameter_removals() {
+        // The transform writes the parameter the removal then drops: the other
+        // order would leave it behind.
+        let fe = cosmetic_engine(
+            "||shop.test/api$urltransform=/keep=/gone=/\n\
+             ||shop.test/api$removeparam=gone\n",
+        );
+        assert_eq!(
+            url_of(&fe, "https://shop.test/api?keep=1", "document").as_deref(),
+            Some("https://shop.test/api")
+        );
+        // The removal reads the request the transform left, so a rule whose
+        // pattern only the rewritten URL matches still fires.
+        let fe = cosmetic_engine(
+            "||shop.test/api$urltransform=/-old/-new/\n\
+             ||shop.test/api-new$removeparam=secret\n",
+        );
+        assert_eq!(
+            url_of(&fe, "https://shop.test/api-old?secret=1", "document").as_deref(),
+            Some("https://shop.test/api-new")
+        );
+    }
+
+    #[test]
+    fn url_modifier_rules_the_engine_cannot_run_are_dropped() {
+        // A `$urltransform` with no value, one naming modifiers the crate
+        // would ignore or widen, one carrying another family, a stage that
+        // does not parse, and a removal value that means nothing: nothing
+        // half-runs.
+        let fe = cosmetic_engine(
+            "||shop.test^$urltransform\n\
+             ||shop.test^$urltransform=/-a/-b/,$to=other.test\n\
+             ||shop.test^$urltransform=/-a/-b/,$method=PUT\n\
+             ||shop.test^$urltransform=/-a/-b/,$replace=/x/y/\n\
+             ||shop.test^$urltransform=bad-stage\n\
+             ||shop.test^$removeparam=~\n",
+        );
+        assert_eq!(fe.url_rules_count(), 0);
+        assert!(url_of(&fe, "https://shop.test/go-a", "document").is_none());
     }
 
     /// Whether any `$replace` rule covers a request, the way the HTTPS path

@@ -837,10 +837,11 @@ impl ProxySession {
     /// This is the only place that has the whole request, so it is where the
     /// rules that need a URL live: `$redirect` (answer with a no-op resource
     /// instead of blocking outright — what keeps an anti-adblock page alive),
-    /// `$removeparam` (the forwarded request line is rewritten) and blocks
-    /// scoped to a path or a request type. A request that carries a body is
-    /// left alone: its head is not the last thing on the wire, and swallowing
-    /// it would desync the connection.
+    /// `$removeparam` and `$urltransform` (the forwarded request line is
+    /// rewritten, see [`FilterEngine::url_edit`]) and blocks scoped to a path
+    /// or a request type. A request that carries a body is left alone: its head
+    /// is not the last thing on the wire, and swallowing it would desync the
+    /// connection.
     fn filter_url_request(
         session: &mut TlsSession,
         buffer: &mut Vec<u8>,
@@ -875,10 +876,18 @@ impl ProxySession {
             return Ok(None);
         };
         let url = request_url(&facts, &host);
-        let source = facts.referer.unwrap_or("").to_string();
         let target = facts.target.to_string();
         let method = facts.method.to_string();
         let request_type = facts.request_type();
+        // A document is its own first party: with no referrer, the page every
+        // rule asks about is the request's own URL. An empty source reads as a
+        // third-party request from nowhere, which is what `$third-party`,
+        // `$domain` and the page-scoped asks must not see.
+        let source = match facts.referer {
+            Some(referer) if !referer.is_empty() => referer.to_string(),
+            _ if request_type == "document" => url.clone(),
+            _ => String::new(),
+        };
         let closes = facts.closes;
 
         // `$urlblock` (and `$document`, which implies it): the page asked for
@@ -905,23 +914,97 @@ impl ProxySession {
             }
         }
 
-        let verdict = filter.check_url(&url, &source, request_type, &method);
+        let mut verdict = filter.check_url(&url, &source, request_type, &method);
         if !verdict.blocked {
-            // A `$removeparam` rule: the request still goes out, with the
-            // parameters the list dropped taken off. AdGuard applies these to
-            // GET, HEAD and OPTIONS only, so anything else keeps its query.
-            if let Some(rewritten) = verdict
+            // The request-URL modifiers. `$urltransform` and the shapes of
+            // `$removeparam` the crate refuses are run by our own engine here;
+            // the `=name` shape the crate does implement comes back on the
+            // verdict itself. AdGuard keeps `$urltransform` out of the way of a
+            // URL basic rules already block, so this only runs on a clear
+            // verdict.
+            let mut rewritten_target: Option<String> = None;
+            let mut transformed: Option<crate::filter::UrlEdit> = None;
+            if filter.has_url_rules() {
+                if let Some(edit) = filter.url_edit(&url, &source, request_type, &method) {
+                    if !crate::filter::same_origin(&url, &edit.url) {
+                        // The rule reaches for another origin, which no rewrite
+                        // of the request line can take the request to — but a
+                        // redirect can, and only a method that allows one may
+                        // be answered that way.
+                        if matches!(method.as_str(), "GET" | "HEAD") {
+                            let rules = edit.rules.join("; ");
+                            crate::logbuf::push(&format!(
+                                "mitm {host}: URL transform redirects to {} ({rules})",
+                                edit.url
+                            ));
+                            let mut response = transform_redirect_response(&edit.url);
+                            if closes {
+                                response = closing_response(response);
+                            }
+                            buffer.drain(..head_end);
+                            let started = Instant::now();
+                            let handshaking = tls::server_handshaking(&session.server);
+                            outcome
+                                .to_client
+                                .extend(send_to_client(&mut session.server, &response)?);
+                            record_tls(stats, started, handshaking);
+                            if let Some(sink) = sink {
+                                sink(&MitmBlock {
+                                    host: &host,
+                                    rule: Some(&rules),
+                                    list_name: None,
+                                    category: 0,
+                                });
+                            }
+                            return Ok(None);
+                        }
+                    } else if rewritable(&method) {
+                        if let Some(new_target) = origin_form(&edit.url) {
+                            if new_target != target {
+                                // The transformed URL is a request of its own:
+                                // it is matched against the rest of the rules
+                                // before it goes out.
+                                verdict =
+                                    filter.check_url(&edit.url, &source, request_type, &method);
+                                if !verdict.blocked {
+                                    rewritten_target = Some(new_target);
+                                    transformed = Some(edit);
+                                }
+                            }
+                        }
+                    }
+                }
+            } else if let Some(rewritten) = verdict
                 .rewritten_url
                 .as_deref()
                 .filter(|_| rewritable(&method))
             {
+                // A `$removeparam` rule the crate implements itself: the
+                // request still goes out, with the parameters the list dropped
+                // taken off. GET, HEAD and OPTIONS only, so anything else keeps
+                // its query.
                 if let Some(new_target) = origin_form(rewritten) {
                     if new_target != target {
-                        buffer.splice(..head_end, rebuilt_head(&buffer[..head_end], &new_target));
+                        rewritten_target = Some(new_target);
                     }
                 }
             }
-            return Ok(None);
+            if !verdict.blocked {
+                if let Some(rewritten_target) = rewritten_target {
+                    buffer.splice(
+                        ..head_end,
+                        rebuilt_head(&buffer[..head_end], &rewritten_target),
+                    );
+                    if let Some(edit) = transformed {
+                        crate::logbuf::push(&format!(
+                            "mitm {host}: URL rewritten to {} by {} rule(s)",
+                            edit.url,
+                            edit.rules.len(),
+                        ));
+                    }
+                }
+                return Ok(None);
+            }
         }
 
         let mut response = verdict
@@ -1914,6 +1997,20 @@ fn not_found_response() -> Vec<u8> {
 /// so the page sees a failed subresource rather than a bogus one.
 pub(super) fn blocked_response() -> Vec<u8> {
     b"HTTP/1.1 204 No Content\r\nContent-Length: 0\r\nCache-Control: no-store\r\n\r\n".to_vec()
+}
+
+/// The answer a `$urltransform` rule gets when it moves the request to another
+/// origin.
+///
+/// A rewrite of the request line could not take the request there — the peer
+/// the connection reaches is fixed — but a redirect can, and AdGuard defines
+/// exactly that as the limit of the modifier: a transform changing the origin
+/// only applies when it is achievable via an HTTP redirect.
+pub(super) fn transform_redirect_response(location: &str) -> Vec<u8> {
+    format!(
+        "HTTP/1.1 302 Found\r\nLocation: {location}\r\nContent-Length: 0\r\nCache-Control: no-store\r\n\r\n"
+    )
+    .into_bytes()
 }
 
 /// Marks a locally answered response as the last one on the connection.

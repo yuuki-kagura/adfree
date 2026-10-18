@@ -989,11 +989,12 @@ fn a_document_exception_takes_every_cosmetic_tag_out() {
 
 /// The network rules that need a URL: path-scoped blocks, `$redirect` and
 /// `$removeparam`. The DNS layer only ever sees a hostname, so these can only
-/// fire on the HTTPS path.
+/// fire on the HTTPS path — and the removal names the request kind, because
+/// without a type option the modifier only covers documents and frames.
 const URL_LIST: &str = "! Title: e2e url rules\n\
                         ||shop.test/ads/tracker.js$script\n\
                         ||shop.test/fake.js$redirect=noopjs\n\
-                        ||shop.test/api^$removeparam=secret\n";
+                        ||shop.test/api^$removeparam=secret,xmlhttprequest\n";
 
 /// The same block, but the page holds a `$urlblock`: its own requests are the
 /// site's business, not the lists'. AdGuard's coverage is spelled out as
@@ -1001,7 +1002,7 @@ const URL_LIST: &str = "! Title: e2e url rules\n\
 /// down for such a page as well.
 const URLBLOCK_LIST: &str = "! Title: e2e urlblock\n\
                              ||shop.test/ads/tracker.js$script\n\
-                             ||shop.test/api^$removeparam=secret\n\
+                             ||shop.test/api^$removeparam=secret,xmlhttprequest\n\
                              @@||shop.test^$urlblock\n";
 
 /// The rules that need a whole URL fire on the HTTPS path: a path-scoped block
@@ -1156,6 +1157,72 @@ fn a_urlblock_exception_lets_the_pages_own_requests_through() {
         "a $urlblock page keeps its query: {api:?}"
     );
     drop(seen);
+    tcp.close();
+}
+
+/// `$urltransform`: a rule whose first substitute reaches for the whole URL
+/// hands the request to the destination it extracted — another origin, so the
+/// request is answered a redirect and the tracker never sees it — while a rule
+/// that stays on the path rewrites the request line the origin receives. Both
+/// over one kept-alive connection, which proves the redirect frames cleanly.
+const URLTRANSFORM_LIST: &str = "! Title: e2e urltransform\n\
+                                 ||shop.test/go$urltransform=pct|/^http.*[?&]url=(https?:\\/\\/[^&]*)$/\\$1/|pct\n\
+                                 ||shop.test/local$urltransform=/-old/-new/\n";
+
+/// `$urltransform` on the HTTPS path: a same-origin transform is a rewrite,
+/// an origin-changing one a redirect, and each is applied by the rule that
+/// carried it (see [`URLTRANSFORM_LIST`]).
+#[test]
+fn urltransform_rules_rewrite_and_redirect_on_the_https_path() {
+    let origin = start_origin(HTML);
+    let (core, ca_der) = setup_core_with_list(&origin, "urltransform", URLTRANSFORM_LIST);
+
+    let mut tcp = Client::connect(core.clone(), origin.port);
+    let mut conn = handshake(&mut tcp, client_config(ca_der));
+    assert!(!conn.is_handshaking(), "the MITM handshake must complete");
+
+    // 1. The destination is another origin: the one answer that can take the
+    //    request there is a redirect, and the tracker never sees it.
+    let (head, body) = request_with(
+        &mut tcp,
+        &mut conn,
+        "/go?url=https%3A%2F%2Fok.test%2Fdeep",
+        "Sec-Fetch-Dest: document\r\nReferer: https://shop.test/\r\n",
+    );
+    assert!(head.starts_with("HTTP/1.1 302"), "{head}");
+    assert!(head.contains("Location: https://ok.test/deep"), "{head}");
+    assert!(body.is_empty(), "{body:?}");
+    {
+        let seen = origin.requests.lock().expect("requests");
+        assert!(
+            !seen.iter().any(|r| r.contains("/go")),
+            "a redirected request must not reach the origin: {seen:?}"
+        );
+    }
+
+    // 2. A transform that stays on the path is a rewrite of the request line
+    //    the origin receives.
+    let (head, _) = request_with(
+        &mut tcp,
+        &mut conn,
+        "/local-old",
+        "Sec-Fetch-Dest: document\r\nReferer: https://shop.test/\r\n",
+    );
+    assert!(
+        head.starts_with("HTTP/1.1 404"),
+        "the origin answers what it has, so the request reached it: {head}"
+    );
+    let seen = origin.requests.lock().expect("requests");
+    let local = seen
+        .iter()
+        .find(|r| r.contains("/local"))
+        .expect("the rewritten request reached the origin");
+    assert!(
+        local.starts_with("GET /local-new "),
+        "the rewritten path must be what the origin sees: {local:?}"
+    );
+    drop(seen);
+
     tcp.close();
 }
 
