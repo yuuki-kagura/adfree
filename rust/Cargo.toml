@@ -35,6 +35,9 @@ rustls-pemfile = "2"
 time = { version = "0.3", default-features = false, features = ["std"] }
 # Cosmetic payloads (per-page CSS/JS rules) travel as JSON into the HTML.
 serde_json = "1"
+# `$redirect` resources come out of the engine as `data:` URLs; the HTTPS path
+# decodes them into a response body.
+base64 = "0.22"
 # gzip/deflate for HTML that the origin compressed anyway: the body is decoded,
 # rewritten and re-compressed so the page still travels compressed to the phone.
 # Pure-Rust backend: no C toolchain in the Android cross build.

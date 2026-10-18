@@ -23,7 +23,7 @@ use adblock::cosmetic_filter_cache::ProceduralOrActionFilter;
 use adblock::engine::Engine;
 use adblock::lists::{FilterFormat, FilterSet, ParseOptions, RuleTypes};
 use adblock::request::Request;
-use adblock::resources::Resource;
+use adblock::resources::{MimeType, Resource, ResourceType};
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
@@ -85,6 +85,87 @@ fn scriptlet_resources() -> &'static Vec<Resource> {
     })
 }
 
+/// Redirect resources (`$redirect=noopjs` and friends) the engine can serve in
+/// place of a blocked request.
+///
+/// A rule like `||imasdk.googleapis.com/js/sdkloader/ima3.js$redirect=noopjs`
+/// exists to keep a page alive while a script is neutralised: without the
+/// resource table the crate reports no redirect, the rule degrades to a hard
+/// block, and the page breaks on the missing script. Names are AdGuard's first,
+/// uBO's and EasyList's ride along as aliases, and the content is embedded in
+/// the base64 form the engine stores.
+///
+/// Only tiny, dependency-free resources live here. Anything a list asks for
+/// that is missing simply does not redirect — the request is blocked exactly
+/// as it would have been before.
+const REDIRECT_TABLE: &[(&str, &[&str], MimeType, &str)] = &[
+    // `(function(){})();`
+    (
+        "noopjs",
+        &["noop.js", "noopjs.js"],
+        MimeType::ApplicationJavascript,
+        "KGZ1bmN0aW9uKCl7fSkoKTs=",
+    ),
+    // An empty body: the classic "let the request through with nothing".
+    ("nooptext", &["noop.txt"], MimeType::TextPlain, ""),
+    (
+        "noopjson",
+        &["noop.json"],
+        MimeType::ApplicationJson,
+        "e30=",
+    ),
+    ("noopcss", &["noop.css"], MimeType::TextCss, ""),
+    (
+        "noopframe",
+        &["noop.html"],
+        MimeType::TextHtml,
+        "PCFET0NUWVBFIGh0bWw+PGh0bWw+PGhlYWQ+PC9oZWFkPjxib2R5PjwvYm9keT48L2h0bWw+",
+    ),
+    // A 1x1 transparent GIF.
+    (
+        "1x1.gif",
+        &["1x1-transparent.gif", "transparent.gif"],
+        MimeType::ImageGif,
+        "R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7",
+    ),
+    (
+        "noop-vast2.xml",
+        &[],
+        MimeType::TextXml,
+        "PFZBU1QgdmVyc2lvbj0iMi4wIj48L1ZBU1Q+",
+    ),
+    (
+        "noop-vast3.xml",
+        &[],
+        MimeType::TextXml,
+        "PFZBU1QgdmVyc2lvbj0iMy4wIj48L1ZBU1Q+",
+    ),
+    (
+        "noop-vast4.xml",
+        &[],
+        MimeType::TextXml,
+        "PFZBU1QgdmVyc2lvbj0iNC4wIj48L1ZBU1Q+",
+    ),
+];
+
+/// The redirect table as engine resources (built once, on the first rebuild).
+fn redirect_resources() -> &'static Vec<Resource> {
+    static RESOURCES: OnceLock<Vec<Resource>> = OnceLock::new();
+    RESOURCES.get_or_init(|| {
+        REDIRECT_TABLE
+            .iter()
+            .map(|(name, aliases, kind, content)| Resource {
+                name: (*name).to_string(),
+                aliases: aliases.iter().map(|alias| (*alias).to_string()).collect(),
+                kind: ResourceType::Mime(kind.clone()),
+                content: (*content).to_string(),
+                dependencies: Vec::new(),
+                permission: Default::default(),
+            })
+            .collect()
+    })
+}
+
 /// Cosmetic filtering payload for one page, ready for the content script.
 #[derive(Debug, Default)]
 pub struct CosmeticResources {
@@ -111,11 +192,12 @@ impl CosmeticResources {
             && self.scriptlets.is_empty()
     }
 }
-/// Cosmetic work a page's exception rules switch off.
+/// Page-level work the lists' exception rules switch off.
 ///
 /// The engine itself knows `$generichide` only; the rest are scanned out of
 /// the list text by [`scan_cosmetic_exceptions`] and applied when a page asks
-/// for its cosmetic resources. See [`FilterEngine::cosmetic_switches_for`].
+/// for its cosmetic resources ([`FilterEngine::cosmetic_switches_for`]) or when
+/// the MITM path decides about the page's own requests (`urlblock`).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub struct CosmeticSwitches {
     /// `$elemhide` (alias `$ehide`): no element hiding, specific or generic.
@@ -125,6 +207,11 @@ pub struct CosmeticSwitches {
     pub specifichide: bool,
     /// `$jsinject`: no scriptlets.
     pub jsinject: bool,
+    /// `$urlblock` (and `$document`, which implies it): the page's own
+    /// requests are not blocked by network rules. The page host is the source:
+    /// the document that carries the exception, or the referrer of a
+    /// subresource.
+    pub urlblock: bool,
 }
 
 impl CosmeticSwitches {
@@ -132,6 +219,7 @@ impl CosmeticSwitches {
         self.elemhide |= other.elemhide;
         self.specifichide |= other.specifichide;
         self.jsinject |= other.jsinject;
+        self.urlblock |= other.urlblock;
     }
 }
 
@@ -161,11 +249,38 @@ pub struct HostVerdict {
     pub rule_text: Option<String>,
     pub list_name: Option<String>,
     pub category: u8,
+    /// The matched rule carries a `$redirect`: the request is not refused, it
+    /// is answered locally with a no-op resource. The DNS layer must leave such
+    /// a host alone — the MITM path (which sees the whole URL, and can tell a
+    /// `redirect-rule` that applies from one that does not) serves it.
+    pub redirect: bool,
+}
+
+/// What the engine says about one full request URL.
+///
+/// The DNS layer only ever has a hostname; the MITM path has the request line
+/// and headers, so it can evaluate the rules that need a URL (`$redirect`,
+/// `$removeparam`, path-scoped blocks) and answer precisely.
+#[derive(Clone, Debug, Default)]
+pub struct UrlVerdict {
+    /// The request must not reach the network. `redirect` may still be set:
+    /// the block is then answered with that resource instead of nothing.
+    pub blocked: bool,
+    /// Body of a `$redirect` resource, as the crate hands it over: a `data:`
+    /// URL carrying the MIME type and the bytes.
+    pub redirect: Option<String>,
+    /// The URL the request must be rewritten to before it is forwarded
+    /// (`$removeparam` dropped something from the query).
+    pub rewritten_url: Option<String>,
+    pub rule_text: Option<String>,
+    pub list_name: Option<String>,
+    pub category: u8,
 }
 
 #[derive(Clone, Copy)]
 struct CachedDecision {
     blocked: bool,
+    redirect: bool,
     category: u8,
     generation: u64,
 }
@@ -186,6 +301,7 @@ impl DecisionCache {
             values: vec![
                 CachedDecision {
                     blocked: false,
+                    redirect: false,
                     category: 0,
                     generation: u64::MAX,
                 };
@@ -412,8 +528,15 @@ impl FilterEngine {
         let mut engine = Engine::new_with_filter_set(set);
         // Scriptlets: `#%#//scriptlet(...)` rules are only assembled when the
         // engine knows the implementations, so the table goes in before any
-        // page asks for its cosmetic resources.
-        engine.use_resources(scriptlet_resources().iter().cloned());
+        // page asks for its cosmetic resources. Redirects ride in the same
+        // call — `use_resources` *replaces* the table, it does not add to it —
+        // and an unresolved `$redirect` degrades to a hard block.
+        engine.use_resources(
+            scriptlet_resources()
+                .iter()
+                .chain(redirect_resources().iter())
+                .cloned(),
+        );
         let memory_bytes = engine.serialize().len();
         let generation = self.generation.fetch_add(1, Ordering::SeqCst) + 1;
         let compiled = Arc::new(Compiled {
@@ -627,6 +750,7 @@ impl FilterEngine {
                 rule_text: None,
                 list_name: None,
                 category: hit.category,
+                redirect: hit.redirect,
             };
         }
 
@@ -635,6 +759,7 @@ impl FilterEngine {
             key,
             CachedDecision {
                 blocked: verdict.blocked,
+                redirect: verdict.redirect,
                 category: verdict.category,
                 generation,
             },
@@ -652,6 +777,47 @@ impl FilterEngine {
         }
         let compiled = self.compiled();
         evaluate(&compiled, host)
+    }
+
+    /// A full request URL, evaluated against every network rule.
+    ///
+    /// This is the MITM path's decision point: it is the only place that knows
+    /// the request line, so it is where `$redirect`, `$removeparam` and the
+    /// rules scoped to a path can be applied. `source` is the page the request
+    /// belongs to — a document request is its own source, a subresource uses
+    /// the `Referer` it carries, and an empty source counts as third-party
+    /// exactly like the DNS layer does.
+    ///
+    /// `request_type` is one of the crate's names (`document`, `script`,
+    /// `sub_frame`, `image`, `stylesheet`, `xmlhttprequest`, `media`, ...).
+    pub fn check_url(
+        &self,
+        url: &str,
+        source: &str,
+        request_type: &str,
+        method: &str,
+    ) -> UrlVerdict {
+        let compiled = self.compiled();
+        let Ok(request) = Request::new(url, source, request_type, method) else {
+            return UrlVerdict::default();
+        };
+        let result = compiled.engine.check_network_request(&request);
+        let blocked = result.should_block();
+        let (rule_text, list_name, category) = matched_details(&compiled, &result, url_host(url));
+        UrlVerdict {
+            blocked,
+            // A redirect only ever stands in for a block: `$redirect-rule`
+            // means "redirect instead, if something else blocks this".
+            redirect: if blocked {
+                result.redirect.clone()
+            } else {
+                None
+            },
+            rewritten_url: result.rewritten_url.clone(),
+            rule_text,
+            list_name,
+            category,
+        }
     }
 
     pub fn clear_cache(&self) {
@@ -728,13 +894,17 @@ fn scan_cosmetic_exceptions(text: &str, into: &mut CosmeticExceptionScan) {
                 "elemhide" | "ehide" => switches.elemhide = true,
                 "specifichide" | "shide" => switches.specifichide = true,
                 "jsinject" => switches.jsinject = true,
+                // `$urlblock` stops the page's own requests from being blocked
+                // by network rules; the MITM path reads it off the referrer.
+                "urlblock" => switches.urlblock = true,
                 // `$document` unblocks the whole site; AdGuard spells it out
-                // as `$elemhide` + `$jsinject` (+ request-level modifiers this
-                // app does not implement).
+                // as `$elemhide` + `$urlblock` + `$jsinject` (+ modifiers this
+                // app applies elsewhere).
                 "document" | "doc" => {
                     switches.elemhide = true;
                     switches.specifichide = true;
                     switches.jsinject = true;
+                    switches.urlblock = true;
                 }
                 "badfilter" => cancel = true,
                 option if option.starts_with("domain=") => scoped = true,
@@ -790,7 +960,7 @@ fn exception_host(pattern: &str) -> Option<String> {
 }
 
 /// The host of a URL, without scheme, port or path.
-fn url_host(url: &str) -> &str {
+pub(crate) fn url_host(url: &str) -> &str {
     let rest = url.split_once("://").map_or(url, |(_, rest)| rest);
     let end = rest.find(['/', '?', '#']).unwrap_or(rest.len());
     let host = &rest[..end];
@@ -887,14 +1057,29 @@ fn evaluate(compiled: &Compiled, host: &str) -> HostVerdict {
         return HostVerdict::default();
     }
 
+    let (rule_text, list_name, category) = matched_details(compiled, &result, host);
+    HostVerdict {
+        blocked: true,
+        rule_text,
+        list_name,
+        category,
+        // A `$redirect` rule blocks *and* answers: the DNS layer must step
+        // aside for it, and only a registered resource counts.
+        redirect: result.redirect.is_some(),
+    }
+}
+
+/// The rule, list and category behind a match, for the log and the UI.
+fn matched_details(
+    compiled: &Compiled,
+    result: &adblock::blocker::BlockerResult,
+    host: &str,
+) -> (Option<String>, Option<String>, u8) {
     let (rule_text, source) = match &result.filter {
-        Some(info) => {
-            let source = info
-                .source_location
-                .as_ref()
-                .map(|loc| loc.source_index);
-            (info.raw_line.clone(), source)
-        }
+        Some(info) => (
+            info.raw_line.clone(),
+            info.source_location.as_ref().map(|loc| loc.source_index),
+        ),
         None => (None, None),
     };
     let list = source
@@ -904,14 +1089,8 @@ fn evaluate(compiled: &Compiled, host: &str) -> HostVerdict {
     let category = list
         .as_ref()
         .map(|l| l.category)
-        .unwrap_or(categorise(rule_text.as_deref(), host));
-
-    HostVerdict {
-        blocked: true,
-        rule_text,
-        list_name: list.map(|l| l.name),
-        category,
-    }
+        .unwrap_or_else(|| categorise(rule_text.as_deref(), host));
+    (rule_text, list.map(|l| l.name), category)
 }
 
 /// Best-effort category for a block whose owning list has none.
@@ -1044,6 +1223,163 @@ mod tests {
         fe.rebuild(&default_lists(), &["||my-block.test^".to_string()]);
         assert!(fe.check_host("my-block.test").blocked);
         assert!(fe.check_host("x.my-block.test").blocked);
+    }
+
+    #[test]
+    fn url_scoped_rules_need_the_whole_request() {
+        let fe = cosmetic_engine("||shop.test/ads/tracker.js$script\n");
+        // The host itself is clean: the rule is narrower than a hostname, so
+        // the DNS layer must not touch it.
+        assert!(!fe.check_host("shop.test").blocked);
+        let hit = fe.check_url(
+            "https://shop.test/ads/tracker.js",
+            "https://shop.test/",
+            "script",
+            "GET",
+        );
+        assert!(hit.blocked, "{hit:?}");
+        assert_eq!(
+            hit.rule_text.as_deref(),
+            Some("||shop.test/ads/tracker.js$script")
+        );
+        // Same URL, another request type: `$script` must not match an image.
+        assert!(
+            !fe.check_url(
+                "https://shop.test/ads/tracker.js",
+                "https://shop.test/",
+                "image",
+                "GET"
+            )
+            .blocked
+        );
+        // Same host, another path.
+        assert!(
+            !fe.check_url("https://shop.test/app.js", "https://shop.test/", "script", "GET").blocked
+        );
+        // The source decides third-party rules, and it is the referrer.
+        let fe = cosmetic_engine("||cdn.test^$third-party\n");
+        assert!(
+            fe.check_url("https://cdn.test/x.js", "https://shop.test/", "script", "GET")
+                .blocked
+        );
+        assert!(
+            !fe.check_url("https://cdn.test/x.js", "https://cdn.test/", "script", "GET").blocked
+        );
+    }
+
+    #[test]
+    fn removeparam_rewrites_the_forwarded_url() {
+        let fe = cosmetic_engine("||shop.test/api$removeparam=secret\n");
+        let v = fe.check_url(
+            "https://shop.test/api?secret=1&keep=2",
+            "https://shop.test/",
+            "xmlhttprequest",
+            "GET",
+        );
+        assert!(!v.blocked, "{v:?}");
+        assert_eq!(
+            v.rewritten_url.as_deref(),
+            Some("https://shop.test/api?keep=2")
+        );
+        // Nothing to drop: the URL is left exactly as it was.
+        let v = fe.check_url(
+            "https://shop.test/api?keep=2",
+            "https://shop.test/",
+            "xmlhttprequest",
+            "GET",
+        );
+        assert_eq!(v.rewritten_url, None);
+    }
+
+    #[test]
+    fn redirect_rules_are_answered_not_dropped() {
+        let fe = cosmetic_engine("||shop.test/fake.js$redirect=noopjs\n");
+        let v = fe.check_url(
+            "https://shop.test/fake.js",
+            "https://shop.test/",
+            "script",
+            "GET",
+        );
+        assert!(v.blocked, "a `$redirect` rule blocks as well: {v:?}");
+        let body = v.redirect.expect("the resource is registered");
+        assert!(
+            body.starts_with("data:application/javascript;base64,"),
+            "{body}"
+        );
+
+        // `$redirect-rule` redirects only when something else blocks, and the
+        // crate reports the resource either way — the gate is ours.
+        let fe = cosmetic_engine("||shop.test/fake.js$redirect-rule=noopjs\n");
+        let v = fe.check_url(
+            "https://shop.test/fake.js",
+            "https://shop.test/",
+            "script",
+            "GET",
+        );
+        assert!(v.redirect.is_none(), "{v:?}");
+        // Together with a block it fires, which is the whole point of the pair.
+        let fe = cosmetic_engine(
+            "||shop.test/fake.js\n\
+             ||shop.test/fake.js$redirect-rule=noopjs\n",
+        );
+        let v = fe.check_url(
+            "https://shop.test/fake.js",
+            "https://shop.test/",
+            "script",
+            "GET",
+        );
+        assert!(v.blocked && v.redirect.is_some(), "{v:?}");
+
+        // A resource this app does not carry degrades to a plain block.
+        let fe = cosmetic_engine("||shop.test/fake.js$redirect=noopmp4-1s\n");
+        let v = fe.check_url(
+            "https://shop.test/fake.js",
+            "https://shop.test/",
+            "script",
+            "GET",
+        );
+        assert!(v.blocked && v.redirect.is_none(), "{v:?}");
+    }
+
+    #[test]
+    fn redirect_hosts_are_flagged_for_the_https_path() {
+        let fe = cosmetic_engine("||tracker.test^$redirect=nooptext\n||plain.test^\n");
+        let v = fe.check_host("tracker.test");
+        assert!(v.blocked && v.redirect, "{v:?}");
+        assert!(fe.check_host("sub.tracker.test").redirect);
+        let v = fe.check_host("plain.test");
+        assert!(v.blocked && !v.redirect, "{v:?}");
+        // A resource we cannot serve is not a reason to step aside.
+        let fe = cosmetic_engine("||tracker.test^$redirect=googlesyndication-adsbygoogle\n");
+        assert!(!fe.check_host("tracker.test").redirect);
+    }
+
+    #[test]
+    fn redirect_resources_decode_to_their_stated_shape() {
+        use base64::engine::general_purpose::STANDARD;
+        use base64::Engine as _;
+        let resources = redirect_resources();
+        let named = |name: &str| {
+            resources
+                .iter()
+                .find(|r| r.name == name)
+                .unwrap_or_else(|| panic!("{name} must be registered"))
+        };
+        let decode = |name: &str| STANDARD.decode(&named(name).content).expect("base64");
+        assert!(decode("noopjs").starts_with(b"(function"));
+        assert_eq!(decode("noopjson"), b"{}");
+        assert!(decode("noopframe").starts_with(b"<!DOCTYPE html>"));
+        assert!(decode("1x1.gif").starts_with(b"GIF89a"));
+        assert!(decode("nooptext").is_empty());
+        // Every name and alias must be unique: the engine refuses duplicates,
+        // and a resource that silently fails to load turns a redirect into a
+        // hard block — exactly the breakage the table exists to avoid.
+        let mut seen = std::collections::HashSet::new();
+        for resource in resources {
+            for ident in std::iter::once(&resource.name).chain(resource.aliases.iter()) {
+                assert!(seen.insert(ident.clone()), "duplicate resource name {ident}");
+            }
+        }
     }
 
     #[test]
@@ -1245,12 +1581,14 @@ mod tests {
              @@||wild.*^$elemhide\n\
              @@/rege?x/$elemhide\n\
              @@||cancel.test^$elemhide,badfilter\n\
+             @@||ub.test^$urlblock\n\
+             @@||ub.test^$urlblock,badfilter\n\
              ||block.test^$elemhide\n",
             &mut scan,
         );
         assert_eq!(
             scan.cancels.len(),
-            1,
+            2,
             "a `$badfilter` is a cancellation: {:?}",
             scan.cancels
         );
@@ -1289,9 +1627,17 @@ mod tests {
             elemhide: true,
             specifichide: true,
             jsinject: true,
+            urlblock: true,
         };
         assert_eq!(on("doc.test"), all);
         assert_eq!(on("doc-alias.test"), all);
+        // `$urlblock` is network-side only: it stops the page's own requests
+        // from being blocked without touching cosmetics.
+        assert_eq!(
+            on("ub.test"),
+            CosmeticSwitches::default(),
+            "cancelled by its own `$badfilter` pair"
+        );
         // Negations, `$domain=` scoping, paths, wildcards and regexes are all
         // narrower than a hostname: skipped, never applied too widely.
         assert_eq!(map.len(), 8, "{map:?}");

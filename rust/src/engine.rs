@@ -232,6 +232,30 @@ pub fn core() -> &'static Core {
     CORE.get_or_init(Core::new)
 }
 
+/// Reports a request the HTTPS path answered itself: a block scoped to a URL,
+/// or a `$redirect` resource standing in for one.
+///
+/// It runs wherever the session runs, so it goes through the process-wide
+/// engine exactly like the packet path — and, like the packet path, it counts
+/// the bytes the network never had to carry.
+pub(crate) fn log_mitm_block(block: &crate::mitm::proxy::MitmBlock<'_>) {
+    let core = core();
+    let saved = BYTES_PER_BLOCKED_REQUEST as u32;
+    core.log_event(events::block_event(
+        events::ACTION_BLOCK,
+        block.host,
+        "",
+        block.rule.unwrap_or(""),
+        block.list_name.unwrap_or(""),
+        block.category,
+        0,
+        saved,
+        false,
+    ));
+    core.stats
+        .add(&core.stats.bytes_saved, u64::from(saved));
+}
+
 impl Default for Core {
     fn default() -> Self {
         Self::new()
@@ -917,9 +941,8 @@ impl Core {
         // connection is refused instead of leaking a SYN to a documentation
         // address.
         let local = dst.as_ip() == crate::mitm::proxy::local_origin_addr();
-        let mitm_armed = cfg.mitm_enabled
-            && pkt.dst_port == self.mitm_port.load(Ordering::Relaxed)
-            && self.mitm_ca.read().unwrap().has_ca();
+        let mitm_armed =
+            self.mitm_ready(cfg) && pkt.dst_port == self.mitm_port.load(Ordering::Relaxed);
         if local && !mitm_armed {
             crate::logbuf::push("relay: local origin asked without HTTPS filtering");
             return false;
@@ -992,6 +1015,9 @@ impl Core {
                     // Timing counters (TLS cost, rewrite cost) land in the same
                     // snapshot the UI already polls once a second.
                     proxy.set_stats(Arc::clone(&self.stats));
+                    // Requests the session answers itself (URL-scoped blocks,
+                    // `$redirect` resources) belong in the app's log.
+                    proxy.set_sink(log_mitm_block);
                     Some(proxy)
                 }
                 Err(e) => {
@@ -1296,7 +1322,12 @@ impl Core {
         self.stats.record_decision(decision_ns);
         let latency_ns = decision_ns.min(u32::MAX as u64) as u32;
 
-        if verdict.blocked {
+        // A host whose match wants a `$redirect` is not refused here: the
+        // resource stands in for it, and only the HTTPS path knows the URL the
+        // rule really applies to. Without TLS termination there is nothing to
+        // serve it, so the host is sinkholed as usual rather than let through.
+        let deferred = verdict.redirect && self.mitm_ready(cfg);
+        if verdict.blocked && !deferred {
             self.stats.inc(&self.stats.dns_blocked);
             let saved = BYTES_PER_BLOCKED_REQUEST;
             self.stats.add(&self.stats.bytes_saved, saved);
@@ -1430,7 +1461,11 @@ impl Core {
             return;
         }
         let host = query.qname.as_str().to_string();
-        let blocked = self.filter.check_host(&host).blocked;
+        let verdict = self.filter.check_host(&host);
+        // A `$redirect` host is answered by the HTTPS path, so its addresses
+        // must stay reachable — but only while that path is actually armed.
+        let mitm = self.mitm_ready(&self.cfg.read().unwrap());
+        let blocked = verdict.blocked && !(verdict.redirect && mitm);
         let records = dns::parse_answers(message);
         if records.is_empty() {
             return;
@@ -1623,6 +1658,15 @@ impl Core {
     /// TLS config for the upstream half of an intercepted connection.
     pub fn upstream_tls_config(&self) -> Arc<rustls::ClientConfig> {
         self.upstream_config.read().unwrap().clone()
+    }
+
+    /// Will port-443 flows actually be terminated and filtered?
+    ///
+    /// HTTPS filtering is opt-in and needs a loaded CA; both the relay and the
+    /// DNS layer's deferral of `$redirect` hosts read the same gate, so a host
+    /// is never let through on the promise of a filter that is not there.
+    fn mitm_ready(&self, cfg: &Config) -> bool {
+        cfg.mitm_enabled && self.mitm_ca.read().unwrap().has_ca()
     }
 
     /// Overrides the upstream trust anchors. The engine's end-to-end tests use
@@ -2350,6 +2394,109 @@ mod tests {
         p.extend_from_slice(&payload);
         crate::packet::fix_ipv4_checksum(&mut p);
         p
+    }
+
+    /// Minimal IPv4 UDP packet carrying a DNS query for `host`.
+    ///
+    /// The resolver address is TEST-NET-3: it is not in the encrypted-DNS list,
+    /// so the datagram takes the plain DNS path the filter sits on.
+    fn dns_query_packet(host: &str) -> Vec<u8> {
+        let mut dns = Vec::new();
+        dns.extend_from_slice(&0x1234u16.to_be_bytes()); // id
+        dns.extend_from_slice(&0x0100u16.to_be_bytes()); // standard query, recursion desired
+        dns.extend_from_slice(&1u16.to_be_bytes()); // one question
+        dns.extend_from_slice(&[0u8; 6]); // no answer/authority/additional records
+        for label in host.split('.') {
+            dns.push(label.len() as u8);
+            dns.extend_from_slice(label.as_bytes());
+        }
+        dns.push(0);
+        dns.extend_from_slice(&1u16.to_be_bytes()); // type A
+        dns.extend_from_slice(&1u16.to_be_bytes()); // class IN
+
+        let total = 20 + 8 + dns.len();
+        let mut p = Vec::with_capacity(total);
+        p.extend_from_slice(&[0x45, 0x00]);
+        p.extend_from_slice(&(total as u16).to_be_bytes());
+        p.extend_from_slice(&[0x00, 0x00, 0x00, 0x00, 64, 17, 0x00, 0x00]);
+        p.extend_from_slice(&[10, 0, 2, 15]);
+        p.extend_from_slice(&[203, 0, 113, 53]);
+        p.extend_from_slice(&40000u16.to_be_bytes());
+        p.extend_from_slice(&53u16.to_be_bytes());
+        p.extend_from_slice(&((8 + dns.len()) as u16).to_be_bytes());
+        p.extend_from_slice(&[0x00, 0x00]);
+        p.extend_from_slice(&dns);
+        crate::packet::fix_ipv4_checksum(&mut p);
+        p
+    }
+
+    /// The rcode of the first DNS answer the engine produced for a query,
+    /// whether it was returned straight away or written to the tun.
+    fn dns_reply_rcode(core: &Core, host: &str) -> Option<u8> {
+        let mut out = core.handle_packet(&dns_query_packet(host));
+        out.extend(core.take_outbox());
+        let raw = out.first()?;
+        let pkt = Packet::parse(raw)?;
+        pkt.l4_payload().get(3).map(|flags| flags & 0x0f)
+    }
+
+    /// A `$redirect` host is left to the HTTPS path, which is the only place
+    /// that can serve the resource — but only while TLS termination is armed,
+    /// and only for resources this app actually carries. Without either, the
+    /// host is sinkholed exactly as before.
+    #[test]
+    fn a_redirect_host_is_left_for_the_https_path() {
+        let dir = std::env::temp_dir().join("adfree-engine-dns");
+        std::fs::create_dir_all(&dir).expect("temp dir");
+        let path = dir.join("dns-list.txt");
+        std::fs::write(
+            &path,
+            "||ads.test^\n||redir.test^$redirect=nooptext\n||missing.test^$redirect=noopmp4-1s\n",
+        )
+        .expect("write list");
+        let lists = vec![FilterListInfo {
+            id: 1,
+            name: "dns-list".to_string(),
+            url: String::new(),
+            enabled: true,
+            local_path: Some(path),
+            format: crate::filter::ListFormat::Standard,
+            category: 0,
+            rule_count: 0,
+            last_error: None,
+        }];
+
+        /// The sinkhole the default block mode asks for.
+        const NXDOMAIN: u8 = 3;
+
+        let core = Core::new();
+        core.set_socket_protector(Arc::new(AllowAll));
+        core.set_lists(lists, Vec::new());
+        // No TLS termination: a redirect host is a block like any other. (The
+        // upstream is not up in a test either, which is why the forwarded case
+        // can only be told apart by *not* being the sinkhole.)
+        assert_eq!(dns_reply_rcode(&core, "ads.test"), Some(NXDOMAIN));
+        assert_eq!(dns_reply_rcode(&core, "redir.test"), Some(NXDOMAIN));
+
+        core.set_config(Config {
+            mitm_enabled: true,
+            ..Config::default()
+        });
+        core.set_mitm_ca(Arc::new(
+            crate::mitm::ca::CertificateAuthority::generate().expect("ca"),
+        ));
+        assert_ne!(dns_reply_rcode(&core, "redir.test"), Some(NXDOMAIN));
+        // A resource this app does not carry is no reason to let a host
+        // through: nothing could serve it.
+        assert_eq!(dns_reply_rcode(&core, "missing.test"), Some(NXDOMAIN));
+        // A plain block stays a block.
+        assert_eq!(dns_reply_rcode(&core, "ads.test"), Some(NXDOMAIN));
+
+        core.set_config(Config {
+            mitm_enabled: false,
+            ..Config::default()
+        });
+        assert_eq!(dns_reply_rcode(&core, "redir.test"), Some(NXDOMAIN));
     }
 
     struct AllowAll;

@@ -920,6 +920,128 @@ fn a_document_exception_takes_every_cosmetic_tag_out() {
     tcp.close();
 }
 
+/// The network rules that need a URL: path-scoped blocks, `$redirect` and
+/// `$removeparam`. The DNS layer only ever sees a hostname, so these can only
+/// fire on the HTTPS path.
+const URL_LIST: &str = "! Title: e2e url rules\n\
+                        ||shop.test/ads/tracker.js$script\n\
+                        ||shop.test/fake.js$redirect=noopjs\n\
+                        ||shop.test/api^$removeparam=secret\n";
+
+/// The same block, but the page holds a `$urlblock`: its own requests are the
+/// site's business, not the lists'.
+const URLBLOCK_LIST: &str = "! Title: e2e urlblock\n\
+                             ||shop.test/ads/tracker.js$script\n\
+                             @@||shop.test^$urlblock\n";
+
+/// The rules that need a whole URL fire on the HTTPS path: a path-scoped block
+/// is answered locally (the origin never sees it), a `$redirect` resource is
+/// served in the blocked request's place, and `$removeparam` rewrites the
+/// request line the origin receives. All of it over one kept-alive connection,
+/// which also proves the locally answered responses frame cleanly.
+#[test]
+fn url_rules_are_applied_on_the_https_path() {
+    let origin = start_origin(HTML);
+    let (core, ca_der) = setup_core_with_list(&origin, "url", URL_LIST);
+
+    let mut tcp = Client::connect(core.clone(), origin.port);
+    let mut conn = handshake(&mut tcp, client_config(ca_der));
+    assert!(!conn.is_handshaking(), "the MITM handshake must complete");
+
+    // 1. A path-scoped block: an empty answer, and nothing left the machine.
+    let (head, body) = request_with(
+        &mut tcp,
+        &mut conn,
+        "/ads/tracker.js",
+        "Sec-Fetch-Dest: script\r\nReferer: https://shop.test/\r\n",
+    );
+    assert!(head.starts_with("HTTP/1.1 204"), "{head}");
+    assert!(body.is_empty(), "{body:?}");
+    {
+        let seen = origin.requests.lock().expect("requests");
+        assert!(
+            !seen.iter().any(|r| r.contains("tracker.js")),
+            "a blocked URL must not reach the origin: {seen:?}"
+        );
+    }
+
+    // 2. `$redirect`: the no-op resource is served in its place.
+    let (head, body) = request_with(
+        &mut tcp,
+        &mut conn,
+        "/fake.js",
+        "Sec-Fetch-Dest: script\r\nReferer: https://shop.test/\r\n",
+    );
+    assert!(head.starts_with("HTTP/1.1 200"), "{head}");
+    assert!(
+        head.to_lowercase()
+            .contains("content-type: application/javascript"),
+        "{head}"
+    );
+    assert_eq!(body, b"(function(){})();", "the registered noop body");
+
+    // 3. `$removeparam`: the request goes out, one parameter lighter than the
+    //    page asked for.
+    let (head, _) = request_with(
+        &mut tcp,
+        &mut conn,
+        "/api?secret=1&keep=2",
+        "Sec-Fetch-Dest: empty\r\nReferer: https://shop.test/\r\n",
+    );
+    assert!(
+        head.starts_with("HTTP/1.1 404"),
+        "the origin answers what it has, so the request reached it: {head}"
+    );
+    let seen = origin.requests.lock().expect("requests");
+    let api = seen
+        .iter()
+        .find(|r| r.contains("/api"))
+        .expect("the rewritten request reached the origin");
+    assert!(
+        api.starts_with("GET /api?keep=2 "),
+        "the dropped parameter must be gone: {api:?}"
+    );
+
+    tcp.close();
+}
+
+/// `@@||host^$urlblock`: the page vouches for itself, so the URL rules stand
+/// down for requests it makes — the third-party referrer case still fires.
+#[test]
+fn a_urlblock_exception_lets_the_pages_own_requests_through() {
+    let origin = start_origin(HTML);
+    let (core, ca_der) = setup_core_with_list(&origin, "urlblock", URLBLOCK_LIST);
+
+    let mut tcp = Client::connect(core.clone(), origin.port);
+    let mut conn = handshake(&mut tcp, client_config(ca_der));
+    assert!(!conn.is_handshaking(), "the MITM handshake must complete");
+
+    // The page's own subresource: the exception covers it.
+    let (head, _) = request_with(
+        &mut tcp,
+        &mut conn,
+        "/ads/tracker.js",
+        "Sec-Fetch-Dest: script\r\nReferer: https://shop.test/\r\n",
+    );
+    assert!(
+        head.starts_with("HTTP/1.1 404"),
+        "the exception must let the request through: {head}"
+    );
+    // The same request with a third-party page behind it: no exception covers
+    // *that* page, so the rule fires.
+    let (head, _) = request_with(
+        &mut tcp,
+        &mut conn,
+        "/ads/tracker.js",
+        "Sec-Fetch-Dest: script\r\nReferer: https://other.test/\r\n",
+    );
+    assert!(
+        head.starts_with("HTTP/1.1 204"),
+        "a page without the exception must still be covered: {head}"
+    );
+    tcp.close();
+}
+
 /// The injection origin: the reserved address is answered by the app itself.
 ///
 /// This is what keeps the injected tags out of the page's reach — a service

@@ -4,7 +4,10 @@
 //! conversation end to end. These tests therefore focus on what this module adds
 //! on top of TLS: the response rewriter that injects scripts into HTML.
 
-use super::proxy::{content_hash, local_asset, take_local_request, ProxySession, HIDE_PATH};
+use super::proxy::{
+    blocked_response, closing_response, content_hash, local_asset, origin_form, redirect_response,
+    rebuilt_head, request_facts, request_url, take_local_request, ProxySession, HIDE_PATH,
+};
 use super::*;
 use crate::mitm::ca::CertificateAuthority;
 use crate::mitm::tls::{open_session, SniCertResolver};
@@ -1229,4 +1232,149 @@ fn the_user_script_is_served_from_a_content_addressed_url() {
     assert!(head.contains("Cache-Control: max-age=31536000, immutable"), "{head}");
     let plain = http::decode_body(&compressed, http::Encoding::Gzip).expect("decoded");
     assert_eq!(String::from_utf8(plain).expect("utf8"), script);
+}
+
+/// The request parser behind the URL rules: a head it does not understand, or
+/// one that carries a body, must never be filtered — the bytes after the head
+/// are not ours to drop.
+#[test]
+fn request_facts_read_only_whole_requests() {
+    let head = b"GET /ads.js?x=1 HTTP/1.1\r\nHost: shop.test:8443\r\n\
+                 Referer: https://page.test/p\r\nSec-Fetch-Dest: script\r\n\
+                 Accept: */*\r\n\r\n";
+    let facts = request_facts(head).expect("parseable");
+    assert_eq!(facts.method, "GET");
+    assert_eq!(facts.target, "/ads.js?x=1");
+    assert_eq!(facts.authority, Some("shop.test:8443"));
+    assert_eq!(facts.referer, Some("https://page.test/p"));
+    assert_eq!(facts.dest, Some("script"));
+    assert_eq!(facts.request_type(), "script");
+    assert!(!facts.has_body);
+
+    // A declared body means the head is not the last thing on the wire.
+    let with_body = b"POST /api HTTP/1.1\r\nHost: shop.test\r\nContent-Length: 5\r\n\r\nhello";
+    assert!(request_facts(with_body).expect("parseable").has_body);
+    let chunked = b"POST /api HTTP/1.1\r\nHost: shop.test\r\nTransfer-Encoding: chunked\r\n\r\n";
+    assert!(request_facts(chunked).expect("parseable").has_body);
+    let empty_body = b"POST /api HTTP/1.1\r\nHost: shop.test\r\nContent-Length: 0\r\n\r\n";
+    assert!(!request_facts(empty_body).expect("parseable").has_body);
+
+    // Not an HTTP/1.x request: nothing else may be read as a request line.
+    assert!(request_facts(b"\x16\x03\x01\x00\x00binary").is_none());
+    assert!(request_facts(b"hello there\r\n\r\n").is_none());
+}
+
+/// Who asked for the connection to end: HTTP/1.1 keeps it unless it says
+/// `close`, HTTP/1.0 closes it unless it asks for keep-alive. A response the
+/// app answers itself has to carry that, or an HTTP/1.0 client waits for an
+/// EOF that no origin will send.
+#[test]
+fn request_facts_know_who_wants_the_connection_closed() {
+    let closes = |head: &[u8]| request_facts(head).expect("parseable").closes;
+    assert!(!closes(
+        b"GET / HTTP/1.1\r\nHost: a.test\r\nConnection: keep-alive\r\n\r\n"
+    ));
+    assert!(closes(
+        b"GET / HTTP/1.1\r\nHost: a.test\r\nConnection: close\r\n\r\n"
+    ));
+    assert!(!closes(b"GET / HTTP/1.1\r\nHost: a.test\r\n\r\n"));
+    assert!(closes(b"GET / HTTP/1.0\r\nHost: a.test\r\n\r\n"));
+    assert!(!closes(
+        b"GET / HTTP/1.0\r\nHost: a.test\r\nConnection: keep-alive\r\n\r\n"
+    ));
+    assert!(closes(b"GET / HTTP/1.0\r\nHost: a.test\r\nConnection: Close\r\n\r\n"));
+
+    // The marker sits before the blank line, so the head stays a head.
+    let marked = closing_response(blocked_response());
+    let head = String::from_utf8_lossy(&marked);
+    assert!(head.contains("Connection: close\r\n\r\n"), "{head}");
+    let (head, body) = split_local(&marked);
+    assert!(head.starts_with("HTTP/1.1 204 No Content\r\n"), "{head}");
+    assert!(body.is_empty(), "{body:?}");
+}
+
+/// Request types come from `Sec-Fetch-Dest`; anything unknown is `other`,
+/// never a guess — a `$script`-scoped rule must not fire on an image.
+#[test]
+fn request_types_follow_sec_fetch_dest() {
+    let of = |dest: &str| {
+        let head = format!("GET /x HTTP/1.1\r\nHost: a.test\r\nSec-Fetch-Dest: {dest}\r\n\r\n");
+        request_facts(head.as_bytes())
+            .expect("parseable")
+            .request_type()
+    };
+    assert_eq!(of("document"), "document");
+    assert_eq!(of("iframe"), "sub_frame");
+    assert_eq!(of("script"), "script");
+    assert_eq!(of("style"), "stylesheet");
+    assert_eq!(of("empty"), "xmlhttprequest");
+    assert_eq!(of("image"), "image");
+    assert_eq!(of("video"), "media");
+    assert_eq!(of("track"), "media");
+    assert_eq!(of("report"), "csp_report");
+    assert_eq!(of("made-up"), "other");
+    let head = b"GET /x HTTP/1.1\r\nHost: a.test\r\n\r\n";
+    assert_eq!(request_facts(head).expect("parseable").request_type(), "other");
+}
+
+/// The URL a request line and its host make, and the origin-form target a
+/// rewritten URL has to turn back into.
+#[test]
+fn urls_and_targets_round_trip() {
+    let facts =
+        request_facts(b"GET /ads.js?a=1 HTTP/1.1\r\nHost: shop.test\r\n\r\n").expect("head");
+    assert_eq!(
+        request_url(&facts, "shop.test"),
+        "https://shop.test/ads.js?a=1"
+    );
+    // An absolute-form target is already a URL.
+    let facts =
+        request_facts(b"GET http://x.test/a HTTP/1.1\r\nHost: x.test\r\n\r\n").expect("head");
+    assert_eq!(request_url(&facts, "x.test"), "http://x.test/a");
+
+    assert_eq!(
+        origin_form("https://shop.test/api?keep=2").as_deref(),
+        Some("/api?keep=2")
+    );
+    assert_eq!(origin_form("https://shop.test").as_deref(), Some("/"));
+    assert_eq!(origin_form("https://shop.test?a=1").as_deref(), Some("/?a=1"));
+    assert_eq!(origin_form("not a url").as_deref(), None);
+}
+
+/// A rewritten request line changes the target and nothing else.
+#[test]
+fn a_rewritten_head_only_changes_the_target() {
+    let head = b"GET /api?secret=1&keep=2 HTTP/1.1\r\nHost: shop.test\r\nAccept: */*\r\n\r\n";
+    assert_eq!(
+        rebuilt_head(head, "/api?keep=2"),
+        b"GET /api?keep=2 HTTP/1.1\r\nHost: shop.test\r\nAccept: */*\r\n\r\n"
+    );
+    // A line we cannot make sense of is handed back untouched.
+    assert_eq!(rebuilt_head(b"garbage\r\n\r\n", "/x"), b"garbage\r\n\r\n");
+}
+
+/// The two answers the URL rules produce locally: an empty block and the
+/// engine's `data:` redirect turned back into a response.
+#[test]
+fn blocked_and_redirect_answers_are_shaped_for_a_browser() {
+    let blocked = blocked_response();
+    let head = String::from_utf8_lossy(&blocked);
+    assert!(head.starts_with("HTTP/1.1 204 No Content\r\n"), "{head}");
+    assert!(head.contains("Content-Length: 0\r\n"), "{head}");
+
+    let redirect =
+        redirect_response("data:application/javascript;base64,KGZ1bmN0aW9uKCl7fSkoKTs=")
+            .expect("decodable");
+    let (head, body) = split_local(&redirect);
+    assert!(head.starts_with("HTTP/1.1 200 OK\r\n"), "{head}");
+    assert!(
+        head.contains("Content-Type: application/javascript\r\n"),
+        "{head}"
+    );
+    assert_eq!(body, b"(function(){})();");
+
+    // Anything that is not the shape the crate produces is not a redirect the
+    // session can serve: the caller has to fall back to a plain block.
+    assert!(redirect_response("https://example.com/x.js").is_none());
+    assert!(redirect_response("data:application/javascript;base64,!!!").is_none());
 }

@@ -14,6 +14,8 @@ use crate::mitm::tls::{
     self, feed_client, feed_client_wire, feed_server, send_to_client, FlowResolver, TlsSession,
 };
 use crate::stats::Stats;
+use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
+use base64::Engine as _;
 use rustls::{ClientConfig, ServerConnection};
 use std::collections::VecDeque;
 use std::sync::Arc;
@@ -110,6 +112,24 @@ impl Outcome {
     }
 }
 
+/// A request an intercepted session answered itself, for the app's log.
+#[derive(Clone, Copy)]
+pub struct MitmBlock<'a> {
+    /// The host the request was for.
+    pub host: &'a str,
+    /// The rule that matched, when the engine reported one.
+    pub rule: Option<&'a str>,
+    pub list_name: Option<&'a str>,
+    pub category: u8,
+}
+
+/// Where the HTTPS path reports what it blocked.
+///
+/// A plain function pointer: in production the only sink is the process-wide
+/// engine ([`crate::engine::log_mitm_block`]) and tests run without one, so the
+/// proxy never has to know how the log is stored.
+pub type MitmSink = fn(&MitmBlock<'_>);
+
 /// Where a relay's TLS termination stands.
 enum ProxyState {
     /// Armed but not open: the hostname to present upstream comes from the
@@ -179,6 +199,9 @@ pub struct ProxySession {
     /// Hot counters of the owning engine, for the TLS and rewrite timings the
     /// HTTPS path adds. `None` when no engine owns the session (tests).
     stats: Option<Arc<Stats>>,
+    /// Where requests answered locally (`$redirect`, URL-level blocks) are
+    /// reported. `None` when no engine owns the session (tests).
+    sink: Option<MitmSink>,
 }
 
 /// Where a connection's response stream stands.
@@ -372,6 +395,7 @@ impl ProxySession {
             script_body,
             cosmetic: None,
             stats: None,
+            sink: None,
         }
     }
 
@@ -411,6 +435,7 @@ impl ProxySession {
             script_body,
             cosmetic: None,
             stats: None,
+            sink: None,
         })
     }
 
@@ -449,6 +474,7 @@ impl ProxySession {
             script_body,
             cosmetic: None,
             stats: None,
+            sink: None,
         })
     }
 
@@ -456,6 +482,12 @@ impl ProxySession {
     /// show up in the stats the UI already polls.
     pub fn set_stats(&mut self, stats: Arc<Stats>) {
         self.stats = Some(stats);
+    }
+
+    /// Points the session at the app's log, so a request it answered itself
+    /// (`$redirect`, a URL-scoped block) is visible in it like any other.
+    pub fn set_sink(&mut self, sink: MitmSink) {
+        self.sink = Some(sink);
     }
 
     /// The SNI captured from the ClientHello, once it has arrived.
@@ -661,6 +693,7 @@ impl ProxySession {
             self.cosmetic.as_deref(),
             self.captured.as_deref(),
             self.stats.as_deref(),
+            self.sink,
             &mut self.head_requests,
             &mut outcome,
         )?;
@@ -683,6 +716,7 @@ impl ProxySession {
         filter: Option<&FilterEngine>,
         session_host: Option<&str>,
         stats: Option<&Stats>,
+        sink: Option<MitmSink>,
         head_requests: &mut VecDeque<http::RequestInfo>,
         outcome: &mut Outcome,
     ) -> Result<(), String> {
@@ -699,6 +733,19 @@ impl ProxySession {
                     .to_client
                     .extend(send_to_client(&mut session.server, &local)?);
                 record_tls(stats, started, handshaking);
+            }
+            // The same loop answers a request the *network* rules want stopped
+            // or rewritten: the head is the only place the URL exists.
+            if let Some(filter) = filter {
+                Self::filter_url_request(
+                    session,
+                    buffer,
+                    filter,
+                    session_host,
+                    stats,
+                    sink,
+                    outcome,
+                )?;
             }
         }
         // A buffer that starts with a method is a request head, not the tail of
@@ -717,6 +764,108 @@ impl ProxySession {
             let handshaking = tls::client_handshaking(&session.client);
             outcome.to_peer.extend(feed_client(&mut session.client, &request)?);
             record_tls(stats, started, handshaking);
+        }
+        Ok(())
+    }
+
+    /// Applies the URL-level network rules to the request head at the front of
+    /// `buffer`.
+    ///
+    /// This is the only place that has the whole request, so it is where the
+    /// rules that need a URL live: `$redirect` (answer with a no-op resource
+    /// instead of blocking outright — what keeps an anti-adblock page alive),
+    /// `$removeparam` (the forwarded request line is rewritten) and blocks
+    /// scoped to a path or a request type. A request that carries a body is
+    /// left alone: its head is not the last thing on the wire, and swallowing
+    /// it would desync the connection.
+    fn filter_url_request(
+        session: &mut TlsSession,
+        buffer: &mut Vec<u8>,
+        filter: &FilterEngine,
+        session_host: Option<&str>,
+        stats: Option<&Stats>,
+        sink: Option<MitmSink>,
+        outcome: &mut Outcome,
+    ) -> Result<(), String> {
+        let Some(head_end) = header_end(buffer) else {
+            return Ok(());
+        };
+        // Everything the filter needs is copied out of the head up front: the
+        // buffer is edited (or drained) below, which ends the borrow.
+        let Some(facts) = request_facts(&buffer[..head_end]) else {
+            return Ok(());
+        };
+        if facts.has_body {
+            return Ok(());
+        }
+        if !facts.target.starts_with('/')
+            && !facts.target.starts_with("http://")
+            && !facts.target.starts_with("https://")
+        {
+            return Ok(());
+        }
+        let Some(host) = session_host
+            .map(str::to_string)
+            .or_else(|| facts.authority.map(str::to_string))
+            .filter(|host| !host.is_empty())
+        else {
+            return Ok(());
+        };
+        let url = request_url(&facts, &host);
+        let source = facts.referer.unwrap_or("").to_string();
+        let target = facts.target.to_string();
+        let method = facts.method.to_string();
+        let request_type = facts.request_type();
+        let closes = facts.closes;
+
+        // `$urlblock` (and `$document`, which implies it): the page asked for
+        // its own requests not to be blocked. The page is the document itself,
+        // or the referrer of a subresource.
+        let page_host = if request_type == "document" {
+            crate::filter::url_host(&url)
+        } else {
+            crate::filter::url_host(&source)
+        };
+        if !page_host.is_empty() && filter.cosmetic_switches_for(page_host).urlblock {
+            return Ok(());
+        }
+
+        let verdict = filter.check_url(&url, &source, request_type, &method);
+        if !verdict.blocked {
+            // A `$removeparam` rule: the request still goes out, with the
+            // parameters the list dropped taken off.
+            if let Some(rewritten) = verdict.rewritten_url.as_deref() {
+                if let Some(new_target) = origin_form(rewritten) {
+                    if new_target != target {
+                        buffer.splice(..head_end, rebuilt_head(&buffer[..head_end], &new_target));
+                    }
+                }
+            }
+            return Ok(());
+        }
+
+        let mut response = verdict
+            .redirect
+            .as_deref()
+            .and_then(redirect_response)
+            .unwrap_or_else(blocked_response);
+        if closes {
+            response = closing_response(response);
+        }
+        buffer.drain(..head_end);
+        let started = Instant::now();
+        let handshaking = tls::server_handshaking(&session.server);
+        outcome
+            .to_client
+            .extend(send_to_client(&mut session.server, &response)?);
+        record_tls(stats, started, handshaking);
+        if let Some(sink) = sink {
+            sink(&MitmBlock {
+                host: &host,
+                rule: verdict.rule_text.as_deref(),
+                list_name: verdict.list_name.as_deref(),
+                category: verdict.category,
+            });
         }
         Ok(())
     }
@@ -797,6 +946,7 @@ impl ProxySession {
                 self.cosmetic.as_deref(),
                 self.captured.as_deref(),
                 self.stats.as_deref(),
+                self.sink,
                 &mut self.head_requests,
                 &mut outcome,
             )?;
@@ -1591,6 +1741,176 @@ fn local_response(content_type: &str, cache: &str, body: &[u8], gzip: bool, cors
 fn not_found_response() -> Vec<u8> {
     b"HTTP/1.1 404 Not Found\r\nContent-Type: text/plain; charset=utf-8\r\nContent-Length: 9\r\nCache-Control: no-store\r\nConnection: close\r\n\r\nnot found"
         .to_vec()
+}
+
+/// The answer to a request a network rule blocked: no body and no cache entry,
+/// so the page sees a failed subresource rather than a bogus one.
+pub(super) fn blocked_response() -> Vec<u8> {
+    b"HTTP/1.1 204 No Content\r\nContent-Length: 0\r\nCache-Control: no-store\r\n\r\n".to_vec()
+}
+
+/// Marks a locally answered response as the last one on the connection.
+///
+/// It matters for the clients that asked to be closed down — an HTTP/1.0
+/// client without `Connection: keep-alive` waits for EOF, and a locally
+/// answered response has no origin to bring it.
+pub(super) fn closing_response(mut response: Vec<u8>) -> Vec<u8> {
+    // The marker goes *inside* the head: the head ends with a CRLF pair, and
+    // the line break before the blank line belongs to the last header that is
+    // already there.
+    if let Some(end) = response.windows(4).position(|w| w == b"\r\n\r\n") {
+        response.splice(end + 2..end + 2, b"Connection: close\r\n".iter().copied());
+    }
+    response
+}
+
+/// Turns the engine's redirect form (`data:<mime>;base64,<payload>`) into a
+/// response body that stands in for the blocked request.
+///
+/// The one shape the crate produces for a `$redirect` resource is a `data:`
+/// URL; anything else is not a redirect we can serve and the caller falls back
+/// to a plain block.
+pub(super) fn redirect_response(data_url: &str) -> Option<Vec<u8>> {
+    let (mime, payload) = data_url.strip_prefix("data:")?.split_once(',')?;
+    let mime = mime.strip_suffix(";base64")?;
+    let body = BASE64_STANDARD.decode(payload).ok()?;
+    let mime = if mime.is_empty() { "text/plain" } else { mime };
+    Some(local_response(mime, "max-age=3600", &body, false, true))
+}
+
+/// One client request head, as far as the URL filter needs it.
+///
+/// `pub(super)` so the splice's own tests can drive the parser directly.
+pub(super) struct RequestFacts<'a> {
+    pub(super) method: &'a str,
+    pub(super) target: &'a str,
+    pub(super) authority: Option<&'a str>,
+    pub(super) referer: Option<&'a str>,
+    /// `Sec-Fetch-Dest`, the only trustworthy word on what the request is for.
+    pub(super) dest: Option<&'a str>,
+    /// The request carries a body: its head is not the last thing on the wire.
+    pub(super) has_body: bool,
+    /// The connection ends after this exchange: a locally answered response
+    /// has to say so, because no origin ever will.
+    pub(super) closes: bool,
+}
+
+impl RequestFacts<'_> {
+    /// The engine's name for the request type. Chrome sends `Sec-Fetch-Dest`;
+    /// anything else counts as `other`, which keeps type-scoped rules from
+    /// firing on a guess.
+    pub(super) fn request_type(&self) -> &'static str {
+        match self.dest.unwrap_or("") {
+            "document" => "document",
+            "iframe" | "frame" => "sub_frame",
+            "script" => "script",
+            "style" => "stylesheet",
+            "image" | "imageset" => "image",
+            "font" => "font",
+            "audio" | "video" | "track" => "media",
+            "object" | "embed" => "object",
+            "empty" => "xmlhttprequest",
+            "report" => "csp_report",
+            _ => "other",
+        }
+    }
+}
+
+/// Parses a request head. `None` when it is not an HTTP/1.x request at all
+/// (the injected assets and any non-HTTP bytes never get this far).
+pub(super) fn request_facts(head: &[u8]) -> Option<RequestFacts<'_>> {
+    let text = std::str::from_utf8(head).ok()?;
+    let mut lines = text.split("\r\n");
+    let mut parts = lines.next()?.split(' ');
+    let method = parts.next()?;
+    let target = parts.next()?;
+    let version = parts.next()?;
+    if !version.starts_with("HTTP/1.") || method.is_empty() {
+        return None;
+    }
+    let mut facts = RequestFacts {
+        method,
+        target,
+        authority: None,
+        referer: None,
+        dest: None,
+        has_body: false,
+        closes: false,
+    };
+    let mut connection = None;
+    for line in lines {
+        if line.is_empty() {
+            break;
+        }
+        let Some((name, value)) = line.split_once(':') else {
+            continue;
+        };
+        let value = value.trim();
+        match name.to_ascii_lowercase().as_str() {
+            "host" => facts.authority = Some(value),
+            "referer" => facts.referer = Some(value),
+            "sec-fetch-dest" => facts.dest = Some(value),
+            "connection" => connection = Some(value),
+            "transfer-encoding" => facts.has_body = true,
+            "content-length" => {
+                facts.has_body |= value.parse::<u64>().map(|len| len > 0).unwrap_or(true);
+            }
+            _ => {}
+        }
+    }
+    // HTTP/1.1 defaults to keeping the connection, HTTP/1.0 to closing it.
+    facts.closes = match connection {
+        Some(value) => {
+            let value = value.to_ascii_lowercase();
+            value.contains("close") || (version == "HTTP/1.0" && !value.contains("keep-alive"))
+        }
+        None => version == "HTTP/1.0",
+    };
+    Some(facts)
+}
+
+/// The absolute URL of a request: its target, resolved against the host the
+/// connection was opened for.
+pub(super) fn request_url(facts: &RequestFacts<'_>, host: &str) -> String {
+    if facts.target.starts_with("http://") || facts.target.starts_with("https://") {
+        return facts.target.to_string();
+    }
+    let mut url = String::with_capacity(host.len() + facts.target.len() + 8);
+    url.push_str("https://");
+    url.push_str(host);
+    url.push_str(facts.target);
+    url
+}
+
+/// The origin-form target of a URL (`/path?query`): what a request line wants.
+pub(super) fn origin_form(url: &str) -> Option<String> {
+    let rest = url.split_once("://")?.1;
+    let start = rest.find(['/', '?', '#']).unwrap_or(rest.len());
+    let origin = &rest[start..];
+    if origin.is_empty() || origin.starts_with('#') {
+        return Some("/".to_string());
+    }
+    if origin.starts_with('/') {
+        Some(origin.to_string())
+    } else {
+        Some(format!("/{origin}"))
+    }
+}
+
+/// Replaces the target of a request line, leaving the rest of the head alone.
+pub(super) fn rebuilt_head(head: &[u8], target: &str) -> Vec<u8> {
+    let Some(line_end) = head.windows(2).position(|w| w == b"\r\n") else {
+        return head.to_vec();
+    };
+    let line = String::from_utf8_lossy(&head[..line_end]);
+    let mut parts = line.splitn(3, ' ');
+    let (Some(method), Some(_), Some(version)) = (parts.next(), parts.next(), parts.next()) else {
+        return head.to_vec();
+    };
+    let mut rebuilt = Vec::with_capacity(head.len() + target.len());
+    rebuilt.extend_from_slice(format!("{method} {target} {version}").as_bytes());
+    rebuilt.extend_from_slice(&head[line_end..]);
+    rebuilt
 }
 
 /// FNV-1a over the bytes: a cheap, stable content hash for cache busting.
