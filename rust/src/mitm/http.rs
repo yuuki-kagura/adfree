@@ -82,12 +82,29 @@ fn looks_like_html(body: &[u8]) -> bool {
     find_ci(&lower, b"<html>").is_some() || find_ci(&lower, b"<!doc").is_some()
 }
 
-/// Where a snippet goes: at `</head>`, else at `</body>`, else just past the
-/// opening `<body ...>` tag.
+/// Where a snippet goes: as early inside `<head>` as the document allows,
+/// else at `</head>`, else at `</body>`, else just past `<body ...>`.
 ///
-/// `None` means the document has not shown a home for it — the streaming
-/// injector waits for more bytes rather than splitting a tag in half.
+/// The early spot mirrors what AdGuard does on real pages (measured on
+/// vnexpress.net, dantri.com.vn and genk.vn: its script tags land right after
+/// the head's metadata block and before the first element that can fetch or
+/// render). Hiding rules arriving before the page's own resources is what
+/// keeps ads from painting first.
+///
+/// Two guards keep the move safe:
+///
+/// * the anchor only moves ahead of a non-metadata element once a
+///   `<meta charset>` (or `http-equiv` declaration) has been seen — a
+///   multi-kilobyte payload must never push the document's encoding
+///   declaration past the parser's 1024-byte prescan window;
+/// * an incomplete tag (`<link rel=...` cut by the buffer) decides nothing,
+///   so the streaming injector waits instead of splitting it in half.
+///
+/// `None` means the document has not shown a home for it yet.
 pub fn injection_point(body: &[u8]) -> Option<usize> {
+    if let Some(pos) = head_snippet_point(body) {
+        return Some(pos);
+    }
     let lower: Vec<u8> = body.iter().map(|b| b.to_ascii_lowercase()).collect();
     // Prefer </head>, then </body>, then <body ...>.
     for needle in [b"</head>".as_slice(), b"</body>".as_slice()] {
@@ -101,6 +118,164 @@ pub fn injection_point(body: &[u8]) -> Option<usize> {
         .iter()
         .position(|b| *b == b'>')
         .map(|i| pos + i + 1)
+}
+
+/// The early-in-`<head>` anchor, when the buffer already answers for it.
+///
+/// Elements that cannot render or fetch (`<title>`, `<meta>`, `<base>`, and
+/// comments) are stepped over; the anchor is the first element that can, or
+/// `</head>` when the head holds nothing else. Until an encoding declaration
+/// has been seen the scan only records it and keeps walking, so the anchor
+/// can still move to the first element after it.
+fn head_snippet_point(body: &[u8]) -> Option<usize> {
+    let mut i = head_open_end(body)?;
+    let mut charset_seen = false;
+    while i < body.len() {
+        if body[i] != b'<' {
+            i += 1;
+            continue;
+        }
+        let rest = &body[i..];
+        if starts_with_ci(rest, b"<!--") {
+            // Comments never anchor: AdGuard lands after them too.
+            let end = find_ci_bytes(&rest[4..], b"-->")?;
+            i += 4 + end + 3;
+            continue;
+        }
+        if starts_with_ci(rest, b"<!") || starts_with_ci(rest, b"<?") {
+            // A declaration or processing instruction runs to its `>`.
+            let end = rest.iter().position(|b| *b == b'>')?;
+            i += end + 1;
+            continue;
+        }
+        let closing = starts_with_ci(rest, b"</");
+        let at = if closing { 2 } else { 1 };
+        let (name_len, name_done) = tag_name(&rest[at..]);
+        if !name_done || name_len == 0 {
+            // Cut mid-name, or a stray `<` in text: wait for more bytes.
+            return None;
+        }
+        let end = rest.iter().position(|b| *b == b'>')?;
+        let name = &rest[at..at + name_len];
+        if closing {
+            // `</head>` is the last chance: everything before it was metadata.
+            if name.eq_ignore_ascii_case(b"head") {
+                return Some(i);
+            }
+            i += end + 1;
+            continue;
+        }
+        if name.eq_ignore_ascii_case(b"meta") {
+            if rest[..end]
+                .windows(b"charset".len())
+                .any(|w| w.eq_ignore_ascii_case(b"charset"))
+            {
+                charset_seen = true;
+            }
+            i += end + 1;
+            continue;
+        }
+        if name.eq_ignore_ascii_case(b"title") || name.eq_ignore_ascii_case(b"base") {
+            i += end + 1;
+            continue;
+        }
+        if RAW_TEXT_ELEMENTS
+            .iter()
+            .any(|raw| name.eq_ignore_ascii_case(raw))
+        {
+            // Content of these may hold `<` bytes that are not tags; skipping
+            // into it would anchor inside a script or a stylesheet.
+            i = close_of_element(body, end + i, name)?;
+            continue;
+        }
+        // The first element that can fetch or render. The payload may go in
+        // front of it, but only once the encoding is spoken for.
+        if charset_seen {
+            return Some(i);
+        }
+        i += end + 1;
+    }
+    None
+}
+
+/// Elements whose content is not parsed as markup by the HTML parser (or is
+/// treated as opaque for our purposes), so a `<` inside never starts a tag.
+const RAW_TEXT_ELEMENTS: [&[u8]; 8] = [
+    b"script",
+    b"style",
+    b"textarea",
+    b"xmp",
+    b"iframe",
+    b"noframes",
+    b"noscript",
+    b"template",
+];
+
+/// The offset just past `</name>`, or `None` while it is still incoming.
+fn close_of_element(body: &[u8], from: usize, name: &[u8]) -> Option<usize> {
+    let mut search = from;
+    while search < body.len() {
+        let at = find_ci_bytes(&body[search..], b"</")? + search;
+        let (name_len, name_done) = tag_name(&body[at + 2..]);
+        if !name_done {
+            return None;
+        }
+        if name_len == name.len() && body[at + 2..at + 2 + name_len].eq_ignore_ascii_case(name) {
+            let end = body[at..].iter().position(|b| *b == b'>')? + at;
+            return Some(end + 1);
+        }
+        search = at + 2;
+    }
+    None
+}
+
+/// The offset just past the opening `<head ...>` tag.
+///
+/// `<header>` is not a head: the name has to end at a delimiter.
+fn head_open_end(body: &[u8]) -> Option<usize> {
+    let mut search = 0;
+    while search < body.len() {
+        let at = find_ci_bytes(&body[search..], b"<head")? + search;
+        let after = at + 5;
+        match body.get(after) {
+            Some(b) if b.is_ascii_whitespace() || *b == b'>' || *b == b'/' => {
+                let end = body[after..].iter().position(|b| *b == b'>')?;
+                return Some(after + end + 1);
+            }
+            Some(_) => search = after,
+            None => return None,
+        }
+    }
+    None
+}
+
+/// The element name right after `<` (or `</`), and whether the buffer held
+/// its delimiter: an unfinished name decides nothing.
+fn tag_name(bytes: &[u8]) -> (usize, bool) {
+    let mut i = 0;
+    while i < bytes.len() {
+        let b = bytes[i];
+        if b.is_ascii_alphanumeric() || b == b'-' {
+            i += 1;
+        } else {
+            return (i, true);
+        }
+    }
+    (i, false)
+}
+
+/// Case-insensitive byte search, for haystacks that arrive as they are.
+fn find_ci_bytes(haystack: &[u8], needle: &[u8]) -> Option<usize> {
+    if needle.is_empty() || needle.len() > haystack.len() {
+        return None;
+    }
+    haystack
+        .windows(needle.len())
+        .position(|w| w.eq_ignore_ascii_case(needle))
+}
+
+fn starts_with_ci(haystack: &[u8], needle: &[u8]) -> bool {
+    haystack.len() >= needle.len() && haystack[..needle.len()].eq_ignore_ascii_case(needle)
 }
 
 /// Offset just past the last complete tag: the fallback home for a snippet when
@@ -1511,5 +1686,73 @@ mod tests {
         assert_eq!(safe_injection_point(b"<html><head>"), b"<html><head>".len());
         assert_eq!(safe_injection_point(b"<html"), b"<html".len() - 5);
         assert_eq!(injection_point(b"<html><head>"), None);
+    }
+
+    #[test]
+    fn injection_moves_before_the_first_resource_like_adguard() {
+        // The measured AdGuard shape: after the metadata block, before the
+        // first element that can fetch or render.
+        let body = b"<html><head><meta charset=\"utf-8\"><title>t</title><!-- c --><link rel=\"icon\" href=\"/i.ico\"><style>x</style></head><body>";
+        let pos = injection_point(body).expect("a point");
+        assert_eq!(&body[pos..pos + 5], b"<link");
+    }
+
+    #[test]
+    fn injection_waits_for_the_encoding_declaration() {
+        // A script precedes the charset declaration: the anchor must not jump
+        // in front of it, or a multi-kilobyte payload would push the
+        // declaration past the parser's 1024-byte prescan window.
+        let body = b"<head><script src=\"/a.js\"></script><meta charset=\"utf-8\"><link rel=\"icon\" href=\"/i.ico\"></head>";
+        let pos = injection_point(body).expect("a point");
+        assert_eq!(&body[pos..pos + 5], b"<link");
+    }
+
+    #[test]
+    fn injection_falls_back_to_head_close_without_a_charset_declaration() {
+        let body = b"<head><link rel=\"icon\" href=\"/i.ico\"><style>x</style></head>";
+        let pos = injection_point(body).expect("a point");
+        assert_eq!(&body[pos..pos + 7], b"</head>");
+    }
+
+    #[test]
+    fn injection_survives_an_unfinished_buffer() {
+        assert_eq!(injection_point(b"<html><hea"), None);
+        assert_eq!(injection_point(b"<html>"), None);
+        assert_eq!(
+            injection_point(b"<html><head><meta charset=\"utf-8\"><lin"),
+            None
+        );
+        assert_eq!(injection_point(b"<html><head><script>var a = 1;</scr"), None);
+        assert_eq!(injection_point(b"<html><head><meta charset=\"utf-8\"><!-- still open"), None);
+    }
+
+    #[test]
+    fn a_charset_lookalike_inside_a_script_does_not_count() {
+        // `<` bytes inside a raw-text element are not tags, and a string that
+        // looks like a meta declaration is not one: a naive byte scan would
+        // anchor inside the script.
+        let body = b"<head><script>var m = '<meta charset=utf-8>'; if (a<b) {}</script><meta charset=utf-8><link rel=\"icon\"></head>";
+        let pos = injection_point(body).expect("a point");
+        assert_eq!(&body[pos..pos + 5], b"<link");
+        let only_script = b"<head><script>document.write('<meta charset=x>')</script><link rel=\"icon\"></head>";
+        let pos = injection_point(only_script).expect("a point");
+        assert_eq!(&only_script[pos..pos + 7], b"</head>");
+    }
+
+    #[test]
+    fn injection_falls_back_to_body_when_the_head_never_shows() {
+        let body = b"<html><body><p>x</p></body></html>";
+        let pos = injection_point(body).expect("a point");
+        assert_eq!(&body[pos..pos + 7], b"</body>");
+        let no_close = b"<html><body class=\"x\">t";
+        let pos = injection_point(no_close).expect("a point");
+        assert_eq!(pos, b"<html><body class=\"x\">".len());
+    }
+
+    #[test]
+    fn a_header_is_not_a_head() {
+        let body = b"<html><body><header>x</header><p>y";
+        let pos = injection_point(body).expect("a point");
+        assert_eq!(pos, b"<html><body>".len());
     }
 }

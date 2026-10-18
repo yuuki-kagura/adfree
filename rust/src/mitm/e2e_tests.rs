@@ -11,6 +11,7 @@
 use crate::engine::{Config, Core};
 use crate::filter::{FilterListInfo, ListFormat};
 use crate::mitm::ca::CertificateAuthority;
+use crate::mitm::proxy::local_asset;
 use crate::mitm::script::UserScript;
 use crate::mitm::tls;
 use crate::packet::{self, Packet, ACK, PSH, SYN};
@@ -41,8 +42,16 @@ impl crate::api::SocketProtector for AllowAll {
     }
 }
 
-/// Builds one IPv4+TCP packet from the "device" to the origin.
-fn tcp_packet(flags: u8, seq: u32, ack: u32, dst_port: u16, payload: &[u8], options: &[u8]) -> Vec<u8> {
+/// Builds one IPv4+TCP packet from the "device" to `dst`.
+fn tcp_packet(
+    dst: [u8; 4],
+    flags: u8,
+    seq: u32,
+    ack: u32,
+    dst_port: u16,
+    payload: &[u8],
+    options: &[u8],
+) -> Vec<u8> {
     let tcp_hdr = 20 + options.len();
     let total = 20 + tcp_hdr + payload.len();
     let mut p = Vec::with_capacity(total);
@@ -50,7 +59,7 @@ fn tcp_packet(flags: u8, seq: u32, ack: u32, dst_port: u16, payload: &[u8], opti
     p.extend_from_slice(&(total as u16).to_be_bytes());
     p.extend_from_slice(&[0x00, 0x00, 0x00, 0x00, 64, 6, 0x00, 0x00]);
     p.extend_from_slice(&CLIENT_IP);
-    p.extend_from_slice(&ORIGIN_IP);
+    p.extend_from_slice(&dst);
     p.extend_from_slice(&CLIENT_PORT.to_be_bytes());
     p.extend_from_slice(&dst_port.to_be_bytes());
     p.extend_from_slice(&seq.to_be_bytes());
@@ -72,6 +81,8 @@ fn tcp_packet(flags: u8, seq: u32, ack: u32, dst_port: u16, payload: &[u8], opti
 /// forwarder pump, exactly like the device's stack would.
 struct Client {
     core: Arc<Core>,
+    /// Where the synthetic packets are addressed.
+    dst_ip: [u8; 4],
     dst_port: u16,
     /// Next byte we send.
     seq: u32,
@@ -85,8 +96,13 @@ struct Client {
 
 impl Client {
     fn connect(core: Arc<Core>, dst_port: u16) -> Client {
+        Client::connect_to(core, ORIGIN_IP, dst_port)
+    }
+
+    fn connect_to(core: Arc<Core>, dst_ip: [u8; 4], dst_port: u16) -> Client {
         let mut c = Client {
             core,
+            dst_ip,
             dst_port,
             seq: 1000,
             their_seq: 0,
@@ -94,7 +110,7 @@ impl Client {
             buf: Vec::new(),
         };
         // MSS option so the relay's segmentation matches a real client's.
-        let syn = tcp_packet(SYN, c.seq, 0, dst_port, &[], &[2, 4, 0x05, 0xb4]);
+        let syn = tcp_packet(c.dst_ip, SYN, c.seq, 0, dst_port, &[], &[2, 4, 0x05, 0xb4]);
         let out = c.core.handle_packet(&syn);
         let syn_ack = out
             .iter()
@@ -103,7 +119,7 @@ impl Client {
             .expect("the engine must answer the SYN");
         c.their_seq = syn_ack.seq.wrapping_add(1);
         c.seq = c.seq.wrapping_add(1);
-        let ack = tcp_packet(ACK, c.seq, c.their_seq, dst_port, &[], &[]);
+        let ack = tcp_packet(c.dst_ip, ACK, c.seq, c.their_seq, dst_port, &[], &[]);
         let out = c.core.handle_packet(&ack);
         c.absorb(out);
         c
@@ -112,7 +128,15 @@ impl Client {
     /// Feeds `data` as segments, exactly what a socket write produces.
     fn send(&mut self, data: &[u8]) {
         for chunk in data.chunks(MSS) {
-            let pkt = tcp_packet(ACK | PSH, self.seq, self.their_seq, self.dst_port, chunk, &[]);
+            let pkt = tcp_packet(
+                self.dst_ip,
+                ACK | PSH,
+                self.seq,
+                self.their_seq,
+                self.dst_port,
+                chunk,
+                &[],
+            );
             self.seq = self.seq.wrapping_add(chunk.len() as u32);
             let out = self.core.handle_packet(&pkt);
             self.absorb(out);
@@ -121,7 +145,15 @@ impl Client {
 
     /// A bare ACK: acknowledges everything received and funds the next burst.
     fn ack(&mut self) {
-        let pkt = tcp_packet(ACK, self.seq, self.their_seq, self.dst_port, &[], &[]);
+        let pkt = tcp_packet(
+            self.dst_ip,
+            ACK,
+            self.seq,
+            self.their_seq,
+            self.dst_port,
+            &[],
+            &[],
+        );
         let out = self.core.handle_packet(&pkt);
         self.absorb(out);
     }
@@ -176,7 +208,15 @@ impl Client {
 
     /// Best-effort close: FIN towards the origin, so its thread can finish.
     fn close(&mut self) {
-        let fin = tcp_packet(ACK | 0x01, self.seq, self.their_seq, self.dst_port, &[], &[]);
+        let fin = tcp_packet(
+            self.dst_ip,
+            ACK | 0x01,
+            self.seq,
+            self.their_seq,
+            self.dst_port,
+            &[],
+            &[],
+        );
         self.seq = self.seq.wrapping_add(1);
         let out = self.core.handle_packet(&fin);
         self.absorb(out);
@@ -375,7 +415,16 @@ fn contains_bytes(hay: &[u8], needle: &[u8]) -> bool {
 
 /// Drives the handshake until rustls says it is done.
 fn handshake(tcp: &mut Client, cfg: Arc<ClientConfig>) -> ClientConnection {
-    let name = ServerName::try_from("shop.test").expect("server name");
+    handshake_with(tcp, cfg, ServerName::try_from("shop.test").expect("server name"))
+}
+
+/// Same, for a connection whose name is not a hostname: the injection origin
+/// is an address literal, and rustls then puts no SNI on the wire at all.
+fn handshake_with(
+    tcp: &mut Client,
+    cfg: Arc<ClientConfig>,
+    name: ServerName<'static>,
+) -> ClientConnection {
     let mut conn = ClientConnection::new(cfg, name).expect("client connection");
     let deadline = Instant::now() + Duration::from_secs(15);
     while conn.is_handshaking() {
@@ -595,17 +644,23 @@ fn cosmetic_filtering_rides_the_packet_path() {
     let page = String::from_utf8_lossy(&body);
     assert!(page.contains("window.__adfree_page="), "payload injected");
     assert!(
-        page.contains("<script src=\"/adfree-page.js?h="),
+        page.contains(&format!(
+            "<script src=\"{}?dmn=shop.test&h=",
+            local_asset("/adfree-page.js")
+        )),
         "runtime tag injected"
     );
     assert!(
-        page.contains("<script src=\"/adfree-user.js?h="),
+        page.contains(&format!(
+            "<script src=\"{}?h=",
+            local_asset("/adfree-user.js")
+        )),
         "user script tag injected"
     );
     // Element hiding left the payload: it travels as a stylesheet the browser
     // fetches once per site, and its URL hashes exactly what it serves.
     let href = hide_href(&page);
-    assert!(href.starts_with("/adfree-hide.css?h="), "{href}");
+    assert!(href.starts_with("/adfree-hide.css?dmn=shop.test&h="), "{href}");
     assert!(!page.contains("\"hide\""), "hiding left the payload: {page}");
     assert!(
         !page.contains("display:none"),
@@ -671,6 +726,81 @@ fn cosmetic_filtering_rides_the_packet_path() {
     tcp.close();
 }
 
+/// The injection origin: the reserved address is answered by the app itself.
+///
+/// This is what keeps the injected tags out of the page's reach — a service
+/// worker only intercepts its own origin, so it can never answer (or break)
+/// a request for the runtime, the stylesheet or a rule lookup. It must work
+/// with no peer socket at all: the leaf is minted for the address (an IP
+/// literal puts no SNI on the wire), and every asset comes back over the
+/// connection the page itself arrived through.
+#[test]
+fn the_injection_origin_is_answered_without_a_peer() {
+    let origin = start_origin(HTML);
+    let (core, ca_der) = setup_core(&origin);
+
+    let mut tcp = Client::connect_to(
+        core.clone(),
+        crate::mitm::proxy::LOCAL_ORIGIN_V4,
+        origin.port,
+    );
+    let mut conn = handshake_with(
+        &mut tcp,
+        client_config(ca_der),
+        ServerName::try_from("192.0.2.1").expect("address literal"),
+    );
+    assert!(!conn.is_handshaking(), "the local origin must complete a handshake");
+
+    // 1. The runtime, for the host its tag named (`dmn=`, like AdGuard's
+    //    content script carries).
+    let (head, body) = request(&mut tcp, &mut conn, "/adfree-page.js?dmn=shop.test&h=0");
+    assert!(head.starts_with("HTTP/1.1 200"), "{head}");
+    assert!(
+        head.contains("Access-Control-Allow-Origin: *"),
+        "the runtime is fetched cross-origin: {head}"
+    );
+    assert!(
+        contains_bytes(&body, b"window.__adfree_page"),
+        "the runtime must arrive whole"
+    );
+
+    // 2. The user script, in window-sized bursts like a real origin's answer.
+    let (head, body) = request(&mut tcp, &mut conn, "/adfree-user.js");
+    assert!(head.starts_with("HTTP/1.1 200"), "{head}");
+    assert!(
+        contains_bytes(&body, b"window.__adfree_e2e"),
+        "the script body must arrive, got {} bytes",
+        body.len()
+    );
+
+    // 3. The host whose rules the answer carries comes from the URL alone.
+    let (head, body) = request(&mut tcp, &mut conn, "/adfree-hide.css?dmn=shop.test&h=0");
+    assert!(head.starts_with("HTTP/1.1 200"), "{head}");
+    let css = String::from_utf8_lossy(&body);
+    assert!(css.contains(".ad-box"), "{css}");
+    let (head, body) = request(
+        &mut tcp,
+        &mut conn,
+        "/adfree-generic.js?dmn=shop.test&c=adsbygoogle&i=slot-1",
+    );
+    assert!(head.starts_with("HTTP/1.1 200"), "{head}");
+    let json = String::from_utf8_lossy(&body);
+    assert!(json.contains("\".adsbygoogle\""), "{json}");
+
+    // 4. Anything else is a dead end: there is no peer to forward to.
+    let (head, _) = request(&mut tcp, &mut conn, "/etc/passwd");
+    assert!(head.starts_with("HTTP/1.1 404"), "{head}");
+
+    // 5. And nothing was ever dialed for the reserved address.
+    let seen = origin.requests.lock().expect("requests");
+    assert!(
+        seen.is_empty(),
+        "the local origin must never reach upstream: {seen:?}"
+    );
+    drop(seen);
+    tcp.close();
+}
+
 #[test]
 fn compressed_and_chunked_pages_are_still_filtered() {
     for mode in [OriginBody::Gzip, OriginBody::Chunked] {
@@ -712,7 +842,7 @@ fn compressed_and_chunked_pages_are_still_filtered() {
         );
         let href = hide_href(&page);
         assert!(
-            href.starts_with("/adfree-hide.css?h="),
+            href.starts_with("/adfree-hide.css?dmn=shop.test&h="),
             "hiding travels as a stylesheet into a {mode:?} page: {href}"
         );
         assert!(page.contains("\"#slot-1\""), "generic rules must be scanned: {page}");
@@ -810,11 +940,17 @@ fn a_page_larger_than_one_window_streams_to_the_client() {
 
     let page = String::from_utf8(body).expect("utf8");
     assert!(
-        page.contains("<script src=\"/adfree-page.js?h="),
+        page.contains(&format!(
+            "<script src=\"{}?dmn=shop.test&h=",
+            local_asset("/adfree-page.js")
+        )),
         "the runtime tag must be injected"
     );
     assert!(
-        page.contains("<script src=\"/adfree-user.js?h="),
+        page.contains(&format!(
+            "<script src=\"{}?h=",
+            local_asset("/adfree-user.js")
+        )),
         "the user script tag must be injected"
     );
     assert!(
@@ -824,7 +960,7 @@ fn a_page_larger_than_one_window_streams_to_the_client() {
     // Hostname rules come from the URL, so they are there even though the scan
     // only saw the head of the document — as the stylesheet the browser caches.
     let href = hide_href(&page);
-    assert!(href.starts_with("/adfree-hide.css?h="), "{href}");
+    assert!(href.starts_with("/adfree-hide.css?dmn=shop.test&h="), "{href}");
     assert!(!page.contains("\"hide\""), "hiding left the payload: {page}");
     // The tag has to land before the body renders, and nothing may be lost.
     let tag = page.find("/adfree-user.js").expect("tag");

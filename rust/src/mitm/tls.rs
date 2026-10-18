@@ -113,11 +113,15 @@ impl std::fmt::Debug for SniCertResolver {
     }
 }
 
-impl ResolvesServerCert for SniCertResolver {
-    fn resolve(&self, client_hello: ClientHello<'_>) -> Option<Arc<CertifiedKey>> {
-        let name = client_hello.server_name()?;
-        let host: String = name.to_string();
-        let issued = self.ca.issue(&host).ok()?;
+impl SniCertResolver {
+    /// The leaf for one hostname, minted from the app's CA.
+    ///
+    /// `host` may be a DNS name or an address literal: the local injection
+    /// origin is reached through a reserved IPv4 address (browsers put no SNI
+    /// on the wire for one), and rcgen puts an address in the IP SAN when the
+    /// string parses as one.
+    fn cert_for(&self, host: &str) -> Option<Arc<CertifiedKey>> {
+        let issued = self.ca.issue(host).ok()?;
         let chain = self.ca.chain_for(&issued);
         let key = crate::mitm::ca::private_key_der(&issued);
 
@@ -130,11 +134,48 @@ impl ResolvesServerCert for SniCertResolver {
             signing_key,
         ));
         if let Ok(mut issued) = self.issued.lock() {
-            if !issued.iter().any(|h| h == &host) {
-                issued.push(host);
+            if !issued.iter().any(|h| h == host) {
+                issued.push(host.to_string());
             }
         }
         Some(certified)
+    }
+}
+
+impl ResolvesServerCert for SniCertResolver {
+    fn resolve(&self, client_hello: ClientHello<'_>) -> Option<Arc<CertifiedKey>> {
+        let name = client_hello.server_name()?;
+        self.cert_for(name)
+    }
+}
+
+/// Resolves the leaf for one fixed host, whatever the ClientHello says.
+///
+/// The local injection origin is an address literal (no SNI is sent for one),
+/// so a session that serves it cannot key its certificate off the hello.
+pub struct FixedCertResolver {
+    inner: Arc<SniCertResolver>,
+    host: String,
+}
+
+impl FixedCertResolver {
+    pub fn new(inner: Arc<SniCertResolver>, host: impl Into<String>) -> Arc<Self> {
+        Arc::new(FixedCertResolver {
+            inner,
+            host: host.into(),
+        })
+    }
+}
+
+impl std::fmt::Debug for FixedCertResolver {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("FixedCertResolver")
+    }
+}
+
+impl ResolvesServerCert for FixedCertResolver {
+    fn resolve(&self, _client_hello: ClientHello<'_>) -> Option<Arc<CertifiedKey>> {
+        self.inner.cert_for(&self.host)
     }
 }
 
@@ -190,6 +231,12 @@ pub fn client_config_with(roots: rustls::RootCertStore) -> Arc<ClientConfig> {
 /// Server config that asks [`SniCertResolver`] for the leaf per connection.
 pub fn server_config(resolver: Arc<SniCertResolver>) -> Arc<ServerConfig> {
     server_config_dyn(resolver)
+}
+
+/// Server config bound to one host, for connections that carry no SNI (the
+/// local injection origin is reached through an address literal).
+pub fn server_config_fixed(resolver: Arc<SniCertResolver>, host: &str) -> Arc<ServerConfig> {
+    server_config_dyn(FixedCertResolver::new(resolver, host))
 }
 
 /// Server config with any per-connection resolver: the engine passes a

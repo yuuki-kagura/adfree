@@ -678,6 +678,11 @@ impl Core {
         let (Some(client), Some(server)) = (pkt.src_ip(), pkt.dst_ip()) else {
             return;
         };
+        if server.as_ip() == crate::mitm::proxy::local_origin_addr() {
+            // The injection origin is a TCP-only local service: a stray
+            // datagram (a QUIC probe) must not leak out to a reserved address.
+            return;
+        }
         let key = UdpKey {
             client,
             client_port: pkt.src_port,
@@ -897,7 +902,8 @@ impl Core {
     ///
     /// Port 443 is additionally TLS-terminated (and filtered) when HTTPS
     /// filtering is armed and the destination hostname is known; every other
-    /// flow is a transparent splice.
+    /// flow is a transparent splice. The one exception is the app's own
+    /// injection origin: it is answered locally, with no peer socket at all.
     fn start_tcp_relay(&self, pkt: &Packet<'_>, cfg: &Config, out: &mut Vec<Vec<u8>>) -> bool {
         let Some(client_ip) = pkt.src_ip() else {
             return false;
@@ -905,16 +911,33 @@ impl Core {
         let Some(dst) = pkt.dst_ip() else {
             return false;
         };
-        let Some(peer_fd) = self.open_peer_socket(dst, libc::SOCK_STREAM) else {
-            return false;
-        };
-        let connect = connect_fd(peer_fd, dst, pkt.dst_port);
-        if connect == Connect::Failed {
-            crate::logbuf::push("relay: connect() to the peer failed");
-            unsafe { libc::close(peer_fd) };
+        // The local injection origin: a reserved address (TEST-NET-1) that the
+        // app answers out of the tunnel. Nothing is ever dialed for it — and
+        // without TLS termination there is nothing to answer with, so a stray
+        // connection is refused instead of leaking a SYN to a documentation
+        // address.
+        let local = dst.as_ip() == crate::mitm::proxy::local_origin_addr();
+        let mitm_armed = cfg.mitm_enabled
+            && pkt.dst_port == self.mitm_port.load(Ordering::Relaxed)
+            && self.mitm_ca.read().unwrap().has_ca();
+        if local && !mitm_armed {
+            crate::logbuf::push("relay: local origin asked without HTTPS filtering");
             return false;
         }
-        let connecting = connect == Connect::InProgress;
+        let (peer_fd, connecting) = if local {
+            (-1, false)
+        } else {
+            let Some(peer_fd) = self.open_peer_socket(dst, libc::SOCK_STREAM) else {
+                return false;
+            };
+            let connect = connect_fd(peer_fd, dst, pkt.dst_port);
+            if connect == Connect::Failed {
+                crate::logbuf::push("relay: connect() to the peer failed");
+                unsafe { libc::close(peer_fd) };
+                return false;
+            }
+            (peer_fd, connect == Connect::InProgress)
+        };
         let flow = crate::mitm::tcp::Flow::new(
             client_ip,
             pkt.src_port,
@@ -929,10 +952,29 @@ impl Core {
         // an address we never learned, and filtering must not silently skip
         // those. Without a CA the flow is still relayed, just not filtered
         // (protecting the user beats breaking their pages).
-        let session = if cfg.mitm_enabled
-            && pkt.dst_port == self.mitm_port.load(Ordering::Relaxed)
-            && self.mitm_ca.read().unwrap().has_ca()
-        {
+        let session = if local {
+            // The injection origin is the app: TLS terminates here and every
+            // request is answered from the same tables the HTML rewrite uses.
+            let (script_path, script_body) = {
+                let scripts = self.mitm_scripts.read().unwrap();
+                (scripts.serve_path().to_string(), scripts.combined_arc())
+            };
+            match crate::mitm::proxy::ProxySession::new_local(
+                self.mitm_resolver(),
+                script_path,
+                script_body,
+            ) {
+                Ok(mut proxy) => {
+                    proxy.set_cosmetic(self.filter.clone());
+                    proxy.set_stats(Arc::clone(&self.stats));
+                    Some(proxy)
+                }
+                Err(e) => {
+                    crate::logbuf::push(&format!("open local session: {e}"));
+                    return false;
+                }
+            }
+        } else if mitm_armed {
             let (script_path, script_body) = {
                 let scripts = self.mitm_scripts.read().unwrap();
                 (scripts.serve_path().to_string(), scripts.combined_arc())
@@ -2321,7 +2363,7 @@ mod tests {
     #[test]
     fn udp_without_a_protector_is_dropped_not_relayed() {
         let core = Core::new();
-        let pkt = udp_packet(40000, [192, 0, 2, 1], 5000);
+        let pkt = udp_packet(40000, [203, 0, 113, 7], 5000);
         assert!(core.handle_packet(&pkt).is_empty());
         // The app never offered a protector, so no descriptor may be created
         // (an unprotected socket would loop the datagram right back in).
@@ -2333,14 +2375,14 @@ mod tests {
     fn udp_flows_are_natted_per_endpoint() {
         let core = Core::new();
         core.set_socket_protector(Arc::new(AllowAll));
-        let pkt = udp_packet(40000, [192, 0, 2, 1], 5000);
+        let pkt = udp_packet(40000, [203, 0, 113, 7], 5000);
         assert!(core.handle_packet(&pkt).is_empty());
         assert_eq!(core.udp_nat.lock().unwrap().len(), 1);
         // A retransmission (same four-tuple) reuses the mapping...
         core.handle_packet(&pkt);
         assert_eq!(core.udp_nat.lock().unwrap().len(), 1);
         // ...while the same server on another port is a new one.
-        core.handle_packet(&udp_packet(40000, [192, 0, 2, 1], 5001));
+        core.handle_packet(&udp_packet(40000, [203, 0, 113, 7], 5001));
         assert_eq!(core.udp_nat.lock().unwrap().len(), 2);
         assert_eq!(core.snapshot().udp_dropped, 0);
         // Three datagrams went out: two on the first mapping, one on the other.

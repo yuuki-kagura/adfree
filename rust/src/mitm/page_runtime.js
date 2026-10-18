@@ -1,6 +1,7 @@
 // AdFree page runtime: applies the cosmetic rules the proxy computed for
-// this page. Served at `/adfree-page.js`, injected before `</head>` so the
-// hiding stylesheet lands before the body renders.
+// this page. Served from the app's own origin (the `https://192.0.2.1` address
+// the tunnel answers locally), injected early in `<head>` so the hiding
+// stylesheet lands before the page's own resources.
 //
 // The rules arrive inline as `window.__adfree_page` (written by the proxy):
 //
@@ -10,8 +11,8 @@
 //   scriptlets: "js source", dynamic: true }
 // ```
 //
-// Element hiding is not in there: the proxy writes it as a stylesheet served
-// from the page's own origin (`<link rel="stylesheet" id="adfree-hide">`),
+// Element hiding is not in there: the proxy writes it as a stylesheet
+// (`<link rel="stylesheet" id="adfree-hide">`) served from that same origin,
 // which the browser fetches once per site and keeps until the rules change.
 //
 // Everything is defensive: a broken rule must never take a page down, so
@@ -19,6 +20,26 @@
 
 (function () {
   'use strict';
+
+  // Where this runtime was served from, and the host whose rules it applies:
+  // both travel in its own tag (`<script src="https://192.0.2.1/…?dmn=…">`),
+  // the same way AdGuard's content script carries `dmn`. The fallbacks keep a
+  // legacy same-origin tag (a page cached before an app update) working.
+  var base = location.origin;
+  var dmn = location.hostname;
+  try {
+    var selfSrc = document.currentScript && document.currentScript.src;
+    if (selfSrc) {
+      var selfUrl = new URL(selfSrc);
+      base = selfUrl.origin;
+      var param = selfUrl.searchParams.get('dmn');
+      if (param) {
+        dmn = param;
+      }
+    }
+  } catch (e) {
+    /* keep the fallbacks */
+  }
 
   var data = window.__adfree_page;
   if (!data || typeof data !== 'object') {
@@ -403,8 +424,10 @@
       ids = ids.slice(0, 300);
     }
     var url =
-      location.origin +
-      '/adfree-generic.js?c=' +
+      base +
+      '/adfree-generic.js?dmn=' +
+      encodeURIComponent(dmn) +
+      '&c=' +
       encodeURIComponent(classes.join(' ')) +
       '&i=' +
       encodeURIComponent(ids.join(' '));

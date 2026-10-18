@@ -4,7 +4,7 @@
 //! conversation end to end. These tests therefore focus on what this module adds
 //! on top of TLS: the response rewriter that injects scripts into HTML.
 
-use super::proxy::{content_hash, take_local_request, ProxySession, HIDE_PATH};
+use super::proxy::{content_hash, local_asset, take_local_request, ProxySession, HIDE_PATH};
 use super::*;
 use crate::mitm::ca::CertificateAuthority;
 use crate::mitm::tls::{open_session, SniCertResolver};
@@ -20,7 +20,8 @@ fn expected_tag() -> &'static str {
     static TAG: std::sync::OnceLock<String> = std::sync::OnceLock::new();
     TAG.get_or_init(|| {
         format!(
-            "<script src=\"/adfree-user.js?h={:016x}\" defer></script>",
+            "<script src=\"{}?h={:016x}\" defer></script>",
+            local_asset("/adfree-user.js"),
             content_hash(b"")
         )
     })
@@ -80,7 +81,7 @@ fn build_proxy(ca: &CertificateAuthority, script: &str) -> ProxySession {
 fn script_request_is_answered_locally() {
     let mut buffer = b"GET /adfree-user.js HTTP/1.1\r\nHost: origin.example.com\r\n\r\n".to_vec();
     let response =
-        take_local_request("/adfree-user.js", "let x = 1;", None, &mut buffer).expect("served");
+        take_local_request("/adfree-user.js", "let x = 1;", None, None, &mut buffer).expect("served");
     assert!(buffer.is_empty(), "the request is consumed");
     let text = String::from_utf8(response).expect("utf8");
     assert!(text.starts_with("HTTP/1.1 200 OK\r\n"));
@@ -92,22 +93,22 @@ fn script_request_is_answered_locally() {
 #[test]
 fn script_request_ignores_other_requests() {
     let mut buffer = b"GET /index.html HTTP/1.1\r\nHost: x\r\n\r\n".to_vec();
-    assert!(take_local_request("/adfree-user.js", "let x = 1;", None, &mut buffer).is_none());
+    assert!(take_local_request("/adfree-user.js", "let x = 1;", None, None, &mut buffer).is_none());
     assert!(!buffer.is_empty(), "untouched");
 }
 
 #[test]
 fn script_request_waits_for_the_full_head() {
     let mut buffer = b"GET /adfree-user.js HTTP/1.1\r\nHost: x\r\n".to_vec();
-    assert!(take_local_request("/adfree-user.js", "let x = 1;", None, &mut buffer).is_none());
+    assert!(take_local_request("/adfree-user.js", "let x = 1;", None, None, &mut buffer).is_none());
     buffer.extend_from_slice(b"\r\n");
-    assert!(take_local_request("/adfree-user.js", "let x = 1;", None, &mut buffer).is_some());
+    assert!(take_local_request("/adfree-user.js", "let x = 1;", None, None, &mut buffer).is_some());
 }
 
 #[test]
 fn script_request_serves_only_when_enabled() {
     let mut buffer = b"GET /adfree-user.js HTTP/1.1\r\n\r\n".to_vec();
-    assert!(take_local_request("/adfree-user.js", "", None, &mut buffer).is_none());
+    assert!(take_local_request("/adfree-user.js", "", None, None, &mut buffer).is_none());
     assert!(!buffer.is_empty());
 }
 
@@ -1035,8 +1036,9 @@ fn the_page_runtime_is_injected_even_without_a_payload() {
     let body = "<html><head><title>t</title></head><body>plain text</body></html>";
     let (out, injected) = proxy.rewrite_response(&html_response(body));
     let text = String::from_utf8(out).expect("utf8");
+    let runtime = format!("{}?h=", local_asset("/adfree-page.js"));
     assert!(
-        text.contains("<script src=\"/adfree-page.js?h="),
+        text.contains(&format!("<script src=\"{runtime}")),
         "the runtime must go out: {text}"
     );
     assert!(
@@ -1107,7 +1109,8 @@ fn answering_the_stylesheet_request_repeats_the_bytes_the_link_hashed() {
     let response = take_local_request(
         "/adfree-user.js",
         "",
-        Some((engine.as_ref(), "origin.example.com")),
+        Some(engine.as_ref()),
+        Some("origin.example.com"),
         &mut buffer,
     )
     .expect("served");
@@ -1137,7 +1140,8 @@ fn the_hiding_stylesheet_travels_plain_when_gzip_is_not_accepted() {
     let response = take_local_request(
         "/adfree-user.js",
         "",
-        Some((engine.as_ref(), "origin.example.com")),
+        Some(engine.as_ref()),
+        Some("origin.example.com"),
         &mut buffer,
     )
     .expect("served");
@@ -1166,7 +1170,8 @@ fn the_runtime_is_served_from_a_content_addressed_url() {
     let response = take_local_request(
         "/adfree-user.js",
         "",
-        Some((engine.as_ref(), "origin.example.com")),
+        Some(engine.as_ref()),
+        Some("origin.example.com"),
         &mut buffer,
     )
     .expect("served");
@@ -1193,7 +1198,7 @@ fn the_user_script_is_served_from_a_content_addressed_url() {
         "GET {href} HTTP/1.1\r\nHost: origin.example.com\r\nAccept-Encoding: gzip\r\n\r\n"
     )
     .into_bytes();
-    let response = take_local_request("/adfree-user.js", script, None, &mut buffer).expect("served");
+    let response = take_local_request("/adfree-user.js", script, None, None, &mut buffer).expect("served");
     let (head, compressed) = split_local(&response);
     assert!(head.contains("Cache-Control: max-age=31536000, immutable"), "{head}");
     let plain = http::decode_body(&compressed, http::Encoding::Gzip).expect("decoded");

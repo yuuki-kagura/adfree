@@ -49,6 +49,35 @@ pub const HIDE_PATH: &str = "/adfree-hide.css";
 /// again. (A filter update changes the hash, which changes the URL.)
 const IMMUTABLE_CACHE: &str = "max-age=31536000, immutable";
 
+/// Origin every injected asset is fetched from.
+///
+/// A reserved address (TEST-NET-1, RFC 5737) that the app answers out of the
+/// tunnel and never dials. A separate origin is what keeps the page's service
+/// worker out of the way: a worker intercepts *every* same-origin fetch and
+/// may answer it with a shell document, a stale cache entry or a 404 — on the
+/// sites that use one (most large Vietnamese news sites) that silently kills
+/// cosmetic filtering. AdGuard solves the same problem by serving from
+/// `local.adguard.org`; an address literal is what makes it work without DNS,
+/// whose lookup Chrome would otherwise take over (secure DNS / Private DNS)
+/// and never route through the filter.
+pub const LOCAL_ORIGIN: &str = "https://192.0.2.1";
+
+/// The host part of [`LOCAL_ORIGIN`], and the name its leaf is minted for.
+pub const LOCAL_ORIGIN_HOST: &str = "192.0.2.1";
+
+/// The IPv4 address of [`LOCAL_ORIGIN`], for the packet path.
+pub const LOCAL_ORIGIN_V4: [u8; 4] = [192, 0, 2, 1];
+
+/// Prefixes an injected path with the local origin.
+pub(crate) fn local_asset(path: &str) -> String {
+    format!("{LOCAL_ORIGIN}{path}")
+}
+
+/// [`LOCAL_ORIGIN`] as an address, for matching packets in the engine.
+pub fn local_origin_addr() -> std::net::IpAddr {
+    std::net::IpAddr::V4(std::net::Ipv4Addr::from(LOCAL_ORIGIN_V4))
+}
+
 /// The page runtime itself, compiled into the binary.
 pub const PAGE_RUNTIME: &str = include_str!("page_runtime.js");
 
@@ -89,6 +118,10 @@ enum ProxyState {
     Pending(Box<PendingState>),
     /// Both halves are up; bytes are decrypted, edited and re-encrypted.
     Active(Box<TlsSession>),
+    /// The local injection origin: TLS terminates here and every request is
+    /// answered locally. There is no upstream half and no peer socket — the
+    /// reserved address never leaves the device.
+    Local(Box<ServerConnection>),
     /// The client is not speaking TLS to us: bytes are spliced untouched.
     Plain,
 }
@@ -281,7 +314,10 @@ impl ProxySession {
     /// A session whose halves are already open (tests, and any caller that
     /// knows the hostname up front).
     pub fn new(session: TlsSession, script_src: String, script_body: Arc<str>) -> Self {
-        let script_tag_src = versioned_path(&script_src, content_hash(script_body.as_bytes()));
+        let script_tag_src = local_asset(&versioned_path(
+            &script_src,
+            content_hash(script_body.as_bytes()),
+        ));
         ProxySession {
             state: ProxyState::Active(Box::new(session)),
             captured: None,
@@ -312,7 +348,10 @@ impl ProxySession {
     ) -> Result<Self, String> {
         let resolver = FlowResolver::new(resolver);
         let server = tls::new_server(tls::server_config_dyn(resolver.clone()))?;
-        let script_tag_src = versioned_path(&script_src, content_hash(script_body.as_bytes()));
+        let script_tag_src = local_asset(&versioned_path(
+            &script_src,
+            content_hash(script_body.as_bytes()),
+        ));
         Ok(ProxySession {
             state: ProxyState::Pending(Box::new(PendingState {
                 server,
@@ -340,6 +379,38 @@ impl ProxySession {
         self.cosmetic = Some(filter);
     }
 
+    /// A session for the local injection origin.
+    ///
+    /// It terminates TLS for the reserved address (the leaf is minted for the
+    /// address itself: no SNI travels for one) and answers the injected
+    /// assets. No peer socket is opened, ever — the engine does not even dial
+    /// the address — so a page can only ever reach the assets, nothing else.
+    pub fn new_local(
+        resolver: Arc<tls::SniCertResolver>,
+        script_src: String,
+        script_body: Arc<str>,
+    ) -> Result<Self, String> {
+        let server = tls::new_server(tls::server_config_fixed(resolver, LOCAL_ORIGIN_HOST))?;
+        let script_tag_src = local_asset(&versioned_path(
+            &script_src,
+            content_hash(script_body.as_bytes()),
+        ));
+        Ok(ProxySession {
+            state: ProxyState::Local(Box::new(server)),
+            captured: None,
+            resp_pending: Vec::new(),
+            resp_phase: RespPhase::Head,
+            head_requests: VecDeque::new(),
+            peer_buffer: Vec::new(),
+            client_buffer: Vec::new(),
+            script_src,
+            script_tag_src,
+            script_body,
+            cosmetic: None,
+            stats: None,
+        })
+    }
+
     /// Points the session at the engine's counters so TLS and rewrite costs
     /// show up in the stats the UI already polls.
     pub fn set_stats(&mut self, stats: Arc<Stats>) {
@@ -356,6 +427,7 @@ impl ProxySession {
         match &self.state {
             ProxyState::Pending { .. } => true,
             ProxyState::Active(session) => tls::server_handshaking(&session.server),
+            ProxyState::Local(server) => tls::server_handshaking(server),
             ProxyState::Plain => false,
         }
     }
@@ -365,6 +437,8 @@ impl ProxySession {
         match &self.state {
             ProxyState::Pending { .. } => true,
             ProxyState::Active(session) => tls::client_handshaking(&session.client),
+            // Nothing to hand shake with: the local origin has no upstream.
+            ProxyState::Local(_) => false,
             ProxyState::Plain => false,
         }
     }
@@ -388,6 +462,34 @@ impl ProxySession {
                 let plain = feed_server(&mut session.server, payload)?;
                 record_tls(self.stats.as_deref(), started, handshaking);
                 self.after_client_feed(plain)
+            }
+            // The local origin: decrypt, answer our own endpoints (anything
+            // else 404s), and never write towards a peer that does not exist.
+            ProxyState::Local(server) => {
+                let started = Instant::now();
+                let handshaking = tls::server_handshaking(server);
+                let plain = feed_server(server, payload)?;
+                record_tls(self.stats.as_deref(), started, handshaking);
+                let mut outcome = Outcome {
+                    to_client: tls::take_server_outbound(server),
+                    ..Outcome::default()
+                };
+                if tls::server_handshaking(server) {
+                    return Ok(outcome);
+                }
+                if !plain.is_empty() {
+                    self.client_buffer.extend_from_slice(&plain);
+                }
+                Self::flush_local_requests(
+                    server,
+                    &self.script_src,
+                    &self.script_body,
+                    self.cosmetic.as_deref(),
+                    &mut self.client_buffer,
+                    self.stats.as_deref(),
+                    &mut outcome,
+                )?;
+                Ok(outcome)
             }
         }
     }
@@ -515,7 +617,8 @@ impl ProxySession {
             &mut self.client_buffer,
             &self.script_src,
             &self.script_body,
-            self.cosmetic.as_deref().zip(self.captured.as_deref()),
+            self.cosmetic.as_deref(),
+            self.captured.as_deref(),
             self.stats.as_deref(),
             &mut self.head_requests,
             &mut outcome,
@@ -524,18 +627,20 @@ impl ProxySession {
     }
 
     /// Drains buffered client requests towards the peer, answering requests
-    /// for the injected user script locally first.
+    /// for the injected assets locally first.
     ///
-    /// The injected tag is a same-origin path (`<script src="/adfree-user.js">`)
-    /// because CSP commonly blocks inline scripts; the browser then asks the
-    /// *origin* for that path, and without this the real server would answer
-    /// 404 and nothing would run.
+    /// An injected tag is an absolute URL on the app's own origin, so the
+    /// browser asks *that* origin for the runtime, the stylesheet and the
+    /// dynamic-rule lookups; without this the session would forward them (and
+    /// a legacy same-origin tag lands here the same way). A request whose
+    /// head is not ours goes to the real server untouched.
     fn flush_client_requests(
         session: &mut TlsSession,
         buffer: &mut Vec<u8>,
         serve_path: &str,
         script_body: &str,
-        cosmetic: Option<(&FilterEngine, &str)>,
+        filter: Option<&FilterEngine>,
+        session_host: Option<&str>,
         stats: Option<&Stats>,
         head_requests: &mut VecDeque<http::RequestInfo>,
         outcome: &mut Outcome,
@@ -544,7 +649,9 @@ impl ProxySession {
             return Ok(());
         }
         if !tls::server_handshaking(&session.server) {
-            while let Some(local) = take_local_request(serve_path, script_body, cosmetic, buffer) {
+            while let Some(local) =
+                take_local_request(serve_path, script_body, filter, session_host, buffer)
+            {
                 let started = Instant::now();
                 let handshaking = tls::server_handshaking(&session.server);
                 outcome
@@ -573,6 +680,38 @@ impl ProxySession {
         Ok(())
     }
 
+    /// Answers whatever the client asks the local injection origin.
+    ///
+    /// There is no peer to forward to: our endpoints are served, and anything
+    /// else (a page probing the origin, a stale tag) gets a 404 and the
+    /// connection is closed so a stray body cannot be read as a next request.
+    fn flush_local_requests(
+        server: &mut ServerConnection,
+        serve_path: &str,
+        script_body: &str,
+        filter: Option<&FilterEngine>,
+        buffer: &mut Vec<u8>,
+        stats: Option<&Stats>,
+        outcome: &mut Outcome,
+    ) -> Result<(), String> {
+        while header_end(buffer).is_some() {
+            let started = Instant::now();
+            let handshaking = tls::server_handshaking(server);
+            let response = match take_local_request(serve_path, script_body, filter, None, buffer)
+            {
+                Some(response) => response,
+                None => {
+                    let head = header_end(buffer).expect("checked by the loop condition");
+                    buffer.drain(..head);
+                    not_found_response()
+                }
+            };
+            outcome.to_client.extend(send_to_client(server, &response)?);
+            record_tls(stats, started, handshaking);
+        }
+        Ok(())
+    }
+
     /// Bytes the real server just sent.
     pub fn on_peer_payload(&mut self, payload: &[u8]) -> Result<Outcome, String> {
         match &mut self.state {
@@ -593,6 +732,9 @@ impl ProxySession {
                 record_tls(self.stats.as_deref(), started, handshaking);
                 self.after_peer_wire(plain)
             }
+            // No upstream socket exists for the local origin, so nothing can
+            // arrive from one.
+            ProxyState::Local(_) => Ok(Outcome::default()),
         }
     }
 
@@ -611,7 +753,8 @@ impl ProxySession {
                 &mut self.client_buffer,
                 &self.script_src,
                 &self.script_body,
-                self.cosmetic.as_deref().zip(self.captured.as_deref()),
+                self.cosmetic.as_deref(),
+                self.captured.as_deref(),
                 self.stats.as_deref(),
                 &mut self.head_requests,
                 &mut outcome,
@@ -1048,9 +1191,9 @@ impl ProxySession {
         Ok(())
     }
 
-    /// The HTML snippet injected before `</head>`: the hiding stylesheet, the
-    /// cosmetic payload (rule data inline, runtime fetched from the local
-    /// endpoint) plus the user script tag when one is installed. Empty when
+    /// The HTML snippet injected early in `<head>`: the hiding stylesheet, the
+    /// cosmetic payload (rule data inline, runtime fetched from the app's own
+    /// origin) plus the user script tag when one is installed. Empty when
     /// nothing applies.
     fn injection_snippet(&self, body: &[u8]) -> Vec<u8> {
         let mut out = Vec::new();
@@ -1061,9 +1204,12 @@ impl ProxySession {
                 // What the rules hide goes out as a stylesheet, not as inline
                 // data: the same 11 KB of all-site selectors applies to every
                 // page of a site, and this way the browser fetches it once and
-                // keeps it.
+                // keeps it. It is fetched from the app's own origin, where the
+                // page's service worker cannot answer in our place.
                 if let Some((href, _)) = hide_stylesheet(filter, host) {
-                    out.extend_from_slice(http::style_link_tag(&href, "adfree-hide").as_bytes());
+                    out.extend_from_slice(
+                        http::style_link_tag(&local_asset(&href), "adfree-hide").as_bytes(),
+                    );
                 }
                 if let Some(data) = self.cosmetic_payload(filter, host, body) {
                     out.extend_from_slice(b"<script>window.__adfree_page=");
@@ -1073,11 +1219,20 @@ impl ProxySession {
             }
             // The runtime goes out whenever cosmetic filtering runs, payload or
             // not: it is what finds rules for the tokens the proxy never saw,
-            // which on a streamed page is everything past `</head>`.
+            // which on a streamed page is everything past the anchor.
             // Not deferred: the hiding stylesheet must land before the body
-            // renders, and the answer comes from this very connection.
-            let runtime = versioned_path(PAGE_SCRIPT_PATH, content_hash(PAGE_RUNTIME.as_bytes()));
-            out.extend_from_slice(http::script_tag(&runtime, false).as_bytes());
+            // renders, and every answer comes from the app itself.
+            // `dmn=` is what tells the cross-origin runtime which host's rules
+            // its lookups are for (AdGuard's content script carries the same
+            // parameter).
+            let runtime = match self.captured.as_deref() {
+                Some(host) => versioned_path(
+                    &format!("{PAGE_SCRIPT_PATH}?dmn={host}"),
+                    content_hash(PAGE_RUNTIME.as_bytes()),
+                ),
+                None => versioned_path(PAGE_SCRIPT_PATH, content_hash(PAGE_RUNTIME.as_bytes())),
+            };
+            out.extend_from_slice(http::script_tag(&local_asset(&runtime), false).as_bytes());
         }
         if !self.script_src.is_empty() {
             out.extend_from_slice(http::script_tag(&self.script_tag_src, true).as_bytes());
@@ -1139,10 +1294,15 @@ impl ProxySession {
 /// the generic class/id lookup. Returns the whole HTTP response and removes
 /// the request from `buffer`. Split out so the check is unit-testable without
 /// a live TLS session.
+///
+/// The host whose rules the answer carries comes from the `dmn` parameter the
+/// injected URLs carry; a legacy same-origin tag (a page cached before an app
+/// update) has none, and falls back to the session's SNI.
 pub fn take_local_request(
     serve_path: &str,
     script_body: &str,
-    cosmetic: Option<(&FilterEngine, &str)>,
+    filter: Option<&FilterEngine>,
+    session_host: Option<&str>,
     buffer: &mut Vec<u8>,
 ) -> Option<Vec<u8>> {
     let head = header_end(buffer)?;
@@ -1162,7 +1322,10 @@ pub fn take_local_request(
             gzip,
         ));
     }
-    let (filter, host) = cosmetic?;
+    let filter = filter?;
+    let host = query_value(&first_line, "dmn")
+        .filter(|h| is_plausible_host(h))
+        .or_else(|| session_host.map(str::to_string));
     if target == PAGE_SCRIPT_PATH {
         buffer.drain(..head);
         return Some(local_response(
@@ -1177,7 +1340,10 @@ pub fn take_local_request(
         // Only the bytes matter here; the hash in the URL was computed over
         // exactly these bytes when the link was written. An empty stylesheet
         // (rules changed since) is a valid answer.
-        let body = hide_stylesheet(filter, host).map(|(_, body)| body);
+        let body = host
+            .as_deref()
+            .and_then(|h| hide_stylesheet(filter, h))
+            .map(|(_, body)| body);
         return Some(local_response(
             "text/css; charset=utf-8",
             IMMUTABLE_CACHE,
@@ -1188,16 +1354,17 @@ pub fn take_local_request(
     if target == GENERIC_PATH {
         buffer.drain(..head);
         let (classes, ids) = generic_query(&first_line);
-        let selectors = if classes.is_empty() && ids.is_empty() {
-            Vec::new()
-        } else {
-            let url = format!("https://{host}/");
-            let rules = filter.cosmetic_resources(&url);
-            if rules.generichide {
-                Vec::new()
-            } else {
-                filter.generic_selectors(&classes, &ids, &rules.exceptions)
+        let selectors = match host.as_deref() {
+            Some(host) if !classes.is_empty() || !ids.is_empty() => {
+                let url = format!("https://{host}/");
+                let rules = filter.cosmetic_resources(&url);
+                if rules.generichide {
+                    Vec::new()
+                } else {
+                    filter.generic_selectors(&classes, &ids, &rules.exceptions)
+                }
             }
+            _ => Vec::new(),
         };
         let body = serde_json::to_string(&selectors).unwrap_or_else(|_| "[]".to_string());
         return Some(http_response(
@@ -1206,6 +1373,31 @@ pub fn take_local_request(
         ));
     }
     None
+}
+
+/// One query parameter out of `GET /path?a=1 HTTP/1.1`.
+fn query_value(first_line: &str, key: &str) -> Option<String> {
+    let target = first_line.split(' ').nth(1)?;
+    let query = target.find('?').map(|i| &target[i + 1..])?;
+    for pair in query.split('&') {
+        let Some(eq) = pair.find('=') else {
+            continue;
+        };
+        if &pair[..eq] == key {
+            return Some(percent_decode(&pair[eq + 1..]));
+        }
+    }
+    None
+}
+
+/// Whether a `dmn` value looks like a hostname: the parameter is page-supplied,
+/// and a garbage name would only waste a rule lookup, never leak anything.
+fn is_plausible_host(host: &str) -> bool {
+    !host.is_empty()
+        && host.len() <= 253
+        && host
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'.' || b == b'-' || b == b'_')
 }
 
 /// `GET /path?query HTTP/1.1` → `/path`, and only for GET requests.
@@ -1282,6 +1474,11 @@ fn http_response(content_type: &str, body: &[u8]) -> Vec<u8> {
 /// `gzip` encodes the body when the caller saw the client accept it: the page
 /// runtime and the hiding stylesheet are document-sized, and page data stays
 /// compressed on the wire.
+///
+/// The two cross-origin headers are what let a page fetch these bytes from the
+/// app's own origin: `Cross-Origin-Resource-Policy` keeps pages served under
+/// COEP working, `Access-Control-Allow-Origin` lets the runtime read its
+/// dynamic-rule lookup answer.
 fn local_response(content_type: &str, cache: &str, body: &[u8], gzip: bool) -> Vec<u8> {
     let compressed = if gzip && !body.is_empty() {
         http::gzip_bytes(body)
@@ -1299,13 +1496,21 @@ fn local_response(content_type: &str, cache: &str, body: &[u8], gzip: bool) -> V
     let mut resp = Vec::with_capacity(payload.len() + 200);
     resp.extend_from_slice(
         format!(
-            "HTTP/1.1 200 OK\r\nContent-Type: {content_type}\r\nCache-Control: {cache}\r\n{encoding}Content-Length: {}\r\n\r\n",
+            "HTTP/1.1 200 OK\r\nContent-Type: {content_type}\r\nCache-Control: {cache}\r\n{encoding}Access-Control-Allow-Origin: *\r\nCross-Origin-Resource-Policy: cross-origin\r\nContent-Length: {}\r\n\r\n",
             payload.len()
         )
         .as_bytes(),
     );
     resp.extend_from_slice(payload);
     resp
+}
+
+/// The answer to anything else asked of the local origin: only the injected
+/// assets live there, and a page may probe for more. `Connection: close` keeps
+/// a stray request body from being read as the next request head.
+fn not_found_response() -> Vec<u8> {
+    b"HTTP/1.1 404 Not Found\r\nContent-Type: text/plain; charset=utf-8\r\nContent-Length: 9\r\nCache-Control: no-store\r\nConnection: close\r\n\r\nnot found"
+        .to_vec()
 }
 
 /// FNV-1a over the bytes: a cheap, stable content hash for cache busting.
@@ -1328,18 +1533,21 @@ fn versioned_path(path: &str, hash: u64) -> String {
     format!("{path}{separator}h={hash:016x}")
 }
 
-/// The elements-hiding stylesheet of a host: its bytes and the same-origin URL
-/// they are served from. `None` when nothing is hidden on this host.
+/// The elements-hiding stylesheet of a host: its bytes and the URL they are
+/// served from. `None` when nothing is hidden on this host.
 ///
 /// The bytes are what the URL hashes, so the two can never disagree: whoever
-/// writes the link and whoever answers it build the same string.
+/// writes the link and whoever answers it build the same string. The host
+/// travels in the URL (`dmn=`) because the answer comes from the app's own
+/// origin, where the session's SNI is not the page's hostname.
 pub(crate) fn hide_stylesheet(filter: &FilterEngine, host: &str) -> Option<(String, String)> {
     let selectors = filter.hide_selectors_for(host);
     if selectors.is_empty() {
         return None;
     }
     let body = format!("{}{{display:none!important}}\n", selectors.join(","));
-    Some((versioned_path(HIDE_PATH, content_hash(body.as_bytes())), body))
+    let path = format!("{HIDE_PATH}?dmn={host}");
+    Some((versioned_path(&path, content_hash(body.as_bytes())), body))
 }
 
 /// Escapes a JSON payload for embedding inside an inline `<script>`.
