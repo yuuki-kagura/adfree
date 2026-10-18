@@ -849,6 +849,14 @@ impl ProxySession {
             .as_deref()
             .and_then(redirect_response)
             .unwrap_or_else(blocked_response);
+        if method == "HEAD" {
+            // A HEAD answer is headers only. The length of the body the same
+            // request would have carried is already in the head, so dropping
+            // the bytes is all it takes.
+            if let Some(end) = header_end(&response) {
+                response.truncate(end);
+            }
+        }
         if closes {
             response = closing_response(response);
         }

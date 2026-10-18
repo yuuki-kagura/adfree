@@ -581,6 +581,36 @@ fn request_with(
     (head, body)
 }
 
+/// A HEAD through the splice. The answer is headers only, so this cannot wait
+/// for a body: it reads until the head is complete, then listens a little
+/// longer to prove nothing follows it.
+fn head_request(tcp: &mut Client, conn: &mut ClientConnection, path: &str, extra: &str) -> Vec<u8> {
+    let req = format!(
+        "HEAD {path} HTTP/1.1\r\nHost: shop.test\r\nConnection: keep-alive\r\n{extra}\r\n"
+    );
+    conn.writer().write_all(req.as_bytes()).expect("write request");
+    flush_tls(tcp, conn);
+
+    let mut raw = Vec::new();
+    let deadline = Instant::now() + Duration::from_secs(15);
+    loop {
+        let wire = tcp.read_some(Duration::from_millis(50));
+        raw.extend_from_slice(&feed_tls(conn, wire));
+        if raw.windows(4).any(|w| w == b"\r\n\r\n") {
+            break;
+        }
+        assert!(Instant::now() < deadline, "no head for {path}: {:?}", raw.len());
+    }
+    // Anything arriving after the head would be a body on a HEAD — the one
+    // thing a client is not allowed to be sent.
+    let quiet = Instant::now() + Duration::from_millis(300);
+    while Instant::now() < quiet {
+        let wire = tcp.read_some(Duration::from_millis(50));
+        raw.extend_from_slice(&feed_tls(conn, wire));
+    }
+    raw
+}
+
 /// The list the engine is given: every cosmetic rule shape in one place.
 const LIST: &str = "! Title: e2e cosmetic\n\
                     shop.test##.ad-box\n\
@@ -1001,6 +1031,30 @@ fn url_rules_are_applied_on_the_https_path() {
         api.starts_with("GET /api?keep=2 "),
         "the dropped parameter must be gone: {api:?}"
     );
+    drop(seen);
+
+    // 4. The same redirect through a HEAD: the head it would have sent, and
+    //    not one byte of body — that is how a connection desyncs.
+    let raw = head_request(
+        &mut tcp,
+        &mut conn,
+        "/fake.js",
+        "Sec-Fetch-Dest: script\r\nReferer: https://shop.test/\r\n",
+    );
+    let head = String::from_utf8_lossy(&raw).to_string();
+    assert!(head.starts_with("HTTP/1.1 200 OK\r\n"), "{head}");
+    // The length of the body the GET above received, still declared.
+    assert!(
+        head.to_lowercase()
+            .contains(&format!("content-length: {}", b"(function(){})();".len())),
+        "{head}"
+    );
+    let end = raw
+        .windows(4)
+        .position(|w| w == b"\r\n\r\n")
+        .map(|i| i + 4)
+        .expect("the head must be complete");
+    assert_eq!(raw.len(), end, "a HEAD answer must carry no body: {head}");
 
     tcp.close();
 }
