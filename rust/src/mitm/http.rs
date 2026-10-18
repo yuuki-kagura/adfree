@@ -5,9 +5,12 @@
 //! `</head>` or `</body>`, and **rewrite `content-length`** — without that the
 //! client would hang or truncate the body.
 //!
-//! Injection also strips `content-security-policy` from the response: the
-//! injected scripts are same-origin, but a strict `script-src` would still
-//! block them (AdGuard relaxes CSP the same way).
+//! Injection also rewrites `content-security-policy` rather than dropping it:
+//! the injected tags carry a fresh nonce per response and the policy learns
+//! that nonce, so a strict `script-src` no longer blocks the hiding rules and
+//! the page keeps the protection it asked for. AdGuard injects with a nonce
+//! for the same reason; the difference is what happens to the rest of the
+//! header, which stays as the origin wrote it.
 
 /// Outcome of handling one response.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -31,25 +34,64 @@ const MAX_CLASS_TOKENS: usize = 800;
 const MAX_ID_TOKENS: usize = 400;
 const MAX_TOKEN_LEN: usize = 64;
 
-/// Builds the `<script src=...>` tag for `src`.
-pub fn script_tag(src: &str, defer: bool) -> String {
-    let escaped = escape_attr(src);
-    if defer {
-        format!("<script src=\"{escaped}\" defer></script>")
+/// Random bytes behind one page's nonce. CSP wants at least 128 bits; 18 bytes
+/// (144 bits) leaves room for the hex encoding to stay a single attribute.
+const NONCE_BYTES: usize = 18;
+
+/// A fresh nonce for one injected page.
+///
+/// Per response, not per session: a value that repeats would let a script that
+/// learned it once run under another page's policy later. `ring`'s system RNG
+/// is the one the TLS stack already builds on; the fallback exists only so a
+/// broken OS RNG cannot take the hiding rules down with it.
+pub fn new_nonce() -> String {
+    use ring::rand::{SecureRandom, SystemRandom};
+    let mut bytes = [0u8; NONCE_BYTES];
+    match SystemRandom::new().fill(&mut bytes) {
+        Ok(()) => bytes.iter().map(|b| format!("{b:02x}")).collect(),
+        Err(_) => {
+            let nanos = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0);
+            format!("{nanos:036x}")
+        }
+    }
+}
+
+/// The `nonce="…"` attribute for an injected tag; empty when there is no nonce.
+pub(crate) fn nonce_attr(nonce: &str) -> String {
+    if nonce.is_empty() {
+        String::new()
     } else {
-        format!("<script src=\"{escaped}\"></script>")
+        format!(" nonce=\"{}\"", escape_attr(nonce))
+    }
+}
+
+/// Builds the `<script src=...>` tag for `src`, with the page's nonce so a
+/// strict `script-src` lets it through.
+pub fn script_tag(src: &str, defer: bool, nonce: &str) -> String {
+    let escaped = escape_attr(src);
+    let nonce = nonce_attr(nonce);
+    if defer {
+        format!("<script{nonce} src=\"{escaped}\" defer></script>")
+    } else {
+        format!("<script{nonce} src=\"{escaped}\"></script>")
     }
 }
 
 /// Builds the `<link rel="stylesheet">` tag for an injected stylesheet.
 ///
 /// The id is what lets the page runtime notice the page dropping the element
-/// and put it back; the browser then reuses its cached copy.
-pub fn style_link_tag(href: &str, id: &str) -> String {
+/// and put it back; the browser then reuses its cached copy. Chromium honours
+/// a nonce on `<link rel=stylesheet>` (checked in the JS test suite), so the
+/// tag carries one when the policy asks for it.
+pub fn style_link_tag(href: &str, id: &str, nonce: &str) -> String {
     format!(
-        "<link rel=\"stylesheet\" id=\"{}\" href=\"{}\">",
+        "<link rel=\"stylesheet\" id=\"{}\" href=\"{}\"{}>",
         escape_attr(id),
-        escape_attr(href)
+        escape_attr(href),
+        nonce_attr(nonce)
     )
 }
 
@@ -75,11 +117,22 @@ pub fn inject_snippet(body: &[u8], snippet: &[u8]) -> (Vec<u8>, Decision) {
     (out, Decision::Injected)
 }
 
-/// True when the bytes start like a document that is safe to edit: a real
+/// True when the bytes look like a document that is safe to edit: a real
 /// `<!doctype`/`<html` somewhere in the head of the file.
 fn looks_like_html(body: &[u8]) -> bool {
     let lower: Vec<u8> = body.iter().map(|b| b.to_ascii_lowercase()).collect();
-    find_ci(&lower, b"<html>").is_some() || find_ci(&lower, b"<!doc").is_some()
+    if find_ci(&lower, b"<!doc").is_some() {
+        return true;
+    }
+    // `"<html>"` alone misses the common shape: the tag usually carries
+    // attributes (`<html lang="en">`), and real pages have been seen with no
+    // doctype at all (news.ycombinator.com).
+    find_ci(&lower, b"<html").is_some_and(|at| {
+        matches!(
+            lower.get(at + 5),
+            Some(b'>' | b' ' | b'\t' | b'\r' | b'\n' | b'/')
+        )
+    })
 }
 
 /// Where a snippet goes: as early inside `<head>` as the document allows,
@@ -91,12 +144,16 @@ fn looks_like_html(body: &[u8]) -> bool {
 /// render). Hiding rules arriving before the page's own resources is what
 /// keeps ads from painting first.
 ///
-/// Two guards keep the move safe:
+/// Three guards keep the move safe:
 ///
 /// * the anchor only moves ahead of a non-metadata element once a
 ///   `<meta charset>` (or `http-equiv` declaration) has been seen — a
 ///   multi-kilobyte payload must never push the document's encoding
 ///   declaration past the parser's 1024-byte prescan window;
+/// * a `<meta http-equiv="content-security-policy">` anchors in its own right:
+///   it governs everything parsed after it (measured: it is not retroactive),
+///   so the snippet lands in front of it and stays outside the policy the page
+///   set for itself. A *header* policy is answered in `csp_with_nonce`;
 /// * an incomplete tag (`<link rel=...` cut by the buffer) decides nothing,
 ///   so the streaming injector waits instead of splitting it in half.
 ///
@@ -166,7 +223,14 @@ fn head_snippet_point(body: &[u8]) -> Option<usize> {
             continue;
         }
         if name.eq_ignore_ascii_case(b"meta") {
-            if rest[..end]
+            let tag = &rest[..end];
+            if charset_seen && meta_is_csp(tag) {
+                // The page's own policy starts here; the injected tags must not
+                // be inside it. Before a charset declaration there is no room
+                // to move (see the prescan rule above), so the walk keeps going.
+                return Some(i);
+            }
+            if tag
                 .windows(b"charset".len())
                 .any(|w| w.eq_ignore_ascii_case(b"charset"))
             {
@@ -278,6 +342,16 @@ fn starts_with_ci(haystack: &[u8], needle: &[u8]) -> bool {
     haystack.len() >= needle.len() && haystack[..needle.len()].eq_ignore_ascii_case(needle)
 }
 
+/// Whether a `<meta …>` tag is a `http-equiv` CSP declaration.
+///
+/// Both attribute names are looked for anywhere in the tag, so attribute order
+/// does not matter; a `content` value that merely mentions the string cannot
+/// match, since `http-equiv` has to be there too.
+fn meta_is_csp(tag: &[u8]) -> bool {
+    find_ci_bytes(tag, b"http-equiv").is_some()
+        && find_ci_bytes(tag, b"content-security-policy").is_some()
+}
+
 /// Offset just past the last complete tag: the fallback home for a snippet when
 /// the document never shows a `</head>`/`</body>`/`<body`.
 pub fn safe_injection_point(body: &[u8]) -> usize {
@@ -287,29 +361,165 @@ pub fn safe_injection_point(body: &[u8]) -> usize {
     }
 }
 
-/// Chèn một `<script src>` — the shape most callers and tests want.
+/// Injects a `<script src>` tag — the shape most callers and tests want.
 pub fn inject_script(body: &[u8], src: &str) -> (Vec<u8>, Decision) {
-    inject_snippet(body, script_tag(src, true).as_bytes())
+    inject_snippet(body, script_tag(src, true, "").as_bytes())
 }
 
-/// Removes `content-security-policy` headers from a rewritten response.
+/// Rewrites `content-security-policy` so everything we inject is allowed,
+/// leaving the policy itself — and with it the page's own protection — in
+/// place.
 ///
-/// Both the enforcing and report-only headers go: our scripts are injected
-/// inline and from the page's own origin, and leaving a strict `script-src`
-/// in place would silently drop every cosmetic rule on hardened sites.
-pub fn strip_csp(headers: &[u8]) -> Vec<u8> {
-    let mut out = Vec::with_capacity(headers.len());
+/// Three things have to get through, and not all of them take a nonce:
+///
+/// * the injected `<script>` and `<link rel="stylesheet">` tags, and the
+///   `<style>` the runtime may build — these take `'nonce-…'`, which the page's
+///   own scripts ignore;
+/// * the runtime's `fetch` of the generic-rule lookup — `connect-src` has no
+///   nonce-source, so there the origin (`host_source`) is the only way in.
+///
+/// Which shape a directive gets is decided per directive:
+///
+/// * a directive that does **not** lean on `'unsafe-inline'` gets
+///   `'nonce-…'`, which our tags carry and the page's own scripts ignore;
+/// * a directive that does lean on it gets `host_source` (our origin) instead.
+///   Chromium ignores `'unsafe-inline'` as soon as the policy holds a nonce,
+///   so adding one there would block the page's *own* inline scripts —
+///   measured, not assumed. A directive that already carries a nonce or a
+///   hash is past that point: its `'unsafe-inline'`, if any, is inert already,
+///   and a nonce of ours changes nothing for the page.
+///
+/// `report-only` policies are diagnostics, not enforcement: they travel back
+/// exactly as they came.
+pub fn csp_with_nonce(headers: &[u8], nonce: &str, host_source: &str) -> Vec<u8> {
+    let mut out = Vec::with_capacity(headers.len() + 64);
     for line in headers.split_inclusive(|b| *b == b'\n') {
         let lower: Vec<u8> = line.iter().map(|b| b.to_ascii_lowercase()).collect();
-        if lower.starts_with(b"content-security-policy:") {
+        if !lower.starts_with(b"content-security-policy:") {
+            out.extend_from_slice(line);
             continue;
         }
-        if lower.starts_with(b"content-security-policy-report-only:") {
+        let name_end = line.iter().position(|b| *b == b':').unwrap_or(0);
+        let ending = line_ending(line);
+        let value_end = line.len().saturating_sub(ending.len());
+        if name_end >= value_end {
+            out.extend_from_slice(line);
             continue;
         }
-        out.extend_from_slice(line);
+        let value = String::from_utf8_lossy(&line[name_end + 1..value_end]);
+        out.extend_from_slice(&line[..name_end]);
+        out.extend_from_slice(b": ");
+        out.extend_from_slice(add_nonce_to_policy(value.trim(), nonce, host_source).as_bytes());
+        out.extend_from_slice(ending.as_bytes());
     }
     out
+}
+
+/// One policy with the nonce (or the origin) added where it would block us.
+fn add_nonce_to_policy(value: &str, nonce: &str, host_source: &str) -> String {
+    let directives: Vec<&str> = value
+        .split(';')
+        .map(str::trim)
+        .filter(|d| !d.is_empty())
+        .collect();
+    if directives.is_empty() {
+        return value.to_string();
+    }
+    let name_of = |d: &str| d.split_whitespace().next().unwrap_or("").to_ascii_lowercase();
+    let names: Vec<String> = directives.iter().map(|d| name_of(d)).collect();
+    let has = |n: &str| names.iter().any(|x| x == n);
+    // The specific directives win over `default-src`, and `-elem` wins over the
+    // bare form: whichever of them is present is what a parser consults.
+    let covered = |carrier: Carrier| match carrier {
+        Carrier::Script => has("script-src") || has("script-src-elem"),
+        Carrier::Style => has("style-src") || has("style-src-elem"),
+        Carrier::Connect => has("connect-src"),
+    };
+
+    let mut out = String::with_capacity(value.len() + 64);
+    for (i, directive) in directives.iter().enumerate() {
+        if i > 0 {
+            out.push_str("; ");
+        }
+        out.push_str(directive);
+        let name = name_of(directive);
+        let mut wanted: Vec<Carrier> = Vec::new();
+        match name.as_str() {
+            "script-src" | "script-src-elem" => wanted.push(Carrier::Script),
+            "style-src" | "style-src-elem" => wanted.push(Carrier::Style),
+            "connect-src" => wanted.push(Carrier::Connect),
+            // Everything the specific directives leave uncovered falls back here.
+            "default-src" => wanted.extend(CARRIERS.iter().copied().filter(|c| !covered(*c))),
+            _ => {}
+        }
+        if wanted.is_empty() {
+            continue;
+        }
+        let sources: Vec<&str> = directive.split_whitespace().skip(1).collect();
+        let inline = sources
+            .iter()
+            .any(|s| s.eq_ignore_ascii_case("'unsafe-inline'"));
+        let native_inline = sources
+            .iter()
+            .any(|s| s.eq_ignore_ascii_case("'strict-dynamic'") || is_nonce_or_hash(s));
+        // A lone `default-src` carries several of our carriers at once: one
+        // addition each, and never the same value twice.
+        let mut additions: Vec<String> = Vec::new();
+        for carrier in wanted {
+            let addition = carrier.addition(inline && !native_inline, nonce, host_source);
+            if !additions.contains(&addition) {
+                additions.push(addition);
+            }
+        }
+        for addition in additions {
+            out.push_str(&addition);
+        }
+    }
+    out
+}
+
+/// What the injected page needs the policy to allow.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Carrier {
+    /// The inline payload, the runtime tag and the user-script tag.
+    Script,
+    /// The hiding stylesheet and the `<style>` element the runtime builds.
+    Style,
+    /// The runtime's `fetch` of the generic-rule lookup.
+    Connect,
+}
+
+/// Every carrier, in the order their additions are written into a directive
+/// that serves as the fallback for more than one of them.
+const CARRIERS: [Carrier; 3] = [Carrier::Script, Carrier::Style, Carrier::Connect];
+
+impl Carrier {
+    /// The source expression that satisfies this carrier.
+    ///
+    /// `inline_only` is the page leaning on `'unsafe-inline'` with no nonce or
+    /// hash of its own: a nonce of ours would silently switch that off, so the
+    /// origin goes in instead — it satisfies our tags and leaves the page's own
+    /// inline scripts alone.
+    ///
+    /// `Connect` has no element to hang a nonce on: `connect-src` has no
+    /// nonce-source, so the origin is the only way in — and the runtime's
+    /// lookup is a `fetch`, which nothing else reaches.
+    fn addition(self, inline_only: bool, nonce: &str, host_source: &str) -> String {
+        if inline_only || self == Carrier::Connect {
+            format!(" {host_source}")
+        } else {
+            format!(" 'nonce-{nonce}'")
+        }
+    }
+}
+
+/// Whether a source expression is a nonce or a hash: a policy holding one of
+/// these already ignores `'unsafe-inline'`, so a nonce of ours is free.
+fn is_nonce_or_hash(source: &str) -> bool {
+    let bare = source.trim_matches('\'').to_ascii_lowercase();
+    ["nonce-", "sha256-", "sha384-", "sha512-"]
+        .iter()
+        .any(|prefix| bare.starts_with(prefix))
 }
 
 /// Class and id tokens used by an HTML body, for generic `##.class` rules.
@@ -415,6 +625,19 @@ pub enum Encoding {
     Deflate,
     /// `br`, `zstd`, ...: readable by the client but not by us.
     Other,
+}
+
+impl Encoding {
+    /// The token for `content-encoding`, when the body is compressed at all.
+    pub fn name(self) -> Option<&'static str> {
+        match self {
+            Encoding::Gzip => Some("gzip"),
+            Encoding::Deflate => Some("deflate"),
+            // An identity body has nothing to declare, and `Other` never
+            // reaches a rewrite: a response is only edited when we can read it.
+            Encoding::Identity | Encoding::Other => None,
+        }
+    }
 }
 
 /// The facts the proxy needs from one response head.
@@ -720,12 +943,14 @@ fn chunk_size(text: &[u8]) -> Result<usize, String> {
 
 /// Head for a body that grew to `body_len` bytes and travels as identity (or as
 /// `encoding` when given): `content-length` is set, `transfer-encoding` and
-/// `trailer` go, CSP goes.
+/// `trailer` go.
+///
+/// The head arrives as it should leave — a rewritten policy included — because
+/// only the caller knows whether anything was injected and under which nonce.
 pub fn head_for_new_body(head: &[u8], body_len: usize, encoding: Option<&str>) -> Vec<u8> {
-    let stripped = strip_csp(head);
-    let mut out = Vec::with_capacity(stripped.len() + 32);
+    let mut out = Vec::with_capacity(head.len() + 32);
     let mut have_length = false;
-    for line in stripped.split_inclusive(|b| *b == b'\n') {
+    for line in head.split_inclusive(|b| *b == b'\n') {
         let lower: Vec<u8> = line.iter().map(|b| b.to_ascii_lowercase()).collect();
         if lower.starts_with(b"transfer-encoding:") || lower.starts_with(b"trailer:") {
             continue;
@@ -768,9 +993,8 @@ pub fn head_for_new_body(head: &[u8], body_len: usize, encoding: Option<&str>) -
 /// Head for a body that only grew by `delta` bytes; framing is untouched.
 pub fn head_for_bigger_body(head: &[u8], delta: usize) -> Vec<u8> {
     let current = parse_response_head(head).content_length;
-    let stripped = strip_csp(head);
-    let mut out = Vec::with_capacity(stripped.len() + 16);
-    for line in stripped.split_inclusive(|b| *b == b'\n') {
+    let mut out = Vec::with_capacity(head.len() + 16);
+    for line in head.split_inclusive(|b| *b == b'\n') {
         let lower: Vec<u8> = line.iter().map(|b| b.to_ascii_lowercase()).collect();
         // A missing `content-length` is fine here: the body is length-framed by
         // definition, so the caller would not pick this helper.
@@ -908,13 +1132,11 @@ pub fn emit_last_chunk(out: &mut Vec<u8>) {
 }
 
 /// Head for a body that will leave chunked: framing is replaced (the edited
-/// length is unknowable up front), `content-encoding` follows `encoding`, CSP
-/// goes.
+/// length is unknowable up front), `content-encoding` follows `encoding`.
 pub fn head_for_chunked_body(head: &[u8], encoding: Option<&str>) -> Vec<u8> {
-    let stripped = strip_csp(head);
-    let mut out = Vec::with_capacity(stripped.len() + 32);
+    let mut out = Vec::with_capacity(head.len() + 32);
     let mut have_framing = false;
-    for line in stripped.split_inclusive(|b| *b == b'\n') {
+    for line in head.split_inclusive(|b| *b == b'\n') {
         let lower: Vec<u8> = line.iter().map(|b| b.to_ascii_lowercase()).collect();
         if lower.starts_with(b"content-length:") || lower.starts_with(b"trailer:") {
             continue;
@@ -1228,8 +1450,22 @@ mod tests {
         assert_eq!(inject_script(b"", "/a.js").1, Decision::Skip);
         let big = vec![b'x'; MAX_INJECTABLE_BODY + 1];
         assert_eq!(inject_script(&big, "/a.js").1, Decision::Skip);
-        // Không có tag html nào.
+        // Neither a `<!doctype` nor an `<html` tag: a fragment, not a page.
         assert_eq!(inject_script(b"just text", "/a.js").1, Decision::Skip);
+        assert_eq!(
+            inject_script(b"<div>fragment</div>", "/a.js").1,
+            Decision::Skip
+        );
+    }
+
+    #[test]
+    fn a_page_without_a_doctype_is_still_a_page() {
+        // news.ycombinator.com ships exactly this shape: no doctype at all and
+        // an `<html>` tag that carries attributes, so `"<html>"` never occurs.
+        let body = b"<html lang=\"en\" op=\"news\"><head><title>t</title></head><body>x</body></html>";
+        let (out, d) = inject_script(body, "/a.js");
+        assert_eq!(d, Decision::Injected);
+        assert!(String::from_utf8(out).unwrap().contains("<script src=\"/a.js\""));
     }
 
     #[test]
@@ -1289,10 +1525,15 @@ mod tests {
     }
 
     #[test]
-    fn growing_bodies_drop_any_csp() {
+    fn growing_bodies_leave_the_policy_alone() {
+        // The policy is the caller's business now: it is rewritten (with the
+        // nonce) or not, and framing passes do not second-guess that.
         let head = b"HTTP/1.1 200 OK\r\nContent-Length: 1\r\nContent-Security-Policy: script-src 'self'\r\n\r\n";
         let text = String::from_utf8(head_for_bigger_body(head, 9)).unwrap();
-        assert!(!text.contains("Content-Security-Policy"), "{text}");
+        assert!(
+            text.contains("Content-Security-Policy: script-src 'self'\r\n"),
+            "{text}"
+        );
     }
 
     #[test]
@@ -1425,19 +1666,129 @@ mod tests {
     }
 
     #[test]
-    fn strips_both_csp_headers() {
-        let head = b"HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Security-Policy: script-src 'self'\r\nContent-Security-Policy-Report-Only: default-src 'none'\r\nX-Kept: yes\r\n\r\n";
-        let out = String::from_utf8(strip_csp(head)).unwrap();
-        assert!(!out.contains("Content-Security-Policy"), "{out}");
+    fn teaches_the_policy_our_nonce() {
+        let head = b"HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Security-Policy: script-src 'self'; style-src 'self'\r\nContent-Security-Policy-Report-Only: default-src 'none'\r\nX-Kept: yes\r\n\r\n";
+        let out = String::from_utf8(csp_with_nonce(head, "abc123", "https://192.0.2.1")).unwrap();
+        assert!(
+            out.contains(
+                "Content-Security-Policy: script-src 'self' 'nonce-abc123'; style-src 'self' 'nonce-abc123'"
+            ),
+            "{out}"
+        );
+        // A report-only policy is a diagnostic, not enforcement: untouched.
+        assert!(
+            out.contains("Content-Security-Policy-Report-Only: default-src 'none'"),
+            "{out}"
+        );
         assert!(out.contains("X-Kept: yes"), "{out}");
         assert!(out.contains("Content-Type: text/html"), "{out}");
     }
 
     #[test]
-    fn strips_csp_case_insensitively() {
+    fn a_fallback_policy_is_taught_case_insensitively() {
         let head = b"HTTP/1.1 200 OK\r\nCONTENT-SECURITY-POLICY: default-src 'self'\r\n\r\n";
-        let out = String::from_utf8(strip_csp(head)).unwrap();
-        assert!(!out.contains("CONTENT-SECURITY-POLICY"), "{out}");
+        let out = String::from_utf8(csp_with_nonce(head, "abc123", "https://192.0.2.1")).unwrap();
+        assert!(
+            out.contains("CONTENT-SECURITY-POLICY: default-src 'self' 'nonce-abc123'"),
+            "{out}"
+        );
+    }
+
+    #[test]
+    fn unsafe_inline_gets_our_origin_instead_of_a_nonce() {
+        // Chromium stops honouring `'unsafe-inline'` the moment the policy
+        // holds a nonce, so a nonce here would block the page's own inline
+        // scripts. The origin satisfies our tags without touching that.
+        let head = b"HTTP/1.1 200 OK\r\nContent-Security-Policy: script-src 'unsafe-inline' https://cdn.test; style-src 'unsafe-inline'\r\n\r\n";
+        let out = String::from_utf8(csp_with_nonce(head, "abc123", "https://192.0.2.1")).unwrap();
+        assert!(out.contains("'unsafe-inline'"), "{out}");
+        assert!(!out.contains("nonce-"), "{out}");
+        assert!(
+            out.contains("script-src 'unsafe-inline' https://cdn.test https://192.0.2.1"),
+            "{out}"
+        );
+        assert!(out.contains("style-src 'unsafe-inline' https://192.0.2.1"), "{out}");
+    }
+
+    #[test]
+    fn a_policy_that_already_holds_a_nonce_can_take_ours() {
+        // `'unsafe-inline'` is inert there already, so our nonce changes
+        // nothing for the page and both our tags are covered by it.
+        let head = b"HTTP/1.1 200 OK\r\nContent-Security-Policy: script-src 'unsafe-inline' 'nonce-page'\r\n\r\n";
+        let out = String::from_utf8(csp_with_nonce(head, "abc123", "https://192.0.2.1")).unwrap();
+        assert!(
+            out.contains("script-src 'unsafe-inline' 'nonce-page' 'nonce-abc123'"),
+            "{out}"
+        );
+    }
+
+    #[test]
+    fn a_policy_that_never_governs_our_tags_is_left_alone() {
+        let head = b"HTTP/1.1 200 OK\r\nContent-Security-Policy: img-src 'self'; frame-ancestors 'none'\r\n\r\n";
+        let out = String::from_utf8(csp_with_nonce(head, "abc123", "https://192.0.2.1")).unwrap();
+        assert!(
+            out.contains("Content-Security-Policy: img-src 'self'; frame-ancestors 'none'"),
+            "{out}"
+        );
+    }
+
+    #[test]
+    fn the_lookup_fetch_is_allowed_by_connect_src() {
+        // `connect-src` has no nonce-source: the runtime's lookup is a fetch,
+        // and a policy that pins connect to 'self' would block it silently.
+        let head = b"HTTP/1.1 200 OK\r\nContent-Security-Policy: script-src 'self'; connect-src 'self'\r\n\r\n";
+        let out = String::from_utf8(csp_with_nonce(head, "abc123", "https://192.0.2.1")).unwrap();
+        assert!(
+            out.contains("connect-src 'self' https://192.0.2.1"),
+            "{out}"
+        );
+    }
+
+    #[test]
+    fn a_policy_shaped_like_a_real_one_gets_all_three_carriers() {
+        // The measured shape of www.reddit.com: scripts locked to a nonce,
+        // styles leaning on 'unsafe-inline', and `default-src 'none'` behind
+        // everything else — which is where the lookup's fetch lands.
+        let head = b"HTTP/1.1 200 OK\r\nContent-Security-Policy: default-src 'none'; script-src 'nonce-page'; style-src 'unsafe-inline'\r\n\r\n";
+        let out = String::from_utf8(csp_with_nonce(head, "abc123", "https://192.0.2.1")).unwrap();
+        assert!(out.contains("default-src 'none' https://192.0.2.1"), "{out}");
+        assert!(
+            out.contains("script-src 'nonce-page' 'nonce-abc123'"),
+            "{out}"
+        );
+        assert!(
+            out.contains("style-src 'unsafe-inline' https://192.0.2.1"),
+            "{out}"
+        );
+    }
+
+    #[test]
+    fn a_lone_default_src_gets_each_addition_once() {
+        // No specific directive: the fallback carries all three carriers, and
+        // the same source expression is never written twice.
+        let head = b"HTTP/1.1 200 OK\r\nContent-Security-Policy: default-src 'self'\r\n\r\n";
+        let out = String::from_utf8(csp_with_nonce(head, "abc123", "https://192.0.2.1")).unwrap();
+        assert!(
+            out.contains("default-src 'self' 'nonce-abc123' https://192.0.2.1"),
+            "{out}"
+        );
+        assert_eq!(out.matches("'nonce-abc123'").count(), 1, "{out}");
+    }
+
+    #[test]
+    fn an_empty_policy_is_not_invented_into_something() {
+        let head = b"HTTP/1.1 200 OK\r\nContent-Security-Policy: \r\n\r\n";
+        let out = String::from_utf8(csp_with_nonce(head, "abc123", "https://192.0.2.1")).unwrap();
+        assert!(out.contains("Content-Security-Policy: \r\n"), "{out}");
+    }
+
+    #[test]
+    fn nonces_do_not_repeat() {
+        let first = new_nonce();
+        let second = new_nonce();
+        assert_eq!(first.len(), 36, "18 bytes in hex: {first}");
+        assert!(first.bytes().all(|b| b.is_ascii_hexdigit()), "{first}");
+        assert_ne!(first, second, "a repeated nonce would be reusable");
     }
 
     #[test]
@@ -1455,24 +1806,35 @@ mod tests {
     }
 
     #[test]
-    fn script_tag_escapes_and_defers() {
+    fn script_tag_escapes_defers_and_carries_the_nonce() {
         assert_eq!(
-            script_tag("/a.js", true),
+            script_tag("/a.js", true, ""),
             "<script src=\"/a.js\" defer></script>"
         );
-        assert_eq!(script_tag("/a.js", false), "<script src=\"/a.js\"></script>");
-        let escaped = script_tag("/a\"<b>", false);
+        assert_eq!(
+            script_tag("/a.js", false, ""),
+            "<script src=\"/a.js\"></script>"
+        );
+        assert_eq!(
+            script_tag("/a.js", false, "n0nce"),
+            "<script nonce=\"n0nce\" src=\"/a.js\"></script>"
+        );
+        let escaped = script_tag("/a\"<b>", false, "");
         assert!(!escaped.contains("/a\"<b>"), "{escaped}");
         assert!(escaped.contains("&quot;") && escaped.contains("&lt;"), "{escaped}");
     }
 
     #[test]
-    fn style_link_escapes_and_keeps_an_id() {
+    fn style_link_escapes_keeps_an_id_and_carries_the_nonce() {
         assert_eq!(
-            style_link_tag("/adfree-hide.css?h=abc", "adfree-hide"),
+            style_link_tag("/adfree-hide.css?h=abc", "adfree-hide", ""),
             "<link rel=\"stylesheet\" id=\"adfree-hide\" href=\"/adfree-hide.css?h=abc\">"
         );
-        let escaped = style_link_tag("/a\"<b>", "x\"");
+        assert_eq!(
+            style_link_tag("/h.css", "adfree-hide", "n0nce"),
+            "<link rel=\"stylesheet\" id=\"adfree-hide\" href=\"/h.css\" nonce=\"n0nce\">"
+        );
+        let escaped = style_link_tag("/a\"<b>", "x\"", "");
         assert!(!escaped.contains("/a\"<b>"), "{escaped}");
         assert!(escaped.contains("&quot;"), "{escaped}");
     }
@@ -1665,7 +2027,11 @@ mod tests {
         assert!(text.contains("Transfer-Encoding: chunked\r\n"), "{text}");
         assert!(text.contains("Content-Encoding: gzip\r\n"), "{text}");
         assert!(!text.to_lowercase().contains("content-length"), "{text}");
-        assert!(!text.to_lowercase().contains("content-security-policy"), "{text}");
+        // The policy is untouched here; the caller adds the nonce before this.
+        assert!(
+            text.contains("Content-Security-Policy: script-src 'none'\r\n"),
+            "{text}"
+        );
         assert!(text.ends_with("\r\n\r\n"), "{text}");
     }
 
@@ -1703,6 +2069,31 @@ mod tests {
         // in front of it, or a multi-kilobyte payload would push the
         // declaration past the parser's 1024-byte prescan window.
         let body = b"<head><script src=\"/a.js\"></script><meta charset=\"utf-8\"><link rel=\"icon\" href=\"/i.ico\"></head>";
+        let pos = injection_point(body).expect("a point");
+        assert_eq!(&body[pos..pos + 5], b"<link");
+    }
+
+    #[test]
+    fn injection_lands_before_a_meta_policy() {
+        // A `<meta http-equiv="content-security-policy">` governs everything
+        // parsed after it and cannot be reached by the header rewrite: the
+        // anchor is the policy meta itself, so the snippet stays outside it.
+        let body = b"<html><head><meta charset=\"utf-8\"><meta http-equiv=\"Content-Security-Policy\" content=\"script-src 'none'\"><link rel=\"icon\" href=\"/i.ico\"></head>";
+        let pos = injection_point(body).expect("a point");
+        assert!(
+            body[pos..].starts_with(b"<meta http-equiv="),
+            "the anchor must be the policy meta: {:?}",
+            String::from_utf8_lossy(&body[pos..])
+        );
+    }
+
+    #[test]
+    fn a_meta_policy_before_the_charset_does_not_jump_the_queue() {
+        // Moving the payload in front of the policy meta would also move it in
+        // front of the charset declaration that follows it, and a multi-
+        // kilobyte payload would push that past the prescan window. The
+        // encoding rule wins; such pages keep the anchor they had.
+        let body = b"<head><meta http-equiv=\"content-security-policy\" content=\"script-src 'none'\"><meta charset=\"utf-8\"><link rel=\"icon\"></head>";
         let pos = injection_point(body).expect("a point");
         assert_eq!(&body[pos..pos + 5], b"<link");
     }

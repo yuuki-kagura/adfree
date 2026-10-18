@@ -28,9 +28,10 @@ const MAX_PENDING_WIRE: usize = 64 * 1024;
 /// hundred bytes; anything larger is not HTTP/1.1 we understand.
 const MAX_RESPONSE_HEAD: usize = 32 * 1024;
 
-/// Path the injected page runtime is served from. Same-origin on purpose: CSP
-/// commonly blocks inline scripts, and the browser resolves a relative tag
-/// against the page it was injected into.
+/// Path the injected page runtime is served from. The injected tag is
+/// absolute (`https://192.0.2.1/adfree-page.js…`), not relative: the runtime
+/// lives on this app's own origin, which is exactly what the rewritten policy
+/// lists, so a strict page still lets it load.
 pub const PAGE_SCRIPT_PATH: &str = "/adfree-page.js";
 
 /// Path the page runtime uses to ask for generic class/id rules that the
@@ -210,8 +211,12 @@ enum RespPhase {
 /// hands over the rest. Anything longer than [`http::STREAM_AFTER`] is
 /// therefore decoded, injected and re-encoded on the fly.
 struct StreamState {
-    /// The rewritten head, chunked and CSP-free, sent before the first chunk.
+    /// The head as the origin sent it; the policy inside it is rewritten by
+    /// [`StreamState::ensure_head`], once it is known whether anything is
+    /// injected.
     head: Vec<u8>,
+    /// The nonce this response's tags carry, decided when the state is made.
+    nonce: String,
     /// How the origin framed the body.
     framing: Framing,
     /// Wire bytes of a length-framed body still to come.
@@ -235,10 +240,8 @@ impl StreamState {
     fn new(head: &[u8], framing: Framing, encoding: http::Encoding) -> Self {
         let gzip = matches!(encoding, http::Encoding::Gzip);
         Self {
-            head: http::head_for_chunked_body(
-                head,
-                if gzip { Some("gzip") } else { None },
-            ),
+            head: head.to_vec(),
+            nonce: http::new_nonce(),
             framing,
             left: match framing {
                 Framing::Length(n) => n,
@@ -256,11 +259,22 @@ impl StreamState {
     }
 
     /// The head goes out before the first body chunk, and only once.
-    fn ensure_head(&mut self, out: &mut Vec<u8>) {
-        if !self.head_sent {
-            self.head_sent = true;
-            out.extend_from_slice(&self.head);
+    ///
+    /// `injecting` says whether a snippet goes out with it: only then does the
+    /// page's policy learn our nonce. The head cannot wait for the decision —
+    /// it is written just before the first body bytes either way — so a body
+    /// that gives up mid-stream keeps the policy it arrived with.
+    fn ensure_head(&mut self, out: &mut Vec<u8>, injecting: bool) {
+        if self.head_sent {
+            return;
         }
+        self.head_sent = true;
+        let encoding = if self.gzip.is_some() { Some("gzip") } else { None };
+        let mut head = std::mem::take(&mut self.head);
+        if injecting {
+            head = http::csp_with_nonce(&head, &self.nonce, LOCAL_ORIGIN);
+        }
+        out.extend_from_slice(&http::head_for_chunked_body(&head, encoding));
     }
 
     /// True when the last byte the origin promised has been handed over.
@@ -289,6 +303,33 @@ impl StreamState {
 /// no codec, gzip keeps the page compressed on the wire.
 fn streamable(encoding: http::Encoding) -> bool {
     matches!(encoding, http::Encoding::Identity | http::Encoding::Gzip)
+}
+
+/// Hands one complete, unedited response body back to the client.
+///
+/// A length-framed body is still framed exactly as it arrived, head included.
+/// A chunked one is not: [`ProxySession::take_body`] had to strip the chunk
+/// framing to hand the body over, so the framing is rebuilt around it — the
+/// stripped bytes under the origin's `transfer-encoding: chunked` head are
+/// what Chrome reports as `ERR_INVALID_CHUNKED_ENCODING`.
+fn emit_passthrough(
+    out: &mut Vec<u8>,
+    head: &[u8],
+    body: &[u8],
+    framing: Framing,
+    encoding: http::Encoding,
+) {
+    match framing {
+        Framing::Length(_) => {
+            out.extend_from_slice(head);
+            out.extend_from_slice(body);
+        }
+        Framing::Chunked => {
+            out.extend_from_slice(&http::head_for_chunked_body(head, encoding.name()));
+            http::emit_chunk(out, body);
+            http::emit_last_chunk(out);
+        }
+    }
 }
 
 /// How the body of the response being collected is framed.
@@ -946,14 +987,16 @@ impl ProxySession {
                     let decoded = http::decode_body(&body, encoding);
                     if decoded.is_none() && encoding != http::Encoding::Identity {
                         // Not a stream we can read: not ours to touch either.
-                        out.extend_from_slice(&head);
-                        out.extend_from_slice(&body);
+                        emit_passthrough(&mut out, &head, &body, framing, encoding);
                         self.resp_phase = RespPhase::Head;
                         continue;
                     }
                     let recompress = decoded.is_some();
                     let plain = decoded.as_deref().unwrap_or(&body);
-                    let snippet = self.injection_snippet(plain);
+                    // One nonce for this response: the tags carry it, and the
+                    // policy does too when the head goes out rewritten below.
+                    let nonce = http::new_nonce();
+                    let snippet = self.injection_snippet(plain, &nonce);
                     let (new_body, decision) = if snippet.is_empty() {
                         (plain.to_vec(), http::Decision::Skip)
                     } else {
@@ -968,6 +1011,9 @@ impl ProxySession {
                             plain.len(),
                             recompress
                         ));
+                        // The page keeps its policy: it just learns the nonce
+                        // the snippet's tags carry.
+                        let head = http::csp_with_nonce(&head, &nonce, LOCAL_ORIGIN);
                         match (recompress, http::gzip_encode(&new_body)) {
                             (true, Some(gzipped)) => {
                                 out.extend_from_slice(&http::head_for_new_body(
@@ -987,10 +1033,9 @@ impl ProxySession {
                             }
                         }
                     } else {
-                        // Nothing to inject, or nowhere to put it: the bytes the
-                        // origin sent go on untouched.
-                        out.extend_from_slice(&head);
-                        out.extend_from_slice(&body);
+                        // Nothing to inject, or nowhere to put it: the bytes
+                        // the origin sent go on untouched.
+                        emit_passthrough(&mut out, &head, &body, framing, encoding);
                     }
                     self.resp_phase = RespPhase::Head;
                     continue;
@@ -1018,7 +1063,8 @@ impl ProxySession {
                                     http::emit_chunk(&mut out, &tail);
                                 }
                             }
-                            state.ensure_head(&mut out);
+                            let injecting = state.injected;
+                            state.ensure_head(&mut out, injecting);
                             http::emit_last_chunk(&mut out);
                             state.finished = true;
                         }
@@ -1124,11 +1170,11 @@ impl ProxySession {
             } else {
                 state.prefix.extend_from_slice(&decoded);
                 if let Some(pos) = state.injection_offset() {
-                    let snippet = self.injection_snippet(&state.prefix);
+                    let snippet = self.injection_snippet(&state.prefix, &state.nonce);
                     let before: Vec<u8> = state.prefix[..pos].to_vec();
                     let after: Vec<u8> = state.prefix[pos..].to_vec();
                     state.prefix.clear();
-                    state.ensure_head(out);
+                    state.ensure_head(out, !snippet.is_empty());
                     self.stream_body(state, &before, out)?;
                     self.stream_body(state, &snippet, out)?;
                     state.injected_bytes += snippet.len();
@@ -1142,11 +1188,11 @@ impl ProxySession {
                 // No `</head>` ever showed up: the snippet lands after the last
                 // complete tag, so the document stays well formed.
                 let pos = http::safe_injection_point(&state.prefix);
-                let snippet = self.injection_snippet(&state.prefix);
+                let snippet = self.injection_snippet(&state.prefix, &state.nonce);
                 let before: Vec<u8> = state.prefix[..pos].to_vec();
                 let after: Vec<u8> = state.prefix[pos..].to_vec();
                 state.prefix.clear();
-                state.ensure_head(out);
+                state.ensure_head(out, !snippet.is_empty());
                 self.stream_body(state, &before, out)?;
                 self.stream_body(state, &snippet, out)?;
                 state.injected_bytes += snippet.len();
@@ -1158,7 +1204,8 @@ impl ProxySession {
                 encoder.finish(&mut tail)?;
                 http::emit_chunk(out, &tail);
             }
-            state.ensure_head(out);
+            let injecting = state.injected;
+            state.ensure_head(out, injecting);
             http::emit_last_chunk(out);
             state.finished = true;
             crate::logbuf::push(&format!(
@@ -1195,7 +1242,11 @@ impl ProxySession {
     /// cosmetic payload (rule data inline, runtime fetched from the app's own
     /// origin) plus the user script tag when one is installed. Empty when
     /// nothing applies.
-    fn injection_snippet(&self, body: &[u8]) -> Vec<u8> {
+    ///
+    /// Every tag carries `nonce`, and the head's policy is taught the same
+    /// value before it leaves, so a strict `script-src`/`style-src` lets the
+    /// snippet through without the page losing its policy.
+    fn injection_snippet(&self, body: &[u8], nonce: &str) -> Vec<u8> {
         let mut out = Vec::new();
         if let Some(filter) = self.cosmetic.as_deref() {
             // Without a hostname there are no rules to look up (a session that
@@ -1208,11 +1259,14 @@ impl ProxySession {
                 // page's service worker cannot answer in our place.
                 if let Some((href, _)) = hide_stylesheet(filter, host) {
                     out.extend_from_slice(
-                        http::style_link_tag(&local_asset(&href), "adfree-hide").as_bytes(),
+                        http::style_link_tag(&local_asset(&href), "adfree-hide", nonce).as_bytes(),
                     );
                 }
                 if let Some(data) = self.cosmetic_payload(filter, host, body) {
-                    out.extend_from_slice(b"<script>window.__adfree_page=");
+                    out.extend_from_slice(
+                        format!("<script{}>window.__adfree_page=", http::nonce_attr(nonce))
+                            .as_bytes(),
+                    );
                     out.extend_from_slice(data.as_bytes());
                     out.extend_from_slice(b";</script>");
                 }
@@ -1232,10 +1286,10 @@ impl ProxySession {
                 ),
                 None => versioned_path(PAGE_SCRIPT_PATH, content_hash(PAGE_RUNTIME.as_bytes())),
             };
-            out.extend_from_slice(http::script_tag(&local_asset(&runtime), false).as_bytes());
+            out.extend_from_slice(http::script_tag(&local_asset(&runtime), false, nonce).as_bytes());
         }
         if !self.script_src.is_empty() {
-            out.extend_from_slice(http::script_tag(&self.script_tag_src, true).as_bytes());
+            out.extend_from_slice(http::script_tag(&self.script_tag_src, true, nonce).as_bytes());
         }
         out
     }
@@ -1320,6 +1374,7 @@ pub fn take_local_request(
             IMMUTABLE_CACHE,
             script_body.as_bytes(),
             gzip,
+            false,
         ));
     }
     let filter = filter?;
@@ -1333,6 +1388,7 @@ pub fn take_local_request(
             IMMUTABLE_CACHE,
             PAGE_RUNTIME.as_bytes(),
             gzip,
+            false,
         ));
     }
     if target == HIDE_PATH {
@@ -1349,6 +1405,7 @@ pub fn take_local_request(
             IMMUTABLE_CACHE,
             body.as_deref().unwrap_or("").as_bytes(),
             gzip,
+            false,
         ));
     }
     if target == GENERIC_PATH {
@@ -1465,8 +1522,11 @@ fn percent_decode(value: &str) -> String {
 }
 
 /// A complete HTTP/1.1 response for a locally answered request.
+///
+/// The lookup is the one local answer a page *reads* (the runtime fetches it
+/// across origins), so it is the one that carries CORS.
 fn http_response(content_type: &str, body: &[u8]) -> Vec<u8> {
-    local_response(content_type, "no-store", body, false)
+    local_response(content_type, "no-store", body, false, true)
 }
 
 /// A locally answered response with an explicit cache policy.
@@ -1475,11 +1535,12 @@ fn http_response(content_type: &str, body: &[u8]) -> Vec<u8> {
 /// runtime and the hiding stylesheet are document-sized, and page data stays
 /// compressed on the wire.
 ///
-/// The two cross-origin headers are what let a page fetch these bytes from the
-/// app's own origin: `Cross-Origin-Resource-Policy` keeps pages served under
-/// COEP working, `Access-Control-Allow-Origin` lets the runtime read its
-/// dynamic-rule lookup answer.
-fn local_response(content_type: &str, cache: &str, body: &[u8], gzip: bool) -> Vec<u8> {
+/// `Cross-Origin-Resource-Policy` keeps pages served under COEP working and is
+/// on every answer; `Access-Control-Allow-Origin` is only on the ones a page
+/// is allowed to *read* (the rule lookup). Scripts and stylesheets are loaded
+/// by their tags and need no CORS — and the user script is the user's own
+/// code, which a page must not be able to fetch behind their back.
+fn local_response(content_type: &str, cache: &str, body: &[u8], gzip: bool, cors: bool) -> Vec<u8> {
     let compressed = if gzip && !body.is_empty() {
         http::gzip_bytes(body)
     } else {
@@ -1493,10 +1554,15 @@ fn local_response(content_type: &str, cache: &str, body: &[u8], gzip: bool) -> V
     } else {
         ""
     };
+    let cors = if cors {
+        "Access-Control-Allow-Origin: *\r\n"
+    } else {
+        ""
+    };
     let mut resp = Vec::with_capacity(payload.len() + 200);
     resp.extend_from_slice(
         format!(
-            "HTTP/1.1 200 OK\r\nContent-Type: {content_type}\r\nCache-Control: {cache}\r\n{encoding}Access-Control-Allow-Origin: *\r\nCross-Origin-Resource-Policy: cross-origin\r\nContent-Length: {}\r\n\r\n",
+            "HTTP/1.1 200 OK\r\nContent-Type: {content_type}\r\nCache-Control: {cache}\r\n{encoding}{cors}Cross-Origin-Resource-Policy: cross-origin\r\nContent-Length: {}\r\n\r\n",
             payload.len()
         )
         .as_bytes(),

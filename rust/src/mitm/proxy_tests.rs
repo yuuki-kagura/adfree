@@ -11,20 +11,45 @@ use crate::mitm::tls::{open_session, SniCertResolver};
 use std::io::{Read, Write};
 use std::sync::Arc;
 
-/// The tag the injector emits, so expectations stay in sync with the code.
+/// A nonce of the length the injector writes: 18 random bytes in hex.
+///
+/// The value differs per response, the length never does, so byte-count
+/// assertions can lean on this one and text assertions read the real nonce out
+/// of the response with [`nonce_in`].
+const TEST_NONCE: &str = "0123456789abcdef0123456789abcdef0123";
+
+/// The URL the injector gives the user script, hash and all.
 ///
 /// The session `build_proxy` makes has an empty script body, so the tag's URL
 /// carries the hash of nothing; the hash itself is what keeps the browser from
 /// re-fetching the script on every page.
-fn expected_tag() -> &'static str {
-    static TAG: std::sync::OnceLock<String> = std::sync::OnceLock::new();
-    TAG.get_or_init(|| {
-        format!(
-            "<script src=\"{}?h={:016x}\" defer></script>",
-            local_asset("/adfree-user.js"),
-            content_hash(b"")
-        )
-    })
+fn user_tag_src() -> String {
+    format!(
+        "{}?h={:016x}",
+        local_asset("/adfree-user.js"),
+        content_hash(b"")
+    )
+}
+
+/// The tag the injector emits for the user script, for a given nonce.
+fn expected_tag(nonce: &str) -> String {
+    crate::mitm::http::script_tag(&user_tag_src(), true, nonce)
+}
+
+/// The nonce an injected tag carries, read out of the response itself.
+fn nonce_in(text: &str) -> String {
+    let at = text
+        .find(" nonce=\"")
+        .expect("an injected tag carries a nonce")
+        + " nonce=\"".len();
+    let rest = &text[at..];
+    rest[..rest.find('"').expect("the nonce is quoted")].to_string()
+}
+
+/// Whether `text` holds the user-script tag with the nonce that same response
+/// issued: the two travel together, so both ends are checked at once.
+fn has_user_tag(text: &str) -> bool {
+    text.contains(&expected_tag(&nonce_in(text)))
 }
 
 /// A filter engine built from a list written to disk, exactly like the app
@@ -134,15 +159,15 @@ fn injects_into_html_and_fixes_content_length() {
 
     let body = "<html><head></head><body>ad</body></html>";
     let (out, injected) = proxy.rewrite_response(&html_response(body));
-    assert_eq!(injected, expected_tag().len(), "the whole tag is added");
+    assert_eq!(injected, expected_tag(TEST_NONCE).len(), "the whole tag is added");
 
     let text = String::from_utf8(out).expect("utf8");
-    let new_len = body.len() + expected_tag().len();
+    let new_len = body.len() + expected_tag(TEST_NONCE).len();
     assert!(
         text.contains(&format!("Content-Length: {new_len}")),
         "length rewritten to {new_len}: {text}"
     );
-    assert!(text.contains(expected_tag()));
+    assert!(has_user_tag(&text));
 }
 
 #[test]
@@ -161,12 +186,12 @@ fn response_split_across_reads_is_reassembled() {
 
     // Chunk 2: the body.
     let (out, injected) = proxy.rewrite_response(body.as_bytes());
-    assert_eq!(injected, expected_tag().len());
+    assert_eq!(injected, expected_tag(TEST_NONCE).len());
 
     let text = String::from_utf8(out).expect("utf8");
-    let new_len = body.len() + expected_tag().len();
+    let new_len = body.len() + expected_tag(TEST_NONCE).len();
     assert!(text.contains(&format!("Content-Length: {new_len}")), "{text}");
-    assert!(text.contains(expected_tag()));
+    assert!(has_user_tag(&text));
 }
 
 #[test]
@@ -183,7 +208,7 @@ fn gzip_responses_are_decoded_rewritten_and_recompressed() {
     response.extend_from_slice(&gz);
 
     let (out, injected) = proxy.rewrite_response(&response);
-    assert_eq!(injected, expected_tag().len(), "the tag is added to the page");
+    assert_eq!(injected, expected_tag(TEST_NONCE).len(), "the tag is added to the page");
 
     let split = http::head_end(&out).expect("head");
     let head = String::from_utf8(out[..split].to_vec()).expect("utf8");
@@ -191,7 +216,7 @@ fn gzip_responses_are_decoded_rewritten_and_recompressed() {
     // The body stays compressed, and decodes back to the injected HTML.
     let plain = http::decode_body(&out[split..], http::Encoding::Gzip).expect("decoded");
     let decoded = String::from_utf8(plain).expect("utf8");
-    assert!(decoded.contains(expected_tag()), "{decoded}");
+    assert!(has_user_tag(&decoded), "{decoded}");
     assert_eq!(
         http::parse_response_head(&out[..split]).content_length,
         Some(out.len() - split)
@@ -230,20 +255,18 @@ fn chunked_responses_become_identity_with_a_length() {
     response.extend_from_slice(b"\r\n0\r\n\r\n");
 
     let (out, injected) = proxy.rewrite_response(&response);
-    assert_eq!(injected, expected_tag().len());
+    assert_eq!(injected, expected_tag(TEST_NONCE).len());
 
     let text = String::from_utf8(out.clone()).expect("utf8");
     assert!(!text.contains("Transfer-Encoding"), "{text}");
     let split = http::head_end(&out).expect("head");
-    let new_len = body.len() + expected_tag().len();
+    let new_len = body.len() + expected_tag(TEST_NONCE).len();
     assert_eq!(
         http::parse_response_head(&out[..split]).content_length,
         Some(new_len)
     );
     assert_eq!(out.len() - split, new_len, "the body is not chunked anymore");
-    assert!(String::from_utf8(out[split..].to_vec())
-        .expect("utf8")
-        .contains(expected_tag()));
+    assert!(has_user_tag(std::str::from_utf8(&out[split..]).expect("utf8")));
 }
 
 /// The regression this stage exists for: a body that arrives in several reads
@@ -266,7 +289,7 @@ fn multi_read_bodies_get_the_full_length() {
         out.extend_from_slice(&part);
         injected += count;
     }
-    assert_eq!(injected, expected_tag().len());
+    assert_eq!(injected, expected_tag(TEST_NONCE).len());
 
     let split = http::head_end(&out).expect("head");
     let declared = http::parse_response_head(&out[..split])
@@ -274,7 +297,7 @@ fn multi_read_bodies_get_the_full_length() {
         .expect("content-length");
     assert_eq!(declared, out.len() - split, "the declared length is the real one");
     let text = String::from_utf8(out[split..].to_vec()).expect("utf8");
-    assert!(text.contains(expected_tag()));
+    assert!(has_user_tag(&text));
     assert!(text.ends_with("</body></html>"), "the body must be complete");
 }
 
@@ -289,10 +312,10 @@ fn several_responses_on_one_connection_are_each_rewritten() {
         "<html><head></head><body>two</body></html>",
     ));
     let (out, injected) = proxy.rewrite_response(&response);
-    assert_eq!(injected, expected_tag().len() * 2, "both bodies got a tag");
+    assert_eq!(injected, expected_tag(TEST_NONCE).len() * 2, "both bodies got a tag");
 
     let text = String::from_utf8(out).expect("utf8");
-    assert_eq!(text.matches(expected_tag()).count(), 2);
+    assert_eq!(text.matches(&user_tag_src()).count(), 2);
     assert_eq!(text.matches("HTTP/1.1 200 OK").count(), 2);
 }
 
@@ -308,10 +331,10 @@ fn bodyless_responses_do_not_hold_the_connection() {
         "<html><head></head><body>after</body></html>",
     ));
     let (out, injected) = proxy.rewrite_response(&response);
-    assert_eq!(injected, expected_tag().len());
+    assert_eq!(injected, expected_tag(TEST_NONCE).len());
     let text = String::from_utf8(out).expect("utf8");
     assert!(text.contains("304 Not Modified"));
-    assert!(text.contains(expected_tag()));
+    assert!(has_user_tag(&text));
 }
 
 #[test]
@@ -627,8 +650,8 @@ fn a_pending_session_opens_from_the_client_hello() {
     );
     assert!(
         browser_plain
-            .windows(expected_tag().len())
-            .any(|w| w == expected_tag().as_bytes()),
+            .windows(user_tag_src().len())
+            .any(|w| w == user_tag_src().as_bytes()),
         "the script must still be injected through a pending-opened session"
     );
 }
@@ -867,7 +890,7 @@ fn a_long_identity_body_streams_with_the_tag_in_it() {
         out.extend_from_slice(&part);
         injected += count;
     }
-    assert_eq!(injected, expected_tag().len());
+    assert_eq!(injected, expected_tag(TEST_NONCE).len());
 
     let (head, page) = read_streamed(&out, false);
     let lower = head.to_lowercase();
@@ -875,11 +898,13 @@ fn a_long_identity_body_streams_with_the_tag_in_it() {
     assert!(lower.contains("transfer-encoding: chunked"), "{head}");
     assert!(!lower.contains("content-length"), "framing must be chunked: {head}");
 
-    let tag = page.find(expected_tag()).expect("the tag must be in the page");
+    let tag = page
+        .find(&expected_tag(&nonce_in(&page)))
+        .expect("the tag must be in the page");
     let head_close = page.find("</head>").expect("</head>");
     assert!(tag < head_close, "the tag must land before </head>");
     assert!(page.ends_with("</body></html>"), "the body must be complete");
-    assert_eq!(page.len(), body.len() + expected_tag().len());
+    assert_eq!(page.len(), body.len() + expected_tag(TEST_NONCE).len());
 }
 
 #[test]
@@ -903,16 +928,16 @@ fn a_long_gzip_body_streams_still_compressed() {
         out.extend_from_slice(&part);
         injected += count;
     }
-    assert_eq!(injected, expected_tag().len());
+    assert_eq!(injected, expected_tag(TEST_NONCE).len());
 
     let (head, page) = read_streamed(&out, true);
     let lower = head.to_lowercase();
     assert!(lower.contains("transfer-encoding: chunked"), "{head}");
     assert!(lower.contains("content-encoding: gzip"), "must stay compressed: {head}");
     assert!(!lower.contains("content-length"), "{head}");
-    assert!(page.contains(expected_tag()));
+    assert!(has_user_tag(&page));
     assert!(page.ends_with("</body></html>"));
-    assert_eq!(page.len(), body.len() + expected_tag().len());
+    assert_eq!(page.len(), body.len() + expected_tag(TEST_NONCE).len());
 }
 
 /// The shape a real site serves: chunked *and* compressed, bytes arriving a
@@ -945,13 +970,13 @@ fn a_chunked_gzip_body_streams() {
         out.extend_from_slice(&part);
         injected += count;
     }
-    assert_eq!(injected, expected_tag().len());
+    assert_eq!(injected, expected_tag(TEST_NONCE).len());
 
     let (head, page) = read_streamed(&out, true);
     assert!(head.to_lowercase().contains("content-encoding: gzip"));
-    assert!(page.contains(expected_tag()));
+    assert!(has_user_tag(&page));
     assert!(page.ends_with("</body></html>"));
-    assert_eq!(page.len(), body.len() + expected_tag().len());
+    assert_eq!(page.len(), body.len() + expected_tag(TEST_NONCE).len());
 }
 
 /// The streaming encoder must write a gzip stream the *library* decoder accepts
@@ -977,7 +1002,7 @@ fn the_streamed_gzip_body_is_valid_gzip() {
     assert!(framing.push(&out[split..], &mut payload).expect("chunks"));
     let plain = http::decode_body(&payload, http::Encoding::Gzip).expect("flate2 must accept it");
     let page = String::from_utf8(plain).expect("utf8");
-    assert!(page.contains(expected_tag()));
+    assert!(has_user_tag(&page));
     assert!(page.ends_with("</body></html>"));
 }
 
@@ -1012,13 +1037,13 @@ fn chunked_bodies_cut_at_the_payload_end_still_stream() {
         out.extend_from_slice(&part);
         injected += count;
     }
-    assert_eq!(injected, expected_tag().len());
+    assert_eq!(injected, expected_tag(TEST_NONCE).len());
 
     let (head, page) = read_streamed(&out, true);
     assert!(head.to_lowercase().contains("transfer-encoding: chunked"));
-    assert!(page.contains(expected_tag()));
+    assert!(has_user_tag(&page));
     assert!(page.ends_with("</body></html>"));
-    assert_eq!(page.len(), body.len() + expected_tag().len());
+    assert_eq!(page.len(), body.len() + expected_tag(TEST_NONCE).len());
 }
 
 /// Cosmetic filtering has to run even when the proxy found no rules of its own:
@@ -1037,15 +1062,16 @@ fn the_page_runtime_is_injected_even_without_a_payload() {
     let (out, injected) = proxy.rewrite_response(&html_response(body));
     let text = String::from_utf8(out).expect("utf8");
     let runtime = format!("{}?h=", local_asset("/adfree-page.js"));
+    let nonce = nonce_in(&text);
     assert!(
-        text.contains(&format!("<script src=\"{runtime}")),
-        "the runtime must go out: {text}"
+        text.contains(&format!("<script nonce=\"{nonce}\" src=\"{runtime}")),
+        "the runtime must go out with the nonce: {text}"
     );
     assert!(
         !text.contains("window.__adfree_page"),
         "there is no payload to send for this page: {text}"
     );
-    assert!(text.contains(expected_tag()), "{text}");
+    assert!(has_user_tag(&text), "{text}");
     assert!(injected > 0);
 }
 

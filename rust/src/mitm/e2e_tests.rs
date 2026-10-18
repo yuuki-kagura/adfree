@@ -232,6 +232,12 @@ enum OriginBody {
     Gzip,
     /// The same HTML cut into HTTP chunks.
     Chunked,
+    /// gzip-compressed HTML cut into HTTP chunks — what news.ycombinator.com
+    /// and many other origins serve.
+    ChunkedGzip,
+    /// Chunked and *declared* gzip, but the body is not gzip at all: the proxy
+    /// cannot decode it and has to hand it over untouched.
+    ChunkedBadGzip,
 }
 
 /// A loopback HTTPS origin serving `html` for `GET /`.
@@ -319,6 +325,29 @@ fn start_origin_mode(html: &'static str, mode: OriginBody) -> Origin {
                             .to_vec();
                         out.extend_from_slice(format!("{:x}\r\n", html.len()).as_bytes());
                         out.extend_from_slice(html.as_bytes());
+                        out.extend_from_slice(b"\r\n0\r\n\r\n");
+                        out
+                    }
+                    OriginBody::ChunkedGzip => {
+                        let gz = crate::mitm::http::gzip_encode(html.as_bytes()).expect("gzip");
+                        let mut out = b"HTTP/1.1 200 OK\r\nContent-Type: text/html\r\n\
+                             Content-Encoding: gzip\r\n\
+                             Content-Security-Policy: script-src 'none'\r\n\
+                             Transfer-Encoding: chunked\r\nConnection: keep-alive\r\n\r\n"
+                            .to_vec();
+                        out.extend_from_slice(format!("{:x}\r\n", gz.len()).as_bytes());
+                        out.extend_from_slice(&gz);
+                        out.extend_from_slice(b"\r\n0\r\n\r\n");
+                        out
+                    }
+                    OriginBody::ChunkedBadGzip => {
+                        let garbage = b"not gzip at all";
+                        let mut out = b"HTTP/1.1 200 OK\r\nContent-Type: text/html\r\n\
+                             Content-Encoding: gzip\r\n\
+                             Transfer-Encoding: chunked\r\nConnection: keep-alive\r\n\r\n"
+                            .to_vec();
+                        out.extend_from_slice(format!("{:x}\r\n", garbage.len()).as_bytes());
+                        out.extend_from_slice(garbage);
                         out.extend_from_slice(b"\r\n0\r\n\r\n");
                         out
                     }
@@ -447,6 +476,13 @@ fn complete_response(raw: &[u8]) -> bool {
         return false;
     };
     let head = String::from_utf8_lossy(&raw[..head_end]).to_lowercase();
+    if head
+        .lines()
+        .any(|l| l.trim() == "transfer-encoding: chunked")
+    {
+        // No length to count: the terminator is the only end there is.
+        return raw[head_end..].ends_with(b"0\r\n\r\n");
+    }
     let len: usize = head
         .lines()
         .find_map(|l| l.strip_prefix("content-length:"))
@@ -468,6 +504,38 @@ fn hide_href(page: &str) -> String {
     let rest = &page[start..];
     let end = rest.find('"').expect("the href must be quoted");
     rest[..end].to_string()
+}
+
+/// The nonce the injected tags carry, out of the policy that learned it.
+///
+/// Also asserts the shape that matters: the policy is still there (that is the
+/// point of the rewrite) and it says `'nonce-…'` — the same value every
+/// injected tag must carry.
+fn nonce_of(head: &str) -> String {
+    let lower = head.to_lowercase();
+    assert!(
+        lower.contains("content-security-policy"),
+        "the page's policy must survive the injection: {head}"
+    );
+    let at = head
+        .find("'nonce-")
+        .expect("the policy must be taught our nonce")
+        + "'nonce-".len();
+    let rest = &head[at..];
+    let end = rest.find('\'').expect("the nonce must be quoted");
+    rest[..end].to_string()
+}
+
+/// The page as the client can read it: gunzipped when the head says so.
+fn page_text(head: &str, body: &[u8]) -> String {
+    if head.to_lowercase().contains("content-encoding: gzip") {
+        let decoded =
+            crate::mitm::http::decode_body(body, crate::mitm::http::Encoding::Gzip)
+                .expect("the body must decode as gzip");
+        String::from_utf8_lossy(&decoded).to_string()
+    } else {
+        String::from_utf8_lossy(body).to_string()
+    }
 }
 
 /// Same, with extra request headers (each line already ending in CRLF).
@@ -637,29 +705,41 @@ fn cosmetic_filtering_rides_the_packet_path() {
         "br/zstd must be dropped before the request goes upstream"
     );
     assert!(head.starts_with("HTTP/1.1 200"), "{head}");
+    let nonce = nonce_of(&head);
     assert!(
-        !head.to_lowercase().contains("content-security-policy"),
-        "CSP must be stripped: {head}"
+        head.to_lowercase()
+            .contains(&format!("script-src 'none' 'nonce-{nonce}'")),
+        "the page's policy must stay, with our nonce added: {head}"
     );
     let page = String::from_utf8_lossy(&body);
-    assert!(page.contains("window.__adfree_page="), "payload injected");
     assert!(
-        page.contains(&format!(
-            "<script src=\"{}?dmn=shop.test&h=",
-            local_asset("/adfree-page.js")
-        )),
-        "runtime tag injected"
+        page.contains(&format!("<script nonce=\"{nonce}\">window.__adfree_page=")),
+        "payload injected with the nonce: {page}"
     );
     assert!(
         page.contains(&format!(
-            "<script src=\"{}?h=",
+            "<script nonce=\"{nonce}\" src=\"{}?dmn=shop.test&h=",
+            local_asset("/adfree-page.js")
+        )),
+        "runtime tag injected with the nonce"
+    );
+    assert!(
+        page.contains(&format!(
+            "<script nonce=\"{nonce}\" src=\"{}?h=",
             local_asset("/adfree-user.js")
         )),
-        "user script tag injected"
+        "user script tag injected with the nonce"
+    );
+    let href = hide_href(&page);
+    assert!(
+        page.contains(&format!(
+            "<link rel=\"stylesheet\" id=\"adfree-hide\" href=\"{}\" nonce=\"{nonce}\">",
+            local_asset(&href)
+        )),
+        "the stylesheet link carries the nonce: {page}"
     );
     // Element hiding left the payload: it travels as a stylesheet the browser
     // fetches once per site, and its URL hashes exactly what it serves.
-    let href = hide_href(&page);
     assert!(href.starts_with("/adfree-hide.css?dmn=shop.test&h="), "{href}");
     assert!(!page.contains("\"hide\""), "hiding left the payload: {page}");
     assert!(
@@ -752,12 +832,17 @@ fn the_injection_origin_is_answered_without_a_peer() {
     assert!(!conn.is_handshaking(), "the local origin must complete a handshake");
 
     // 1. The runtime, for the host its tag named (`dmn=`, like AdGuard's
-    //    content script carries).
+    //    content script carries). A `<script src>` needs no CORS, only CORP;
+    //    the page must not be able to *read* our assets.
     let (head, body) = request(&mut tcp, &mut conn, "/adfree-page.js?dmn=shop.test&h=0");
     assert!(head.starts_with("HTTP/1.1 200"), "{head}");
     assert!(
-        head.contains("Access-Control-Allow-Origin: *"),
-        "the runtime is fetched cross-origin: {head}"
+        head.contains("Cross-Origin-Resource-Policy: cross-origin"),
+        "the runtime is embedded cross-origin: {head}"
+    );
+    assert!(
+        !head.contains("Access-Control-Allow-Origin"),
+        "a page must not be able to fetch the runtime: {head}"
     );
     assert!(
         contains_bytes(&body, b"window.__adfree_page"),
@@ -765,8 +850,13 @@ fn the_injection_origin_is_answered_without_a_peer() {
     );
 
     // 2. The user script, in window-sized bursts like a real origin's answer.
+    //    The user's own code: not readable from a page.
     let (head, body) = request(&mut tcp, &mut conn, "/adfree-user.js");
     assert!(head.starts_with("HTTP/1.1 200"), "{head}");
+    assert!(
+        !head.contains("Access-Control-Allow-Origin"),
+        "the user script must stay unreadable: {head}"
+    );
     assert!(
         contains_bytes(&body, b"window.__adfree_e2e"),
         "the script body must arrive, got {} bytes",
@@ -784,6 +874,10 @@ fn the_injection_origin_is_answered_without_a_peer() {
         "/adfree-generic.js?dmn=shop.test&c=adsbygoogle&i=slot-1",
     );
     assert!(head.starts_with("HTTP/1.1 200"), "{head}");
+    assert!(
+        head.contains("Access-Control-Allow-Origin: *"),
+        "the rule lookup is what a page reads cross-origin: {head}"
+    );
     let json = String::from_utf8_lossy(&body);
     assert!(json.contains("\".adsbygoogle\""), "{json}");
 
@@ -812,10 +906,11 @@ fn compressed_and_chunked_pages_are_still_filtered() {
 
         let (head, body) = request(&mut tcp, &mut conn, "/");
         assert!(head.starts_with("HTTP/1.1 200"), "{head}");
+        let nonce = nonce_of(&head);
         let lower = head.to_lowercase();
         assert!(
-            !lower.contains("content-security-policy"),
-            "CSP must be stripped whatever the framing: {head}"
+            lower.contains(&format!("script-src 'none' 'nonce-{nonce}'")),
+            "the policy must survive the framing rewrite: {head}"
         );
 
         let page = match mode {
@@ -837,8 +932,8 @@ fn compressed_and_chunked_pages_are_still_filtered() {
             }
         };
         assert!(
-            page.contains("window.__adfree_page="),
-            "the payload must be injected into a {mode:?} page: {page}"
+            page.contains(&format!("<script nonce=\"{nonce}\">window.__adfree_page=")),
+            "the payload must be injected into a {mode:?} page with the nonce: {page}"
         );
         let href = hide_href(&page);
         assert!(
@@ -849,6 +944,103 @@ fn compressed_and_chunked_pages_are_still_filtered() {
         assert!(page.contains("Sponsored content"), "the page itself is intact: {page}");
         tcp.close();
     }
+}
+
+/// The shape news.ycombinator.com serves: no doctype, and the `<html>` tag
+/// carries attributes so the bare `"<html>"` never occurs.
+const HTML_NO_DOCTYPE: &str = "<html lang=\"en\" op=\"news\"><head><title>e2e</title></head>\
+                               <body><div class=\"adsbygoogle\" id=\"slot-1\">ad</div></body></html>";
+
+#[test]
+fn a_page_without_a_doctype_is_injected_like_any_other() {
+    // Until the document check learned this shape the body fell through
+    // unedited — and under chunked framing that also broke the page.
+    for mode in [OriginBody::Plain, OriginBody::ChunkedGzip] {
+        let origin = start_origin_mode(HTML_NO_DOCTYPE, mode);
+        let (core, ca_der) = setup_core_named(&origin, "e2e-no-doctype");
+
+        let mut tcp = Client::connect(core.clone(), origin.port);
+        let mut conn = handshake(&mut tcp, client_config(ca_der));
+
+        let (head, body) = request(&mut tcp, &mut conn, "/");
+        let nonce = nonce_of(&head);
+        assert!(
+            !head.to_lowercase().contains("transfer-encoding"),
+            "chunking must be gone, the body has a length now: {head}"
+        );
+        let page = page_text(&head, &body);
+        assert!(
+            page.contains(&format!("<script nonce=\"{nonce}\">window.__adfree_page=")),
+            "the payload must be injected into a {mode:?} page with the nonce: {page}"
+        );
+        assert!(
+            page.contains(&format!(
+                "<script nonce=\"{nonce}\" src=\"https://192.0.2.1/adfree-page.js"
+            )),
+            "the runtime must travel with the same nonce into a {mode:?} page: {page}"
+        );
+        assert!(page.contains("\"#slot-1\""), "generic rules must be scanned: {page}");
+        tcp.close();
+    }
+}
+
+#[test]
+fn a_chunked_body_that_is_not_ours_to_edit_keeps_its_chunking() {
+    // `text/html` that never looks like a document: the injector leaves it
+    // alone, and the framing has to survive that — a dechunked body under the
+    // origin's `transfer-encoding: chunked` head is exactly what Chrome
+    // reports as ERR_INVALID_CHUNKED_ENCODING.
+    let fragment = "<div class=\"adsbygoogle\">ad</div>";
+    for mode in [OriginBody::Chunked, OriginBody::ChunkedGzip] {
+        let origin = start_origin_mode(fragment, mode);
+        let (core, ca_der) = setup_core_named(&origin, "e2e-passthrough");
+
+        let mut tcp = Client::connect(core.clone(), origin.port);
+        let mut conn = handshake(&mut tcp, client_config(ca_der));
+
+        let (head, body) = request(&mut tcp, &mut conn, "/");
+        assert!(
+            head.to_lowercase().contains("transfer-encoding: chunked"),
+            "the framing the origin chose must survive: {head}"
+        );
+        let payload = match crate::mitm::http::dechunk(&body) {
+            crate::mitm::http::Dechunk::Complete { payload, .. } => payload,
+            _ => panic!("the client must receive a well-framed chunked body: {body:?}"),
+        };
+        let plain = if mode == OriginBody::ChunkedGzip {
+            crate::mitm::http::decode_body(&payload, crate::mitm::http::Encoding::Gzip)
+                .expect("the gzip payload must survive")
+        } else {
+            payload
+        };
+        assert_eq!(String::from_utf8_lossy(&plain), fragment);
+        tcp.close();
+    }
+}
+
+#[test]
+fn a_chunked_body_we_cannot_decode_keeps_its_chunking() {
+    // Declared gzip, but the bytes are not: the injector cannot read the body,
+    // so it hands it over byte for byte. Framing included — this is the other
+    // branch that leaves a body alone.
+    let garbage = "not gzip at all";
+    let origin = start_origin_mode(garbage, OriginBody::ChunkedBadGzip);
+    let (core, ca_der) = setup_core_named(&origin, "e2e-bad-gzip");
+
+    let mut tcp = Client::connect(core.clone(), origin.port);
+    let mut conn = handshake(&mut tcp, client_config(ca_der));
+
+    let (head, body) = request(&mut tcp, &mut conn, "/");
+    assert!(
+        head.to_lowercase().contains("transfer-encoding: chunked"),
+        "the framing the origin chose must survive: {head}"
+    );
+    let payload = match crate::mitm::http::dechunk(&body) {
+        crate::mitm::http::Dechunk::Complete { payload, .. } => payload,
+        _ => panic!("the client must receive a well-framed chunked body: {body:?}"),
+    };
+    assert_eq!(String::from_utf8_lossy(&payload), garbage);
+    tcp.close();
 }
 
 /// A page that does not compress away: a repeated character would shrink to
@@ -936,26 +1128,26 @@ fn a_page_larger_than_one_window_streams_to_the_client() {
         "and it must still travel compressed: {head}"
     );
     assert!(!lower.contains("content-length"), "{head}");
-    assert!(!lower.contains("content-security-policy"), "{head}");
+    let nonce = nonce_of(&head);
 
     let page = String::from_utf8(body).expect("utf8");
     assert!(
         page.contains(&format!(
-            "<script src=\"{}?dmn=shop.test&h=",
+            "<script nonce=\"{nonce}\" src=\"{}?dmn=shop.test&h=",
             local_asset("/adfree-page.js")
         )),
-        "the runtime tag must be injected"
+        "the runtime tag must be injected with the nonce"
     );
     assert!(
         page.contains(&format!(
-            "<script src=\"{}?h=",
+            "<script nonce=\"{nonce}\" src=\"{}?h=",
             local_asset("/adfree-user.js")
         )),
-        "the user script tag must be injected"
+        "the user script tag must be injected with the nonce"
     );
     assert!(
-        page.contains("window.__adfree_page="),
-        "the payload must be injected"
+        page.contains(&format!("<script nonce=\"{nonce}\">window.__adfree_page=")),
+        "the payload must be injected with the nonce"
     );
     // Hostname rules come from the URL, so they are there even though the scan
     // only saw the head of the document — as the stylesheet the browser caches.

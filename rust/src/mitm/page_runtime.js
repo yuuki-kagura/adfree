@@ -32,13 +32,20 @@
   // legacy same-origin tag (a page cached before an app update) working.
   let base = location.origin;
   let dmn = location.hostname;
+  let nonce = '';
   try {
-    const selfSrc = document.currentScript?.src;
+    const self = document.currentScript;
+    const selfSrc = self?.src;
     if (selfSrc) {
       const selfUrl = new URL(selfSrc);
       base = selfUrl.origin;
       dmn = selfUrl.searchParams.get('dmn') || dmn;
     }
+    // The nonce our tags carry — the proxy taught it to the page's policy, and
+    // anything this runtime creates has to carry it too, or a strict
+    // `style-src` drops it. A nonce is hidden from `getAttribute` and readable
+    // through the property, which is what lets a script pass it on.
+    nonce = self?.nonce || self?.getAttribute?.('nonce') || '';
   } catch {
     /* keep the fallbacks */
   }
@@ -108,6 +115,24 @@
     }
   };
 
+  // Tags this runtime creates carry the nonce the proxy put on its own: a
+  // `<style>` or a `<script>` built from JS is subject to `style-src` /
+  // `script-src` like any other, and a strict policy drops an un-nonced one.
+  const withNonce = (el) => {
+    if (nonce) {
+      try {
+        if ('nonce' in el) {
+          el.nonce = nonce;
+        } else {
+          el.setAttribute('nonce', nonce);
+        }
+      } catch {
+        /* an element that refuses the attribute is still better than none */
+      }
+    }
+    return el;
+  };
+
   // Writes the whole rule set again, wherever it lives: `dynamicCss` grows as
   // lookups come back, so a rewrite is one call instead of an append path.
   const installStyles = () => {
@@ -131,7 +156,7 @@
       }
     }
     try {
-      const el = styleEl ?? document.createElement('style');
+      const el = withNonce(styleEl ?? document.createElement('style'));
       el.setAttribute('data-adfree', 'css');
       el.textContent = css;
       if (!el.isConnected) {
@@ -147,12 +172,19 @@
   installStyles();
 
   // Scriptlets run immediately: they install property traps and must beat the
-  // page's own scripts.
+  // page's own scripts. They go in as an inline `<script>` carrying our nonce
+  // rather than through `new Function`: a strict policy has no `'unsafe-eval'`,
+  // and eval would be dropped silently — the nonce is what `script-src`
+  // already accepts. The wrapper keeps the isolation the function constructor
+  // gave them: one broken scriptlet must not take the page down with it.
   if (data.scriptlets) {
     try {
-      (new Function(data.scriptlets))();
+      const el = withNonce(document.createElement('script'));
+      el.textContent = `try {\n${data.scriptlets}\n} catch { /* a broken scriptlet stays inside */ }`;
+      (document.head || document.documentElement).appendChild(el);
+      el.remove();
     } catch {
-      /* a broken scriptlet must not break the page */
+      /* a scriptlet that cannot even be inserted must not break the page */
     }
   }
 

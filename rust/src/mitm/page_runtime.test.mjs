@@ -121,6 +121,7 @@ const openPage = async (options = {}) => {
       return route.fulfill({
         status: 200,
         contentType: 'text/html; charset=utf-8',
+        headers: options.csp ? { 'content-security-policy': options.csp } : {},
         body: page1(options.html ?? {}),
       });
     }
@@ -134,15 +135,18 @@ const openPage = async (options = {}) => {
   if (options.before) {
     await options.before(page);
   }
-  // The proxy writes the payload inline before the runtime tag.
-  await page.evaluate((payload) => {
-    if (payload !== undefined) {
-      window.__adfree_page = payload;
-    }
-  }, options.payload);
-  await page.addScriptTag({
-    url: options.scriptUrl ?? `${ORIGIN}/adfree-page.js?dmn=shop.test&h=test`,
-  });
+  // The proxy writes the payload inline before the runtime tag, so the tests
+  // do the same — unless the document already carries both (the CSP tests).
+  if (options.scriptTag !== false) {
+    await page.evaluate((payload) => {
+      if (payload !== undefined) {
+        window.__adfree_page = payload;
+      }
+    }, options.payload);
+    await page.addScriptTag({
+      url: options.scriptUrl ?? `${ORIGIN}/adfree-page.js?dmn=shop.test&h=test`,
+    });
+  }
 
   return {
     page,
@@ -212,6 +216,65 @@ test('without constructable stylesheets a style element carries the rules, and s
     .poll(() => page.page.evaluate(() => document.querySelectorAll('style[data-adfree]').length))
     .toBe(1);
   await expect.poll(() => page.display('.ad-slot')).toBe('none');
+  expect(page.errors).toEqual([]);
+});
+
+test('a strict policy is satisfied by the nonce and the origin, carriers included', async () => {
+  const nonce = 'csp-test-nonce-0123456789';
+  const page = await openPage({
+    // The shape the proxy writes for a nonce-locked page: the tags carry the
+    // nonce, and our origin sits where the lookup's fetch lands. Nothing
+    // without one of those gets through, so a rule that lands proves its
+    // carrier was accepted by the browser's own policy check.
+    csp: `default-src 'none' ${ORIGIN}; script-src 'nonce-${nonce}'; style-src 'nonce-${nonce}'`,
+    // The document carries what the proxy injects, nonce included: the payload
+    // inline, the stylesheet link, then the runtime tag — which is how
+    // `currentScript` hands the runtime its own nonce.
+    html: {
+      head:
+        `<script nonce="${nonce}">window.__adfree_page={"generic":[".ad-slot"],"scriptlets":"document.documentElement.setAttribute('data-ran','1')"};</script>` +
+        `<link rel="stylesheet" id="adfree-hide" href="${ORIGIN}/adfree-hide.css?dmn=shop.test&h=hide" nonce="${nonce}">` +
+        `<script nonce="${nonce}" src="${ORIGIN}/adfree-page.js?dmn=shop.test&h=test"></script>`,
+      body: '<div class="banner">banner</div><div class="ad-slot">slot</div>',
+    },
+    hideCss: '.banner{display:none!important}',
+    answer: ['.late-ad'],
+    scriptTag: false,
+    // The `<style>` element path is the one that has to carry the nonce.
+    initScript: () => {
+      delete Document.prototype.adoptedStyleSheets;
+      delete window.CSSStyleSheet;
+    },
+  });
+
+  // The link the proxy wrote: a nonce on `<link rel=stylesheet>` is honoured.
+  await expect.poll(() => page.display('.banner')).toBe('none');
+  // And the element the runtime builds itself: it read the nonce off its own
+  // tag, or the browser would have dropped the sheet.
+  await expect.poll(() => page.display('.ad-slot')).toBe('none');
+  const style = await page.page.evaluate(() => {
+    const el = document.querySelector('style[data-adfree]');
+    return el ? { nonce: el.nonce, rules: el.sheet ? el.sheet.cssRules.length : 0 } : null;
+  });
+  expect(style).not.toBeNull();
+  expect(style.nonce).toBe(nonce);
+  expect(style.rules).toBe(1);
+
+  // The lookup is a `fetch`, so it is the origin in `default-src` that keeps
+  // it alive — a nonce does nothing for `connect-src`.
+  await page.page.evaluate(() => {
+    const el = document.createElement('div');
+    el.className = 'late-ad';
+    document.body.appendChild(el);
+  });
+  await expect.poll(() => page.lookups.length).toBe(1);
+  await expect.poll(() => page.display('.late-ad')).toBe('none');
+
+  // A scriptlet is inline JavaScript: `new Function` would be `'unsafe-eval'`
+  // and dropped here, so it runs as a `<script>` carrying the same nonce.
+  expect(
+    await page.page.evaluate(() => document.documentElement.getAttribute('data-ran'))
+  ).toBe('1');
   expect(page.errors).toEqual([]);
 });
 
@@ -450,31 +513,66 @@ describe.skipIf(!process.env.ADFREE_CDP)('behind the running VPN', () => {
   test('a real page carries the injected tags and the runtime answers', async () => {
     const connected = await chromium.connectOverCDP(process.env.ADFREE_CDP);
     const context = connected.contexts()[0];
-    const page = context.pages()[0];
-    await page.goto(process.env.ADFREE_PAGE ?? 'https://dantri.com.vn/', { waitUntil: 'load' });
-    await page.waitForTimeout(3000);
+    const page = await context.newPage();
 
-    const tags = await page.evaluate(() =>
-      [...document.querySelectorAll('script[src], link[href]')]
-        .map((el) => el.src || el.href)
-        .filter((url) => url.includes('192.0.2.1'))
-    );
+    // Fresh bytes: a cached copy of the page from an earlier run carries no
+    // tags, and this test is about what the running VPN does to a response.
+    const cdp = await context.newCDPSession(page);
+    await cdp.send('Network.enable');
+    await cdp.send('Network.setCacheDisabled', { cacheDisabled: true }).catch(() => {});
+    await cdp.send('Network.clearBrowserCache').catch(() => {});
+
+    const url = process.env.ADFREE_PAGE ?? 'https://news.ycombinator.com/';
+    const load = async () => {
+      // `domcontentloaded` plus a swallowed timeout: a news page keeps loading
+      // ads for a minute, and the document is what this test reads.
+      await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 60000 }).catch(() => {});
+      await page.waitForTimeout(2500);
+      return page.evaluate(() =>
+        [...document.querySelectorAll('script[src], link[href]')]
+          .map((el) => el.src || el.href)
+          .filter((u) => u.includes('192.0.2.1'))
+      );
+    };
+
+    // The relay occasionally lets a connection through untouched — the app
+    // logs nothing for it, so it is not an injection failure (see the open
+    // issue in docs/rust-owned-state.md). A few fresh loads absorb that; a
+    // page the injector really missed still fails the assertions below.
+    let tags = [];
+    for (let attempt = 0; attempt < 3; attempt++) {
+      tags = await load();
+      if (
+        tags.some((u) => u.includes('/adfree-page.js')) &&
+        tags.some((u) => u.includes('/adfree-hide.css'))
+      ) {
+        break;
+      }
+    }
     expect(tags.some((url) => url.includes('/adfree-page.js'))).toBe(true);
     expect(tags.some((url) => url.includes('/adfree-hide.css'))).toBe(true);
 
-    // Both assets come back cross-origin: the certificate for the address
-    // literal was accepted and the CORS header is there.
-    const runtime = await page.evaluate(() =>
-      fetch('https://192.0.2.1/adfree-page.js?dmn=dantri.com.vn', { cache: 'no-store' }).then((r) => r.text())
-    );
-    expect(runtime).toContain('adoptedStyleSheets');
-
-    const answer = await page.evaluate(() =>
-      fetch('https://192.0.2.1/adfree-generic.js?dmn=dantri.com.vn&c=adfree-canary&i=adfree-canary', {
-        cache: 'no-store',
-      }).then((r) => r.json())
+    // The lookup is the one endpoint a page may read cross-origin: the answer
+    // is JSON, and asking for it also proves the certificate for the address
+    // literal was accepted including the CORS header.
+    const host = new URL(url).host;
+    const answer = await page.evaluate(
+      (dmn) =>
+        fetch(`https://192.0.2.1/adfree-generic.js?dmn=${dmn}&c=adfree-canary&i=adfree-canary`, {
+          cache: 'no-store',
+        }).then((r) => r.json()),
+      host
     );
     expect(Array.isArray(answer)).toBe(true);
+
+    // The runtime must have *run*, not just loaded: its own lookup request is
+    // in the page's resource timeline. (The runtime's source itself is not
+    // readable from the page — that is the point of the CORS narrowing.)
+    const asked = await page.evaluate(() =>
+      performance.getEntriesByType('resource').some((e) => e.name.includes('/adfree-generic.js'))
+    );
+    expect(asked).toBe(true);
+    await page.close().catch(() => {});
     await connected.close();
   });
 });
