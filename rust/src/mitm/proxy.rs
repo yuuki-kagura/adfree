@@ -8,7 +8,7 @@
 //! Everything is non-blocking and returns the payloads to write back, so the
 //! packet loop stays in charge of TCP segmentation and never blocks a syscall.
 
-use crate::filter::FilterEngine;
+use crate::filter::{FilterEngine, Replace};
 use crate::mitm::http;
 use crate::mitm::tls::{
     self, feed_client, feed_client_wire, feed_server, send_to_client, FlowResolver, TlsSession,
@@ -180,7 +180,7 @@ pub struct ProxySession {
     /// Where the response rewriter stands on this connection.
     resp_phase: RespPhase,
     /// One entry per forwarded request: what its response will look like.
-    head_requests: VecDeque<http::RequestInfo>,
+    head_requests: VecDeque<ResponseEdit>,
     /// Bytes read from the peer that are not yet processed.
     pub peer_buffer: Vec<u8>,
     /// Bytes from the client that are not yet processed.
@@ -219,12 +219,28 @@ enum RespPhase {
         head: Vec<u8>,
         framing: Framing,
         encoding: http::Encoding,
+        /// The `$replace` rule the response matched: applied once the whole
+        /// body is here.
+        replace: Option<Arc<Replace>>,
+        /// The body may be a page: only then does the injector look at it.
+        inject: bool,
     },
     /// The body is already on its way to the client while the rest of it is
     /// still being edited.
     Stream(Box<StreamState>),
     /// Bytes flow through untouched; `left` tracks the current body.
     Pass { left: Left },
+}
+
+/// What the response of one forwarded request needs to know about it.
+#[derive(Default)]
+struct ResponseEdit {
+    /// Frame facts the rewriter needs: a HEAD has no body to rewrite, and an
+    /// HTTP/1.0 client cannot take a chunked one.
+    info: http::RequestInfo,
+    /// The `$replace` rule the request matched: its response body is rewritten
+    /// instead of the request being blocked. `None` on every other request.
+    replace: Option<Arc<Replace>>,
 }
 
 /// State for a response whose body is streamed to the client as it is edited.
@@ -355,6 +371,23 @@ fn emit_passthrough(
     }
 }
 
+/// Hands one complete, re-encoded response body back to the client.
+///
+/// The head goes out with the length of what follows it, compressed again when
+/// the origin's body was: a page that arrived compressed leaves compressed.
+fn emit_edited(out: &mut Vec<u8>, head: &[u8], body: &[u8], recompress: bool) {
+    match (recompress, http::gzip_encode(body)) {
+        (true, Some(gzipped)) => {
+            out.extend_from_slice(&http::head_for_new_body(head, gzipped.len(), Some("gzip")));
+            out.extend_from_slice(&gzipped);
+        }
+        _ => {
+            out.extend_from_slice(&http::head_for_new_body(head, body.len(), None));
+            out.extend_from_slice(body);
+        }
+    }
+}
+
 /// How the body of the response being collected is framed.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum Framing {
@@ -362,6 +395,20 @@ enum Framing {
     Length(usize),
     /// `transfer-encoding: chunked`.
     Chunked,
+}
+
+/// One `$replace` payload, short enough for a log line.
+///
+/// The payload is the rule's own text — what the list author wrote between
+/// `$replace=` and the end of the line — so it is worth showing whole when it
+/// fits, and cut on a character boundary when it does not.
+fn payload_summary(payload: &str) -> String {
+    const MAX: usize = 96;
+    if payload.chars().count() <= MAX {
+        return payload.to_string();
+    }
+    let cut: String = payload.chars().take(MAX - 1).collect();
+    format!("{cut}…")
 }
 
 /// How many bytes of a passed-through body are still to come.
@@ -717,12 +764,15 @@ impl ProxySession {
         session_host: Option<&str>,
         stats: Option<&Stats>,
         sink: Option<MitmSink>,
-        head_requests: &mut VecDeque<http::RequestInfo>,
+        head_requests: &mut VecDeque<ResponseEdit>,
         outcome: &mut Outcome,
     ) -> Result<(), String> {
         if tls::client_handshaking(&session.client) || buffer.is_empty() {
             return Ok(());
         }
+        // The `$replace` rule this request matched, if any: the response body
+        // is rewritten when it comes back.
+        let mut replace = None;
         if !tls::server_handshaking(&session.server) {
             while let Some(local) =
                 take_local_request(serve_path, script_body, filter, session_host, buffer)
@@ -737,7 +787,7 @@ impl ProxySession {
             // The same loop answers a request the *network* rules want stopped
             // or rewritten: the head is the only place the URL exists.
             if let Some(filter) = filter {
-                Self::filter_url_request(
+                replace = Self::filter_url_request(
                     session,
                     buffer,
                     filter,
@@ -753,8 +803,9 @@ impl ProxySession {
         // look like (a HEAD has no body, an HTTP/1.0 client cannot take a
         // chunked one) and stop HTML negotiations the rewriter cannot follow.
         if let Some(info) = http::request_info(buffer) {
-            head_requests.push_back(info);
-            if let Some(fixed) = http::drop_undecodable_encodings(buffer) {
+            let forced = replace.is_some();
+            head_requests.push_back(ResponseEdit { info, replace });
+            if let Some(fixed) = http::drop_undecodable_encodings(buffer, forced) {
                 *buffer = fixed;
             }
         }
@@ -786,30 +837,30 @@ impl ProxySession {
         stats: Option<&Stats>,
         sink: Option<MitmSink>,
         outcome: &mut Outcome,
-    ) -> Result<(), String> {
+    ) -> Result<Option<Arc<Replace>>, String> {
         let Some(head_end) = header_end(buffer) else {
-            return Ok(());
+            return Ok(None);
         };
         // Everything the filter needs is copied out of the head up front: the
         // buffer is edited (or drained) below, which ends the borrow.
         let Some(facts) = request_facts(&buffer[..head_end]) else {
-            return Ok(());
+            return Ok(None);
         };
         if facts.has_body {
-            return Ok(());
+            return Ok(None);
         }
         if !facts.target.starts_with('/')
             && !facts.target.starts_with("http://")
             && !facts.target.starts_with("https://")
         {
-            return Ok(());
+            return Ok(None);
         }
         let Some(host) = session_host
             .map(str::to_string)
             .or_else(|| facts.authority.map(str::to_string))
             .filter(|host| !host.is_empty())
         else {
-            return Ok(());
+            return Ok(None);
         };
         let url = request_url(&facts, &host);
         let source = facts.referer.unwrap_or("").to_string();
@@ -829,7 +880,17 @@ impl ProxySession {
             crate::filter::url_host(&source)
         };
         if !page_host.is_empty() && filter.cosmetic_switches_for(page_host).urlblock {
-            return Ok(());
+            return Ok(None);
+        }
+
+        // `$replace`: the response body is rewritten *instead of* the request
+        // being blocked — AdGuard gives the modifier priority over every other
+        // basic rule, so a URL it matches is never blocked. The request goes
+        // out untouched; the response is picked up again when it comes back.
+        if filter.has_replace() {
+            if let Some(rule) = filter.replace_for(&url, &source, request_type, &method) {
+                return Ok(Some(rule));
+            }
         }
 
         let verdict = filter.check_url(&url, &source, request_type, &method);
@@ -848,7 +909,7 @@ impl ProxySession {
                     }
                 }
             }
-            return Ok(());
+            return Ok(None);
         }
 
         let mut response = verdict
@@ -882,7 +943,7 @@ impl ProxySession {
                 category: verdict.category,
             });
         }
-        Ok(())
+        Ok(None)
     }
 
     /// Answers whatever the client asks the local injection origin.
@@ -1043,7 +1104,7 @@ impl ProxySession {
                     let req = self.head_requests.pop_front().unwrap_or_default();
                     // A response to HEAD advertises the length of the body it
                     // would have carried, and then carries no body at all.
-                    if info.bodyless() || req.head {
+                    if info.bodyless() || req.info.head {
                         out.extend_from_slice(&head);
                         continue;
                     }
@@ -1062,10 +1123,59 @@ impl ProxySession {
                         info.encoding,
                         http::Encoding::Identity | http::Encoding::Gzip | http::Encoding::Deflate
                     );
-                    let edit =
-                        info.html && renderable && decodable && framing.is_some() && !req.http10;
-                    if edit {
-                        let framing = framing.expect("framing is Some when edit holds");
+                    let editable = decodable && framing.is_some() && !req.info.http10;
+                    let html_edit = info.html && renderable && editable;
+                    // `$replace` only ever looks at text bodies: media,
+                    // images and downloads travel untouched.
+                    let replace = req.replace.filter(|_| info.text && editable);
+                    // A rewrite needs the whole body, which is the one thing
+                    // streaming cannot give it: a body already known to be over
+                    // the cap is left to the page's own handling below.
+                    let over_cap =
+                        matches!(framing, Some(Framing::Length(n)) if n > http::REPLACE_AFTER);
+                    match replace {
+                        Some(rule) if !over_cap => {
+                            let framing = framing.expect("framing is Some when a rule holds");
+                            // Rewriting on the fly is what makes a gzip body
+                            // affordable; without a codec the whole body is
+                            // held instead.
+                            let how = if streamable(info.encoding) {
+                                "rewriting"
+                            } else {
+                                "buffering"
+                            };
+                            crate::logbuf::push(&format!(
+                                "mitm {}: {} {} {:?} {:?}: {how}",
+                                self.captured.as_deref().unwrap_or("?"),
+                                if info.html { "html" } else { "text" },
+                                info.status,
+                                framing,
+                                info.encoding,
+                            ));
+                            self.resp_phase = RespPhase::Buffer {
+                                head,
+                                framing,
+                                encoding: info.encoding,
+                                replace: Some(rule),
+                                inject: html_edit,
+                            };
+                            continue;
+                        }
+                        Some(_) => {
+                            // The list matched and the body is too big to hold,
+                            // so the rewrite cannot happen. The response goes
+                            // out exactly as the page's own handling decides.
+                            crate::logbuf::push(&format!(
+                                "mitm {}: {} {:?} over the $replace cap, left alone",
+                                self.captured.as_deref().unwrap_or("?"),
+                                info.status,
+                                framing.expect("over the cap means a length was known"),
+                            ));
+                        }
+                        None => {}
+                    }
+                    if html_edit {
+                        let framing = framing.expect("framing is Some when html_edit holds");
                         crate::logbuf::push(&format!(
                             "mitm {}: html {} {:?} {:?}: {}",
                             self.captured.as_deref().unwrap_or("?"),
@@ -1090,6 +1200,8 @@ impl ProxySession {
                             head,
                             framing,
                             encoding: info.encoding,
+                            replace: None,
+                            inject: true,
                         };
                         continue;
                     }
@@ -1115,12 +1227,32 @@ impl ProxySession {
                     head,
                     framing,
                     encoding,
+                    replace,
+                    inject,
                 } => {
+                    // A `$replace` rewrite needs the whole body, so it holds
+                    // one far longer than an injection does.
+                    let cap = if replace.is_some() {
+                        http::REPLACE_AFTER
+                    } else {
+                        http::STREAM_AFTER
+                    };
                     let Some(body) = self.take_body(framing) else {
-                        if self.resp_pending.len() > http::STREAM_AFTER {
-                            if streamable(encoding) {
+                        if self.resp_pending.len() > cap {
+                            if inject && streamable(encoding) {
                                 // Too much to keep holding: what is here goes
                                 // out now and the rest follows as it arrives.
+                                // Only a page can fall back this way — the
+                                // injector re-encodes on the fly, a `$replace`
+                                // rewrite cannot.
+                                if replace.is_some() {
+                                    crate::logbuf::push(&format!(
+                                        "mitm {}: body over {} bytes in {:?}, $replace dropped",
+                                        self.captured.as_deref().unwrap_or("?"),
+                                        cap,
+                                        encoding
+                                    ));
+                                }
                                 self.resp_phase = RespPhase::Stream(Box::new(StreamState::new(
                                     &head, framing, encoding,
                                 )));
@@ -1131,7 +1263,7 @@ impl ProxySession {
                             crate::logbuf::push(&format!(
                                 "mitm {}: body over {} bytes in {:?}, passing through",
                                 self.captured.as_deref().unwrap_or("?"),
-                                http::STREAM_AFTER,
+                                cap,
                                 encoding
                             ));
                             out.extend_from_slice(&head);
@@ -1142,6 +1274,8 @@ impl ProxySession {
                                 head,
                                 framing,
                                 encoding,
+                                replace,
+                                inject,
                             };
                         }
                         break;
@@ -1158,10 +1292,29 @@ impl ProxySession {
                     }
                     let recompress = decoded.is_some();
                     let plain = decoded.as_deref().unwrap_or(&body);
+                    let before = plain.len();
+                    // `$replace` first: what a list rewrites is the page's own
+                    // bytes, and the snippet injected below is ours, not the
+                    // list's — the two never feed into one another.
+                    let replaced = replace.as_ref().and_then(|rule| rule.apply(plain));
+                    let plain = replaced.as_deref().unwrap_or(plain);
+                    if let Some(rule) = replace.as_ref().filter(|_| replaced.is_some()) {
+                        crate::logbuf::push(&format!(
+                            "mitm {}: $replace applied ({} to {} bytes): {}",
+                            self.captured.as_deref().unwrap_or("?"),
+                            before,
+                            plain.len(),
+                            payload_summary(rule.payload())
+                        ));
+                    }
                     // One nonce for this response: the tags carry it, and the
                     // policy does too when the head goes out rewritten below.
                     let nonce = http::new_nonce();
-                    let snippet = self.injection_snippet(plain, &nonce);
+                    let snippet = if inject {
+                        self.injection_snippet(plain, &nonce)
+                    } else {
+                        Vec::new()
+                    };
                     let (new_body, decision) = if snippet.is_empty() {
                         (plain.to_vec(), http::Decision::Skip)
                     } else {
@@ -1179,24 +1332,11 @@ impl ProxySession {
                         // The page keeps its policy: it just learns the nonce
                         // the snippet's tags carry.
                         let head = http::csp_with_nonce(&head, &nonce, LOCAL_ORIGIN);
-                        match (recompress, http::gzip_encode(&new_body)) {
-                            (true, Some(gzipped)) => {
-                                out.extend_from_slice(&http::head_for_new_body(
-                                    &head,
-                                    gzipped.len(),
-                                    Some("gzip"),
-                                ));
-                                out.extend_from_slice(&gzipped);
-                            }
-                            _ => {
-                                out.extend_from_slice(&http::head_for_new_body(
-                                    &head,
-                                    new_body.len(),
-                                    None,
-                                ));
-                                out.extend_from_slice(&new_body);
-                            }
-                        }
+                        emit_edited(&mut out, &head, &new_body, recompress);
+                    } else if replaced.is_some() {
+                        // A rewrite without a snippet: the head only learns the
+                        // length its body now has.
+                        emit_edited(&mut out, &head, &new_body, recompress);
                     } else {
                         // Nothing to inject, or nowhere to put it: the bytes
                         // the origin sent go on untouched.

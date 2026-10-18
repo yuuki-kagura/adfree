@@ -295,7 +295,33 @@ fn start_origin_mode(html: &'static str, mode: OriginBody) -> Origin {
             }
             let line = String::from_utf8_lossy(&request);
             seen.lock().expect("requests").push(line.to_string());
-            let response: Vec<u8> = if line.starts_with("GET / ") {
+            // A subresource the lists may want to rewrite: text, but not HTML,
+            // so it takes a different road through the rewriter. A HEAD asks
+            // for the head alone, and a real origin sends no body with it; the
+            // `-gz` path arrives compressed, which is how Chrome usually gets
+            // its scripts.
+            let response: Vec<u8> = if line.starts_with("GET /ad.js ")
+                || line.starts_with("HEAD /ad.js ")
+            {
+                let body = if line.starts_with("HEAD") { "" } else { SCRIPT };
+                format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/javascript\r\n\
+                     Content-Length: {}\r\nConnection: keep-alive\r\n\r\n{body}",
+                    SCRIPT.len()
+                )
+                .into_bytes()
+            } else if line.starts_with("GET /ad-gz.js ") {
+                let gz = crate::mitm::http::gzip_encode(SCRIPT.as_bytes()).expect("gzip");
+                let mut out = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/javascript\r\n\
+                     Content-Encoding: gzip\r\nContent-Length: {}\r\n\
+                     Connection: keep-alive\r\n\r\n",
+                    gz.len()
+                )
+                .into_bytes();
+                out.extend_from_slice(&gz);
+                out
+            } else if line.starts_with("GET / ") {
                 match mode {
                     OriginBody::Plain => format!(
                         "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\n\
@@ -489,6 +515,17 @@ fn complete_response(raw: &[u8]) -> bool {
         .and_then(|v| v.trim().parse().ok())
         .unwrap_or(0);
     raw.len() >= head_end + len
+}
+
+/// The length a response head declares, to hold against the body it framed.
+fn declared_length(head: &str) -> usize {
+    head.to_lowercase()
+        .lines()
+        .find_map(|l| {
+            l.strip_prefix("content-length:")
+                .and_then(|v| v.trim().parse().ok())
+        })
+        .expect("a length-framed response")
 }
 
 /// One HTTP/1.1 round trip through the splice. Returns `(head, body)`.
@@ -1121,6 +1158,165 @@ fn a_urlblock_exception_lets_the_pages_own_requests_through() {
     drop(seen);
     tcp.close();
 }
+
+/// `$replace` rules: one names the page, one a script it loads, so both roads
+/// through the rewriter are walked — HTML, which is injected into as well, and
+/// plain text, which is not.
+const REPLACE_LIST: &str = "! Title: e2e replace\n\
+                            ||shop.test^$document,replace=/<title>e2e<\\/title>/<title>clean<\\/title>/\n\
+                            ||shop.test/ad.js$script,replace=/banner\\((\\d)\\)/safe($1)/\n\
+                            ||shop.test/ad-gz.js$script,replace=/banner\\((\\d)\\)/safe($1)/\n";
+
+/// The same, for a page far larger than a rewrite may hold.
+const REPLACE_CAP_LIST: &str = "! Title: e2e replace cap\n\
+                                ||shop.test^$replace=/<title>big<\\/title>/<title>small<\\/title>/\n";
+
+/// `$replace`: the matched response body is rewritten, the request is *not*
+/// blocked, and the injection that follows an HTML rewrite still lands — all
+/// over one kept-alive connection, which also proves the rewritten responses
+/// frame cleanly.
+#[test]
+fn replace_rules_rewrite_bodies_on_the_https_path() {
+    let origin = start_origin(HTML);
+    let (core, ca_der) = setup_core_with_list(&origin, "replace", REPLACE_LIST);
+
+    let mut tcp = Client::connect(core.clone(), origin.port);
+    let mut conn = handshake(&mut tcp, client_config(ca_der));
+    assert!(!conn.is_handshaking(), "the MITM handshake must complete");
+
+    // 1. The page itself: the list's own text lands in the body, and the
+    //    injector then runs on the result — one nonce in the policy, the tags
+    //    carrying it, and a length that counts both edits.
+    let (head, body) = request_with(
+        &mut tcp,
+        &mut conn,
+        "/",
+        "Sec-Fetch-Dest: document\r\nReferer: https://shop.test/\r\n",
+    );
+    assert!(head.starts_with("HTTP/1.1 200 OK"), "{head}");
+    let nonce = nonce_of(&head);
+    let page = page_text(&head, &body);
+    assert!(page.contains("<title>clean</title>"), "{page}");
+    assert!(!page.contains("<title>e2e</title>"), "{page}");
+    assert!(page.contains(&format!(" nonce=\"{nonce}\"")), "{page}");
+    assert!(
+        page.ends_with("</html>"),
+        "the body must be complete: {page}"
+    );
+    assert_eq!(declared_length(&head), body.len());
+
+    // 2. A script the page loads: rewritten in place, served by the origin
+    //    rather than answered by the filter.
+    let (head, body) = request_with(
+        &mut tcp,
+        &mut conn,
+        "/ad.js",
+        "Sec-Fetch-Dest: script\r\nReferer: https://shop.test/\r\n",
+    );
+    assert!(head.starts_with("HTTP/1.1 200 OK"), "{head}");
+    assert!(
+        head.to_lowercase()
+            .contains("content-type: application/javascript"),
+        "{head}"
+    );
+    assert_eq!(String::from_utf8_lossy(&body), "/* ads */ safe(1);");
+    assert_eq!(declared_length(&head), body.len());
+    {
+        let seen = origin.requests.lock().expect("requests");
+        assert!(
+            seen.iter().any(|r| r.starts_with("GET /ad.js ")),
+            "a `$replace` rule must not block the request: {seen:?}"
+        );
+    }
+
+    // 3. The same rewrite on a compressed response: decoded, rewritten, and
+    //    put back compressed — a `$replace` match is also reason enough to
+    //    stop the client negotiating an encoding the rewriter cannot read.
+    let (head, body) = request_with(
+        &mut tcp,
+        &mut conn,
+        "/ad-gz.js",
+        "Sec-Fetch-Dest: script\r\nReferer: https://shop.test/\r\n\
+         Accept-Encoding: gzip, deflate, br, zstd\r\n",
+    );
+    assert!(
+        head.to_lowercase().contains("content-encoding: gzip"),
+        "{head}"
+    );
+    assert_eq!(page_text(&head, &body), "/* ads */ safe(1);");
+    assert_eq!(declared_length(&head), body.len());
+    {
+        let seen = origin.requests.lock().expect("requests");
+        let asked = seen
+            .iter()
+            .find(|r| r.starts_with("GET /ad-gz.js "))
+            .expect("the request reached the origin");
+        assert!(
+            asked.contains("Accept-Encoding: gzip, deflate\r\n"),
+            "the encodings we cannot decode must be gone: {asked:?}"
+        );
+    }
+
+    // 4. The same connection, one more round: a rewritten response is framed
+    //    like any other, and the splice stays in sync.
+    let (head, body) = request_with(
+        &mut tcp,
+        &mut conn,
+        "/ad.js",
+        "Sec-Fetch-Dest: script\r\nReferer: https://shop.test/\r\n",
+    );
+    assert!(head.starts_with("HTTP/1.1 200 OK"), "{head}");
+    assert_eq!(String::from_utf8_lossy(&body), "/* ads */ safe(1);");
+
+    // 5. A HEAD exists to advertise a body, not to carry one: there is nothing
+    //    to rewrite, so the origin's own head goes through untouched and
+    //    nothing follows it.
+    let raw = head_request(
+        &mut tcp,
+        &mut conn,
+        "/ad.js",
+        "Sec-Fetch-Dest: script\r\nReferer: https://shop.test/\r\n",
+    );
+    let head = String::from_utf8_lossy(&raw).to_string();
+    assert!(head.starts_with("HTTP/1.1 200 OK\r\n"), "{head}");
+
+    tcp.close();
+}
+
+/// The cap: a rewrite holds the whole body, so a text body already known to be
+/// larger travels as it is — and a page among those still gets its injection,
+/// streamed exactly as before.
+#[test]
+fn a_body_over_the_replace_cap_keeps_its_bytes() {
+    let origin = start_origin(noisy_page(600 * 1024));
+    let (core, ca_der) = setup_core_with_list(&origin, "replace-cap", REPLACE_CAP_LIST);
+
+    let mut tcp = Client::connect(core.clone(), origin.port);
+    let mut conn = handshake(&mut tcp, client_config(ca_der));
+    assert!(!conn.is_handshaking(), "the MITM handshake must complete");
+
+    let (head, body) = request_streamed(&mut tcp, &mut conn, "/");
+    let nonce = nonce_of(&head);
+    let page = page_text(&head, &body);
+    assert!(
+        page.contains("<title>big</title>"),
+        "unrewritten: {page:.200}"
+    );
+    assert!(!page.contains("<title>small</title>"), "{page:.200}");
+    assert!(
+        page.contains(&format!(" nonce=\"{nonce}\"")),
+        "and still injected: {page:.200}"
+    );
+    assert!(
+        page.ends_with("</body></html>"),
+        "the body must be complete"
+    );
+
+    tcp.close();
+}
+
+/// The script the origin serves for `/ad.js`: a text body that is not a page.
+const SCRIPT: &str = "/* ads */ banner(1);";
 
 /// The injection origin: the reserved address is answered by the app itself.
 ///

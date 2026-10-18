@@ -645,6 +645,8 @@ impl Encoding {
 pub struct ResponseHead {
     pub status: u16,
     pub html: bool,
+    /// The body is text: the only kind a `$replace` rule ever looks at.
+    pub text: bool,
     pub chunked: bool,
     pub encoding: Encoding,
     pub content_length: Option<usize>,
@@ -658,11 +660,37 @@ impl ResponseHead {
     }
 }
 
+/// Whether a media type names text a `$replace` rule may rewrite.
+///
+/// AdGuard modifies every text response and refuses media, images and objects;
+/// the list here is that, minus the types no rule in the catalogue targets,
+/// plus the HLS manifests some of them do.
+fn content_type_is_text(mime: &str) -> bool {
+    mime.starts_with("text/")
+        || matches!(
+            mime,
+            "application/javascript"
+                | "application/x-javascript"
+                | "application/ecmascript"
+                | "application/json"
+                | "application/ld+json"
+                | "application/xml"
+                | "application/xhtml+xml"
+                | "application/rss+xml"
+                | "application/atom+xml"
+                | "application/x-mpegurl"
+                | "application/vnd.apple.mpegurl"
+                | "audio/mpegurl"
+                | "audio/x-mpegurl"
+        )
+}
+
 /// Parses a complete response head (up to and including the blank line).
 pub fn parse_response_head(head: &[u8]) -> ResponseHead {
     let mut info = ResponseHead {
         status: 0,
         html: false,
+        text: false,
         chunked: false,
         encoding: Encoding::Identity,
         content_length: None,
@@ -678,6 +706,14 @@ pub fn parse_response_head(head: &[u8]) -> ResponseHead {
         let lower: Vec<u8> = line.iter().map(|b| b.to_ascii_lowercase()).collect();
         if lower.starts_with(b"content-type:") {
             info.html = lower.windows(9).any(|w| w == b"text/html");
+            let value = String::from_utf8_lossy(&lower);
+            let mime = value
+                .trim_start_matches("content-type:")
+                .split(';')
+                .next()
+                .unwrap_or("")
+                .trim();
+            info.text = content_type_is_text(mime);
         } else if lower.starts_with(b"content-encoding:") {
             let value = String::from_utf8_lossy(&lower);
             let value = value.trim_start_matches("content-encoding:").trim();
@@ -702,12 +738,15 @@ pub fn parse_response_head(head: &[u8]) -> ResponseHead {
 /// encodings we cannot decode (`br`, `zstd`).
 ///
 /// Keeps `gzip`/`deflate` in place: those are decoded, filtered and put back
-/// compressed. Returns `None` when the buffer has no complete head, no
-/// `accept: text/html`, or nothing to drop.
-pub fn drop_undecodable_encodings(buf: &[u8]) -> Option<Vec<u8>> {
+/// compressed. `force` is for a request the lists matched with `$replace`:
+/// the response is not a page, so the `accept` header says nothing, and the
+/// body still has to be decodable — a header left with nothing to negotiate
+/// asks for `gzip` rather than going away. Returns `None` when the buffer has
+/// no complete head, no reason to drop anything, or nothing to drop.
+pub fn drop_undecodable_encodings(buf: &[u8], force: bool) -> Option<Vec<u8>> {
     let end = head_end(buf)?;
     let head = &buf[..end];
-    if !head_accepts_html(head) {
+    if !force && !head_accepts_html(head) {
         return None;
     }
     let mut changed = false;
@@ -731,6 +770,20 @@ pub fn drop_undecodable_encodings(buf: &[u8]) -> Option<Vec<u8>> {
                 let name = String::from_utf8_lossy(&line[..name_end]).to_string();
                 let ending = if line.ends_with(b"\r\n") { "\r\n" } else { "\n" };
                 out.extend_from_slice(format!("{name}: {}{ending}", kept.join(", ")).as_bytes());
+            } else if force {
+                // Nothing left, and the header cannot simply go away: with no
+                // `accept-encoding` at all the origin is free to pick anything,
+                // including what could not be decoded. A `$replace` match is
+                // usually not a page, so the browser never asked for gzip —
+                // say it here.
+                let name_end = line.iter().position(|b| *b == b':').unwrap_or(0);
+                let name = String::from_utf8_lossy(&line[..name_end]).to_string();
+                let ending = if line.ends_with(b"\r\n") {
+                    "\r\n"
+                } else {
+                    "\n"
+                };
+                out.extend_from_slice(format!("{name}: gzip{ending}").as_bytes());
             }
             continue;
         }
@@ -1034,6 +1087,9 @@ pub fn request_method_is_head(buf: &[u8]) -> Option<bool> {
 }
 
 /// What a request line says about the response that will follow it.
+///
+/// `Default` is the shape every response rewriter assumes when it cannot see
+/// the request: not a HEAD, and a client that speaks HTTP/1.1.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct RequestInfo {
     /// A `HEAD`: the response advertises a length but carries no body.
@@ -1112,6 +1168,15 @@ pub fn gzip_encode(body: &[u8]) -> Option<Vec<u8>> {
 /// not acknowledge stops the relay: holding more than one TCP window of body
 /// deadlocks the connection. A window is at least 64 KiB, so this leaves room.
 pub const STREAM_AFTER: usize = 32 * 1024;
+
+/// How big a text body may be before a `$replace` rule is given up on.
+///
+/// A rewrite needs the whole body at once, which streaming cannot do, so the
+/// rule's own cap is the only bound there is. AdGuard draws the line at 10 MB;
+/// that is memory a phone does not have to spare for one response, and the
+/// bodies these rules target — player scripts, API answers, manifests — are
+/// well under this one. What goes over travels untouched.
+pub const REPLACE_AFTER: usize = 512 * 1024;
 
 /// Decoded bytes kept while the injector looks for an insertion point.
 pub const STREAM_PREFIX_LIMIT: usize = 16 * 1024;
@@ -1503,7 +1568,19 @@ mod tests {
         let js = b"HTTP/1.1 200 OK\r\nContent-Type: application/javascript\r\n\r\n";
         assert!(!parse_response_head(js).html);
 
-        let chunked = b"HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nTransfer-Encoding: chunked\r\n\r\n";
+        // What a `$replace` rule may look at: text bodies, not media. A
+        // response without a content-type is not one of them.
+        assert!(parse_response_head(js).text);
+        assert!(parse_response_head(head).text);
+        let manifest = b"HTTP/1.1 200 OK\r\nContent-Type: application/vnd.apple.mpegurl\r\n\r\n";
+        assert!(parse_response_head(manifest).text);
+        let png = b"HTTP/1.1 200 OK\r\nContent-Type: image/png\r\n\r\n";
+        assert!(!parse_response_head(png).text);
+        let none = b"HTTP/1.1 200 OK\r\nContent-Length: 1\r\n\r\n";
+        assert!(!parse_response_head(none).text);
+
+        let chunked =
+            b"HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nTransfer-Encoding: chunked\r\n\r\n";
         assert!(parse_response_head(chunked).chunked);
 
         // 304 advertises a length but never carries a body.
@@ -1593,7 +1670,7 @@ mod tests {
     #[test]
     fn html_requests_stop_asking_for_brotli() {
         let req = b"GET / HTTP/1.1\r\nHost: x\r\nAccept: text/html,application/xhtml+xml\r\nAccept-Encoding: gzip, deflate, br, zstd\r\n\r\n";
-        let out = drop_undecodable_encodings(req).expect("rewritten");
+        let out = drop_undecodable_encodings(req, false).expect("rewritten");
         let text = String::from_utf8(out).unwrap();
         assert!(text.contains("Accept-Encoding: gzip, deflate\r\n"), "{text}");
         assert!(!text.contains("br"), "{text}");
@@ -1601,19 +1678,26 @@ mod tests {
 
         // Requests that do not ask for HTML keep their negotiation.
         let js = b"GET /a.js HTTP/1.1\r\nAccept: */*\r\nAccept-Encoding: br, zstd\r\n\r\n";
-        assert!(drop_undecodable_encodings(js).is_none());
+        assert!(drop_undecodable_encodings(js, false).is_none());
 
         // Nothing droppable: no rewrite at all, so the bytes stay identical.
         let gz = b"GET / HTTP/1.1\r\nAccept: text/html\r\nAccept-Encoding: gzip\r\n\r\n";
-        assert!(drop_undecodable_encodings(gz).is_none());
+        assert!(drop_undecodable_encodings(gz, false).is_none());
+
+        // A `$replace` match is reason enough on its own: the response is not
+        // a page, so nothing in the request says its body is text.
+        let out = drop_undecodable_encodings(js, true).expect("rewritten");
+        assert!(String::from_utf8(out)
+            .unwrap()
+            .contains("Accept-Encoding: gzip\r\n"));
 
         // Only undecodable tokens: the header goes away entirely.
         let only_br = b"GET / HTTP/1.1\r\nAccept: text/html\r\nAccept-Encoding: br\r\n\r\n";
-        let out = drop_undecodable_encodings(only_br).expect("rewritten");
+        let out = drop_undecodable_encodings(only_br, false).expect("rewritten");
         assert!(!String::from_utf8(out).unwrap().contains("Accept-Encoding"));
 
         // Head still arriving: not our business yet.
-        assert!(drop_undecodable_encodings(b"GET / HTTP/1.1\r\nAccept: text/htm").is_none());
+        assert!(drop_undecodable_encodings(b"GET / HTTP/1.1\r\nAccept: text/htm", false).is_none());
     }
 
     #[test]

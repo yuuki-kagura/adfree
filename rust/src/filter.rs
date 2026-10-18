@@ -24,6 +24,8 @@ use adblock::engine::Engine;
 use adblock::lists::{FilterFormat, FilterSet, ParseOptions, RuleTypes};
 use adblock::request::Request;
 use adblock::resources::{MimeType, Resource, ResourceType};
+use base64::engine::general_purpose::STANDARD as BASE64;
+use base64::Engine as _;
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
@@ -223,6 +225,171 @@ impl CosmeticSwitches {
     }
 }
 
+/// One `$replace` rule's payload, ready to apply to a response body.
+///
+/// The crate drops every rule carrying a modifier it does not implement, so
+/// `$replace` rules never reach the main engine. [`scan_replace_rules`] keeps
+/// them aside — their patterns still matched by the crate, their payloads
+/// compiled here — and the HTTPS path applies them after decoding a response
+/// body, which is what AdGuard calls "the response is modified instead".
+pub struct Replace {
+    /// The payload exactly as the list wrote it: `/regexp/replacement/flags`.
+    payload: String,
+    /// `None` when the pattern is one the `regex` crate cannot compile
+    /// (lookarounds, backreferences): the engine cannot run such a rule, so
+    /// the response travels unmodified — the request is still not blocked,
+    /// which is the part of the modifier that keeps a page alive.
+    regex: Option<regex::bytes::Regex>,
+    /// The right-hand side with AdGuard's escapes resolved.
+    replacement: String,
+}
+
+impl Replace {
+    /// Reads `/regexp/replacement/flags`, the only shape real lists use.
+    ///
+    /// The payload may contain escaped separators (`\/`, `\,`) and escaped
+    /// dollars (`\$1`), and two of the three slashes close the regexp and the
+    /// replacement before the flags follow, so a malformed value still yields
+    /// a rule that simply never matches.
+    pub fn parse(payload: &str) -> Replace {
+        let mut replacement = String::new();
+        let mut regex = None;
+        if let Some(rest) = payload.strip_prefix('/') {
+            if let Some((pattern, rest)) = split_unescaped(rest, '/') {
+                if let Some((right, flags)) = split_unescaped(rest, '/') {
+                    replacement = unescape_replacement(right);
+                    regex = inline_flags(flags)
+                        .map(|prefix| format!("{prefix}{}", unescape_pattern(pattern)))
+                        .and_then(|pattern| regex::bytes::Regex::new(&pattern).ok());
+                }
+            }
+        }
+        Replace {
+            payload: payload.to_string(),
+            regex,
+            replacement,
+        }
+    }
+
+    /// The payload as the list wrote it, for logs.
+    pub fn payload(&self) -> &str {
+        &self.payload
+    }
+
+    /// True when the pattern compiled: a rule that cannot run rewrites
+    /// nothing.
+    pub fn runs(&self) -> bool {
+        self.regex.is_some()
+    }
+
+    /// The body with every match replaced, or `None` when nothing matched.
+    ///
+    /// `None` leaves the caller free to hand the original bytes over with the
+    /// origin's own length and framing still in place.
+    pub fn apply(&self, body: &[u8]) -> Option<Vec<u8>> {
+        let regex = self.regex.as_ref()?;
+        match regex.replace_all(body, self.replacement.as_bytes()) {
+            std::borrow::Cow::Owned(bytes) => Some(bytes),
+            std::borrow::Cow::Borrowed(_) => None,
+        }
+    }
+}
+
+/// The `(?i)`-style prefix for a `$replace` payload's flags, or `None` when a
+/// flag means something this engine does not implement.
+///
+/// `g` asks for every match, which `replace_all` does anyway.
+fn inline_flags(flags: &str) -> Option<String> {
+    let mut out = String::new();
+    for flag in flags.chars() {
+        match flag {
+            'g' | '_' => {}
+            'i' | 'm' | 's' | 'x' => out.push(flag),
+            _ => return None,
+        }
+    }
+    if out.is_empty() {
+        Some(String::new())
+    } else {
+        Some(format!("(?{out})"))
+    }
+}
+
+/// Resolves the escapes an AdGuard `$replace` regexp carries.
+///
+/// `\,` is what keeps a comma out of the option list; as a regexp it becomes
+/// the character itself — the engine has no use for the backslash, and a
+/// quantifier would not parse with it (`{280\,400}`). `\/` needs no resolving:
+/// the list writes it as the separator's escape and the regexp engine reads an
+/// escaped piece of punctuation as that piece. `\\` is a literal backslash, so
+/// neither rule applies to whatever follows it.
+fn unescape_pattern(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut chars = text.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c != '\\' {
+            out.push(c);
+            continue;
+        }
+        match chars.peek() {
+            Some(',') => {
+                chars.next();
+                out.push(',');
+            }
+            Some('\\') => {
+                chars.next();
+                out.push('\\');
+                out.push('\\');
+            }
+            Some(_) => out.push('\\'),
+            None => out.push('\\'),
+        }
+    }
+    out
+}
+
+/// Splits at the first `sep` that is not escaped by a backslash.
+fn split_unescaped(text: &str, sep: char) -> Option<(&str, &str)> {
+    let mut escaped = false;
+    for (index, c) in text.char_indices() {
+        if escaped {
+            escaped = false;
+            continue;
+        }
+        match c {
+            '\\' => escaped = true,
+            _ if c == sep => return Some((&text[..index], &text[index + c.len_utf8()..])),
+            _ => {}
+        }
+    }
+    None
+}
+
+/// Resolves the escapes AdGuard writes inside a `$replace` replacement.
+///
+/// `\/` is the separator, `\,` the comma the option list splits on and `\$1`
+/// a capture reference — which the regex crate spells `$1`, so the backslash
+/// has to go. Anything else keeps its backslash.
+fn unescape_replacement(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut chars = text.chars();
+    while let Some(c) = chars.next() {
+        if c != '\\' {
+            out.push(c);
+            continue;
+        }
+        match chars.next() {
+            Some(next) if matches!(next, '/' | '$' | ',') => out.push(next),
+            Some(other) => {
+                out.push('\\');
+                out.push(other);
+            }
+            None => out.push('\\'),
+        }
+    }
+    out
+}
+
 pub const CAT_ANNOYANCE: u8 = 4;
 pub const CAT_MALWARE: u8 = 5;
 pub const CAT_CUSTOM: u8 = 6;
@@ -404,6 +571,33 @@ struct Compiled {
     /// Cosmetic switches from the loaded exceptions, by hostname (see
     /// [`scan_cosmetic_exceptions`]). Empty on a stock engine.
     cosmetic_switches: HashMap<String, CosmeticSwitches>,
+    /// `$replace` rules, found by [`scan_replace_rules`]. `None` when no
+    /// loaded list carries one.
+    replace: Option<ReplaceEngine>,
+}
+
+/// The `$replace` rules of the loaded lists, with the engine that finds them.
+///
+/// The crate refuses the modifier, so a rule cannot go into the main engine
+/// as it stands. It goes into a second one with `$replace` swapped for a
+/// `$redirect` to a per-rule resource: the crate keeps matching the rule's
+/// own pattern — `domain=`, type options, `important` and exceptions all mean
+/// what the list meant — and hands the matched rule's identity back as the
+/// redirect body.
+struct ReplaceEngine {
+    /// The probe engine. `None` when only content exceptions were found.
+    probe: Option<Engine>,
+    /// Payloads, index-matched with the probe engine's resources.
+    rules: Vec<Arc<Replace>>,
+    /// Rules that switch content modification off (`$content`, an empty
+    /// `$replace`), kept as plain blocking rules: a match there means "do not
+    /// modify the response".
+    veto: Option<Engine>,
+    /// How many content exceptions went into [`ReplaceEngine::veto`].
+    veto_rules: u32,
+    /// Rules left out because the crate cannot be told about them the way the
+    /// list meant them (`app=`, `badfilter`, a payload on a page exception).
+    dropped: u32,
 }
 
 pub struct FilterEngine {
@@ -431,6 +625,7 @@ impl FilterEngine {
                 sources: Vec::new(),
                 rule_count: 0,
                 cosmetic_switches: HashMap::new(),
+                replace: None,
             })),
             cache: RwLock::new(DecisionCache::new(1 << 15)),
             build_ns: AtomicU64::new(0),
@@ -448,6 +643,7 @@ impl FilterEngine {
         let mut rule_count = 0u64;
         let mut errors: Vec<String> = Vec::new();
         let mut cosmetic_exceptions = CosmeticExceptionScan::default();
+        let mut replace_scan = ReplaceScan::default();
 
         for list in lists.iter().filter(|l| l.enabled) {
             let Some(path) = &list.local_path else { continue };
@@ -464,6 +660,7 @@ impl FilterEngine {
                                 // (conversion only rewrites cosmetic markers,
                                 // network rules pass through untouched).
                                 scan_cosmetic_exceptions(&text, &mut cosmetic_exceptions);
+                                scan_replace_rules(&text, &mut replace_scan);
                                 convert_adguard_cosmetics(text)
                             }
                             ListFormat::Hosts => text,
@@ -513,6 +710,7 @@ impl FilterEngine {
                 .collect::<Vec<_>>()
                 .join("\n");
             scan_cosmetic_exceptions(&joined, &mut cosmetic_exceptions);
+            scan_replace_rules(&joined, &mut replace_scan);
             let record = set.add_filter_list(
                 convert_adguard_cosmetics(joined),
                 ParseOptions::default(),
@@ -539,6 +737,18 @@ impl FilterEngine {
         );
         let memory_bytes = engine.serialize().len();
         let generation = self.generation.fetch_add(1, Ordering::SeqCst) + 1;
+        let replace = build_replace(replace_scan);
+        if let Some(replace) = replace.as_ref() {
+            // The count is what the docs quote: rules the lists carry that the
+            // engine on its own would have thrown away.
+            let unreadable = replace.rules.iter().filter(|rule| !rule.runs()).count();
+            crate::logbuf::push(&format!(
+                "filter: {} $replace rules ({unreadable} unreadable), {} content exceptions, {} rules dropped",
+                replace.rules.len(),
+                replace.veto_rules,
+                replace.dropped,
+            ));
+        }
         let compiled = Arc::new(Compiled {
             engine,
             generation,
@@ -546,6 +756,7 @@ impl FilterEngine {
             sources,
             rule_count,
             cosmetic_switches: cosmetic_exceptions.resolve(),
+            replace,
         });
         *self.inner.write().unwrap() = compiled;
         self.cache.write().unwrap().clear();
@@ -820,6 +1031,66 @@ impl FilterEngine {
         }
     }
 
+    /// Whether any `$replace` rule is loaded: the HTTPS path only pays for the
+    /// probe when one is.
+    pub fn has_replace(&self) -> bool {
+        self.compiled()
+            .replace
+            .as_ref()
+            .is_some_and(|replace| replace.probe.is_some())
+    }
+
+    /// How many `$replace` rules the loaded lists carry (diagnostics).
+    pub fn replace_rules(&self) -> u64 {
+        self.compiled()
+            .replace
+            .as_ref()
+            .map(|replace| replace.rules.len() as u64)
+            .unwrap_or(0)
+    }
+
+    /// The `$replace` rule that applies to one request, if any.
+    ///
+    /// A match means the response body is rewritten *instead* of the request
+    /// being blocked: AdGuard gives the modifier priority over every other
+    /// basic rule, exceptions included. A page exception (`$content`, or an
+    /// empty `$replace`) switches content modification off for the pages it
+    /// matches, so those are asked first.
+    pub fn replace_for(
+        &self,
+        url: &str,
+        source: &str,
+        request_type: &str,
+        method: &str,
+    ) -> Option<Arc<Replace>> {
+        let compiled = self.compiled();
+        let replace = compiled.replace.as_ref()?;
+        let probe = replace.probe.as_ref()?;
+        let request = Request::new(url, source, request_type, method).ok()?;
+        let result = probe.check_network_request(&request);
+        let rule = replace
+            .rules
+            .get(replace_redirect_index(result.redirect.as_deref()?)?)?
+            .clone();
+        if let Some(veto) = replace.veto.as_ref() {
+            // The exceptions name *pages*, so a subresource is asked about the
+            // document it came from. `other` keeps the crate from reading a
+            // path-scoped pattern as "not a document": a page URL is the only
+            // URL the rule is about, whatever the request type is.
+            let page = if request_type == "document" || source.is_empty() {
+                url
+            } else {
+                source
+            };
+            if let Ok(request) = Request::new(page, page, "other", "GET") {
+                if veto.check_network_request(&request).should_block() {
+                    return None;
+                }
+            }
+        }
+        Some(rule)
+    }
+
     pub fn clear_cache(&self) {
         self.cache.write().unwrap().clear();
     }
@@ -1031,6 +1302,273 @@ fn convert_adguard_line(line: &str, out: &mut String) {
         }
     }
     out.push_str(line);
+}
+
+/// Where a `$replace` rule's index rides.
+///
+/// The probe engine answers a match with a `$redirect` to
+/// `adfree-replace-<index>`, whose resource body *is* that index: the crate
+/// hands the body back in `BlockerResult::redirect`, which is how the payload
+/// that matched is found again.
+const REPLACE_RESOURCE_PREFIX: &str = "adfree-replace-";
+
+/// Modifiers a `$replace` rule may carry and the crate implements exactly.
+///
+/// They go into the probe rule untouched, so the probe matches the rule the
+/// way the list meant it. Everything else — `app=`, `badfilter`, another
+/// modifier the crate refuses — sends the whole rule to
+/// [`ReplaceEngine::dropped`]: matching it without that option would apply it
+/// wider than the list asked for.
+const KEPT_OPTIONS: &[&str] = &[
+    "domain",
+    "from",
+    "to",
+    "important",
+    "match-case",
+    "third-party",
+    "3p",
+    "first-party",
+    "1p",
+    "document",
+    "doc",
+    "image",
+    "media",
+    "object",
+    "object-subrequest",
+    "other",
+    "ping",
+    "beacon",
+    "script",
+    "stylesheet",
+    "css",
+    "subdocument",
+    "frame",
+    "xmlhttprequest",
+    "xhr",
+    "websocket",
+    "font",
+    "all",
+    "method",
+];
+
+/// The `$replace` and content-exception rules one list carries.
+#[derive(Default)]
+struct ReplaceScan {
+    /// Probe rules: the original rule with `$replace` swapped for a `$redirect`
+    /// to the resource carrying the rule's index.
+    probe: Vec<String>,
+    /// Payloads, index-matched with `probe`.
+    payloads: Vec<String>,
+    /// Rules that switch content modification off, as plain blocking rules.
+    veto: Vec<String>,
+    /// Rules left out (see [`ReplaceEngine::dropped`]).
+    dropped: u32,
+}
+
+/// Reads the rules the crate drops because of the modifiers it does not
+/// implement: `$replace` (the response body is rewritten instead of the
+/// request being blocked) and `$content` (a page exception switching such
+/// rewrites off).
+///
+/// The pattern half of every `$replace` rule still goes to the crate's own
+/// matcher — as a `$redirect` to a resource carrying the rule's index — so
+/// `domain=`, the type options, `important` and the exceptions keep the
+/// meaning the list gave them.
+fn scan_replace_rules(text: &str, scan: &mut ReplaceScan) {
+    for line in text.lines() {
+        let line = line.trim();
+        if line.is_empty() || line.starts_with(['!', '[', '#']) {
+            continue;
+        }
+        let exception = line.starts_with("@@");
+        let rule = line.strip_prefix("@@").unwrap_or(line);
+        let Some((pattern, tokens)) = split_rule(rule) else {
+            continue;
+        };
+        let replace = tokens.iter().copied().find(|token| is_replace_token(token));
+        let content = tokens.contains(&"content");
+
+        let mut kept: Vec<&str> = Vec::new();
+        let mut faithful = true;
+        for token in &tokens {
+            let bare = token.trim_start_matches('~');
+            let name = bare.split('=').next().unwrap_or(bare);
+            if name.is_empty() || matches!(name, "replace" | "content" | "_" | "__" | "___") {
+                continue;
+            }
+            if KEPT_OPTIONS.contains(&name) {
+                kept.push(token);
+            } else {
+                faithful = false;
+            }
+        }
+        if !faithful {
+            scan.dropped += 1;
+            continue;
+        }
+
+        let payload = replace
+            .map(|token| token.strip_prefix("replace=").unwrap_or(""))
+            .unwrap_or_default();
+        if content || (replace.is_some() && payload.is_empty()) {
+            // Both say "do not modify the response here", and only an
+            // exception can say it.
+            if exception {
+                scan.veto.push(probe_line(pattern, &kept, None));
+            } else {
+                scan.dropped += 1;
+            }
+            continue;
+        }
+        if exception {
+            // `@@...$replace=/X/Y/` cancels the rules carrying that payload
+            // only; no list in the catalogue writes the form.
+            scan.dropped += 1;
+            continue;
+        }
+        scan.probe
+            .push(probe_line(pattern, &kept, Some(scan.probe.len())));
+        scan.payloads.push(payload.to_string());
+    }
+}
+
+/// Splits `pattern$option,option,...` at the `$` that starts the modifier
+/// list.
+///
+/// The pattern itself may contain a `$`, so the split is the first `$` after
+/// which a `$replace` or `$content` option shows up.
+fn split_rule(text: &str) -> Option<(&str, Vec<&str>)> {
+    let mut search = 0;
+    while let Some(offset) = text[search..].find('$') {
+        let index = search + offset;
+        let pattern = &text[..index];
+        let tokens = split_options(&text[index + 1..]);
+        if !pattern.is_empty()
+            && tokens
+                .iter()
+                .any(|token| is_replace_token(token) || *token == "content")
+        {
+            return Some((pattern, tokens));
+        }
+        search = index + 1;
+    }
+    None
+}
+
+/// Splits an option list on commas, keeping a `replace=` payload whole.
+///
+/// The payload is `/regexp/replacement/`, and a quarter of the real rules
+/// contain commas of their own — while the option list around it is
+/// comma-separated. The two unescaped slashes after the value's opening one
+/// are what says where it ends, exactly like AdGuard's own parser.
+fn split_options(options: &str) -> Vec<&str> {
+    let bytes = options.as_bytes();
+    let mut tokens = Vec::new();
+    let mut start = 0usize;
+    let mut index = 0usize;
+    // Inside a `replace=/…` value: how many of its slashes have been seen.
+    let mut payload_slashes: Option<u32> = None;
+    while index < bytes.len() {
+        if index == start && options[start..].starts_with("replace=/") {
+            payload_slashes = Some(0);
+            index = start + "replace=/".len();
+            continue;
+        }
+        let byte = bytes[index];
+        if byte == b'\\' && index + 1 < bytes.len() {
+            index += 2;
+            continue;
+        }
+        if let Some(slashes) = payload_slashes.as_mut() {
+            if byte == b'/' {
+                *slashes += 1;
+                if *slashes == 2 {
+                    payload_slashes = None;
+                }
+            }
+            index += 1;
+            continue;
+        }
+        if byte == b',' {
+            tokens.push(&options[start..index]);
+            start = index + 1;
+            index = start;
+            continue;
+        }
+        index += 1;
+    }
+    tokens.push(&options[start..]);
+    tokens
+}
+
+fn is_replace_token(token: &str) -> bool {
+    token == "replace" || token.starts_with("replace=")
+}
+
+/// The rule the crate is actually given: the pattern, the options the crate
+/// understands, and — for the probe engine — the redirect that names the
+/// rule's index.
+fn probe_line(pattern: &str, options: &[&str], index: Option<usize>) -> String {
+    let mut parts: Vec<String> = Vec::with_capacity(options.len() + 1);
+    if let Some(index) = index {
+        parts.push(format!("{REPLACE_RESOURCE_PREFIX}{index}"));
+        parts[0].insert_str(0, "redirect=");
+    }
+    parts.extend(options.iter().map(|option| (*option).to_string()));
+    if parts.is_empty() {
+        return pattern.to_string();
+    }
+    format!("{pattern}${}", parts.join(","))
+}
+
+/// Builds the engines a list's `$replace` rules need, or `None` when the
+/// loaded lists carry none.
+fn build_replace(scan: ReplaceScan) -> Option<ReplaceEngine> {
+    let rules: Vec<Arc<Replace>> = scan
+        .payloads
+        .iter()
+        .map(|payload| Arc::new(Replace::parse(payload)))
+        .collect();
+    let veto_rules = scan.veto.len() as u32;
+    let probe = (!scan.probe.is_empty()).then(|| {
+        let mut set = FilterSet::new(false);
+        set.add_filter_list(scan.probe.join("\n"), ParseOptions::default());
+        let mut engine = Engine::new_with_filter_set(set);
+        // One resource per rule. The body is the rule's index: the only thing
+        // that has to survive the crate's redirect handling.
+        engine.use_resources((0..scan.probe.len()).map(|index| Resource {
+            name: format!("{REPLACE_RESOURCE_PREFIX}{index}"),
+            aliases: Vec::new(),
+            kind: ResourceType::Mime(MimeType::TextPlain),
+            content: BASE64.encode(index.to_string()),
+            dependencies: Vec::new(),
+            permission: Default::default(),
+        }));
+        engine
+    });
+    let veto = (!scan.veto.is_empty()).then(|| {
+        let mut set = FilterSet::new(false);
+        set.add_filter_list(scan.veto.join("\n"), ParseOptions::default());
+        Engine::new_with_filter_set(set)
+    });
+    if probe.is_none() && veto.is_none() {
+        return None;
+    }
+    Some(ReplaceEngine {
+        probe,
+        rules,
+        veto,
+        veto_rules,
+        dropped: scan.dropped,
+    })
+}
+
+/// The rule index a probe resource handed back, out of the `data:` URL the
+/// crate wraps a redirect body in.
+fn replace_redirect_index(data_url: &str) -> Option<usize> {
+    let (_, encoded) = data_url.strip_prefix("data:")?.split_once(',')?;
+    let bytes = BASE64.decode(encoded).ok()?;
+    std::str::from_utf8(&bytes).ok()?.parse().ok()
 }
 
 /// Number of rule-looking lines in a list. The `adblock` engine does not expose
@@ -1289,6 +1827,178 @@ mod tests {
             "GET",
         );
         assert_eq!(v.rewritten_url, None);
+    }
+
+    /// Whether any `$replace` rule covers a request, the way the HTTPS path
+    /// asks about it.
+    fn rewrites(fe: &FilterEngine, url: &str, source: &str, kind: &str) -> bool {
+        fe.replace_for(url, source, kind, "GET").is_some()
+    }
+
+    /// The `$replace` rule covering one of this file's script URLs.
+    fn replace_rule(fe: &FilterEngine, url: &str) -> Arc<Replace> {
+        fe.replace_for(url, "https://page.test/", "script", "GET")
+            .unwrap_or_else(|| panic!("no rule covers {url}"))
+    }
+
+    #[test]
+    fn replace_rules_rewrite_instead_of_blocking() {
+        let fe = cosmetic_engine(
+            "||shop.test/ad.js$replace=/banner/advert/\n\
+             ||shop.test/other.js\n",
+        );
+        assert!(fe.has_replace());
+        assert_eq!(fe.replace_rules(), 1);
+        // The crate drops a rule it cannot implement, so nothing about the URL
+        // looks blocked to the caller: the body is what gets edited.
+        let v = fe.check_url(
+            "https://shop.test/ad.js",
+            "https://shop.test/",
+            "script",
+            "GET",
+        );
+        assert!(!v.blocked, "{v:?}");
+        let rule = replace_rule(&fe, "https://shop.test/ad.js");
+        assert_eq!(rule.payload(), "/banner/advert/");
+        assert!(rule.runs());
+        assert_eq!(
+            rule.apply(b"a banner here").as_deref(),
+            Some(&b"a advert here"[..])
+        );
+        // No match means no rewrite: the caller hands the origin's bytes over
+        // with the length it declared.
+        assert_eq!(rule.apply(b"nothing to see"), None);
+        // A URL the rule does not name is left to the blocking rules.
+        let v = fe.check_url(
+            "https://shop.test/other.js",
+            "https://shop.test/",
+            "script",
+            "GET",
+        );
+        assert!(v.blocked, "{v:?}");
+        let (url, page) = ("https://shop.test/other.js", "https://shop.test/");
+        assert!(!rewrites(&fe, url, page, "script"));
+    }
+
+    #[test]
+    fn replace_payloads_survive_commas_and_escapes() {
+        // A real payload is full of commas of its own — a quantifier, a
+        // character class — inside an option list that is comma-separated.
+        // The slashes after the value's opening one are what says where the
+        // value ends, exactly like AdGuard's own parser.
+        let fe = cosmetic_engine(
+            r"||shop.test/a.js$script,replace=/\d{1,3}\.(\d+)/v$1/i
+||shop.test/b.js$replace=/(a\,b)/[$1]/
+||shop.test/c.js$replace=/(<item>){2\,3}/G/
+||shop.test/d.js$replace=/a\/b/H/
+",
+        );
+        assert_eq!(fe.replace_rules(), 4);
+        let rule = replace_rule(&fe, "https://shop.test/a.js");
+        assert_eq!(rule.payload(), r"/\d{1,3}\.(\d+)/v$1/i");
+        assert_eq!(
+            rule.apply(b"123.45 and 7.8").as_deref(),
+            Some(&b"v45 and v8"[..])
+        );
+        // A `\,` keeps the comma from ending the option list and reads as a
+        // plain comma to the regexp engine.
+        let rule = replace_rule(&fe, "https://shop.test/b.js");
+        assert_eq!(rule.payload(), r"/(a\,b)/[$1]/");
+        assert_eq!(rule.apply(b"a,b").as_deref(), Some(&b"[a,b]"[..]));
+        // `\,` inside a quantifier is the list's way of hiding the comma from
+        // its own option list: the regexp wants a plain `{2,3}`.
+        let rule = replace_rule(&fe, "https://shop.test/c.js");
+        assert_eq!(rule.payload(), r"/(<item>){2\,3}/G/");
+        assert_eq!(rule.apply(b"<item><item>Z").as_deref(), Some(&b"GZ"[..]));
+        assert_eq!(rule.apply(b"<item>Z"), None);
+        // `\/` is the separator's escape, and the regexp engine reads it as
+        // the slash the list means.
+        let rule = replace_rule(&fe, "https://shop.test/d.js");
+        assert_eq!(rule.apply(b"a/ba/b").as_deref(), Some(&b"HH"[..]));
+    }
+
+    #[test]
+    fn replace_rules_honour_their_scoping() {
+        // `domain=` names the page the subresource was loaded from, and the
+        // type option names the kind of subresource: both are the crate's own
+        // matcher, kept whole by the probe line.
+        let (url, page) = ("https://cdn.test/ad.js", "https://page.test/");
+        let fe = cosmetic_engine("||cdn.test/ad.js$replace=/x/y/,domain=page.test\n");
+        assert!(rewrites(&fe, url, page, "script"));
+        assert!(!rewrites(&fe, url, "https://other.test/", "script"));
+
+        let fe = cosmetic_engine("||cdn.test/ad.js$replace=/x/y/,script\n");
+        assert!(rewrites(&fe, url, page, "script"));
+        assert!(!rewrites(&fe, url, page, "xmlhttprequest"));
+
+        // A rule the blocking engine would answer for a different URL is not
+        // dragged in: the probe matches on the same pattern.
+        let fe = cosmetic_engine("||cdn.test/ad.js$replace=/x/y/\n");
+        assert!(!rewrites(&fe, "https://cdn.test/other.js", page, "script"));
+    }
+
+    #[test]
+    fn page_exceptions_switch_replace_off() {
+        // Both spellings say "do not modify the responses of this page", and
+        // the question is asked about the page, not the subresource.
+        let url = "https://cdn.test/ad.js";
+        let quiet = "https://quiet.test/";
+        let loud = "https://loud.test/";
+        for exception in ["@@||quiet.test^$content\n", "@@||quiet.test^$replace\n"] {
+            let fe = cosmetic_engine(&format!("||cdn.test/ad.js$replace=/x/y/\n{exception}"));
+            assert!(!rewrites(&fe, url, quiet, "script"), "{exception}");
+            assert!(rewrites(&fe, url, loud, "script"), "{exception}");
+        }
+        // A page named by a path pattern is the only page it covers.
+        let fe = cosmetic_engine(
+            "||cdn.test/ad.js$replace=/x/y/\n\
+             @@||quiet.test/one^$content\n",
+        );
+        let one = "https://quiet.test/one/page.html";
+        let two = "https://quiet.test/two/page.html";
+        assert!(!rewrites(&fe, url, one, "script"));
+        assert!(rewrites(&fe, url, two, "script"));
+    }
+
+    #[test]
+    fn replace_rules_the_crate_cannot_keep_are_dropped() {
+        // `@@…$replace=/…/…/` cancels the rules carrying that payload. Telling
+        // which ones those are means reading every payload twice; no list in
+        // the catalogue writes the form, so the exception is dropped instead —
+        // which leaves the rule it names in place (a known deviation).
+        let (url, page) = ("https://cdn.test/ad.js", "https://page.test/");
+        let fe = cosmetic_engine(
+            "||cdn.test/ad.js$replace=/x/y/\n\
+             @@||cdn.test/ad.js$replace=/x/y/\n",
+        );
+        assert!(rewrites(&fe, url, page, "script"));
+
+        // An option the crate does not implement changes what a rule means:
+        // keeping the pattern anyway would over-apply it to every response.
+        let fe = cosmetic_engine("||cdn.test/ad.js$replace=/x/y/,csp=script-src 'none'\n");
+        assert!(!fe.has_replace());
+        assert_eq!(fe.replace_rules(), 0);
+        assert!(!rewrites(&fe, url, page, "script"));
+        // A blocking `$content` rule is just as unreadable: the modifier only
+        // means something on an exception.
+        let fe = cosmetic_engine("||cdn.test/ad.js$content\n");
+        assert!(!fe.has_replace());
+    }
+
+    #[test]
+    fn unreadable_replace_payloads_never_rewrite() {
+        // The regexp crate has no lookbehind. The rule is still counted — the
+        // list asked for it — but its body passes through untouched.
+        let fe = cosmetic_engine("||cdn.test/ad.js$replace=/(?<=x)y/z/\n");
+        assert!(fe.has_replace());
+        assert_eq!(fe.replace_rules(), 1);
+        let rule = replace_rule(&fe, "https://cdn.test/ad.js");
+        assert!(!rule.runs());
+        assert_eq!(rule.apply(b"xy"), None);
+        // A payload that is not `/regexp/replacement/` at all fares the same.
+        let rule = Replace::parse("nonsense");
+        assert!(!rule.runs());
+        assert_eq!(rule.apply(b"nonsense"), None);
     }
 
     #[test]
