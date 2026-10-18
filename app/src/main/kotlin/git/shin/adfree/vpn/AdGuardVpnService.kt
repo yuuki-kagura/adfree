@@ -44,6 +44,9 @@ class AdGuardVpnService : VpnService() {
     @Volatile
     private var isRunning = false
 
+    /** Guards the tunnel build itself, not just the running state. */
+    private val establishing = java.util.concurrent.atomic.AtomicBoolean(false)
+
     private val screenReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
             when (intent?.action) {
@@ -75,12 +78,19 @@ class AdGuardVpnService : VpnService() {
 
     private fun startVpn() {
         if (isRunning) return
+        // `isRunning` only turns true once `establish()` returns, so two starts
+        // in quick succession (the launcher plus an explicit ACTION_START_VPN)
+        // would both get past it and race: two `establish()` calls, and two
+        // runs of `prepareUpstreamSockets` mutating the same socket lists. One
+        // of them then dies mid-iteration and the tunnel is left half-built.
+        if (!establishing.compareAndSet(false, true)) return
         try {
             createNotificationChannel()
             promoteToForeground(NOTIFICATION_ID, buildStatusNotification())
         } catch (e: Exception) {
             Log.e(TAG, "notification failed: ${e.message}", e)
             isRunning = false
+            establishing.set(false)
             return
         }
         // Everything below is binder work — `establish()`, one
@@ -94,6 +104,8 @@ class AdGuardVpnService : VpnService() {
             } catch (e: Exception) {
                 Log.e(TAG, "establish failed: ${e.message}", e)
                 isRunning = false
+            } finally {
+                establishing.set(false)
             }
         }
     }

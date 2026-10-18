@@ -56,6 +56,7 @@ class CoreEngine {
      * The critical part: every socket must be `VpnService.protect()`ed, otherwise
      * packets towards the resolver re-enter our own TUN and DNS dies entirely.
      */
+    @Synchronized
     fun prepareUpstreamSockets(vpnService: android.net.VpnService) {
         closeUpstreamSockets()
         repeat(SOCKET_COUNT) {
@@ -89,6 +90,7 @@ class CoreEngine {
 
     private val holderPipes = mutableListOf<android.os.ParcelFileDescriptor>()
 
+    @Synchronized
     private fun closeUpstreamSockets() {
         closeHeldSockets()
         upstreamSockets.clear()
@@ -97,7 +99,13 @@ class CoreEngine {
     /**
      * Releases every descriptor handed to the core. Called only from `stop()`,
      * once the engine has stopped using them.
+     *
+     * Every entry point that touches the two lists is `@Synchronized`: a
+     * `stop()` racing the tunnel build otherwise iterates a list the other
+     * side is still appending to, which is exactly the crash that used to
+     * leave the tunnel half-built.
      */
+    @Synchronized
     private fun closeHeldSockets() {
         holderPipes.forEach { runCatching { it.close() } }
         holderPipes.clear()
