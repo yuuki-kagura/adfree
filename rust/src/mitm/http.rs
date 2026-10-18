@@ -855,6 +855,155 @@ fn header_line_name(line: &[u8]) -> Option<String> {
     Some(String::from_utf8_lossy(&line[..end]).to_ascii_lowercase())
 }
 
+/// The trimmed value of one header line, when the line is a header of that
+/// (lowercased) name.
+fn header_value<'a>(line: &'a [u8], name: &str) -> Option<&'a str> {
+    let end = line.iter().position(|b| *b == b':')?;
+    if end == 0 || !line[..end].eq_ignore_ascii_case(name.as_bytes()) {
+        return None;
+    }
+    std::str::from_utf8(&line[end + 1..]).ok().map(str::trim)
+}
+
+/// The name of a `Cookie` pair (`name=value`), or `None` when the pair does
+/// not parse as one — the reference skips those, and a pair it skips is a
+/// cookie no rule can name.
+fn cookie_pair_name(pair: &str) -> Option<&str> {
+    let (name, _) = pair.split_once('=')?;
+    let name = name.trim();
+    (!name.is_empty()).then_some(name)
+}
+
+/// The cookie a `Set-Cookie` value names: its first non-empty `;`-part up to
+/// the first `=`, or the whole part when it carries none. The reference reads
+/// it that way, and trims nothing.
+fn set_cookie_name(value: &str) -> Option<&str> {
+    let first = value.split(';').find(|part| !part.is_empty())?;
+    let name = first.split('=').next().unwrap_or(first);
+    (!name.is_empty()).then_some(name)
+}
+
+/// The cookie names a request head carries, in the order its `Cookie` header
+/// lists them.
+///
+/// A pair counts only when it parses as `name=value`, and repeats count once.
+pub fn request_cookie_names(head: &[u8]) -> Vec<String> {
+    let mut names: Vec<String> = Vec::new();
+    for line in head.split_inclusive(|b| *b == b'\n') {
+        let Some(value) = header_value(line, "cookie") else {
+            continue;
+        };
+        for pair in value.split(';') {
+            let Some(name) = cookie_pair_name(pair.trim()) else {
+                continue;
+            };
+            if !names.iter().any(|seen| seen == name) {
+                names.push(name.to_string());
+            }
+        }
+    }
+    names
+}
+
+/// Takes the cookies `dropped` names out of the `Cookie` header of a request
+/// head, rebuilding the header the way the reference serialises one
+/// (`name=value; name=value`, names and values trimmed) — a header is rewritten
+/// only when one of the names really was on it, so a request the rules do not
+/// touch goes over byte for byte. `None` when the head carries none of the
+/// names: the caller keeps the head it had.
+pub fn drop_request_cookies(head: &[u8], dropped: &[String]) -> Option<Vec<u8>> {
+    if dropped.is_empty() {
+        return None;
+    }
+    let mut changed = false;
+    let mut out = Vec::with_capacity(head.len());
+    for line in head.split_inclusive(|b| *b == b'\n') {
+        let Some(value) = header_value(line, "cookie") else {
+            out.extend_from_slice(line);
+            continue;
+        };
+        let mut kept: Vec<String> = Vec::new();
+        let mut line_changed = false;
+        for pair in value.split(';') {
+            // The reference reads a cookie as `name=value` and skips anything
+            // else: a pair without an `=` is not a cookie, and a rebuild only
+            // carries cookies.
+            let Some((name, value)) = pair.split_once('=') else {
+                continue;
+            };
+            let name = name.trim();
+            if dropped.iter().any(|dropped| dropped == name) {
+                line_changed = true;
+                continue;
+            }
+            kept.push(format!("{name}={}", value.trim()));
+        }
+        if !line_changed {
+            // None of the names is on this line: it goes over as it came.
+            out.extend_from_slice(line);
+            continue;
+        }
+        changed = true;
+        if kept.is_empty() {
+            // Every cookie went: the header goes with them.
+            continue;
+        }
+        let Some(colon) = line.iter().position(|b| *b == b':') else {
+            out.extend_from_slice(line);
+            continue;
+        };
+        let ending = if line.ends_with(b"\r\n") { "\r\n" } else { "\n" };
+        out.extend_from_slice(&line[..colon]);
+        out.extend_from_slice(format!(": {}{ending}", kept.join("; ")).as_bytes());
+    }
+    changed.then_some(out)
+}
+
+/// The cookie names a response head sets, in header order, each once.
+pub fn set_cookie_names(head: &[u8]) -> Vec<String> {
+    let mut names: Vec<String> = Vec::new();
+    for line in head.split_inclusive(|b| *b == b'\n') {
+        let Some(value) = header_value(line, "set-cookie") else {
+            continue;
+        };
+        let Some(name) = set_cookie_name(value) else {
+            continue;
+        };
+        if !names.iter().any(|seen| seen == name) {
+            names.push(name.to_string());
+        }
+    }
+    names
+}
+
+/// Takes the `set-cookie` headers whose cookie name is in `dropped` out of a
+/// response head. The names actually found and taken out come back with the
+/// new head.
+pub fn drop_set_cookie_headers(head: &[u8], dropped: &[String]) -> Option<(Vec<u8>, Vec<String>)> {
+    if dropped.is_empty() {
+        return None;
+    }
+    let mut taken: Vec<String> = Vec::new();
+    let mut out = Vec::with_capacity(head.len());
+    for line in head.split_inclusive(|b| *b == b'\n') {
+        if let Some(value) = header_value(line, "set-cookie") {
+            if let Some(name) = set_cookie_name(value) {
+                if dropped.iter().any(|dropped| dropped == name) {
+                    if !taken.iter().any(|seen| seen == name) {
+                        taken.push(name.to_string());
+                    }
+                    continue;
+                }
+            }
+        }
+        out.extend_from_slice(line);
+    }
+    if taken.is_empty() {
+        return None;
+    }
+    Some((out, taken))
+}
+
 /// What [`apply_response_headers`] did to one head, for the log line.
 #[derive(Debug, Default)]
 pub struct HeadEdits {
@@ -954,6 +1103,7 @@ pub fn dechunk(body: &[u8]) -> Dechunk {
 /// anything; a body that has to reach the client *while it is still arriving*
 /// cannot, so the framing is decoded a piece at a time here. Bytes that belong
 /// to the next response stay in [`DechunkState::leftover`].
+#[derive(Debug)]
 pub struct DechunkState {
     buf: Vec<u8>,
     consumed: usize,
@@ -1019,6 +1169,20 @@ impl DechunkState {
     /// `Ok(true)` once the terminating chunk has been seen. An `Err` means the
     /// bytes are not chunked framing at all.
     pub fn push(&mut self, data: &[u8], out: &mut Vec<u8>) -> Result<bool, String> {
+        self.parse(data, Some(out))
+    }
+
+    /// Follows the framing without keeping the payload, for a body that goes
+    /// to the client exactly as it came: only the end of the stream matters,
+    /// because the next response's head is right behind it.
+    ///
+    /// `Ok(true)` once the terminating chunk has been seen; whatever followed
+    /// it is in [`DechunkState::leftover`].
+    pub fn walk(&mut self, data: &[u8]) -> Result<bool, String> {
+        self.parse(data, None)
+    }
+
+    fn parse(&mut self, data: &[u8], mut out: Option<&mut Vec<u8>>) -> Result<bool, String> {
         if self.done {
             return Ok(true);
         }
@@ -1031,7 +1195,9 @@ impl DechunkState {
                     // into megabytes, and waiting for one whole is not an
                     // option for a body that has to keep moving.
                     let take = self.chunk_left.min(self.buf.len() - pos);
-                    out.extend_from_slice(&self.buf[pos..pos + take]);
+                    if let Some(sink) = out.as_mut() {
+                        sink.extend_from_slice(&self.buf[pos..pos + take]);
+                    }
                     pos += take;
                     self.chunk_left -= take;
                     if self.chunk_left > 0 {
@@ -1779,6 +1945,33 @@ mod tests {
     }
 
     #[test]
+    fn walking_a_chunked_stream_keeps_nothing_but_the_position() {
+        // A body that goes over untouched still has to be followed to its
+        // end: the head behind it is the next response's, and the walker is
+        // how that boundary is found. What it takes in, it counts; what it
+        // consumes, nobody sees.
+        let mut state = DechunkState::new();
+        assert!(!state.walk(b"5\r\nhe").expect("framing so far"));
+        assert!(!state.walk(b"llo\r\n0\r\n").expect("framing so far"));
+        assert!(!state.is_done(), "the trailers are still to come");
+        assert!(state.walk(b"\r\n").expect("the terminating chunk"));
+        assert!(state.is_done());
+        assert_eq!(state.consumed(), b"5\r\nhello\r\n0\r\n\r\n".len());
+        assert!(state.leftover().is_empty());
+
+        // Bytes after the terminator are left exactly where they are: they
+        // belong to the next response.
+        let mut state = DechunkState::new();
+        assert!(state.walk(b"1\r\na\r\n0\r\n\r\nNEXT").expect("the stream"));
+        assert_eq!(state.leftover(), b"NEXT");
+
+        // Framing that is not chunked framing at all is refused, not
+        // guessed at.
+        let mut state = DechunkState::new();
+        assert!(state.walk(b"zz\r\n").is_err());
+    }
+
+    #[test]
     fn html_requests_stop_asking_for_brotli() {
         let req = b"GET / HTTP/1.1\r\nHost: x\r\nAccept: text/html,application/xhtml+xml\r\nAccept-Encoding: gzip, deflate, br, zstd\r\n\r\n";
         let out = drop_undecodable_encodings(req, false).expect("rewritten");
@@ -2402,5 +2595,79 @@ mod tests {
             String::from_utf8(head).unwrap(),
             "HTTP/1.1 200 OK\r\nX-Drop: 1"
         );
+    }
+
+    #[test]
+    fn cookie_helpers_read_the_headers_the_way_the_reference_does() {
+        // A pair is a cookie only when it looks like `name=value` (the
+        // reference skips the others), the name is trimmed of surrounding
+        // spaces, and a name repeats once.
+        let head = b"GET / HTTP/1.1\r\nCookie: a=1; b=2; a=1; nope; =x; c=\r\n\r\n";
+        assert_eq!(
+            request_cookie_names(head),
+            vec!["a".to_string(), "b".to_string(), "c".to_string()]
+        );
+        assert!(request_cookie_names(b"GET / HTTP/1.1\r\nHost: x\r\n\r\n").is_empty());
+        // A `set-cookie` names its cookie in the first non-empty `;`-part,
+        // before the first `=`; the parts after it are options, not names.
+        let head = b"HTTP/1.1 200 OK\r\nSet-Cookie: a=1; Path=/\r\nSet-Cookie: b=2\r\nSet-Cookie: a=9\r\n\r\n";
+        assert_eq!(
+            set_cookie_names(head),
+            vec!["a".to_string(), "b".to_string()]
+        );
+        // A `set-cookie` with no name cannot be parsed: it is none of the
+        // rules' business, and it stays whatever they say.
+        let head = b"HTTP/1.1 200 OK\r\nSet-Cookie: =novalue; a=b\r\n\r\n";
+        assert!(set_cookie_names(head).is_empty());
+        assert!(drop_set_cookie_headers(head, &["a".to_string()]).is_none());
+    }
+
+    #[test]
+    fn drop_request_cookies_rebuilds_only_when_a_cookie_went() {
+        let names = vec!["a".to_string()];
+        // The header is re-serialised the way the reference writes one —
+        // `name=value; name=value`, names and values trimmed — and only when
+        // one of the names really went.
+        let head = b"GET / HTTP/1.1\r\nCookie: a = 1 ; b=2 ; c =\r\n\r\n";
+        let out = drop_request_cookies(head, &names).expect("a went");
+        assert_eq!(
+            String::from_utf8(out).unwrap(),
+            "GET / HTTP/1.1\r\nCookie: b=2; c=\r\n\r\n"
+        );
+        // Every cookie gone: the header goes with them.
+        let head = b"GET / HTTP/1.1\r\nCookie: a=1\r\nHost: x\r\n\r\n";
+        let out = drop_request_cookies(head, &names).expect("a went");
+        assert_eq!(
+            String::from_utf8(out).unwrap(),
+            "GET / HTTP/1.1\r\nHost: x\r\n\r\n"
+        );
+        // A pair the reference cannot read as a cookie is dropped with the
+        // rebuild — the reference re-serialises cookies, not raw pairs.
+        let head = b"GET / HTTP/1.1\r\nCookie: nope; a=1; b=2\r\n\r\n";
+        let out = drop_request_cookies(head, &names).expect("a went");
+        assert_eq!(
+            String::from_utf8(out).unwrap(),
+            "GET / HTTP/1.1\r\nCookie: b=2\r\n\r\n"
+        );
+        // A header the rules do not touch is no reason to rewrite anything.
+        let head = b"GET / HTTP/1.1\r\nCookie: b=2; nope\r\n\r\n";
+        assert!(drop_request_cookies(head, &names).is_none());
+        assert!(drop_request_cookies(head, &["missing".to_string()]).is_none());
+        assert!(drop_request_cookies(head, &[]).is_none());
+    }
+
+    #[test]
+    fn drop_set_cookie_headers_takes_whole_lines_off() {
+        let head = b"HTTP/1.1 200 OK\r\nSet-Cookie: a=1; Path=/\r\nSet-Cookie: b=2\r\nSet-Cookie: a=9\r\n\r\n";
+        let (out, taken) =
+            drop_set_cookie_headers(head, &["a".to_string(), "missing".to_string()])
+                .expect("one went");
+        assert_eq!(
+            String::from_utf8(out).unwrap(),
+            "HTTP/1.1 200 OK\r\nSet-Cookie: b=2\r\n\r\n"
+        );
+        assert_eq!(taken, vec!["a".to_string()]);
+        assert!(drop_set_cookie_headers(head, &["missing".to_string()]).is_none());
+        assert!(drop_set_cookie_headers(head, &[]).is_none());
     }
 }

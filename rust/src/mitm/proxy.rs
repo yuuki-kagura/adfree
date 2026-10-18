@@ -8,7 +8,7 @@
 //! Everything is non-blocking and returns the payloads to write back, so the
 //! packet loop stays in charge of TCP segmentation and never blocks a syscall.
 
-use crate::filter::{FilterEngine, HeaderEdit, Replace};
+use crate::filter::{CookiePlan, FilterEngine, HeaderEdit, Replace};
 use crate::mitm::http;
 use crate::mitm::tls::{
     self, feed_client, feed_client_wire, feed_server, send_to_client, FlowResolver, TlsSession,
@@ -244,6 +244,9 @@ struct ResponseEdit {
     /// The `$csp` / `$permissions` / `$removeheader` rules the request
     /// matched: applied to the response head when it comes back.
     headers: Option<Arc<HeaderEdit>>,
+    /// The `$cookie` rules the request matched: the response head loses the
+    /// `set-cookie` headers they name.
+    cookies: Option<Arc<CookiePlan>>,
 }
 
 /// What one forwarded request carries back from the filter: the response body
@@ -254,6 +257,10 @@ struct RequestPlan {
     replace: Option<Arc<Replace>>,
     /// Header edits, computed once, here, and held until the response arrives.
     headers: Option<Arc<HeaderEdit>>,
+    /// The `$cookie` rules the request matched: the request loses the cookies
+    /// they name now, and the response may not set them — the same plan
+    /// answers both, so it rides along.
+    cookies: Option<Arc<CookiePlan>>,
 }
 
 /// State for a response whose body is streamed to the client as it is edited.
@@ -424,14 +431,32 @@ fn payload_summary(payload: &str) -> String {
     format!("{cut}…")
 }
 
-/// How many bytes of a passed-through body are still to come.
-#[derive(Clone, Copy, Debug)]
+/// How a passed-through body is framed, and how far it still has to go.
+#[derive(Debug)]
 enum Left {
     /// `content-length` bytes.
     Length(usize),
-    /// Until the peer closes: chunked bodies the proxy does not frame, and
-    /// close-delimited ones. Nothing more can be parsed on this connection.
+    /// A chunked body: the bytes go on exactly as the origin sent them, and
+    /// the framing is followed to its end — the head behind the terminating
+    /// chunk is the next response's, and only the Head phase sees heads.
+    Chunked(ChunkPass),
+    /// Until the peer closes: a close-delimited body. Nothing more can be
+    /// parsed on this connection.
     End,
+}
+
+/// A chunked body going over untouched.
+///
+/// The framing walker never reads the payload, so the bytes on the wire are
+/// the origin's own; what it holds is the position, and what [`ChunkPass::tail`]
+/// holds is the handful of bytes that position is short of — a size line or a
+/// trailer still arriving.
+#[derive(Debug)]
+struct ChunkPass {
+    /// Bytes the walker has taken in but not consumed yet.
+    tail: Vec<u8>,
+    /// The position in the chunked stream.
+    framing: http::DechunkState,
 }
 
 impl ProxySession {
@@ -834,6 +859,7 @@ impl ProxySession {
                 info,
                 replace: plan.replace,
                 headers: plan.headers,
+                cookies: plan.cookies,
             });
             if let Some(fixed) = http::drop_undecodable_encodings(buffer, forced) {
                 *buffer = fixed;
@@ -953,6 +979,9 @@ impl ProxySession {
         if filter.has_replace() {
             if let Some(rule) = filter.replace_for(&url, &source, request_type, &method) {
                 plan.replace = Some(rule);
+                Self::apply_cookie_plan(
+                    filter, buffer, head_end, &url, &source, &method, &host, &mut plan,
+                );
                 return Ok(plan);
             }
         }
@@ -1046,6 +1075,9 @@ impl ProxySession {
                         ));
                     }
                 }
+                Self::apply_cookie_plan(
+                    filter, buffer, head_end, &url, &source, &method, &host, &mut plan,
+                );
                 return Ok(plan);
             }
         }
@@ -1082,6 +1114,53 @@ impl ProxySession {
             });
         }
         Ok(RequestPlan::default())
+    }
+
+    /// Applies the `$cookie` plan to the request head at the front of `buffer`:
+    /// the cookies the rules name come off the `Cookie` header, and the plan
+    /// rides on `plan` so the response that request produces cannot set them
+    /// either.
+    ///
+    /// The rules are matched against the URL the client sent — the way the
+    /// reference reads its matching result — so a request a `$urltransform`
+    /// rewrote is still the exchange that client meant to make. A page that
+    /// switched content modification off (`$urlblock`) never gets here: the
+    /// caller returns before this point, exactly like the reference's cookie
+    /// finder sees an empty rule set there.
+    #[allow(clippy::too_many_arguments)]
+    fn apply_cookie_plan(
+        filter: &FilterEngine,
+        buffer: &mut Vec<u8>,
+        head_end: usize,
+        url: &str,
+        source: &str,
+        method: &str,
+        host: &str,
+        plan: &mut RequestPlan,
+    ) {
+        if !filter.has_cookie_rules() {
+            return;
+        }
+        let Some(cookie_plan) = filter.cookie_plan(url, source, method) else {
+            return;
+        };
+        let names = http::request_cookie_names(&buffer[..head_end]);
+        if !names.is_empty() {
+            if let Some(edit) = cookie_plan.dropped(&names) {
+                // `drop_request_cookies` is `None` when none of the names is
+                // there, so the request is spliced only when it really changes.
+                if let Some(fixed) = http::drop_request_cookies(&buffer[..head_end], &edit.drop) {
+                    let old_end = head_end;
+                    buffer.splice(..old_end, fixed);
+                    crate::logbuf::push(&format!(
+                        "mitm {host}: request cookies dropped: {} by {} rule(s)",
+                        edit.drop.join(", "),
+                        edit.rules.len(),
+                    ));
+                }
+            }
+        }
+        plan.cookies = Some(Arc::new(cookie_plan));
     }
 
     /// Answers whatever the client asks the local injection origin.
@@ -1211,10 +1290,13 @@ impl ProxySession {
     pub fn rewrite_response(&mut self, plain: &[u8]) -> (Vec<u8>, usize) {
         // Nothing to hide and no header to edit: the connection bypasses the
         // rewriter entirely. Header edits alone still need it — they are what
-        // `$csp`, `$permissions` and `$removeheader` matched.
+        // `$csp`, `$permissions`, `$removeheader` and `$cookie` matched.
         if self.script_src.is_empty()
             && self.cosmetic.is_none()
-            && !self.head_requests.iter().any(|req| req.headers.is_some())
+            && !self
+                .head_requests
+                .iter()
+                .any(|req| req.headers.is_some() || req.cookies.is_some())
         {
             return (plain.to_vec(), 0);
         }
@@ -1272,6 +1354,26 @@ impl ProxySession {
                                 done.added.join(", "),
                                 edit.rules.len(),
                             ));
+                        }
+                    }
+                    // `$cookie`: the response may not set a cookie the rules
+                    // the request matched name, the same way the request lost
+                    // the ones it carried. A `set-cookie` names one cookie, so
+                    // the whole header goes.
+                    if let Some(plan) = &req.cookies {
+                        let names = http::set_cookie_names(&head);
+                        if let Some(edit) = plan.dropped(&names) {
+                            if let Some((fixed, dropped)) =
+                                http::drop_set_cookie_headers(&head, &edit.drop)
+                            {
+                                head = fixed;
+                                let host = self.captured.as_deref().unwrap_or("?");
+                                crate::logbuf::push(&format!(
+                                    "mitm {host}: set-cookie dropped: {} by {} rule(s)",
+                                    dropped.join(", "),
+                                    edit.rules.len(),
+                                ));
+                            }
                         }
                     }
                     // A response to HEAD advertises the length of the body it
@@ -1394,7 +1496,11 @@ impl ProxySession {
                     self.resp_phase = RespPhase::Pass {
                         left: match framing {
                             Some(Framing::Length(n)) => Left::Length(n),
-                            _ => Left::End,
+                            Some(Framing::Chunked) => Left::Chunked(ChunkPass {
+                                tail: Vec::new(),
+                                framing: http::DechunkState::new(),
+                            }),
+                            None => Left::End,
                         },
                     };
                     continue;
@@ -1567,30 +1673,62 @@ impl ProxySession {
                     self.resp_phase = RespPhase::Stream(state);
                     break;
                 }
-                RespPhase::Pass { left } => {
-                    let take = match left {
-                        Left::Length(n) => n.min(self.resp_pending.len()),
-                        Left::End => self.resp_pending.len(),
-                    };
-                    out.extend(self.resp_pending.drain(..take));
-                    match left {
-                        Left::Length(n) if n > take => {
+                RespPhase::Pass { left } => match left {
+                    Left::Length(n) => {
+                        let take = n.min(self.resp_pending.len());
+                        out.extend(self.resp_pending.drain(..take));
+                        if n > take {
                             self.resp_phase = RespPhase::Pass {
                                 left: Left::Length(n - take),
                             };
                             break;
                         }
-                        Left::Length(_) => {
-                            // This response is done: the next bytes are a head.
-                            self.resp_phase = RespPhase::Head;
-                            continue;
-                        }
-                        Left::End => {
-                            self.resp_phase = RespPhase::Pass { left: Left::End };
-                            break;
+                        // This response is done: the next bytes are a head.
+                        self.resp_phase = RespPhase::Head;
+                        continue;
+                    }
+                    Left::Chunked(mut pass) => {
+                        let fresh = std::mem::take(&mut self.resp_pending);
+                        let before = pass.framing.consumed();
+                        pass.tail.extend_from_slice(&fresh);
+                        match pass.framing.walk(&fresh) {
+                            Ok(done) => {
+                                let eaten = pass.framing.consumed() - before;
+                                out.extend_from_slice(&pass.tail[..eaten]);
+                                pass.tail.drain(..eaten);
+                                if done {
+                                    // What followed the terminating chunk is
+                                    // the next response's head — and this
+                                    // connection is back to reading heads.
+                                    self.resp_pending.append(&mut pass.tail);
+                                    self.resp_phase = RespPhase::Head;
+                                    continue;
+                                }
+                                self.resp_phase = RespPhase::Pass {
+                                    left: Left::Chunked(pass),
+                                };
+                                break;
+                            }
+                            Err(e) => {
+                                crate::logbuf::push(&format!(
+                                    "mitm {}: chunked body is not framed ({e}), passing through",
+                                    self.captured.as_deref().unwrap_or("?")
+                                ));
+                                // A body that is not framed the way it claims
+                                // has no end this proxy can find: the rest of
+                                // the connection goes over untouched.
+                                out.extend_from_slice(&pass.tail);
+                                self.resp_phase = RespPhase::Pass { left: Left::End };
+                                break;
+                            }
                         }
                     }
-                }
+                    Left::End => {
+                        out.append(&mut self.resp_pending);
+                        self.resp_phase = RespPhase::Pass { left: Left::End };
+                        break;
+                    }
+                },
             }
         }
         (out, injected)
@@ -2338,4 +2476,178 @@ pub fn open(
     let _ = ca;
     let session = tls::open_session(resolver, real_server)?;
     Ok(ProxySession::new(session, script_src, script_body))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::mitm::ca::CertificateAuthority;
+    use crate::mitm::tls::open_session;
+
+    /// A session with nothing to inject and nothing to hide: only a header edit
+    /// makes the rewriter do any work on such a flow.
+    fn quiet_proxy(ca: &CertificateAuthority) -> ProxySession {
+        let resolver = Arc::new(tls::SniCertResolver::new(Arc::new(
+            CertificateAuthority::from_pem(&ca.cert_pem(), &ca.key_pem()).expect("restore"),
+        )));
+        let session = open_session(&resolver, "origin.example.com").expect("session");
+        ProxySession::new(session, String::new(), Arc::from(""))
+    }
+
+    /// A cookie plan the test engine produces for one request.
+    fn cookie_plan(tag: &str, rules: &str, url: &str) -> Arc<CookiePlan> {
+        let dir = std::env::temp_dir().join("adfree-proxy-cookie-tests");
+        std::fs::create_dir_all(&dir).expect("temp dir");
+        let path = dir.join(format!("{tag}-list.txt"));
+        std::fs::write(&path, rules).expect("write list");
+        let engine = FilterEngine::new();
+        engine.rebuild(
+            &[crate::filter::FilterListInfo {
+                id: 1,
+                name: tag.to_string(),
+                url: String::new(),
+                enabled: true,
+                local_path: Some(path),
+                format: crate::filter::ListFormat::Standard,
+                category: 0,
+                rule_count: 0,
+                last_error: None,
+            }],
+            &[],
+        );
+        Arc::new(
+            engine
+                .cookie_plan(url, url, "GET")
+                .expect("the rules match the request"),
+        )
+    }
+
+    /// A connection that carries a `$cookie` plan and nothing else still needs
+    /// the rewriter: the response head is where a `set-cookie` the rules name
+    /// is taken off, and with no plan at all the bytes would bypass it.
+    #[test]
+    fn a_cookie_plan_alone_keeps_the_response_rewriter_awake() {
+        let ca = CertificateAuthority::generate().expect("ca");
+        let mut proxy = quiet_proxy(&ca);
+        let plan = cookie_plan(
+            "cookie-awake",
+            "||origin.example.com^$cookie=dropme\n",
+            "https://origin.example.com/x",
+        );
+        proxy.head_requests.push_back(ResponseEdit {
+            info: http::RequestInfo {
+                head: false,
+                http10: false,
+            },
+            replace: None,
+            headers: None,
+            cookies: Some(plan),
+        });
+
+        let response =
+            b"HTTP/1.1 200 OK\r\nSet-Cookie: dropme=1\r\nSet-Cookie: keepme=2\r\nContent-Length: 0\r\n\r\n";
+        let (out, injected) = proxy.rewrite_response(response);
+        assert_eq!(injected, 0, "nothing is injected on this flow");
+        let text = String::from_utf8(out).expect("utf8");
+        assert!(
+            !text.to_lowercase().contains("set-cookie: dropme"),
+            "the named cookie must be gone: {text}"
+        );
+        assert!(
+            text.contains("Set-Cookie: keepme=2"),
+            "every other cookie stays: {text}"
+        );
+    }
+
+    /// The same session without a plan is a pass-through: no edit, no copy.
+    #[test]
+    fn a_session_with_nothing_to_edit_bypasses_the_rewriter() {
+        let ca = CertificateAuthority::generate().expect("ca");
+        let mut proxy = quiet_proxy(&ca);
+        let response = b"HTTP/1.1 200 OK\r\nSet-Cookie: dropme=1\r\nContent-Length: 0\r\n\r\n";
+        let (out, injected) = proxy.rewrite_response(response);
+        assert_eq!(injected, 0);
+        assert_eq!(out, response);
+    }
+
+    /// A chunked body nobody edits still has to be followed to its end: the
+    /// head behind the terminating chunk is the next response's, and a
+    /// connection that stops looking for heads after a chunked body lets
+    /// every later response go by unedited.
+    #[test]
+    fn a_chunked_body_passes_through_and_the_next_head_is_still_read() {
+        let ca = CertificateAuthority::generate().expect("ca");
+        let mut proxy = quiet_proxy(&ca);
+        let plan = cookie_plan(
+            "chunked-next-head",
+            "||origin.example.com^$cookie=dropme\n",
+            "https://origin.example.com/x",
+        );
+        for _ in 0..2 {
+            proxy.head_requests.push_back(ResponseEdit {
+                info: http::RequestInfo {
+                    head: false,
+                    http10: false,
+                },
+                replace: None,
+                headers: None,
+                cookies: Some(Arc::clone(&plan)),
+            });
+        }
+        // The first response — the shape the device showed: a JSON body
+        // compressed and chunked, nothing for the rules to edit — arrives in
+        // two reads, the first ending right after a chunk's payload.
+        let first = b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Encoding: gzip\r\nTransfer-Encoding: chunked\r\n\r\n5\r\nhello\r\n0\r\n\r\n";
+        let cut = first.len() - 7;
+        let (out, _) = proxy.rewrite_response(&first[..cut]);
+        assert_eq!(out, &first[..cut], "the bytes go over as they came");
+        let second = b"HTTP/1.1 200 OK\r\nSet-Cookie: dropme=1\r\nSet-Cookie: keepme=2\r\nContent-Length: 0\r\n\r\n";
+        // The rest of the chunked body and the next response, one read.
+        let (out, _) = proxy.rewrite_response(&[&first[cut..], second.as_slice()].concat());
+        assert!(
+            out.starts_with(&first[cut..]),
+            "the tail of the body goes over as it came: {:?}",
+            String::from_utf8_lossy(&out)
+        );
+        let text = String::from_utf8(out).expect("utf8");
+        assert!(
+            !text.to_lowercase().contains("set-cookie: dropme"),
+            "the head behind a chunked body must still be edited: {text}"
+        );
+        assert!(
+            text.contains("Set-Cookie: keepme=2"),
+            "and only the cookie the rules name is taken: {text}"
+        );
+    }
+
+    /// A body that claims to be chunked and is not: no end can be found, so
+    /// nothing is guessed at — the rest of the connection goes over as it
+    /// came.
+    #[test]
+    fn a_body_that_is_not_chunked_framing_gives_up_the_connection() {
+        let ca = CertificateAuthority::generate().expect("ca");
+        let mut proxy = quiet_proxy(&ca);
+        let plan = cookie_plan(
+            "chunked-give-up",
+            "||origin.example.com^$cookie=dropme\n",
+            "https://origin.example.com/x",
+        );
+        for _ in 0..2 {
+            proxy.head_requests.push_back(ResponseEdit {
+                info: http::RequestInfo {
+                    head: false,
+                    http10: false,
+                },
+                replace: None,
+                headers: None,
+                cookies: Some(Arc::clone(&plan)),
+            });
+        }
+        let broken = b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\nzz\r\nnot hex at all";
+        let (out, _) = proxy.rewrite_response(broken);
+        assert_eq!(out, broken, "a broken body is not rewritten or dropped");
+        let next = b"HTTP/1.1 200 OK\r\nSet-Cookie: dropme=1\r\nContent-Length: 0\r\n\r\n";
+        let (out, _) = proxy.rewrite_response(next);
+        assert_eq!(out, next, "and neither is anything after it");
+    }
 }

@@ -579,6 +579,9 @@ struct Compiled {
     /// `$permissions`, `$removeheader`), found by [`scan_modifier_rules`].
     /// `None` when no loaded list carries one.
     modifier_rules: Option<ModifierRules>,
+    /// The `$cookie` rules, found by [`scan_modifier_rules`] too. `None` when
+    /// no loaded list carries one.
+    cookie_rules: Option<CookieRules>,
 }
 
 /// The `$replace` rules of the loaded lists, with the engine that finds them.
@@ -632,6 +635,7 @@ impl FilterEngine {
                 cosmetic_switches: HashMap::new(),
                 replace: None,
                 modifier_rules: None,
+                cookie_rules: None,
             })),
             cache: RwLock::new(DecisionCache::new(1 << 15)),
             build_ns: AtomicU64::new(0),
@@ -760,7 +764,7 @@ impl FilterEngine {
                 replace.dropped,
             ));
         }
-        let modifier_rules = build_modifier_rules(url_scan);
+        let (modifier_rules, cookie_rules) = build_modifier_rules(url_scan);
         if let Some(rules) = modifier_rules.as_ref() {
             let url = rules
                 .rules
@@ -773,6 +777,14 @@ impl FilterEngine {
                 rules.dropped,
             ));
         }
+        if let Some(rules) = cookie_rules.as_ref() {
+            crate::logbuf::push(&format!(
+                "filter: {} $cookie rules ({} request-independent, {} dropped)",
+                rules.rules.len(),
+                rules.rules.iter().filter(|rule| rule.constant).count(),
+                rules.dropped,
+            ));
+        }
         let compiled = Arc::new(Compiled {
             engine,
             generation,
@@ -782,6 +794,7 @@ impl FilterEngine {
             cosmetic_switches: cosmetic_exceptions.resolve(),
             replace,
             modifier_rules,
+            cookie_rules,
         });
         *self.inner.write().unwrap() = compiled;
         self.cache.write().unwrap().clear();
@@ -1484,8 +1497,9 @@ fn split_options(options: &str) -> Vec<&str> {
     // Inside a `/…/`-bracketed modifier value: how many of its slashes have
     // been seen, and how many close the bracketed part of the value.
     // `replace`/`urltransform` values carry two or more slashes before the
-    // unescaped commas are free to split again, `removeparam=/regexp/` closes
-    // at the first one. Escaped commas are handled for every value.
+    // unescaped commas are free to split again, `removeparam=/regexp/` and
+    // `cookie=/regexp/` close at the first one. Escaped commas are handled for
+    // every value.
     let mut payload_slashes: Option<(u32, u32)> = None;
     while index < bytes.len() {
         if index == start {
@@ -1497,11 +1511,13 @@ fn split_options(options: &str) -> Vec<&str> {
                         .then_some((prefix.len(), 2))
                 })
                 .or_else(|| {
-                    ["removeparam=/", "queryprune=/"].iter().find_map(|prefix| {
-                        options[start..]
-                            .starts_with(prefix)
-                            .then_some((prefix.len(), 1))
-                    })
+                    ["removeparam=/", "queryprune=/", "cookie=/"]
+                        .iter()
+                        .find_map(|prefix| {
+                            options[start..]
+                                .starts_with(prefix)
+                                .then_some((prefix.len(), 1))
+                        })
                 });
             if let Some((len, closes)) = payload {
                 payload_slashes = Some((0, closes));
@@ -1782,6 +1798,11 @@ struct ModifierScan {
     /// Rules held until the `$badfilter` pass has looked at them (it needs the
     /// whole set, lists and user rules alike, before a rule can be called).
     pending: Vec<PendingRule>,
+    /// `$cookie` rules, held the same way but built differently: they are not
+    /// one engine apiece but a single probe that answers every rule that
+    /// matched (see [`CookieRules`]), and an exception among them is not a
+    /// cancellation to fold but a rule of its own.
+    cookies: Vec<PendingCookie>,
     /// Exceptions, waiting to be folded into the per-rule engines. An empty
     /// value cancels every rule of its family; a valued one cancels the rules
     /// repeating it. `$permissions` also compares whether the two are
@@ -1791,6 +1812,9 @@ struct ModifierScan {
     /// off the set.
     badfilters: Vec<CancelMaterial>,
     dropped: u32,
+    /// The `$cookie` share of [`ModifierScan::dropped`], counted apart for the
+    /// build log.
+    cookie_dropped: u32,
 }
 
 /// One rule the scan read, before `$badfilter` has had its say.
@@ -1803,6 +1827,19 @@ struct PendingRule {
     /// family token gone, the default types spelled out.
     options: Vec<String>,
     /// What a `$badfilter` rule compares (see [`CancelMaterial`]).
+    cancel: CancelMaterial,
+}
+
+/// One `$cookie` rule the scan read, held the same way.
+struct PendingCookie {
+    rule: CookieRule,
+    /// The pattern the probe matches on (`*` when the list wrote none).
+    pattern: String,
+    /// The options the probe line carries: the crate options, without a
+    /// default type — a `$csp` line cannot carry one, and a type-less cookie
+    /// rule covers every request type anyway.
+    options: Vec<String>,
+    /// What a `$badfilter` rule compares.
     cancel: CancelMaterial,
 }
 
@@ -1941,7 +1978,10 @@ fn scan_modifier_rules(text: &str, scan: &mut ModifierScan) {
             continue;
         }
         let token = families[0];
-        let family = modifier_family_of(token);
+        // `$cookie` is not one of the modifier families: it is matched by
+        // machinery of its own (see [`CookieRules`]) and takes the branch below
+        // before a family is read.
+        let cookie = token.split('=').next() == Some("cookie");
         let value = token.split_once('=').map(|(_, value)| value).unwrap_or("");
         let badfilter = tokens.iter().any(|token| {
             let bare = token.trim_start_matches('~');
@@ -1996,6 +2036,20 @@ fn scan_modifier_rules(text: &str, scan: &mut ModifierScan) {
                     continue;
                 }
             }
+            if cookie && TYPE_OPTIONS.contains(&name) {
+                // The cookie probe line is a `$csp`, and the crate refuses
+                // `$csp` with a content type — so the line carries none, and
+                // that is faithful to every real `$cookie` rule: a type-less
+                // one covers every request type. `all` says exactly that and
+                // reads as no option; any other type would make the probe
+                // answer a different question than the list asked, and the
+                // rule is dropped rather than half-run.
+                if name == "all" && !token.starts_with('~') {
+                    continue;
+                }
+                faithful = false;
+                continue;
+            }
             if KEPT_OPTIONS.contains(&name) {
                 kept.push(token);
             } else {
@@ -2004,8 +2058,68 @@ fn scan_modifier_rules(text: &str, scan: &mut ModifierScan) {
         }
         if !faithful {
             scan.dropped += 1;
+            scan.cookie_dropped += u32::from(cookie);
             continue;
         }
+        if cookie {
+            // `$badfilter` never applies itself, and never reads its modifier
+            // value either (the reference checks the marker first): one whose
+            // value is unreadable still cancels the rules it matches.
+            if badfilter {
+                scan.badfilters.push(cancel_material(exception, pattern, &tokens));
+                continue;
+            }
+            // The value is the cookie this rule is about, read into a matcher;
+            // an unreadable one (`;maxAge`/`;sameSite` — a *modifying* rule
+            // this engine does not modify with — an unknown `;` part, or a
+            // regexp the regex crate cannot run) sends the rule to the dropped
+            // counter, the way the reference refuses it.
+            let Some(matcher) = cookie_payload(value) else {
+                scan.dropped += 1;
+                scan.cookie_dropped += 1;
+                continue;
+            };
+            if scan.cookies.len() >= COOKIE_RULES_MAX {
+                scan.dropped += 1;
+                scan.cookie_dropped += 1;
+                continue;
+            }
+            // An exception among cookie rules is a rule of its own, not a
+            // cancellation: whether a cookie goes is answered per name, and an
+            // allowlist rule that matches the name has the last word (see
+            // [`CookiePlan::dropped`]).
+            let text = if exception {
+                format!("@@{rule}")
+            } else {
+                rule.to_string()
+            };
+            // The rules whose answer does not depend on the request — no
+            // pattern, no `$domain=`/party/method option — are answered without
+            // asking the engine at all; asking about them would mean
+            // enumerating hundreds of hits per request for an answer that never
+            // changes (the live corpus is 427 of them).
+            let constant = pattern == "*"
+                && !tokens.iter().any(|token| {
+                    let bare = token.trim_start_matches('~');
+                    matches!(
+                        bare.split('=').next().unwrap_or(bare),
+                        "domain" | "from" | "1p" | "first-party" | "3p" | "third-party" | "method"
+                    )
+                });
+            scan.cookies.push(PendingCookie {
+                rule: CookieRule {
+                    text,
+                    allow: exception,
+                    matcher,
+                    constant,
+                },
+                pattern: pattern.to_string(),
+                options: kept.iter().map(|token| token.to_string()).collect(),
+                cancel: cancel_material(exception, pattern, &tokens),
+            });
+            continue;
+        }
+        let family = modifier_family_of(token);
         let mut options: Vec<String> = kept.iter().map(|token| token.to_string()).collect();
         if !has_positive_type(&kept) {
             options.push(default_types(family).to_string());
@@ -2095,6 +2209,7 @@ fn is_modifier_token(token: &str) -> bool {
             | "csp"
             | "permissions"
             | "removeheader"
+            | "cookie"
     )
 }
 
@@ -2651,23 +2766,32 @@ fn page_vetoed(compiled: &Compiled, url: &str, source: &str, request_type: &str)
         .unwrap_or(false)
 }
 
-/// Builds the engines a list's modifier rules need, or `None` when the loaded
-/// lists carry none.
-fn build_modifier_rules(scan: ModifierScan) -> Option<ModifierRules> {
+/// Builds the engines a list's modifier rules need, or `None`/`None` when the
+/// loaded lists carry none: the request/response-header rules and the cookie
+/// rules, which share the scan (and its `$badfilter` pass) but not the way
+/// they are matched.
+fn build_modifier_rules(scan: ModifierScan) -> (Option<ModifierRules>, Option<CookieRules>) {
     let ModifierScan {
         pending,
+        cookies,
         exceptions,
         badfilters,
         dropped,
+        cookie_dropped,
     } = scan;
     // `$badfilter` has the last word on which rules live: a rule one of them
     // matches never applies.
+    let cookies: Vec<PendingCookie> = cookies
+        .into_iter()
+        .filter(|rule| !badfilters.iter().any(|filter| filter.cancels(&rule.cancel)))
+        .collect();
+    let cookie_rules = build_cookie_rules(cookies, cookie_dropped);
     let pending: Vec<PendingRule> = pending
         .into_iter()
         .filter(|rule| !badfilters.iter().any(|filter| filter.cancels(&rule.cancel)))
         .collect();
     if pending.is_empty() {
-        return None;
+        return (None, cookie_rules);
     }
     let mut any_lines = Vec::with_capacity(pending.len());
     let mut probes = Vec::with_capacity(pending.len());
@@ -2733,12 +2857,254 @@ fn build_modifier_rules(scan: ModifierScan) -> Option<ModifierRules> {
     let mut any = Engine::new_with_filter_set(any_set);
     any.use_resources([url_resource(&format!("{MODIFIER_RESOURCE_PREFIX}any"), "0")]);
 
-    Some(ModifierRules {
+    (
+        Some(ModifierRules {
+            rules,
+            probes,
+            any,
+            dropped,
+        }),
+        cookie_rules,
+    )
+}
+
+// ---------------------------------------------------------------------------
+// `$cookie` — the rules that keep a cookie from being sent or set
+// ---------------------------------------------------------------------------
+
+/// How many `$cookie` rules one build keeps.
+///
+/// Every request-dependent rule of the family shares one probe engine (see
+/// [`CookieRules`]), so this is only a sanity bound, far above anything a list
+/// carries — the live corpus reads 1127.
+const COOKIE_RULES_MAX: usize = 4096;
+
+/// The `$cookie` rules of the loaded lists, with the engine that finds them.
+///
+/// The crate refuses the modifier, so the rules are matched by an engine of
+/// this engine's own. What makes it one engine instead of one per rule: a
+/// rule's `$cookie` modifier is rewritten into a `$csp` carrying the rule's
+/// index, and `get_csp_directives` hands back *every* directive that matched —
+/// the whole matching set in one call. The crate dedupes directive values, so
+/// one index per line is one hit per rule.
+struct CookieRules {
+    /// Every rule, in list order; the probe's `$csp` value is the rule's index
+    /// into this vector.
+    rules: Vec<Arc<CookieRule>>,
+    /// The probe engine, holding one `$csp` line per request-dependent rule.
+    /// `None` when every rule is [`CookieRule::constant`].
+    probe: Option<Engine>,
+    dropped: u32,
+}
+
+/// One `$cookie` rule, ready to match a cookie name.
+struct CookieRule {
+    /// The rule exactly as the list wrote it (an exception keeps its `@@`: it
+    /// is a rule of its own here, not a cancellation folded into another).
+    text: String,
+    /// `@@`: the rule protects the cookies its matcher names.
+    allow: bool,
+    /// What the rule's value matches.
+    matcher: CookieMatcher,
+    /// The rule matches every request (no pattern, no `$domain=` or
+    /// party/method option), so the probe engine is never asked about it.
+    constant: bool,
+}
+
+/// What a `$cookie` value matches.
+enum CookieMatcher {
+    /// `$cookie=name`: that exact name.
+    Name(String),
+    /// `$cookie=/regexp/`: the reference compiles the value with `new RegExp`
+    /// and tests the cookie name with it — a search, not a full match.
+    Regex(regex::Regex),
+    /// `$cookie` with no value: every cookie.
+    All,
+}
+
+impl CookieMatcher {
+    fn matches(&self, name: &str) -> bool {
+        match self {
+            CookieMatcher::Name(rule) => rule == name,
+            CookieMatcher::Regex(regex) => regex.is_match(name),
+            CookieMatcher::All => true,
+        }
+    }
+}
+
+/// What the `$cookie` rules do to the cookies of one exchange, from
+/// [`CookiePlan::dropped`].
+#[derive(Debug, Default)]
+pub struct CookieEdit {
+    /// The cookie names that must go, in the order they were asked about.
+    pub drop: Vec<String>,
+    /// The blocking rules behind the drops (the log shows the count).
+    pub rules: Vec<String>,
+}
+
+/// The `$cookie` rules one request matched, from [`FilterEngine::cookie_plan`].
+///
+/// The plan is what the HTTPS path holds for the exchange: the request loses
+/// the cookies it names from its `Cookie` header, and the response that comes
+/// back may not set them. Both questions are answered per cookie name, because
+/// the answers depend on the name.
+pub struct CookiePlan {
+    /// The rules that matched the request, in list order.
+    matched: Vec<Arc<CookieRule>>,
+}
+
+impl CookiePlan {
+    /// The names of `names` that must be taken off: a name goes when a
+    /// blocking rule that matched the request matches it too, unless an
+    /// allowlist rule that matched the request matches it — an allowlist rule
+    /// has the last word whatever the rules' order or importance, the way the
+    /// reference's per-cookie lookup reads them.
+    pub fn dropped(&self, names: &[String]) -> Option<CookieEdit> {
+        let mut edit = CookieEdit::default();
+        for name in names {
+            // An empty name is no cookie to name in a rule; the reference
+            // never blocks one.
+            if name.is_empty() || edit.drop.iter().any(|dropped| dropped == name) {
+                continue;
+            }
+            let mut blocked: Option<&CookieRule> = None;
+            let mut allowed = false;
+            for rule in &self.matched {
+                if !rule.matcher.matches(name) {
+                    continue;
+                }
+                if rule.allow {
+                    allowed = true;
+                    break;
+                }
+                if blocked.is_none() {
+                    blocked = Some(rule);
+                }
+            }
+            let Some(rule) = blocked.filter(|_| !allowed) else {
+                continue;
+            };
+            edit.drop.push(name.clone());
+            if !edit.rules.iter().any(|text| text == &rule.text) {
+                edit.rules.push(rule.text.clone());
+            }
+        }
+        (!edit.drop.is_empty()).then_some(edit)
+    }
+}
+
+/// Builds the one engine the cookie rules need, or `None` when there are none.
+fn build_cookie_rules(cookies: Vec<PendingCookie>, dropped: u32) -> Option<CookieRules> {
+    if cookies.is_empty() {
+        return None;
+    }
+    let mut rules: Vec<Arc<CookieRule>> = Vec::with_capacity(cookies.len());
+    let mut lines: Vec<String> = Vec::new();
+    for pending in cookies {
+        let index = rules.len();
+        let PendingCookie {
+            rule,
+            pattern,
+            options,
+            ..
+        } = pending;
+        if !rule.constant {
+            // The probe line the crate can read: the `$cookie` modifier
+            // becomes a `$csp` naming the rule's index. A rule carries one
+            // modifier, so the value is free to be the index.
+            let mut probe_options = Vec::with_capacity(options.len() + 1);
+            probe_options.push(format!("csp={index}"));
+            probe_options.extend(options);
+            lines.push(probe_line(&pattern, &probe_options, None));
+        }
+        rules.push(Arc::new(rule));
+    }
+    let probe = (!lines.is_empty()).then(|| {
+        let mut set = FilterSet::new(false);
+        set.add_filter_list(lines.join("\n"), ParseOptions::default());
+        Engine::new_with_filter_set(set)
+    });
+    Some(CookieRules {
         rules,
-        probes,
-        any,
+        probe,
         dropped,
     })
+}
+
+/// Reads a `$cookie` value: the cookie the rule is about.
+///
+/// The value is a name, a `/regexp/` (the reference compiles it with
+/// `new RegExp`, so a value that merely looks like one — `/foo/i`, say — is a
+/// literal name), or empty, which matches every cookie. A `;`-separated part
+/// names one of the two options the reference implements and this engine does
+/// not: a `;maxAge` above zero or a `;sameSite` makes the rule *modify* the
+/// cookie instead of removing it, and a rule this engine cannot modify is a
+/// rule it must not half-run; an unknown part is a value the reference refuses
+/// with it. Both drop the rule.
+fn cookie_payload(value: &str) -> Option<CookieMatcher> {
+    let mut parts = value.split(';');
+    let name = parts.next().unwrap_or_default();
+    for part in parts {
+        let (option, argument) = match part.split_once('=') {
+            Some((option, argument)) => (option, Some(argument)),
+            None => (part, None),
+        };
+        match option {
+            // `parseInt` reads the leading whole number and stops: `30`, `+30`
+            // and `30x` are all thirty seconds of modification, while a
+            // missing value, an empty one or `soon` read as none at all.
+            "maxAge" => {
+                let seconds = argument.and_then(leading_integer).unwrap_or(0);
+                if seconds > 0 {
+                    return None;
+                }
+            }
+            // `sameSite` modifies whatever it carries, an absent value
+            // included.
+            "sameSite" => return None,
+            _ => return None,
+        }
+    }
+    if name.is_empty() {
+        return Some(CookieMatcher::All);
+    }
+    if name.starts_with('/') && name.ends_with('/') {
+        // `/` alone is the empty pattern, which matches everything — the way
+        // the reference reads it.
+        let pattern = if name.len() >= 2 {
+            &name[1..name.len() - 1]
+        } else {
+            ""
+        };
+        return regex::Regex::new(pattern).ok().map(CookieMatcher::Regex);
+    }
+    Some(CookieMatcher::Name(name.to_string()))
+}
+
+/// The leading whole number of a string, the way JavaScript's `parseInt` reads
+/// one: an optional sign, then digits, up to the first byte that is neither.
+/// `None` when there is no number at all; a number too large to hold counts as
+/// one.
+fn leading_integer(text: &str) -> Option<i64> {
+    let bytes = text.as_bytes();
+    let mut end = 0usize;
+    if matches!(bytes.first(), Some(&b'+') | Some(&b'-')) {
+        end = 1;
+    }
+    let digits_start = end;
+    while end < bytes.len() && bytes[end].is_ascii_digit() {
+        end += 1;
+    }
+    if end == digits_start {
+        return None;
+    }
+    Some(text[..end].parse().unwrap_or_else(|_| {
+        if text.starts_with('-') {
+            i64::MIN
+        } else {
+            i64::MAX
+        }
+    }))
 }
 
 /// One probe resource: the body is what the crate hands back when the redirect
@@ -2771,6 +3137,56 @@ impl FilterEngine {
             .modifier_rules
             .as_ref()
             .is_some_and(|rules| rules.rules.iter().any(|rule| !rule.family.is_url()))
+    }
+
+    /// Whether the loaded lists carry `$cookie` rules.
+    pub fn has_cookie_rules(&self) -> bool {
+        self.compiled().cookie_rules.is_some()
+    }
+
+    /// The `$cookie` rules that apply to one request, matched once per exchange
+    /// and held for both halves of it.
+    ///
+    /// The request type is not part of the question: the probe line is a `$csp`
+    /// (which the crate only answers for document-like requests) and carries no
+    /// type option, so the answer is the same for a request of any type — and a
+    /// rule that names a type was dropped at build, because its answer could
+    /// not be asked for.
+    pub fn cookie_plan(&self, url: &str, source: &str, method: &str) -> Option<CookiePlan> {
+        let compiled = self.compiled();
+        let rules = compiled.cookie_rules.as_ref()?;
+        // `document` is what the crate's enumeration demands; no probe line
+        // carries a type option, so it does not decide anything.
+        let request = Request::new(url, source, "document", method).ok()?;
+        let mut hit: Vec<usize> = Vec::new();
+        if let Some(probe) = rules.probe.as_ref() {
+            if let Some(directives) = probe.get_csp_directives(&request) {
+                for value in directives.split(',') {
+                    if let Ok(index) = value.parse::<usize>() {
+                        if index < rules.rules.len() {
+                            hit.push(index);
+                        }
+                    }
+                }
+            }
+        }
+        let matched: Vec<Arc<CookieRule>> = rules
+            .rules
+            .iter()
+            .enumerate()
+            .filter(|(index, rule)| rule.constant || hit.contains(index))
+            .map(|(_, rule)| Arc::clone(rule))
+            .collect();
+        (!matched.is_empty()).then_some(CookiePlan { matched })
+    }
+
+    /// How many `$cookie` rules they carry (diagnostics).
+    pub fn cookie_rules_count(&self) -> u64 {
+        self.compiled()
+            .cookie_rules
+            .as_ref()
+            .map(|rules| rules.rules.len() as u64)
+            .unwrap_or(0)
     }
 
     /// How many URL modifier rules the loaded lists carry (diagnostics).
@@ -3667,6 +4083,167 @@ mod tests {
         assert_eq!(edit.csp, vec!["worker-src 'none'".to_string()]);
         assert_eq!(edit.remove_response, vec!["location".to_string()]);
         assert_eq!(edit.rules.len(), 2, "one per distinct value");
+    }
+
+    /// The cookie names the rules take off one request, the way the HTTPS path
+    /// asks about them.
+    fn dropped(fe: &FilterEngine, url: &str, names: &[&str]) -> Vec<String> {
+        let names: Vec<String> = names.iter().map(|name| name.to_string()).collect();
+        fe.cookie_plan(url, "https://page.test/", "GET")
+            .and_then(|plan| plan.dropped(&names))
+            .map(|edit| edit.drop)
+            .unwrap_or_default()
+    }
+
+    #[test]
+    fn cookie_values_match_by_name_regexp_or_everything() {
+        // The three shapes the lists write: an exact name, a `/regexp/`
+        // (compiled like the reference's `new RegExp`), and no value at all,
+        // which is every cookie.
+        let fe = cosmetic_engine("||shop.test^$cookie=dropme\n");
+        assert!(fe.has_cookie_rules());
+        assert_eq!(fe.cookie_rules_count(), 1);
+        assert!(!fe.has_url_rules() && !fe.has_header_rules());
+        assert_eq!(
+            dropped(&fe, "https://shop.test/", &["dropme", "keepme"]),
+            vec!["dropme"]
+        );
+        // The name is exact and case-sensitive: `$cookie=ID` never names `id`.
+        let fe = cosmetic_engine("||shop.test^$cookie=ID\n");
+        assert_eq!(dropped(&fe, "https://shop.test/", &["id", "ID"]), vec!["ID"]);
+
+        let fe = cosmetic_engine("||shop.test^$cookie=/^trac/\n");
+        assert_eq!(
+            dropped(&fe, "https://shop.test/", &["tracker_1", "other"]),
+            vec!["tracker_1"]
+        );
+        // The regexp is a search, the way `RegExp.test` reads one.
+        let fe = cosmetic_engine("||shop.test^$cookie=/k$/\n");
+        assert_eq!(
+            dropped(&fe, "https://shop.test/", &["bk", "kb"]),
+            vec!["bk"]
+        );
+
+        // No value: every cookie is named. No pattern either, so the rule is
+        // answered without asking the probe engine at all.
+        let fe = cosmetic_engine("$cookie\n");
+        assert_eq!(fe.cookie_rules_count(), 1);
+        assert_eq!(
+            dropped(&fe, "https://any.test/x", &["a", "b"]),
+            vec!["a", "b"]
+        );
+    }
+
+    #[test]
+    fn cookie_allowlist_has_the_last_word() {
+        // An exception among cookie rules is a rule of its own, not a
+        // cancellation folded into the blocking rule: it protects the cookies
+        // its own matcher names, whatever the rules' order.
+        for body in [
+            "||shop.test^$cookie=/^trac/\n@@||shop.test^$cookie=tracker_1\n",
+            "@@||shop.test^$cookie=tracker_1\n||shop.test^$cookie=/^trac/\n",
+        ] {
+            let fe = cosmetic_engine(body);
+            assert_eq!(fe.cookie_rules_count(), 2);
+            assert_eq!(
+                dropped(&fe, "https://shop.test/", &["tracker_1", "tracker_2"]),
+                vec!["tracker_2"],
+                "{body:?}"
+            );
+        }
+        // A page that does not match the exception keeps losing the cookie.
+        let fe = cosmetic_engine(
+            "||shop.test^$cookie=dropme\n@@||other.test^$cookie=dropme\n",
+        );
+        assert_eq!(
+            dropped(&fe, "https://shop.test/", &["dropme"]),
+            vec!["dropme"]
+        );
+    }
+
+    #[test]
+    fn cookie_rules_follow_their_request_options() {
+        // A pattern scopes the rule to the requests it names; `$domain=`
+        // scopes it to the pages ours stand on.
+        let fe = cosmetic_engine("||shop.test/cart^$cookie=dropme\n");
+        assert!(dropped(&fe, "https://shop.test/home", &["dropme"]).is_empty());
+        assert_eq!(
+            dropped(&fe, "https://shop.test/cart", &["dropme"]),
+            vec!["dropme"]
+        );
+        let fe = cosmetic_engine("$cookie=dropme,domain=shop.test\n");
+        let names = vec!["dropme".to_string()];
+        let hits = |source: &str| {
+            fe.cookie_plan("https://api.test/x", source, "GET")
+                .and_then(|plan| plan.dropped(&names))
+                .is_some()
+        };
+        assert!(hits("https://shop.test/"));
+        assert!(!hits("https://other.test/"));
+    }
+
+    #[test]
+    fn cookie_values_the_engine_cannot_run_are_dropped() {
+        // A `;maxAge` above zero or a `;sameSite` turns the rule into a
+        // *modifying* one this engine does not modify with, an unknown `;`
+        // part is a value the reference refuses with it, and a regexp the
+        // regex crate cannot run cannot name a cookie: nothing half-runs.
+        let fe = cosmetic_engine(
+            "||shop.test^$cookie=keep;maxAge=30\n\
+             ||shop.test^$cookie=keep;sameSite=None\n\
+             ||shop.test^$cookie=keep;part=value\n\
+             ||shop.test^$cookie=/[/\n",
+        );
+        assert!(!fe.has_cookie_rules());
+        assert_eq!(fe.cookie_rules_count(), 0);
+        assert!(dropped(&fe, "https://shop.test/", &["keep"]).is_empty());
+        // `maxAge` reads its leading whole number, and zero is no
+        // modification at all — the rule stands.
+        let fe = cosmetic_engine("||shop.test^$cookie=keep;maxAge=0\n");
+        assert_eq!(fe.cookie_rules_count(), 1);
+        assert_eq!(
+            dropped(&fe, "https://shop.test/", &["keep"]),
+            vec!["keep"]
+        );
+        // A value that merely looks like a regexp is a literal name: `/foo/i`
+        // is not a flag-carrying regexp, it is a cookie named that way.
+        let fe = cosmetic_engine("||shop.test^$cookie=/foo/i\n");
+        assert_eq!(fe.cookie_rules_count(), 1);
+        assert_eq!(
+            dropped(&fe, "https://shop.test/", &["/foo/i", "foo"]),
+            vec!["/foo/i"]
+        );
+        // A type makes the probe line impossible to write (a `$csp` carries
+        // none) and no real rule names one: the rule is dropped.
+        let fe = cosmetic_engine("||shop.test^$cookie=dropme,script\n");
+        assert!(!fe.has_cookie_rules());
+    }
+
+    #[test]
+    fn cookie_badfilter_cancels_cookie_rules_across_lists() {
+        let fe = engine(vec![
+            temp_list(
+                "cancel-cookie-a.txt",
+                "||shop.test^$cookie=dropme,badfilter\n",
+                ListFormat::Standard,
+                13,
+            ),
+            temp_list(
+                "cancel-cookie-b.txt",
+                "||shop.test^$cookie=dropme\n",
+                ListFormat::Standard,
+                14,
+            ),
+        ]);
+        assert!(!fe.has_cookie_rules());
+        assert!(dropped(&fe, "https://shop.test/", &["dropme"]).is_empty());
+        // A badfilter whose own value is unreadable still cancels: the
+        // reference checks the marker before it reads the modifier.
+        let fe = cosmetic_engine(
+            "||shop.test^$cookie=dropme\n\
+             ||shop.test^$cookie=dropme;maxAge=30,badfilter\n",
+        );
+        assert!(!fe.has_cookie_rules());
     }
 
     /// Whether any `$replace` rule covers a request, the way the HTTPS path

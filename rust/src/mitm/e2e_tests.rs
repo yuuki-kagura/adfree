@@ -327,6 +327,17 @@ fn start_origin_mode(html: &'static str, mode: OriginBody) -> Origin {
                 b"HTTP/1.1 302 Found\r\nLocation: https://track.test/next\r\n\
                   Content-Length: 0\r\nConnection: keep-alive\r\n\r\n"
                     .to_vec()
+            } else if line.starts_with("GET /cookies ") || line.starts_with("HEAD /cookies ") {
+                // The cookies a `$cookie` rule may take off both halves of the
+                // exchange: the request carries some, the answer sets some.
+                let body = if line.starts_with("HEAD") { "" } else { "ok" };
+                format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\n\
+                     Set-Cookie: dropme=5; Path=/\r\nSet-Cookie: keepme=3; Path=/\r\n\
+                     Set-Cookie: other=5; Path=/\r\n\
+                     Content-Length: 2\r\nConnection: keep-alive\r\n\r\n{body}"
+                )
+                .into_bytes()
             } else if line.starts_with("GET / ") {
                 match mode {
                     OriginBody::Plain => format!(
@@ -1171,6 +1182,62 @@ fn header_rules_shape_the_https_exchange() {
     assert!(
         !head.to_lowercase().contains("location:"),
         "the header must be gone: {head}"
+    );
+
+    tcp.close();
+}
+
+/// The `$cookie` rules: what the request carries and what the answer sets, both
+/// trimmed to the same allowlist.
+const COOKIE_LIST: &str = "! Title: e2e cookie rules\n\
+                           ||shop.test/cookies$cookie=dropme\n\
+                           @@||shop.test/cookies$cookie=keepme\n\
+                           ||shop.test/cookies$cookie\n";
+
+/// `$cookie` names cookies on both halves of the exchange: the request loses
+/// them before it is forwarded, and the response may not set them again. The
+/// allowlist protects the cookie it names, on both halves alike.
+#[test]
+fn cookie_rules_trim_the_https_exchange() {
+    let origin = start_origin(HTML);
+    let (core, ca_der) = setup_core_with_list(&origin, "cookie", COOKIE_LIST);
+
+    let mut tcp = Client::connect(core.clone(), origin.port);
+    let mut conn = handshake(&mut tcp, client_config(ca_der));
+    assert!(!conn.is_handshaking(), "the MITM handshake must complete");
+
+    let (head, body) = request_with(
+        &mut tcp,
+        &mut conn,
+        "/cookies",
+        "Sec-Fetch-Dest: document\r\nCookie: dropme=1; keepme=2; other=5\r\n\
+         Referer: https://shop.test/\r\n",
+    );
+    assert!(head.starts_with("HTTP/1.1 200"), "{head}");
+    assert_eq!(body, b"ok", "the body is none of the rules' business");
+    {
+        let seen = origin.requests.lock().expect("requests");
+        let sent = seen.last().expect("the request reached the origin");
+        assert!(
+            sent.contains("Cookie: keepme=2"),
+            "the allowlisted cookie must still go out: {sent:?}"
+        );
+        assert!(
+            !sent.contains("dropme") && !sent.contains("other"),
+            "a dropped cookie must not reach the origin: {sent:?}"
+        );
+    }
+    // The answer sets the same three cookies; the same rules decide. The
+    // blocking ones name `dropme` and, with no value, every cookie; the
+    // allowlist keeps `keepme` whatever they say.
+    let lower = head.to_lowercase();
+    assert!(
+        lower.contains("set-cookie: keepme=3"),
+        "the allowlisted cookie must still be set: {head}"
+    );
+    assert!(
+        !lower.contains("set-cookie: dropme") && !lower.contains("set-cookie: other"),
+        "a dropped cookie must not come back in a set-cookie: {head}"
     );
 
     tcp.close();
