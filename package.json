@@ -1,0 +1,15 @@
+{
+  "name": "adfree",
+  "private": true,
+  "type": "module",
+  "description": "Dev tooling for the JavaScript the app injects into pages. Not shipped: the app itself is Gradle + Rust.",
+  "packageManager": "bun@1.4.3",
+  "scripts": {
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "devDependencies": {
+    "playwright": "^1.56.1",
+    "vitest": "^3.2.4"
+  }
+}

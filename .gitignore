@@ -30,3 +30,6 @@ captures/
 .claude/
 .codegraph/
 adguard.apk
+
+# JavaScript test tooling (Vitest + Playwright, driven by bun — see package.json)
+node_modules/
