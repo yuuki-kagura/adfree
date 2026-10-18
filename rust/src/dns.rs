@@ -11,6 +11,8 @@ use crate::packet::{self, Packet};
 
 pub const TYPE_A: u16 = 1;
 pub const TYPE_AAAA: u16 = 28;
+pub const TYPE_SVCB: u16 = 64;
+pub const TYPE_HTTPS: u16 = 65;
 pub const TYPE_ANY: u16 = 255;
 
 pub const RCODE_NOERROR: u16 = 0;
@@ -313,6 +315,93 @@ pub fn parse_answers(body: &[u8]) -> Vec<LearnedRecord> {
     out
 }
 
+/// SvcParamKey 5, held for Encrypted Client Hello (RFC 9460, Table 1): the
+/// ECHConfigList a client needs to attempt ECH (RFC 9849).
+const SVC_PARAM_KEY_ECH: u16 = 5;
+
+/// Key 65535, reserved as "Invalid key" (RFC 9460, Table 1). Clients ignore
+/// SvcParams they do not recognise (RFC 9460 §2.4.3), which is what makes the
+/// rewrite below a safe way of taking `ech` away.
+const SVC_PARAM_KEY_RESERVED: u16 = 0xffff;
+
+/// Neutralises the `ech` SvcParam of every SVCB/HTTPS record in `message`.
+///
+/// A client that learns an ECHConfig wraps its next ClientHello around it, and
+/// that handshake cannot negotiate ECH through the TLS terminator: the outer
+/// name is the only one the ClientHello exposes. The client then either
+/// rejects the forged certificate and retries without ECH a second later (a
+/// wasted round trip per origin, seen as `CertificateUnknown`), or — on hosts
+/// in ECH-required mode — refuses to continue at all (`ech_required`), and the
+/// connection, hence the page, fails. ECH exists to keep *this* proxy out of
+/// the connection, and the user asked for it to be in, so an HTTPS filter has
+/// to strip the parameter before the client sees it.
+///
+/// The key is rewritten to the reserved value instead of removing the
+/// parameter: the record keeps its length, so nothing after it (another
+/// SvcParam, a resource record, a compression pointer) can shift. Returns
+/// whether anything was rewritten.
+pub fn strip_ech(message: &mut [u8]) -> bool {
+    if message.len() < 12 {
+        return false;
+    }
+    let qd = u16::from_be_bytes([message[4], message[5]]) as usize;
+    let an = u16::from_be_bytes([message[6], message[7]]) as usize;
+    if qd > 4 || an == 0 || an > 64 {
+        return false;
+    }
+    let mut off = 12usize;
+    for _ in 0..qd {
+        if !skip_name(message, &mut off) {
+            return false;
+        }
+        off += 4;
+        if off > message.len() {
+            return false;
+        }
+    }
+    let mut stripped = false;
+    for _ in 0..an {
+        if !skip_name(message, &mut off) || off + 10 > message.len() {
+            break;
+        }
+        let rtype = u16::from_be_bytes([message[off], message[off + 1]]);
+        let rdlen = u16::from_be_bytes([message[off + 8], message[off + 9]]) as usize;
+        off += 10;
+        if off + rdlen > message.len() {
+            break;
+        }
+        if rtype == TYPE_SVCB || rtype == TYPE_HTTPS {
+            stripped |= strip_ech_param(message, off, off + rdlen);
+        }
+        off += rdlen;
+    }
+    stripped
+}
+
+/// Rewrites the `ech` key inside one record's RDATA, if it carries one.
+fn strip_ech_param(message: &mut [u8], start: usize, end: usize) -> bool {
+    // SvcPriority (2 bytes), then the target name (never compressed in
+    // practice, but skip_name reads either form).
+    let mut off = start + 2;
+    if off > end || !skip_name(message, &mut off) {
+        return false;
+    }
+    let mut stripped = false;
+    while off + 4 <= end {
+        let key = u16::from_be_bytes([message[off], message[off + 1]]);
+        let len = u16::from_be_bytes([message[off + 2], message[off + 3]]) as usize;
+        if off + 4 + len > end {
+            break;
+        }
+        if key == SVC_PARAM_KEY_ECH {
+            message[off..off + 2].copy_from_slice(&SVC_PARAM_KEY_RESERVED.to_be_bytes());
+            stripped = true;
+        }
+        off += 4 + len;
+    }
+    stripped
+}
+
 /// Length of the name field at `off`, following compression pointers only to
 /// find the end of the *field* (never the position after the target name).
 fn name_field_len(body: &[u8], start: usize) -> Option<usize> {
@@ -489,5 +578,148 @@ mod tests {
         assert_eq!(recs.len(), 1);
         assert_eq!(recs[0].ip.as_ip().to_string(), "1.2.3.4");
         assert_eq!(recs[0].ttl, 300);
+    }
+
+    /// SVCB/HTTPS RDATA: priority, root target, then the given parameters.
+    fn svcb_rdata(params: &[(u16, &[u8])]) -> Vec<u8> {
+        let mut rdata = Vec::new();
+        rdata.extend_from_slice(&1u16.to_be_bytes());
+        rdata.push(0);
+        for (key, value) in params {
+            rdata.extend_from_slice(&key.to_be_bytes());
+            rdata.extend_from_slice(&(value.len() as u16).to_be_bytes());
+            rdata.extend_from_slice(value);
+        }
+        rdata
+    }
+
+    /// A response for `example.com` with `answers` answer slots to fill.
+    fn response_skeleton(answers: usize) -> Vec<u8> {
+        let mut b = Vec::new();
+        b.extend_from_slice(&[0x12, 0x34, 0x84, 0x80]);
+        b.extend_from_slice(&[0x00, 0x01]);
+        b.extend_from_slice(&(answers as u16).to_be_bytes());
+        b.extend_from_slice(&[0, 0, 0, 0]);
+        let mut qname = Vec::new();
+        qname.push(7u8);
+        qname.extend_from_slice(b"example");
+        qname.push(3u8);
+        qname.extend_from_slice(b"com");
+        b.extend_from_slice(&qname);
+        b.extend_from_slice(&[0]);
+        b.extend_from_slice(&[0x00, 0x41, 0x00, 0x01]);
+        b
+    }
+
+    fn add_answer(b: &mut Vec<u8>, rtype: u16, rdata: &[u8]) {
+        b.extend_from_slice(&[0xc0, 0x0c]);
+        b.extend_from_slice(&rtype.to_be_bytes());
+        b.extend_from_slice(&1u16.to_be_bytes());
+        b.extend_from_slice(&300u32.to_be_bytes());
+        b.extend_from_slice(&(rdata.len() as u16).to_be_bytes());
+        b.extend_from_slice(rdata);
+    }
+
+    /// The parameter list of the first SVCB/HTTPS answer, parsed the way a
+    /// client would: independently of `strip_ech`.
+    fn svcb_params(message: &[u8]) -> Vec<(u16, Vec<u8>)> {
+        let qd = u16::from_be_bytes([message[4], message[5]]) as usize;
+        let an = u16::from_be_bytes([message[6], message[7]]) as usize;
+        let mut off = 12usize;
+        for _ in 0..qd {
+            assert!(skip_name(message, &mut off));
+            off += 4;
+        }
+        for _ in 0..an {
+            assert!(skip_name(message, &mut off));
+            let rtype = u16::from_be_bytes([message[off], message[off + 1]]);
+            let rdlen = u16::from_be_bytes([message[off + 8], message[off + 9]]) as usize;
+            off += 10;
+            let end = off + rdlen;
+            if rtype == TYPE_HTTPS {
+                let mut p = off + 2;
+                assert!(skip_name(message, &mut p));
+                let mut out = Vec::new();
+                while p + 4 <= end {
+                    let key = u16::from_be_bytes([message[p], message[p + 1]]);
+                    let len = u16::from_be_bytes([message[p + 2], message[p + 3]]) as usize;
+                    out.push((key, message[p + 4..p + 4 + len].to_vec()));
+                    p += 4 + len;
+                }
+                return out;
+            }
+            off = end;
+        }
+        Vec::new()
+    }
+
+    #[test]
+    fn strips_the_ech_param_without_moving_a_byte() {
+        const ALPN: &[u8] = &[0x02, b'h', b'2'];
+        const ECM: &[u8] = &[0xab; 6];
+        const HINT: &[u8] = &[93, 184, 216, 34];
+        let mut msg = response_skeleton(2);
+        add_answer(
+            &mut msg,
+            TYPE_HTTPS,
+            &svcb_rdata(&[(1, ALPN), (5, ECM), (4, HINT)]),
+        );
+        // An answer *after* the rewritten one must survive untouched.
+        add_answer(&mut msg, TYPE_A, &[1, 2, 3, 4]);
+        let before = svcb_params(&msg);
+        assert!(before.iter().any(|(key, _)| *key == SVC_PARAM_KEY_ECH));
+        let len = msg.len();
+
+        assert!(strip_ech(&mut msg));
+        assert_eq!(msg.len(), len, "the rewrite may not shift a byte");
+        let after = svcb_params(&msg);
+        assert_eq!(
+            after,
+            vec![
+                (1, ALPN.to_vec()),
+                (SVC_PARAM_KEY_RESERVED, ECM.to_vec()),
+                (4, HINT.to_vec()),
+            ]
+        );
+        // The record after it still parses, too.
+        let learned = parse_answers(&msg);
+        assert_eq!(learned.len(), 1);
+        assert_eq!(learned[0].ip.as_ip().to_string(), "1.2.3.4");
+        // Nothing left for a second pass.
+        assert!(!strip_ech(&mut msg));
+    }
+
+    #[test]
+    fn leaves_a_record_without_ech_alone() {
+        let mut msg = response_skeleton(2);
+        add_answer(
+            &mut msg,
+            TYPE_HTTPS,
+            &svcb_rdata(&[(1, &[0x02, b'h', b'2'])]),
+        );
+        add_answer(&mut msg, TYPE_A, &[1, 2, 3, 4]);
+        let before = msg.clone();
+        assert!(!strip_ech(&mut msg));
+        assert_eq!(msg, before, "no ech means no rewrite at all");
+    }
+
+    #[test]
+    fn a_truncated_answer_is_left_alone() {
+        assert!(!strip_ech(&mut []));
+        assert!(!strip_ech(&mut [0u8; 3]));
+        // An answer count that promises records the message does not carry.
+        let mut msg = response_skeleton(1);
+        assert!(!strip_ech(&mut msg));
+        // An HTTPS record whose RDATA claims an `ech` value it does not carry:
+        // the parameter must be left alone, not patched over the record end.
+        let mut msg = response_skeleton(1);
+        add_answer(
+            &mut msg,
+            TYPE_HTTPS,
+            &[0x00, 0x01, 0x00, 0x00, 0x05, 0x00, 0x40],
+        );
+        let before = msg.clone();
+        assert!(!strip_ech(&mut msg));
+        assert_eq!(msg, before);
     }
 }

@@ -620,6 +620,11 @@ impl ProxySession {
             return Ok(Outcome::default());
         };
         if state.raw.len() + payload.len() > MAX_PENDING_WIRE {
+            crate::logbuf::push(&format!(
+                "mitm {}: no ClientHello in {} KiB, splicing verbatim",
+                self.captured.as_deref().unwrap_or("?"),
+                MAX_PENDING_WIRE / 1024
+            ));
             return Ok(self.splice_pending_verbatim());
         }
         state.raw.extend_from_slice(payload);
@@ -636,6 +641,10 @@ impl ProxySession {
                     return Err(e);
                 }
                 // Not a ClientHello: splice the stream through untouched.
+                crate::logbuf::push(&format!(
+                    "mitm {}: not a TLS ClientHello, splicing verbatim",
+                    self.captured.as_deref().unwrap_or("?")
+                ));
                 Ok(self.splice_pending_verbatim())
             }
             Ok(plain) => {
@@ -671,6 +680,9 @@ impl ProxySession {
                     Ok(client) => client,
                     Err(_) => {
                         // Unusable name: keep the connection alive as a splice.
+                        crate::logbuf::push(&format!(
+                            "mitm {name}: the name is unusable for TLS, splicing verbatim"
+                        ));
                         return Ok(Outcome {
                             to_peer: raw,
                             ..Outcome::default()

@@ -15,6 +15,10 @@ use std::sync::Mutex;
 static LOCK: Mutex<()> = Mutex::new(());
 
 fn query_packet(host: &str, txid: u16) -> Vec<u8> {
+    query_packet_of_type(host, txid, 0x0001)
+}
+
+fn query_packet_of_type(host: &str, txid: u16, qtype: u16) -> Vec<u8> {
     let mut dns = Vec::new();
     dns.extend_from_slice(&txid.to_be_bytes());
     dns.extend_from_slice(&[0x01, 0x00]);
@@ -24,7 +28,8 @@ fn query_packet(host: &str, txid: u16) -> Vec<u8> {
         dns.extend_from_slice(label.as_bytes());
     }
     dns.push(0);
-    dns.extend_from_slice(&[0x00, 0x01, 0x00, 0x01]);
+    dns.extend_from_slice(&qtype.to_be_bytes());
+    dns.extend_from_slice(&[0x00, 0x01]);
 
     let mut p = Vec::new();
     p.extend_from_slice(&[0x45, 0x00]);
@@ -160,4 +165,177 @@ fn the_answer_comes_back_out_of_the_tun() {
 
     unsafe { libc::close(tun_w) };
     unsafe { libc::close(tun_r) };
+}
+
+/// Offset just past the name field at `off` (handles the sole `c00c` pointer
+/// the answers below use).
+fn name_at(message: &[u8], mut off: usize) -> usize {
+    loop {
+        let len = message[off] as usize;
+        if len & 0xc0 == 0xc0 {
+            return off + 2;
+        }
+        if len == 0 {
+            return off + 1;
+        }
+        off += 1 + len;
+    }
+}
+
+/// The SvcParam keys of the first HTTPS answer in a DNS message.
+fn https_param_keys(message: &[u8]) -> Vec<u16> {
+    let qd = u16::from_be_bytes([message[4], message[5]]) as usize;
+    let an = u16::from_be_bytes([message[6], message[7]]) as usize;
+    let mut off = 12usize;
+    for _ in 0..qd {
+        off = name_at(message, off) + 4;
+    }
+    let mut keys = Vec::new();
+    for _ in 0..an {
+        off = name_at(message, off);
+        let rtype = u16::from_be_bytes([message[off], message[off + 1]]);
+        let rdlen = u16::from_be_bytes([message[off + 8], message[off + 9]]) as usize;
+        off += 10;
+        if rtype == 0x0041 {
+            let end = off + rdlen;
+            let mut p = name_at(message, off + 2);
+            while p + 4 <= end {
+                let key = u16::from_be_bytes([message[p], message[p + 1]]);
+                let len = u16::from_be_bytes([message[p + 2], message[p + 3]]) as usize;
+                keys.push(key);
+                p += 4 + len;
+            }
+            break;
+        }
+        off += rdlen;
+    }
+    keys
+}
+
+/// The upstream answer for a type-65 query: priority, alpn, an ECHConfigList,
+/// an address hint, and an A record *after* all of them.
+fn https_answer(query: &dns::Query<'_>, ech: &[u8]) -> Vec<u8> {
+    let mut reply = Vec::new();
+    reply.extend_from_slice(&query.id.to_be_bytes());
+    reply.extend_from_slice(&[0x85, 0x80]);
+    reply.extend_from_slice(&[0x00, 0x01, 0x00, 0x02, 0, 0, 0, 0]);
+    reply.extend_from_slice(&query.body[12..query.q_end]);
+    let mut rdata = Vec::new();
+    rdata.extend_from_slice(&1u16.to_be_bytes());
+    rdata.push(0);
+    for (key, value) in [
+        (1u16, &[0x02, b'h', b'2'][..]),
+        (5, ech),
+        (4, &[93, 184, 216, 34][..]),
+    ] {
+        rdata.extend_from_slice(&key.to_be_bytes());
+        rdata.extend_from_slice(&(value.len() as u16).to_be_bytes());
+        rdata.extend_from_slice(value);
+    }
+    reply.extend_from_slice(&[0xc0, 0x0c, 0x00, 0x41, 0x00, 0x01]);
+    reply.extend_from_slice(&300u32.to_be_bytes());
+    reply.extend_from_slice(&(rdata.len() as u16).to_be_bytes());
+    reply.extend_from_slice(&rdata);
+    reply.extend_from_slice(&[0xc0, 0x0c, 0x00, 0x01, 0x00, 0x01]);
+    reply.extend_from_slice(&300u32.to_be_bytes());
+    reply.extend_from_slice(&4u16.to_be_bytes());
+    reply.extend_from_slice(&[93, 184, 216, 34]);
+    reply
+}
+
+/// Sends one HTTPS query in and returns the SvcParam keys of the answer.
+fn ask_https(core: &adfree_core::engine::Core, tun_r: RawFd, host: &str, txid: u16) -> Vec<u16> {
+    let packet = query_packet_of_type(host, txid, 0x0041);
+    assert!(
+        core.handle_packet(&packet).is_empty(),
+        "with a live upstream the answer is async"
+    );
+    let mut buf = [0u8; 4096];
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
+    while std::time::Instant::now() < deadline {
+        core.poll_upstream_once_for_test();
+        if let Ok(n) = read_raw_fd(tun_r, &mut buf) {
+            if n > 0 {
+                let parsed = Packet::parse(&buf[..n]).expect("valid packet");
+                let answer = dns::parse_query(parsed.l4_payload()).expect("valid DNS answer");
+                assert_eq!(answer.id, txid, "the client's transaction id must survive");
+                return https_param_keys(parsed.l4_payload());
+            }
+        }
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    panic!("the client never received an answer");
+}
+
+/// An ECHConfig is only useful while nothing terminates TLS. Once HTTPS
+/// filtering is armed the client must not be told about ECH: its first attempt
+/// would die on the forged certificate and the retry costs a round trip.
+#[test]
+fn ech_configs_are_stripped_only_while_https_filtering_is_on() {
+    let _guard = LOCK.lock().unwrap_or_else(|e| e.into_inner());
+
+    let resolver = UdpSocket::bind(SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 0)))
+        .expect("bind resolver");
+    let resolver_addr = resolver.local_addr().expect("resolver addr");
+    resolver
+        .set_read_timeout(Some(std::time::Duration::from_secs(2)))
+        .expect("resolver timeout");
+    let resolver_thread = std::thread::spawn(move || {
+        let mut buf = [0u8; 2048];
+        for _ in 0..2 {
+            let (n, peer) = resolver.recv_from(&mut buf).expect("recv query");
+            let q = dns::parse_query(&buf[..n]).expect("a valid DNS query must arrive");
+            assert_eq!(q.qtype, 0x0041, "the type-65 query must reach the resolver");
+            let reply = https_answer(&q, &[0xab; 8]);
+            resolver.send_to(&reply, peer).expect("answer");
+        }
+    });
+
+    let sockets: Vec<UdpSocket> = (0..4)
+        .map(|_| {
+            UdpSocket::bind(SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 0)))
+                .expect("bind socket")
+        })
+        .collect();
+    let fds: Vec<i32> = sockets.iter().map(|s| s.as_raw_fd()).collect();
+    let (tun_w, tun_r) = fake_tun();
+
+    let core = core();
+    core.set_config(Config::default());
+    core.set_socket_fds(&fds);
+    core.set_resolver(resolver_addr);
+    core.set_tun_fd_for_test(tun_w);
+
+    // 1. No TLS termination: the ECHConfig is none of the filter's business.
+    let keys = ask_https(core, tun_r, "ech.example.com", 0x6001);
+    assert!(
+        keys.contains(&5),
+        "without HTTPS filtering the ECHConfig must reach the client: {keys:?}"
+    );
+
+    // 2. HTTPS filtering armed (the CA is what arms it): the parameter goes,
+    //    and the rest of the record stays readable.
+    core.set_config(Config {
+        mitm_enabled: true,
+        ..Config::default()
+    });
+    core.set_mitm_ca(std::sync::Arc::new(
+        adfree_core::mitm::ca::CertificateAuthority::generate().expect("generate a CA"),
+    ));
+    let keys = ask_https(core, tun_r, "ech.example.com", 0x6002);
+    assert!(
+        !keys.contains(&5),
+        "with HTTPS filtering the ECHConfig must be stripped: {keys:?}"
+    );
+    assert!(
+        keys.contains(&1) && keys.contains(&4),
+        "the other parameters must survive: {keys:?}"
+    );
+    let learned = core.snapshot();
+    assert!(learned.dns_replies >= 2, "both answers must have gone out");
+
+    core.set_config(Config::default());
+    unsafe { libc::close(tun_w) };
+    unsafe { libc::close(tun_r) };
+    resolver_thread.join().expect("resolver thread");
 }

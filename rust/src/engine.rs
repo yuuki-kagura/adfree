@@ -845,7 +845,15 @@ impl Core {
                         relay.queue_to_client(&to_client);
                     }
                     Err(e) => {
-                        crate::logbuf::push(&format!("relay client step: {e}"));
+                        // Name the flow: without the host these errors (a
+                        // pinned client rejecting the forged certificate, say)
+                        // are impossible to tell apart in the log.
+                        let host = relay
+                            .session
+                            .as_ref()
+                            .and_then(|s| s.captured_sni())
+                            .unwrap_or_else(|| "?".to_string());
+                        crate::logbuf::push(&format!("relay client step: {e} ({host})"));
                         if let Some(rst) = relay.rst_to_client() {
                             out.push(rst);
                         }
@@ -1444,16 +1452,29 @@ impl Core {
         };
         let mut message = reply.message.clone();
         dns::patch_txid(&mut message, reply.pending.client_txid);
+        // A client that is about to have its TLS terminated must not be told
+        // an ECHConfig: the handshake cannot negotiate ECH through the
+        // terminator, so the attempt either dies on the forged certificate (a
+        // wasted round trip) or, on hosts in ECH-required mode, fails the
+        // connection outright (see `dns::strip_ech`).
+        let mitm = self.mitm_ready(&self.cfg.read().unwrap());
+        if mitm && dns::strip_ech(&mut message) {
+            let host = dns::parse_query(&message)
+                .map(|q| q.qname.as_str().to_string())
+                .unwrap_or_else(|| "?".to_string());
+            crate::logbuf::push(&format!("dns: ECH stripped for {host}"));
+        }
         let rewritten = client_packet.rewrite_udp(&message);
         if !self.write_raw(&rewritten) {
             return;
         }
         self.stats.inc(&self.stats.dns_replies);
-        self.learn_answers(&message);
+        self.learn_answers(&message, mitm);
     }
 
     /// Teaches the connection tracker which addresses belong to which host.
-    fn learn_answers(&self, message: &[u8]) {
+    /// `mitm` is the gate `handle_reply` already read for this reply.
+    fn learn_answers(&self, message: &[u8], mitm: bool) {
         let Some(query) = dns::parse_query(message) else {
             return;
         };
@@ -1464,7 +1485,6 @@ impl Core {
         let verdict = self.filter.check_host(&host);
         // A `$redirect` host is answered by the HTTPS path, so its addresses
         // must stay reachable — but only while that path is actually armed.
-        let mitm = self.mitm_ready(&self.cfg.read().unwrap());
         let blocked = verdict.blocked && !(verdict.redirect && mitm);
         let records = dns::parse_answers(message);
         if records.is_empty() {
