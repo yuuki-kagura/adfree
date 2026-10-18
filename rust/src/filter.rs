@@ -777,9 +777,14 @@ impl FilterEngine {
                 .iter()
                 .filter(|rule| rule.family == ModifierFamily::Jsonprune)
                 .count();
+            let hls = rules
+                .rules
+                .iter()
+                .filter(|rule| rule.family == ModifierFamily::Hls)
+                .count();
             crate::logbuf::push(&format!(
-                "filter: {url} URL modifier rules + {} header modifier rules + {jsonprune} $jsonprune rules ({} dropped)",
-                rules.rules.len() - url - jsonprune,
+                "filter: {url} URL modifier rules + {} header modifier rules + {jsonprune} $jsonprune rules + {hls} $hls rules ({} dropped)",
+                rules.rules.len() - url - jsonprune - hls,
                 rules.dropped,
             ));
         }
@@ -1652,6 +1657,7 @@ enum ModifierFamily {
     Permissions,
     RemoveHeader,
     Jsonprune,
+    Hls,
 }
 
 impl ModifierFamily {
@@ -1699,6 +1705,8 @@ enum ModifierKind {
     RemoveHeader(HeaderName),
     /// The expression the response body loses its matches of.
     Jsonprune(JsonPrune),
+    /// The matcher the response playlist loses its segments by.
+    Hls(crate::hls::HlsMatcher),
 }
 
 /// One `$removeheader` payload: the header to take out, and the direction.
@@ -1976,6 +1984,29 @@ impl JsonprunePlan {
     }
 }
 
+/// The `$hls` rules that apply to one request, as a plan for the response
+/// body.
+///
+/// The reference calls the rules' effect cumulative — each removes segments
+/// of the same playlist — so the plan carries them all, with the playlist's
+/// own URL to resolve the segments against, and [`HlsPlan::apply`] unions
+/// the removals in one pass.
+pub struct HlsPlan {
+    rules: Vec<crate::hls::HlsRule>,
+    /// The URL the playlist was fetched from: segment URLs resolve against
+    /// it, the way a player would read them.
+    base: String,
+}
+
+impl HlsPlan {
+    /// Applies the plan to one response body, returning the rewritten body
+    /// and the rules that changed it. `None` when the body is not an HLS
+    /// playlist, or no rule removed a segment from it.
+    pub fn apply(&self, body: &[u8]) -> Option<(Vec<u8>, Vec<String>)> {
+        crate::hls::apply_rules(&self.rules, &self.base, body)
+    }
+}
+
 /// Reads the rules the crate refuses because of their modifier: `$urltransform`
 /// and the `$removeparam` shapes it does not implement (bare, `~`, and
 /// `/regexp/`; only `=name` ever reached the crate) rewrite the request URL,
@@ -2017,10 +2048,12 @@ fn scan_modifier_rules(text: &str, scan: &mut ModifierScan) {
         let token = families[0];
         // `$cookie` is not one of the modifier families: it is matched by
         // machinery of its own (see [`CookieRules`]) and takes the branch below
-        // before a family is read. `$jsonprune` is a family like the others —
-        // per-rule probes carry it — but the reference scopes its type options.
+        // before a family is read. `$jsonprune` and `$hls` are families like
+        // the others — per-rule probes carry them — but the reference scopes
+        // their type options.
         let cookie = token.split('=').next() == Some("cookie");
-        let jsonprune = token.split('=').next() == Some("jsonprune");
+        let hls = token.split('=').next() == Some("hls");
+        let body_family = hls || token.split('=').next() == Some("jsonprune");
         let value = token.split_once('=').map(|(_, value)| value).unwrap_or("");
         let badfilter = tokens.iter().any(|token| {
             let bare = token.trim_start_matches('~');
@@ -2032,6 +2065,10 @@ fn scan_modifier_rules(text: &str, scan: &mut ModifierScan) {
         // redirect goes, and nothing else would parse.
         let mut kept: Vec<&str> = Vec::new();
         let mut faithful = true;
+        // `$hls` names `$match-case`: remembered here because whether it can
+        // be honored depends on the value's form (a pattern cannot, a regexp
+        // answers for itself).
+        let mut value_match_case = false;
         for token in &tokens {
             let bare = token.trim_start_matches('~');
             let name = bare.split('=').next().unwrap_or(bare);
@@ -2089,18 +2126,27 @@ fn scan_modifier_rules(text: &str, scan: &mut ModifierScan) {
                 faithful = false;
                 continue;
             }
-            if jsonprune && TYPE_OPTIONS.contains(&name) {
-                // The reference takes `$jsonprune` with `$xmlhttprequest`
-                // only, and the live corpus also spells `all` — every type by
-                // definition. Any other type, or a negated one (which the
-                // compatibility list does not have), would make the probe
-                // answer a question the list did not ask: the rule is dropped
-                // rather than half-run.
+            if body_family && TYPE_OPTIONS.contains(&name) {
+                // The reference takes `$jsonprune` and `$hls` with
+                // `$xmlhttprequest` only, and the live corpus also spells
+                // `all` — every type by definition. Any other type, or a
+                // negated one (which the compatibility list does not have),
+                // would make the probe answer a question the list did not
+                // ask: the rule is dropped rather than half-run.
                 if !token.starts_with('~') && matches!(name, "xmlhttprequest" | "xhr" | "all") {
                     kept.push(token);
                     continue;
                 }
                 faithful = false;
+                continue;
+            }
+            if hls && name == "match-case" {
+                // The crate refuses `$match-case` on anything but a full-regex
+                // rule, so a probe carrying it would never match. The option
+                // is left off the probe; where it would have shaped a
+                // pattern-form value it cannot be honored (see below), and a
+                // regexp-form value carries its own case syntax.
+                value_match_case = true;
                 continue;
             }
             if KEPT_OPTIONS.contains(&name) {
@@ -2197,6 +2243,21 @@ fn scan_modifier_rules(text: &str, scan: &mut ModifierScan) {
             scan.dropped += 1;
             continue;
         }
+        if hls
+            && !exception
+            && value_match_case
+            && matches!(
+                kind,
+                Some(ModifierKind::Hls(crate::hls::HlsMatcher::Pattern(_)))
+            )
+        {
+            // The pattern engine can only match case-insensitively — the
+            // crate's own basic-rule matching — so a pattern-form rule asking
+            // for `$match-case` is dropped rather than run wider than the
+            // list wrote it.
+            scan.dropped += 1;
+            continue;
+        }
         if badfilter {
             // A `$badfilter` rule never applies itself: it waits until every
             // list has been read, then takes the rules it matches off the set.
@@ -2264,6 +2325,7 @@ fn is_modifier_token(token: &str) -> bool {
             | "removeheader"
             | "cookie"
             | "jsonprune"
+            | "hls"
     )
 }
 
@@ -2274,6 +2336,7 @@ fn modifier_family_of(token: &str) -> ModifierFamily {
         Some("permissions") => ModifierFamily::Permissions,
         Some("removeheader") => ModifierFamily::RemoveHeader,
         Some("jsonprune") => ModifierFamily::Jsonprune,
+        Some("hls") => ModifierFamily::Hls,
         _ => ModifierFamily::RemoveParam,
     }
 }
@@ -2289,6 +2352,7 @@ fn payload(family: ModifierFamily, value: &str) -> Option<ModifierKind> {
         ModifierFamily::Permissions => permissions_payload(value).map(ModifierKind::Permissions),
         ModifierFamily::RemoveHeader => removeheader_payload(value).map(ModifierKind::RemoveHeader),
         ModifierFamily::Jsonprune => JsonPrune::parse(value).map(ModifierKind::Jsonprune),
+        ModifierFamily::Hls => crate::hls::parse(value).map(ModifierKind::Hls),
     }
 }
 
@@ -2470,7 +2534,8 @@ fn default_types(family: ModifierFamily) -> &'static str {
         ModifierFamily::Transform
         | ModifierFamily::Csp
         | ModifierFamily::RemoveHeader
-        | ModifierFamily::Jsonprune => "all",
+        | ModifierFamily::Jsonprune
+        | ModifierFamily::Hls => "all",
         ModifierFamily::RemoveParam | ModifierFamily::Permissions => "document,subdocument",
     }
 }
@@ -3216,6 +3281,19 @@ impl FilterEngine {
             })
     }
 
+    /// Whether the loaded lists carry `$hls` rules.
+    pub fn has_hls_rules(&self) -> bool {
+        self.compiled()
+            .modifier_rules
+            .as_ref()
+            .is_some_and(|rules| {
+                rules
+                    .rules
+                    .iter()
+                    .any(|rule| rule.family == ModifierFamily::Hls)
+            })
+    }
+
     /// The `$cookie` rules that apply to one request, matched once per exchange
     /// and held for both halves of it.
     ///
@@ -3458,7 +3536,8 @@ impl FilterEngine {
                 }
                 ModifierKind::Transform(_)
                 | ModifierKind::RemoveParam(_)
-                | ModifierKind::Jsonprune(_) => continue,
+                | ModifierKind::Jsonprune(_)
+                | ModifierKind::Hls(_) => continue,
             }
             edit.rules.push(rule.text.clone());
         }
@@ -3515,6 +3594,51 @@ impl FilterEngine {
         (!rules.is_empty()).then_some(JsonprunePlan { rules })
     }
 
+    /// The `$hls` rules that apply to one request, matched once per exchange
+    /// and held for the response that request produces.
+    ///
+    /// A page exception (`$content`, an empty `$replace`) switches the family
+    /// off, like it switches `$replace` off — `$hls` is a content modifier,
+    /// not network filtering. Every matching rule rides on the plan in list
+    /// order; their effect is cumulative and order-independent (see
+    /// [`HlsPlan::apply`]).
+    pub fn hls_plan(
+        &self,
+        url: &str,
+        source: &str,
+        request_type: &str,
+        method: &str,
+    ) -> Option<HlsPlan> {
+        let compiled = self.compiled();
+        let rules = compiled.modifier_rules.as_ref()?;
+        if page_vetoed(&compiled, url, source, request_type) {
+            return None;
+        }
+        let request = Request::new(url, source, request_type, method).ok()?;
+        // The same fast path as the other edits: a miss on the shared engine
+        // means no rule of any family can match, whatever the exceptions say.
+        rules.any.check_network_request(&request).redirect.as_ref()?;
+        let rules: Vec<crate::hls::HlsRule> = rules
+            .rules
+            .iter()
+            .zip(rules.probes.iter())
+            .filter(|(rule, engine)| {
+                rule.family == ModifierFamily::Hls
+                    && engine.check_network_request(&request).should_block()
+            })
+            .filter_map(|(rule, _)| match &rule.kind {
+                ModifierKind::Hls(matcher) => {
+                    Some(crate::hls::HlsRule::new(rule.text.clone(), matcher.clone()))
+                }
+                _ => None,
+            })
+            .collect();
+        (!rules.is_empty()).then(|| HlsPlan {
+            rules,
+            base: url.to_string(),
+        })
+    }
+
     /// How many `$jsonprune` rules they carry (diagnostics).
     pub fn jsonprune_rules_count(&self) -> u64 {
         self.compiled()
@@ -3525,6 +3649,21 @@ impl FilterEngine {
                     .rules
                     .iter()
                     .filter(|rule| rule.family == ModifierFamily::Jsonprune)
+                    .count() as u64
+            })
+            .unwrap_or(0)
+    }
+
+    /// How many `$hls` rules they carry (diagnostics).
+    pub fn hls_rules_count(&self) -> u64 {
+        self.compiled()
+            .modifier_rules
+            .as_ref()
+            .map(|rules| {
+                rules
+                    .rules
+                    .iter()
+                    .filter(|rule| rule.family == ModifierFamily::Hls)
                     .count() as u64
             })
             .unwrap_or(0)
@@ -4521,6 +4660,166 @@ mod tests {
                 "{exception}"
             );
             assert!(prunes(&fe, url, "https://loud.test/", "xmlhttprequest").is_some());
+        }
+    }
+
+    /// The `$hls` plan covering one request, the way the HTTPS path asks
+    /// about it.
+    fn trims(fe: &FilterEngine, url: &str, source: &str, kind: &str) -> Option<HlsPlan> {
+        fe.hls_plan(url, source, kind, "GET")
+    }
+
+    #[test]
+    fn hls_rules_edit_the_playlists_they_cover() {
+        let fe = cosmetic_engine("||stream.test^$hls=preroll\n");
+        assert!(fe.has_hls_rules());
+        assert_eq!(fe.hls_rules_count(), 1);
+        // An `$hls` rule is not a URL, header or cookie rule, and it edits
+        // instead of blocking.
+        assert!(!fe.has_url_rules() && !fe.has_header_rules() && !fe.has_cookie_rules());
+        let url = "https://stream.test/hls/index.m3u8";
+        let plan = trims(&fe, url, "https://page.test/", "xmlhttprequest")
+            .expect("the rule covers the request");
+        let (body, applied) = plan
+            .apply(b"#EXTM3U\n#EXTINF:10,\npreroll.ts\n#EXTINF:10,\n01.ts\n")
+            .expect("the segment goes");
+        assert_eq!(
+            String::from_utf8(body).expect("utf8"),
+            "#EXTM3U\n#EXTINF:10,\n01.ts\n"
+        );
+        assert_eq!(applied, vec!["||stream.test^$hls=preroll"]);
+        // A URL the rule does not name has no plan.
+        assert!(trims(
+            &fe,
+            "https://other.test/hls/index.m3u8",
+            "https://page.test/",
+            "xmlhttprequest"
+        )
+        .is_none());
+    }
+
+    #[test]
+    fn hls_takes_the_request_types_the_reference_allows() {
+        let url = "https://stream.test/hls/index.m3u8";
+        // The reference pairs `$hls` with `$xmlhttprequest`; the live lists
+        // also spell `all`, every type by definition.
+        let fe = cosmetic_engine("||stream.test^$hls=preroll,xmlhttprequest\n");
+        assert!(trims(&fe, url, "https://page.test/", "xmlhttprequest").is_some());
+        assert!(trims(&fe, url, "https://page.test/", "script").is_none());
+        let fe = cosmetic_engine("||stream.test^$hls=preroll,all\n");
+        assert!(trims(&fe, url, "https://page.test/", "document").is_some());
+        // Party and domain options are crate options and stay.
+        let fe = cosmetic_engine("||stream.test^$hls=preroll,~third-party\n");
+        assert!(trims(&fe, url, "https://stream.test/", "xmlhttprequest").is_some());
+        assert!(trims(&fe, url, "https://other.test/", "xmlhttprequest").is_none());
+        let fe = cosmetic_engine("||stream.test^$hls=preroll,domain=page.test\n");
+        assert!(trims(&fe, url, "https://page.test/", "xmlhttprequest").is_some());
+        assert!(trims(&fe, url, "https://other.test/", "xmlhttprequest").is_none());
+        // A type the compatibility list does not carry — negated or not —
+        // would make the probe answer a question the list did not ask.
+        for spec in ["preroll,script", "preroll,~xmlhttprequest", "preroll,subdocument"] {
+            let fe = cosmetic_engine(&format!("||stream.test^$hls={spec}\n"));
+            assert!(!fe.has_hls_rules(), "{spec} must be dropped");
+        }
+    }
+
+    #[test]
+    fn hls_exceptions_fold_into_the_rules_they_cancel() {
+        let url = "https://stream.test/hls/index.m3u8";
+        // A bare exception cancels every rule of the family for the responses
+        // its pattern names.
+        let fe = cosmetic_engine("||stream.test^$hls=preroll\n@@||stream.test^$hls\n");
+        assert!(fe.has_hls_rules());
+        assert!(trims(&fe, url, "https://page.test/", "xmlhttprequest").is_none());
+        // A rule the exception's pattern does not name still applies.
+        let fe = cosmetic_engine("||stream.test^$hls=preroll\n@@||other.test^$hls\n");
+        assert!(trims(&fe, url, "https://page.test/", "xmlhttprequest").is_some());
+        // A valued exception cancels the rules repeating its value, and only
+        // them.
+        let fe = cosmetic_engine("||stream.test^$hls=preroll\n@@||stream.test^$hls=preroll\n");
+        assert!(trims(&fe, url, "https://page.test/", "xmlhttprequest").is_none());
+        let fe = cosmetic_engine("||stream.test^$hls=preroll\n@@||stream.test^$hls=midroll\n");
+        assert!(trims(&fe, url, "https://page.test/", "xmlhttprequest").is_some());
+    }
+
+    #[test]
+    fn hls_badfilter_cancels_across_lists() {
+        let fe = engine(vec![
+            temp_list(
+                "cancel-hls-a.txt",
+                "||stream.test^$hls=preroll,badfilter\n",
+                ListFormat::Standard,
+                17,
+            ),
+            temp_list(
+                "cancel-hls-b.txt",
+                "||stream.test^$hls=preroll\n",
+                ListFormat::Standard,
+                18,
+            ),
+        ]);
+        assert!(!fe.has_hls_rules());
+        assert_eq!(fe.hls_rules_count(), 0);
+        assert!(trims(
+            &fe,
+            "https://stream.test/hls/index.m3u8",
+            "https://page.test/",
+            "xmlhttprequest"
+        )
+        .is_none());
+    }
+
+    #[test]
+    fn hls_match_case_shapes_both_forms() {
+        // A pattern-form value cannot run `$match-case` — the crate refuses
+        // the option on anything but a full regex — so the rule is dropped
+        // rather than run wider than the list wrote it.
+        let fe = cosmetic_engine("||stream.test^$hls=preroll,match-case\n");
+        assert!(!fe.has_hls_rules());
+        assert_eq!(fe.hls_rules_count(), 0);
+        // A regexp answers for its own case, so the option adds nothing and
+        // the rule stays.
+        let fe = cosmetic_engine("||stream.test^$hls=/preroll/,match-case\n");
+        assert!(fe.has_hls_rules());
+        let plan = trims(
+            &fe,
+            "https://stream.test/hls/index.m3u8",
+            "https://page.test/",
+            "xmlhttprequest",
+        )
+        .expect("the rule covers the request");
+        assert!(plan
+            .apply(b"#EXTM3U\n#EXTINF:10,\npreroll.ts\n")
+            .is_some());
+    }
+
+    #[test]
+    fn hls_values_the_engine_cannot_run_are_dropped() {
+        // A regexp without its closing `/`, an unknown flag, a lookahead the
+        // Rust regex crate cannot compile, a pattern holding a literal `$`:
+        // a rule that cannot run does not run half-way.
+        let fe = cosmetic_engine(
+            "||stream.test^$hls=/preroll\n\
+             ||stream.test^$hls=/preroll/q\n\
+             ||stream.test^$hls=/\\.ts(?=x)/\n\
+             ||stream.test^$hls=price\\$5\n",
+        );
+        assert!(!fe.has_hls_rules());
+        assert_eq!(fe.hls_rules_count(), 0);
+    }
+
+    #[test]
+    fn page_exceptions_switch_hls_off() {
+        // `$hls` is content modification: a page that switched it off keeps
+        // its playlists intact.
+        let url = "https://stream.test/hls/index.m3u8";
+        for exception in ["@@||quiet.test^$content\n", "@@||quiet.test^$replace\n"] {
+            let fe = cosmetic_engine(&format!("||stream.test^$hls=preroll\n{exception}"));
+            assert!(
+                trims(&fe, url, "https://quiet.test/", "xmlhttprequest").is_none(),
+                "{exception}"
+            );
+            assert!(trims(&fe, url, "https://loud.test/", "xmlhttprequest").is_some());
         }
     }
 

@@ -347,6 +347,18 @@ fn start_origin_mode(html: &'static str, mode: OriginBody) -> Origin {
                     body.len()
                 )
                 .into_bytes()
+            } else if line.starts_with("GET /hls ") {
+                // An HLS playlist a `$hls` rule takes segments out of: the
+                // URL-pattern rule removes `01.ts`, the tag rule the segment
+                // its `#EXT-X-BYTERANGE` marker covers.
+                let body = "#EXTM3U\n#EXTINF:10,\n#EXT-X-BYTERANGE:1000@0\nad.ts\n\
+                            #EXTINF:10,\n01.ts\n#EXT-X-ENDLIST\n";
+                format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/vnd.apple.mpegurl\r\n\
+                     Content-Length: {}\r\nConnection: keep-alive\r\n\r\n{body}",
+                    body.len()
+                )
+                .into_bytes()
             } else if line.starts_with("GET / ") {
                 match mode {
                     OriginBody::Plain => format!(
@@ -1277,6 +1289,46 @@ fn jsonprune_rules_trim_the_https_body() {
     assert_eq!(body, br#"{"keep":3}"#, "the ad item must be gone: {head}");
     assert!(
         head.to_lowercase().contains("content-length: 10"),
+        "the head must tell the length the client reads: {head}"
+    );
+
+    tcp.close();
+}
+
+/// The `$hls` rules: the tag rule removes the segment its marker covers, the
+/// URL-pattern rule the segment it names.
+const HLS_LIST: &str = "! Title: e2e hls rules\n\
+                        ||shop.test/hls$hls=/#EXT-X-BYTERANGE/t\n\
+                        ||shop.test/hls$hls=01.ts\n";
+
+/// `$hls` takes the segments the rules name out of an HLS playlist, the tags
+/// that applied only to them with them — and the head the client reads is
+/// told the truth about the length.
+#[test]
+fn hls_rules_trim_the_https_body() {
+    let origin = start_origin(HTML);
+    let (core, ca_der) = setup_core_with_list(&origin, "hls", HLS_LIST);
+
+    let mut tcp = Client::connect(core.clone(), origin.port);
+    let mut conn = handshake(&mut tcp, client_config(ca_der));
+    assert!(!conn.is_handshaking(), "the MITM handshake must complete");
+
+    let (head, body) = request_with(
+        &mut tcp,
+        &mut conn,
+        "/hls",
+        "Sec-Fetch-Dest: empty\r\nReferer: https://shop.test/\r\n",
+    );
+    assert!(head.starts_with("HTTP/1.1 200"), "{head}");
+    let expected = "#EXTM3U\n#EXT-X-ENDLIST\n";
+    assert_eq!(
+        String::from_utf8(body).expect("utf8"),
+        expected,
+        "the named segments and their tag must be gone: {head}"
+    );
+    assert!(
+        head.to_lowercase()
+            .contains(&format!("content-length: {}", expected.len())),
         "the head must tell the length the client reads: {head}"
     );
 
