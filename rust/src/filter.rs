@@ -20,6 +20,7 @@
 
 use crate::fxhash::hash_str;
 use crate::jsonprune::{JsonPrune, JsonpruneRule};
+use crate::pathmask;
 use adblock::cosmetic_filter_cache::ProceduralOrActionFilter;
 use adblock::engine::Engine;
 use adblock::lists::{FilterFormat, FilterSet, ParseOptions, RuleTypes};
@@ -30,7 +31,7 @@ use base64::Engine as _;
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
-use std::sync::{Arc, OnceLock, RwLock};
+use std::sync::{Arc, Mutex, OnceLock, RwLock};
 
 /// Format of a subscription file.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -72,6 +73,10 @@ const MAX_STYLE_RULES: usize = 400;
 const MAX_PROCEDURAL: usize = 400;
 const MAX_SCRIPTLET_BYTES: usize = 128 * 1024;
 const MAX_GENERIC_SELECTORS: usize = 3000;
+/// How many `$path` subsets keep their side engine. A page usually matches
+/// none, and the pages that match one are the ones their rules were written
+/// for: a handful is every path a session realistically visits.
+const PATH_ENGINE_CACHE: usize = 32;
 
 /// Scriptlet implementations (AdGuard's, compiled into the binary).
 ///
@@ -583,6 +588,9 @@ struct Compiled {
     /// The `$cookie` rules, found by [`scan_modifier_rules`] too. `None` when
     /// no loaded list carries one.
     cookie_rules: Option<CookieRules>,
+    /// The cosmetic rules pinned to page paths (`[$path=…]`), found by
+    /// [`convert_adguard_cosmetics`]. `None` when no loaded list carries one.
+    path_cosmetics: Option<PathCosmetics>,
 }
 
 /// The `$replace` rules of the loaded lists, with the engine that finds them.
@@ -637,6 +645,7 @@ impl FilterEngine {
                 replace: None,
                 modifier_rules: None,
                 cookie_rules: None,
+                path_cosmetics: None,
             })),
             cache: RwLock::new(DecisionCache::new(1 << 15)),
             build_ns: AtomicU64::new(0),
@@ -656,6 +665,7 @@ impl FilterEngine {
         let mut cosmetic_exceptions = CosmeticExceptionScan::default();
         let mut replace_scan = ReplaceScan::default();
         let mut url_scan = ModifierScan::default();
+        let mut path_scan = PathScan::default();
 
         for list in lists.iter().filter(|l| l.enabled) {
             let Some(path) = &list.local_path else {
@@ -676,7 +686,7 @@ impl FilterEngine {
                                 scan_cosmetic_exceptions(&text, &mut cosmetic_exceptions);
                                 scan_replace_rules(&text, &mut replace_scan);
                                 scan_modifier_rules(&text, &mut url_scan);
-                                convert_adguard_cosmetics(text)
+                                convert_adguard_cosmetics(text, &mut path_scan)
                             }
                             ListFormat::Hosts => text,
                         };
@@ -728,7 +738,7 @@ impl FilterEngine {
             scan_replace_rules(&joined, &mut replace_scan);
             scan_modifier_rules(&joined, &mut url_scan);
             let record = set.add_filter_list(
-                convert_adguard_cosmetics(joined),
+                convert_adguard_cosmetics(joined, &mut path_scan),
                 ParseOptions::default(),
             );
             sources.push(SourceMapEntry {
@@ -796,6 +806,14 @@ impl FilterEngine {
                 rules.dropped,
             ));
         }
+        let path_cosmetics = path_scan.resolve();
+        if let Some(path) = path_cosmetics.as_ref() {
+            crate::logbuf::push(&format!(
+                "filter: {} $path cosmetic rules ({} unsupported)",
+                path.rules.len(),
+                path.dropped,
+            ));
+        }
         let compiled = Arc::new(Compiled {
             engine,
             generation,
@@ -806,6 +824,7 @@ impl FilterEngine {
             replace,
             modifier_rules,
             cookie_rules,
+            path_cosmetics,
         });
         *self.inner.write().unwrap() = compiled;
         self.cache.write().unwrap().clear();
@@ -852,12 +871,27 @@ impl FilterEngine {
     }
 
     /// Cosmetic rules that apply to `url`: element hiding, style actions,
-    /// procedural rules and scriptlets.
+    /// procedural rules and scriptlets. `url` must be the page the response
+    /// will render — the `$path` rules are matched against its path.
     ///
-    /// The caller passes the page URL (`https://host/` is enough: cosmetic
-    /// matching is hostname-based, exactly like AdGuard's own engine). What
-    /// the lists' exceptions switch off is already applied.
+    /// The caller may pass `https://host/` when the lists carry no `$path`
+    /// rule: cosmetic matching is hostname-based, exactly like AdGuard's own
+    /// engine. What the lists' exceptions switch off is already applied.
     pub fn cosmetic_resources(&self, url: &str) -> CosmeticResources {
+        self.cosmetic_resources_impl(url, true)
+    }
+
+    /// The cosmetic rules bound to `host` itself, `$path` rules left out.
+    ///
+    /// For callers that ask about a hostname rather than a page — the hiding
+    /// stylesheet, the generic class/id lookup: the `/` of the URL synthesized
+    /// for them is nobody's real path, and evaluating a main-page `$path` rule
+    /// against it would apply the rule on pages the list never asked about.
+    pub fn cosmetic_resources_for_host(&self, host: &str) -> CosmeticResources {
+        self.cosmetic_resources_impl(&format!("https://{host}/"), false)
+    }
+
+    fn cosmetic_resources_impl(&self, url: &str, with_paths: bool) -> CosmeticResources {
         // Clone the Arc out of the lock: a rebuild can then swap engines
         // without this call holding the read guard.
         let compiled = self.inner.read().unwrap().clone();
@@ -889,6 +923,43 @@ impl FilterEngine {
             }
         }
         let mut scriptlets = raw.injected_script;
+
+        // The `$path` rules pinned to this page's path, served from the side
+        // engine. They ride the inline payload like procedural rules do — the
+        // per-host hiding stylesheet cannot know the path, and the browser
+        // keeps it cached across the site.
+        if with_paths {
+            if let Some(path_rules) = compiled.path_cosmetics.as_ref() {
+                let subset = path_rules.subset(pathmask::path_and_query(url));
+                if !subset.is_empty() {
+                    let extra = path_rules.engine_for(&subset).url_cosmetic_resources(url);
+                    for selector in extra.hide_selectors {
+                        if style_rules.len() < MAX_STYLE_RULES {
+                            style_rules.push((selector, "display: none !important".to_string()));
+                        }
+                    }
+                    for entry in extra.procedural_actions {
+                        let Ok(parsed) = serde_json::from_str::<ProceduralOrActionFilter>(&entry)
+                        else {
+                            continue;
+                        };
+                        match parsed.as_css() {
+                            Some((selector, style)) => {
+                                if style_rules.len() < MAX_STYLE_RULES {
+                                    style_rules.push((selector, style));
+                                }
+                            }
+                            None => {
+                                if procedural.len() < MAX_PROCEDURAL {
+                                    procedural.push(entry);
+                                }
+                            }
+                        }
+                    }
+                    scriptlets.push_str(&extra.injected_script);
+                }
+            }
+        }
 
         if switches.elemhide {
             // `$elemhide`: no cosmetic rule at all, specific or generic.
@@ -941,8 +1012,7 @@ impl FilterEngine {
     /// stable order mandatory: the hash written into the page has to match the
     /// bytes the stylesheet request comes back with.
     pub fn hide_selectors_for(&self, host: &str) -> Vec<String> {
-        let url = format!("https://{host}/");
-        let mut selectors = self.cosmetic_resources(&url).hide_selectors;
+        let mut selectors = self.cosmetic_resources_for_host(host).hide_selectors;
         selectors.sort_unstable();
         selectors.dedup();
         selectors
@@ -1296,6 +1366,196 @@ fn switches_for(compiled: &Compiled, host: &str) -> CosmeticSwitches {
     switches
 }
 
+/// A cosmetic rule AdGuard pins to a page path (`[$path=…]`), with the side
+/// engine that serves it.
+///
+/// The main engine has no notion of the bracket — it drops such a rule whole
+/// — and its cosmetic matching is hostname-based: a page asks for its
+/// cosmetics for a URL, and the rules pinned to some other path of the site
+/// must not be part of the answer. So those rules stay out of the main engine
+/// and a page whose path matches a rule's mask gets a small engine of its own
+/// — just the rules that match, plus the lists' cosmetic exceptions, which
+/// cancel a path rule exactly as they would cancel any other — asked for the
+/// URL like any other engine would be.
+struct PathCosmetics {
+    /// The path-pinned rules, in list order.
+    rules: Vec<PathRule>,
+    /// The `#@#`-family lines of every loaded list, converted, newline-
+    /// separated: what the side engine needs to cancel a path rule the lists
+    /// except elsewhere. Lines with a `[$…]` bracket of their own are not
+    /// here — they cancel only the rules sharing their path, and are carried
+    /// by the side list itself.
+    exceptions: String,
+    /// How many bracket rules could not be honored (see [`PathScan`]).
+    dropped: u32,
+    /// One engine per matched subset of [`PathCosmetics::rules`]. A page
+    /// usually matches none, and the ones that match are pages the rules were
+    /// written for, so the cache only ever holds the paths a session visits.
+    engines: Mutex<HashMap<Vec<usize>, Arc<Engine>>>,
+}
+
+/// One path-pinned cosmetic rule: the converted text the side engine parses,
+/// and the mask that decides the pages it applies to.
+struct PathRule {
+    text: String,
+    mask: pathmask::PathMask,
+}
+
+impl PathCosmetics {
+    /// The indices of the rules whose mask covers `subject` — a page's path
+    /// and query.
+    fn subset(&self, subject: &str) -> Vec<usize> {
+        self.rules
+            .iter()
+            .enumerate()
+            .filter(|(_, rule)| rule.mask.matches(subject))
+            .map(|(index, _)| index)
+            .collect()
+    }
+
+    /// The engine for one matched subset, built on first use.
+    fn engine_for(&self, subset: &[usize]) -> Arc<Engine> {
+        let mut engines = self.engines.lock().unwrap();
+        if let Some(engine) = engines.get(subset) {
+            return engine.clone();
+        }
+        let mut set = FilterSet::new(false);
+        let mut text = String::new();
+        for &index in subset {
+            text.push_str(&self.rules[index].text);
+            text.push('\n');
+        }
+        text.push_str(&self.exceptions);
+        set.add_filter_list(
+            text,
+            ParseOptions {
+                format: FilterFormat::Standard,
+                rule_types: RuleTypes::All,
+                ..Default::default()
+            },
+        );
+        let mut engine = Engine::new_with_filter_set(set);
+        // Scriptlets only assemble when the engine knows the implementations,
+        // and only the subsets carrying one need the (large) table.
+        if subset
+            .iter()
+            .any(|&index| self.rules[index].text.contains("+js("))
+        {
+            engine.use_resources(scriptlet_resources().iter().cloned());
+        }
+        let engine = Arc::new(engine);
+        if engines.len() >= PATH_ENGINE_CACHE {
+            engines.clear();
+        }
+        engines.insert(subset.to_vec(), engine.clone());
+        engine
+    }
+}
+
+/// What the path-bracket scan of the loaded lists has collected, before the
+/// count and the side engine are made of it.
+#[derive(Default)]
+struct PathScan {
+    rules: Vec<PathRule>,
+    /// Raw `#@#`-family lines; converted in [`PathScan::resolve`].
+    exceptions: Vec<String>,
+    /// Bracket rules that could not be honored: `$app` or `$url`, a regexp
+    /// `$domain` (a cosmetic rule cannot spell one), a `$path` that does not
+    /// compile, or domains spelled in both styles (invalid per the knowledge
+    /// base). Dropped rather than applied to pages the list did not ask for.
+    dropped: u32,
+}
+
+impl PathScan {
+    /// The scan as [`Compiled`] holds it. Anything at all — a rule or a drop
+    /// — makes it `Some`, so the build log can report both.
+    fn resolve(self) -> Option<PathCosmetics> {
+        if self.rules.is_empty() && self.dropped == 0 {
+            return None;
+        }
+        let mut exceptions = String::new();
+        if !self.rules.is_empty() {
+            for line in &self.exceptions {
+                convert_adguard_line(line, &mut exceptions);
+                exceptions.push('\n');
+            }
+        }
+        Some(PathCosmetics {
+            rules: self.rules,
+            exceptions,
+            dropped: self.dropped,
+            engines: Mutex::new(HashMap::new()),
+        })
+    }
+}
+
+/// A cosmetic marker and its position: the earliest of the markers the
+/// conversion and the bracket scan know. No marker is a substring of another
+/// at the same position, so the earliest one is also the right one.
+fn cosmetic_marker(line: &str) -> Option<(usize, &'static str)> {
+    COSMETIC_MARKERS
+        .iter()
+        .filter_map(|marker| line.find(marker).map(|index| (index, *marker)))
+        .min_by_key(|(index, _)| *index)
+}
+
+/// Every cosmetic marker a rule can carry, [`convert_adguard_line`]'s table
+/// included.
+const COSMETIC_MARKERS: &[&str] = &[
+    "#@$?#", "#@?#", "#@$#", "#@%#", "#@#", "#$?#", "#?#", "#$#", "#%#", "##",
+];
+
+/// The markers whose lines cancel a rule ([`PathCosmetics::exceptions`]).
+const EXCEPTION_MARKERS: &[&str] = &["#@$?#", "#@?#", "#@$#", "#@%#", "#@#"];
+
+/// Rewrites one `[$…]`-bracketed cosmetic line.
+///
+/// `Some` means the bracket was recognized and the returned text replaces the
+/// line — empty when the bracket holds something unusable, the rewritten rule
+/// otherwise. `None` leaves the line to the plain conversion: it is not a
+/// bracket rule, its bracket could not be made sense of, or its rule text is
+/// not a cosmetic rule (a network rule's `[$…]` is out of this scanner's
+/// business and stays exactly as it was).
+fn bracket_cosmetic_line(line: &str, path: &mut PathScan) -> Option<String> {
+    let bracket = match pathmask::parse_bracket(line) {
+        pathmask::BracketParse::NotBracket => return None,
+        pathmask::BracketParse::Unsupported { rest } => {
+            // Only cosmetic rules are this scanner's (and the engine's)
+            // business; a network rule keeps its line.
+            cosmetic_marker(&rest)?;
+            path.dropped += 1;
+            return Some(String::new());
+        }
+        pathmask::BracketParse::Parsed(bracket) => bracket,
+    };
+    let (marker, _) = cosmetic_marker(&bracket.rest)?;
+    // The domain part of the rule text, before the marker. Mixed styles —
+    // `$domain` in the bracket *and* domains on the rule — are invalid per
+    // the knowledge base: the rule is ignored.
+    let before = bracket.rest[..marker].trim();
+    if bracket.domain.is_some() && !before.is_empty() {
+        path.dropped += 1;
+        return Some(String::new());
+    }
+    let domains = bracket.domain.as_deref().unwrap_or(before);
+    let mut rewritten = String::new();
+    convert_adguard_line(&format!("{domains}{}", &bracket.rest[marker..]), &mut rewritten);
+    match bracket.path {
+        // A path-pinned rule: out of the main text — a blank line keeps the
+        // source map aligned — and into the side list.
+        Some(mask) => {
+            path.rules.push(PathRule {
+                text: rewritten,
+                mask,
+            });
+            Some(String::new())
+        }
+        // `$domain` alone: the rule goes back into the main text without its
+        // bracket, in the domain position the bracket was standing in for.
+        None => Some(rewritten),
+    }
+}
+
 /// Rewrites AdGuard-only cosmetic syntax into the uBO/ABP forms the engine
 /// understands, line for line (so source-map line numbers stay aligned):
 ///
@@ -1306,13 +1566,32 @@ fn switches_for(compiled: &Compiled, host: &str) -> CosmeticSwitches {
 /// Anything else (`#%#` raw JS, `##^`, `$$`) is left untouched: the engine
 /// drops what it cannot parse, and a wrong rewrite would be worse than a
 /// dropped rule.
-fn convert_adguard_cosmetics(text: String) -> String {
-    if !text.contains("#%#") && !text.contains("#$#") {
+fn convert_adguard_cosmetics(text: String, path: &mut PathScan) -> String {
+    if !text.contains("[$")
+        && !text.contains("#%#")
+        && !text.contains("#$#")
+        && !text.contains("#@")
+    {
         return text;
     }
     let mut out = String::with_capacity(text.len() + 64);
     for line in text.lines() {
-        convert_adguard_line(line, &mut out);
+        match bracket_cosmetic_line(line, path) {
+            Some(rewritten) => out.push_str(&rewritten),
+            None => {
+                // `#@#`-family lines are the cancellations the path side
+                // engine has to know: taken down as written, converted in
+                // [`PathScan::resolve`].
+                if line.contains("#@") {
+                    if let Some((_, marker)) = cosmetic_marker(line) {
+                        if EXCEPTION_MARKERS.contains(&marker) {
+                            path.exceptions.push(line.to_string());
+                        }
+                    }
+                }
+                convert_adguard_line(line, &mut out);
+            }
+        }
         out.push('\n');
     }
     out
@@ -3268,6 +3547,15 @@ impl FilterEngine {
         self.compiled().cookie_rules.is_some()
     }
 
+    /// Whether the loaded lists carry cosmetic rules pinned to a page path
+    /// (`[$path=…]`).
+    pub fn has_path_rules(&self) -> bool {
+        self.compiled()
+            .path_cosmetics
+            .as_ref()
+            .is_some_and(|path| !path.rules.is_empty())
+    }
+
     /// Whether the loaded lists carry `$jsonprune` rules.
     pub fn has_jsonprune_rules(&self) -> bool {
         self.compiled()
@@ -5214,6 +5502,149 @@ mod tests {
         assert!(generic.iter().any(|s| s == ".adsbygoogle"), "{generic:?}");
         let none = fe.generic_selectors(&["unused-token".to_string()], &[], &res.exceptions);
         assert!(none.is_empty(), "{none:?}");
+    }
+
+    #[test]
+    fn path_rules_wait_for_their_page() {
+        let fe = cosmetic_engine(
+            "! Title: paths\n\
+             shop.test##.always\n\
+             [$path=/tv]shop.test##.only-tv\n\
+             [$path]shop.test##.only-main\n",
+        );
+        assert!(fe.has_path_rules());
+
+        let tv = fe.cosmetic_resources("https://shop.test/tv");
+        assert!(
+            tv.style_rules
+                .iter()
+                .any(|(s, css)| s == ".only-tv" && css == "display: none !important"),
+            "{:?}",
+            tv.style_rules
+        );
+        // The path rule rides the inline payload; the per-host stylesheet is
+        // for rules the whole site shares.
+        assert!(!tv.hide_selectors.iter().any(|s| s == ".only-tv"));
+        assert!(tv.hide_selectors.iter().any(|s| s == ".always"));
+
+        // `$path` matches the query string as well.
+        let query = fe.cosmetic_resources("https://shop.test/tv?video=1");
+        assert!(query.style_rules.iter().any(|(s, _)| s == ".only-tv"));
+
+        // Another path of the same site: neither path rule applies.
+        let other = fe.cosmetic_resources("https://shop.test/other");
+        assert!(other.style_rules.is_empty(), "{:?}", other.style_rules);
+        assert!(other.hide_selectors.iter().any(|s| s == ".always"));
+
+        // The main page: the bare `[$path]` rule, and only it.
+        let main = fe.cosmetic_resources("https://shop.test/");
+        assert!(main.style_rules.iter().any(|(s, _)| s == ".only-main"));
+        assert!(!main.style_rules.iter().any(|(s, _)| s == ".only-tv"));
+        // A query string does not make the main page another page.
+        let main_query = fe.cosmetic_resources("https://shop.test/?utm_source=x");
+        assert!(main_query.style_rules.iter().any(|(s, _)| s == ".only-main"));
+
+        // The rule's own domain still has to match.
+        let sibling = fe.cosmetic_resources("https://other.test/tv");
+        assert!(!sibling.style_rules.iter().any(|(s, _)| s == ".only-tv"));
+
+        // A hostname ask has no page behind it: no path rule may answer.
+        let host = fe.cosmetic_resources_for_host("shop.test");
+        assert!(host.style_rules.is_empty(), "{:?}", host.style_rules);
+        assert!(host.hide_selectors.iter().any(|s| s == ".always"));
+    }
+
+    #[test]
+    fn path_rules_carry_scriptlets_and_procedural_actions() {
+        let fe = cosmetic_engine(
+            "[$path=/tv]shop.test#%#//scriptlet('set-constant', 'adblock', 'false')\n\
+             [$path=/tv]shop.test#?#.late:has-text(Sponsored)\n",
+        );
+        let tv = fe.cosmetic_resources("https://shop.test/tv");
+        assert!(!tv.scriptlets.is_empty(), "{:?}", tv.scriptlets);
+        assert!(
+            tv.procedural.iter().any(|p| p.contains("has-text")),
+            "{:?}",
+            tv.procedural
+        );
+        let other = fe.cosmetic_resources("https://shop.test/other");
+        assert!(other.scriptlets.is_empty());
+        assert!(other.procedural.is_empty());
+    }
+
+    #[test]
+    fn path_rule_exceptions_apply_inside_the_path_engine() {
+        let fe = cosmetic_engine(
+            "shop.test#@#.only-tv\n\
+             [$path=/tv]shop.test##.only-tv\n\
+             [$path=/tv]shop.test##.stays\n",
+        );
+        let tv = fe.cosmetic_resources("https://shop.test/tv");
+        assert!(!tv.style_rules.iter().any(|(s, _)| s == ".only-tv"));
+        assert!(tv.style_rules.iter().any(|(s, _)| s == ".stays"));
+    }
+
+    #[test]
+    fn path_bracket_domains_apply_like_classic_domains() {
+        let fe = cosmetic_engine("[$domain=alpha.test|beta.test]##.promo\n");
+        // No `$path`: the bracket goes away and the rule is an ordinary one.
+        assert!(!fe.has_path_rules());
+        assert!(fe
+            .cosmetic_resources("https://alpha.test/")
+            .hide_selectors
+            .iter()
+            .any(|s| s == ".promo"));
+        assert!(fe
+            .cosmetic_resources("https://sub.beta.test/x")
+            .hide_selectors
+            .iter()
+            .any(|s| s == ".promo"));
+        assert!(!fe
+            .cosmetic_resources("https://gamma.test/")
+            .hide_selectors
+            .iter()
+            .any(|s| s == ".promo"));
+    }
+
+    #[test]
+    fn path_bracket_domain_moves_onto_the_rule() {
+        let fe = cosmetic_engine(
+            "[$domain=facebook.com,path=/gaming]#$#body > .AdBox { height: 0 !important; }\n",
+        );
+        let gaming = fe.cosmetic_resources("https://facebook.com/gaming");
+        assert!(
+            gaming
+                .style_rules
+                .iter()
+                .any(|(s, css)| s == "body > .AdBox" && css.contains("height")),
+            "{:?}",
+            gaming.style_rules
+        );
+        // The domain from the bracket still scopes the rule.
+        let other_path = fe.cosmetic_resources("https://facebook.com/feed");
+        assert!(other_path.style_rules.is_empty());
+        let other_site = fe.cosmetic_resources("https://twitter.com/gaming");
+        assert!(other_site.style_rules.is_empty());
+    }
+
+    #[test]
+    fn path_brackets_that_cannot_be_honored_are_dropped() {
+        let fe = cosmetic_engine(
+            "[$app=org.example.app]##.a\n\
+             [$url=/x]##.b\n\
+             [$domain=/re/]##.c\n\
+             [$domain=x.com,path=/y]y.com##.d\n\
+             [$path=/x,path=/y]##.e\n\
+             [$path=||x.com]##.f\n",
+        );
+        assert!(!fe.has_path_rules());
+        let compiled = fe.compiled();
+        let path = compiled.path_cosmetics.as_ref().expect("scan");
+        assert_eq!(path.dropped, 6);
+        assert!(path.rules.is_empty());
+        // None of them may fall back to the engine as plain rules.
+        let res = fe.cosmetic_resources("https://y.com/y");
+        assert!(res.hide_selectors.is_empty(), "{:?}", res.hide_selectors);
     }
 
     #[test]

@@ -196,6 +196,11 @@ pub struct ProxySession {
     pub script_body: Arc<str>,
     /// Cosmetic filtering: rules are computed per page when set.
     pub cosmetic: Option<Arc<FilterEngine>>,
+    /// The page URL of the response being rewritten, when the loaded lists
+    /// carry `[$path=…]` rules. Set from the request's plan as its response
+    /// head goes out, so the injection — buffered or streamed, long after —
+    /// can match those rules. `None` when no plan named one.
+    page_url: Option<String>,
     /// Hot counters of the owning engine, for the TLS and rewrite timings the
     /// HTTPS path adds. `None` when no engine owns the session (tests).
     stats: Option<Arc<Stats>>,
@@ -259,6 +264,10 @@ struct ResponseEdit {
     /// The `$hls` rules the request matched: the response body loses the
     /// playlist segments they name.
     hls: Option<Arc<HlsPlan>>,
+    /// The URL of the page this request is for, when the loaded lists carry
+    /// `[$path=…]` rules: the injection matches those rules against it. The
+    /// request head is the only place the URL exists, so it rides along.
+    page_url: Option<String>,
 }
 
 /// What one forwarded request carries back from the filter: the response body
@@ -279,6 +288,11 @@ struct RequestPlan {
     /// The `$hls` rules the request matched: held until the response body
     /// arrives.
     hls: Option<Arc<HlsPlan>>,
+    /// The request's page URL when the loaded lists carry `[$path=…]` rules:
+    /// what the injection matches those rules against. Rides on the plan so
+    /// the response edit — which happens long after the head was read — can
+    /// find it again.
+    page_url: Option<String>,
 }
 
 /// State for a response whose body is streamed to the client as it is edited.
@@ -509,6 +523,7 @@ impl ProxySession {
             script_tag_src,
             script_body,
             cosmetic: None,
+            page_url: None,
             stats: None,
             sink: None,
         }
@@ -549,6 +564,7 @@ impl ProxySession {
             script_tag_src,
             script_body,
             cosmetic: None,
+            page_url: None,
             stats: None,
             sink: None,
         })
@@ -588,6 +604,7 @@ impl ProxySession {
             script_tag_src,
             script_body,
             cosmetic: None,
+            page_url: None,
             stats: None,
             sink: None,
         })
@@ -895,6 +912,7 @@ impl ProxySession {
                 cookies: plan.cookies,
                 jsonprune: plan.jsonprune,
                 hls: plan.hls,
+                page_url: plan.page_url,
             });
             if let Some(fixed) = http::drop_undecodable_encodings(buffer, forced) {
                 *buffer = fixed;
@@ -938,9 +956,6 @@ impl ProxySession {
         let Some(facts) = request_facts(&buffer[..head_end]) else {
             return Ok(RequestPlan::default());
         };
-        if facts.has_body {
-            return Ok(RequestPlan::default());
-        }
         if !facts.target.starts_with('/')
             && !facts.target.starts_with("http://")
             && !facts.target.starts_with("https://")
@@ -955,6 +970,19 @@ impl ProxySession {
             return Ok(RequestPlan::default());
         };
         let url = request_url(&facts, &host);
+        // The page URL the cosmetics of the response will be matched against.
+        // Only `[$path=…]` rules read it, so it is only carried when the
+        // loaded lists hold any.
+        let page_url = filter.has_path_rules().then(|| url.clone());
+        // A request with a body is not edited here — its head cannot be
+        // drained and rewritten without the body — but its response can still
+        // be a page, and the injection still needs to know which one.
+        if facts.has_body {
+            return Ok(RequestPlan {
+                page_url,
+                ..RequestPlan::default()
+            });
+        }
         let target = facts.target.to_string();
         let method = facts.method.to_string();
         let request_type = facts.request_type();
@@ -980,14 +1008,23 @@ impl ProxySession {
             crate::filter::url_host(&source)
         };
         if !page_host.is_empty() && filter.cosmetic_switches_for(page_host).urlblock {
-            return Ok(RequestPlan::default());
+            // The network decision is skipped, but the page's cosmetics still
+            // run: `$urlblock` alone unblocks requests, it does not switch
+            // element hiding off.
+            return Ok(RequestPlan {
+                page_url,
+                ..RequestPlan::default()
+            });
         }
 
         // The response-header rules (`$csp`, `$permissions`, `$removeheader`)
         // are matched once, here, and ride on the plan: the response they shape
         // is the next thing to come back. The request-side half of
         // `$removeheader` happens now, while the head is here — the rest waits.
-        let mut plan = RequestPlan::default();
+        let mut plan = RequestPlan {
+            page_url,
+            ..RequestPlan::default()
+        };
         if filter.has_header_rules() {
             if let Some(edit) = filter.header_edit(&url, &source, request_type, &method) {
                 // `drop_headers` is `None` when none of the names is there, so
@@ -1390,6 +1427,9 @@ impl ProxySession {
                         continue;
                     }
                     let req = self.head_requests.pop_front().unwrap_or_default();
+                    // What the injection will match `[$path=…]` rules
+                    // against, until the next response head replaces it.
+                    self.page_url = req.page_url;
                     // The header edits the request matched are applied as the
                     // head goes out — before anything decides what to do with
                     // the body, so an injected `$csp` value is rewritten with
@@ -2003,7 +2043,9 @@ impl ProxySession {
                                 .as_bytes(),
                         );
                     }
-                    if let Some(data) = self.cosmetic_payload(filter, host, body) {
+                    if let Some(data) =
+                        self.cosmetic_payload(filter, host, body, self.page_url.as_deref())
+                    {
                         out.extend_from_slice(
                             format!("<script{}>window.__adfree_page=", http::nonce_attr(nonce))
                                 .as_bytes(),
@@ -2040,14 +2082,21 @@ impl ProxySession {
 
     /// The per-page cosmetic payload as JSON, or `None` when the page has
     /// nothing left to carry inline (element hiding travels as a stylesheet).
+    ///
+    /// `page_url` is the page's own URL when the request carried one — that is
+    /// what `[$path=…]` rules are matched against. Without it the answer is
+    /// the host's alone: no `/`-path may stand in for a page nobody named.
     fn cosmetic_payload(
         &self,
         filter: &FilterEngine,
         host: &str,
         body: &[u8],
+        page_url: Option<&str>,
     ) -> Option<String> {
-        let url = format!("https://{host}/");
-        let rules = filter.cosmetic_resources(&url);
+        let rules = match page_url {
+            Some(url) => filter.cosmetic_resources(url),
+            None => filter.cosmetic_resources_for_host(host),
+        };
 
         // Generic class/id rules: the page's own tokens decide which apply.
         // The initial HTML is scanned here so the first paint is covered; the
@@ -2157,8 +2206,7 @@ pub fn take_local_request(
         let (classes, ids) = generic_query(&first_line);
         let selectors = match host.as_deref() {
             Some(host) if !classes.is_empty() || !ids.is_empty() => {
-                let url = format!("https://{host}/");
-                let rules = filter.cosmetic_resources(&url);
+                let rules = filter.cosmetic_resources_for_host(host);
                 if rules.generichide {
                     Vec::new()
                 } else {
@@ -2684,6 +2732,7 @@ mod tests {
             cookies: None,
             jsonprune: Some(plan),
             hls: None,
+            page_url: None,
         });
 
         let body = br#"{"ads": [1, 2], "keep": 3}"#;
@@ -2751,6 +2800,7 @@ mod tests {
             cookies: None,
             jsonprune: None,
             hls: Some(plan),
+            page_url: None,
         });
 
         let body = b"#EXTM3U\n#EXTINF:10,\nad.ts\n#EXTINF:10,\n01.ts\n";
@@ -2795,6 +2845,7 @@ mod tests {
             cookies: Some(plan),
             jsonprune: None,
             hls: None,
+            page_url: None,
         });
 
         let response =
@@ -2847,6 +2898,7 @@ mod tests {
                 cookies: Some(Arc::clone(&plan)),
                 jsonprune: None,
                 hls: None,
+                page_url: None,
             });
         }
         // The first response — the shape the device showed: a JSON body
@@ -2898,6 +2950,7 @@ mod tests {
                 cookies: Some(Arc::clone(&plan)),
                 jsonprune: None,
                 hls: None,
+                page_url: None,
             });
         }
         let broken = b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\nzz\r\nnot hex at all";

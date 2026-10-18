@@ -359,6 +359,16 @@ fn start_origin_mode(html: &'static str, mode: OriginBody) -> Origin {
                     body.len()
                 )
                 .into_bytes()
+            } else if line.starts_with("GET /pathpage ") {
+                // The same page under another path: the `$path` rules have to
+                // tell the two apart.
+                format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\n\
+                     Content-Length: {}\r\nConnection: keep-alive\r\n\r\n{}",
+                    html.len(),
+                    html
+                )
+                .into_bytes()
             } else if line.starts_with("GET / ") {
                 match mode {
                     OriginBody::Plain => format!(
@@ -1021,6 +1031,68 @@ fn a_document_exception_takes_every_cosmetic_tag_out() {
         "the user script still goes out: {page}"
     );
     assert!(page.contains("Sponsored content"), "the page itself is intact");
+
+    tcp.close();
+}
+
+/// The `[$path=…]` bracket: cosmetic rules pinned to one page of a site.
+/// The page's own URL decides — the rules must reach the page they name and
+/// stay away from every other one, and the per-host stylesheet must never
+/// carry them.
+const PATH_LIST: &str = "! Title: e2e path\n\
+                         [$path=/pathpage]shop.test##.path-only\n\
+                         [$path]shop.test##.path-main\n\
+                         shop.test##.ad-box\n";
+
+#[test]
+fn path_rules_apply_to_their_page_only() {
+    let origin = start_origin(HTML);
+    let (core, ca_der) = setup_core_with_list(&origin, "path", PATH_LIST);
+
+    let mut tcp = Client::connect(core.clone(), origin.port);
+    let mut conn = handshake(&mut tcp, client_config(ca_der));
+    assert!(!conn.is_handshaking(), "the MITM handshake must complete");
+
+    // The page the rule names: the selector rides the inline payload, since
+    // the stylesheet is asked for by host alone and cannot know the path.
+    let (head, body) = request(&mut tcp, &mut conn, "/pathpage");
+    assert!(head.starts_with("HTTP/1.1 200"), "{head}");
+    let page = page_text(&head, &body);
+    assert!(
+        page.contains("\".path-only\""),
+        "the path rule must reach its page: {page}"
+    );
+    assert!(
+        !page.contains("\".path-main\""),
+        "the main-page rule must stay on the main page: {page}"
+    );
+
+    // The host stylesheet carries the host rules only.
+    if let Some(start) = page.find("/adfree-hide.css") {
+        let rest = &page[start..];
+        let end = rest.find('"').expect("the href must be quoted");
+        let href = rest[..end].to_string();
+        let (_, css_body) = request(&mut tcp, &mut conn, &href);
+        let css = String::from_utf8_lossy(&css_body).to_string();
+        assert!(css.contains(".ad-box"), "the host rule is in the stylesheet: {css}");
+        assert!(
+            !css.contains(".path-only"),
+            "a path rule must not travel in the per-host stylesheet: {css}"
+        );
+    }
+
+    // The main page: its own rule, and not the other page's.
+    let (head, body) = request(&mut tcp, &mut conn, "/");
+    assert!(head.starts_with("HTTP/1.1 200"), "{head}");
+    let page = page_text(&head, &body);
+    assert!(
+        page.contains("\".path-main\""),
+        "the bare `$path` rule is for the main page: {page}"
+    );
+    assert!(
+        !page.contains("\".path-only\""),
+        "the /pathpage rule must stay there: {page}"
+    );
 
     tcp.close();
 }

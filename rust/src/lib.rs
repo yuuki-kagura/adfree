@@ -28,6 +28,7 @@ pub mod hls;
 pub mod jsonprune;
 pub mod logbuf;
 pub mod packet;
+pub mod pathmask;
 pub mod stats;
 pub mod store;
 pub mod udpnat;
