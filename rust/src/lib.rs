@@ -24,6 +24,7 @@ pub mod engine;
 pub mod events;
 pub mod filter;
 pub mod fxhash;
+pub mod jsonprune;
 pub mod logbuf;
 pub mod packet;
 pub mod stats;

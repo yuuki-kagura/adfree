@@ -8,7 +8,7 @@
 //! Everything is non-blocking and returns the payloads to write back, so the
 //! packet loop stays in charge of TCP segmentation and never blocks a syscall.
 
-use crate::filter::{CookiePlan, FilterEngine, HeaderEdit, Replace};
+use crate::filter::{CookiePlan, FilterEngine, HeaderEdit, JsonprunePlan, Replace};
 use crate::mitm::http;
 use crate::mitm::tls::{
     self, feed_client, feed_client_wire, feed_server, send_to_client, FlowResolver, TlsSession,
@@ -222,6 +222,9 @@ enum RespPhase {
         /// The `$replace` rule the response matched: applied once the whole
         /// body is here.
         replace: Option<Arc<Replace>>,
+        /// The `$jsonprune` rules the request matched: applied to the body
+        /// before `$replace` has it.
+        jsonprune: Option<Arc<JsonprunePlan>>,
         /// The body may be a page: only then does the injector look at it.
         inject: bool,
     },
@@ -247,6 +250,9 @@ struct ResponseEdit {
     /// The `$cookie` rules the request matched: the response head loses the
     /// `set-cookie` headers they name.
     cookies: Option<Arc<CookiePlan>>,
+    /// The `$jsonprune` rules the request matched: the response body loses
+    /// the JSON items they name.
+    jsonprune: Option<Arc<JsonprunePlan>>,
 }
 
 /// What one forwarded request carries back from the filter: the response body
@@ -261,6 +267,9 @@ struct RequestPlan {
     /// they name now, and the response may not set them — the same plan
     /// answers both, so it rides along.
     cookies: Option<Arc<CookiePlan>>,
+    /// The `$jsonprune` rules the request matched: held until the response
+    /// body arrives.
+    jsonprune: Option<Arc<JsonprunePlan>>,
 }
 
 /// State for a response whose body is streamed to the client as it is edited.
@@ -854,12 +863,15 @@ impl ProxySession {
         // look like (a HEAD has no body, an HTTP/1.0 client cannot take a
         // chunked one) and stop HTML negotiations the rewriter cannot follow.
         if let Some(info) = http::request_info(buffer) {
-            let forced = plan.replace.is_some();
+            // A body edit cannot read a response the request did not ask to
+            // be encoded readably.
+            let forced = plan.replace.is_some() || plan.jsonprune.is_some();
             head_requests.push_back(ResponseEdit {
                 info,
                 replace: plan.replace,
                 headers: plan.headers,
                 cookies: plan.cookies,
+                jsonprune: plan.jsonprune,
             });
             if let Some(fixed) = http::drop_undecodable_encodings(buffer, forced) {
                 *buffer = fixed;
@@ -969,6 +981,18 @@ impl ProxySession {
                     ));
                 }
                 plan.headers = Some(Arc::new(edit));
+            }
+        }
+
+        // `$jsonprune`: the response body loses the JSON items the matching
+        // rules name. Matched here, like the header edits, and held until the
+        // body comes back; a request that ends up blocked discards the plan
+        // with its answer, and the page's own switches were asked above
+        // (`$urlblock`) and inside the finder (`$content`, an empty
+        // `$replace`).
+        if filter.has_jsonprune_rules() {
+            if let Some(rules) = filter.jsonprune_plan(&url, &source, request_type, &method) {
+                plan.jsonprune = Some(Arc::new(rules));
             }
         }
 
@@ -1288,15 +1312,18 @@ impl ProxySession {
     /// Returns the bytes to hand to the client and how many bytes the rewrite
     /// added. Split out so it can be tested without a live TLS handshake.
     pub fn rewrite_response(&mut self, plain: &[u8]) -> (Vec<u8>, usize) {
-        // Nothing to hide and no header to edit: the connection bypasses the
-        // rewriter entirely. Header edits alone still need it — they are what
-        // `$csp`, `$permissions`, `$removeheader` and `$cookie` matched.
+        // Nothing to hide and no header or body to edit: the connection
+        // bypasses the rewriter entirely. Header edits alone still need it —
+        // they are what `$csp`, `$permissions`, `$removeheader` and `$cookie`
+        // matched — and so does a body edit (`$replace`, `$jsonprune`).
         if self.script_src.is_empty()
             && self.cosmetic.is_none()
-            && !self
-                .head_requests
-                .iter()
-                .any(|req| req.headers.is_some() || req.cookies.is_some())
+            && !self.head_requests.iter().any(|req| {
+                req.headers.is_some()
+                    || req.cookies.is_some()
+                    || req.replace.is_some()
+                    || req.jsonprune.is_some()
+            })
         {
             return (plain.to_vec(), 0);
         }
@@ -1403,54 +1430,55 @@ impl ProxySession {
                     // here for header edits alone must not hold bodies back.
                     let can_inject = !self.script_src.is_empty() || self.cosmetic.is_some();
                     let html_edit = can_inject && info.html && renderable && editable;
-                    // `$replace` only ever looks at text bodies: media,
-                    // images and downloads travel untouched.
+                    // `$replace` and `$jsonprune` only ever look at text
+                    // bodies: media, images and downloads travel untouched.
                     let replace = req.replace.filter(|_| info.text && editable);
-                    // A rewrite needs the whole body, which is the one thing
+                    let jsonprune = req.jsonprune.filter(|_| info.text && editable);
+                    let holding = replace.is_some() || jsonprune.is_some();
+                    // A body edit needs the whole body, which is the one thing
                     // streaming cannot give it: a body already known to be over
                     // the cap is left to the page's own handling below.
                     let over_cap =
                         matches!(framing, Some(Framing::Length(n)) if n > http::REPLACE_AFTER);
-                    match replace {
-                        Some(rule) if !over_cap => {
-                            let framing = framing.expect("framing is Some when a rule holds");
-                            // Rewriting on the fly is what makes a gzip body
-                            // affordable; without a codec the whole body is
-                            // held instead.
-                            let how = if streamable(info.encoding) {
-                                "rewriting"
-                            } else {
-                                "buffering"
-                            };
-                            crate::logbuf::push(&format!(
-                                "mitm {}: {} {} {:?} {:?}: {how}",
-                                self.captured.as_deref().unwrap_or("?"),
-                                if info.html { "html" } else { "text" },
-                                info.status,
-                                framing,
-                                info.encoding,
-                            ));
-                            self.resp_phase = RespPhase::Buffer {
-                                head,
-                                framing,
-                                encoding: info.encoding,
-                                replace: Some(rule),
-                                inject: html_edit,
-                            };
-                            continue;
-                        }
-                        Some(_) => {
-                            // The list matched and the body is too big to hold,
-                            // so the rewrite cannot happen. The response goes
-                            // out exactly as the page's own handling decides.
-                            crate::logbuf::push(&format!(
-                                "mitm {}: {} {:?} over the $replace cap, left alone",
-                                self.captured.as_deref().unwrap_or("?"),
-                                info.status,
-                                framing.expect("over the cap means a length was known"),
-                            ));
-                        }
-                        None => {}
+                    if holding && !over_cap {
+                        let framing = framing.expect("framing is Some when a rule holds");
+                        // Rewriting on the fly is what makes a gzip body
+                        // affordable; without a codec the whole body is
+                        // held instead.
+                        let how = if streamable(info.encoding) {
+                            "rewriting"
+                        } else {
+                            "buffering"
+                        };
+                        crate::logbuf::push(&format!(
+                            "mitm {}: {} {} {:?} {:?}: {how}",
+                            self.captured.as_deref().unwrap_or("?"),
+                            if info.html { "html" } else { "text" },
+                            info.status,
+                            framing,
+                            info.encoding,
+                        ));
+                        self.resp_phase = RespPhase::Buffer {
+                            head,
+                            framing,
+                            encoding: info.encoding,
+                            replace,
+                            jsonprune,
+                            inject: html_edit,
+                        };
+                        continue;
+                    }
+                    if holding {
+                        // The list matched and the body is too big to hold, so
+                        // the edit cannot happen. The response goes out exactly
+                        // as the page's own handling decides.
+                        crate::logbuf::push(&format!(
+                            "mitm {}: {} {:?} over the {} cap, left alone",
+                            self.captured.as_deref().unwrap_or("?"),
+                            info.status,
+                            framing.expect("over the cap means a length was known"),
+                            if replace.is_some() { "$replace" } else { "$jsonprune" },
+                        ));
                     }
                     if html_edit {
                         let framing = framing.expect("framing is Some when html_edit holds");
@@ -1479,6 +1507,7 @@ impl ProxySession {
                             framing,
                             encoding: info.encoding,
                             replace: None,
+                            jsonprune: None,
                             inject: true,
                         };
                         continue;
@@ -1511,10 +1540,11 @@ impl ProxySession {
                     encoding,
                     replace,
                     inject,
+                    jsonprune,
                 } => {
-                    // A `$replace` rewrite needs the whole body, so it holds
-                    // one far longer than an injection does.
-                    let cap = if replace.is_some() {
+                    // A body edit needs the whole body, so it holds one far
+                    // longer than an injection does.
+                    let cap = if replace.is_some() || jsonprune.is_some() {
                         http::REPLACE_AFTER
                     } else {
                         http::STREAM_AFTER
@@ -1525,14 +1555,15 @@ impl ProxySession {
                                 // Too much to keep holding: what is here goes
                                 // out now and the rest follows as it arrives.
                                 // Only a page can fall back this way — the
-                                // injector re-encodes on the fly, a `$replace`
-                                // rewrite cannot.
-                                if replace.is_some() {
+                                // injector re-encodes on the fly, a body edit
+                                // cannot.
+                                if replace.is_some() || jsonprune.is_some() {
                                     crate::logbuf::push(&format!(
-                                        "mitm {}: body over {} bytes in {:?}, $replace dropped",
+                                        "mitm {}: body over {} bytes in {:?}, {} dropped",
                                         self.captured.as_deref().unwrap_or("?"),
                                         cap,
-                                        encoding
+                                        encoding,
+                                        if replace.is_some() { "$replace" } else { "$jsonprune" },
                                     ));
                                 }
                                 self.resp_phase = RespPhase::Stream(Box::new(StreamState::new(
@@ -1557,6 +1588,7 @@ impl ProxySession {
                                 framing,
                                 encoding,
                                 replace,
+                                jsonprune,
                                 inject,
                             };
                         }
@@ -1574,10 +1606,29 @@ impl ProxySession {
                     }
                     let recompress = decoded.is_some();
                     let plain = decoded.as_deref().unwrap_or(&body);
-                    let before = plain.len();
-                    // `$replace` first: what a list rewrites is the page's own
+                    // `$jsonprune` takes its matches out of the document
+                    // itself, and the `$replace` pass below then reads the
+                    // pruned bytes — a regexp written for what the client
+                    // will get.
+                    let original = plain.len();
+                    let pruned = jsonprune.as_ref().and_then(|plan| plan.apply(plain));
+                    let plain = pruned
+                        .as_ref()
+                        .map(|(body, _)| body.as_slice())
+                        .unwrap_or(plain);
+                    if let Some((_, applied)) = pruned.as_ref() {
+                        crate::logbuf::push(&format!(
+                            "mitm {}: $jsonprune applied ({} to {} bytes): {}",
+                            self.captured.as_deref().unwrap_or("?"),
+                            original,
+                            plain.len(),
+                            applied.join("; "),
+                        ));
+                    }
+                    // `$replace` second: what a list rewrites is the page's own
                     // bytes, and the snippet injected below is ours, not the
                     // list's — the two never feed into one another.
+                    let before = plain.len();
                     let replaced = replace.as_ref().and_then(|rule| rule.apply(plain));
                     let plain = replaced.as_deref().unwrap_or(plain);
                     if let Some(rule) = replace.as_ref().filter(|_| replaced.is_some()) {
@@ -1589,6 +1640,7 @@ impl ProxySession {
                             payload_summary(rule.payload())
                         ));
                     }
+                    let edited = replaced.is_some() || pruned.is_some();
                     // One nonce for this response: the tags carry it, and the
                     // policy does too when the head goes out rewritten below.
                     let nonce = http::new_nonce();
@@ -1615,7 +1667,7 @@ impl ProxySession {
                         // the snippet's tags carry.
                         let head = http::csp_with_nonce(&head, &nonce, LOCAL_ORIGIN);
                         emit_edited(&mut out, &head, &new_body, recompress);
-                    } else if replaced.is_some() {
+                    } else if edited {
                         // A rewrite without a snippet: the head only learns the
                         // length its body now has.
                         emit_edited(&mut out, &head, &new_body, recompress);
@@ -2522,6 +2574,73 @@ mod tests {
         )
     }
 
+    /// A `$jsonprune` plan the test engine produces for one request.
+    fn jsonprune_plan(tag: &str, rules: &str, url: &str) -> Arc<JsonprunePlan> {
+        let dir = std::env::temp_dir().join("adfree-proxy-jsonprune-tests");
+        std::fs::create_dir_all(&dir).expect("temp dir");
+        let path = dir.join(format!("{tag}-list.txt"));
+        std::fs::write(&path, rules).expect("write list");
+        let engine = FilterEngine::new();
+        engine.rebuild(
+            &[crate::filter::FilterListInfo {
+                id: 1,
+                name: tag.to_string(),
+                url: String::new(),
+                enabled: true,
+                local_path: Some(path),
+                format: crate::filter::ListFormat::Standard,
+                category: 0,
+                rule_count: 0,
+                last_error: None,
+            }],
+            &[],
+        );
+        Arc::new(
+            engine
+                .jsonprune_plan(url, url, "xmlhttprequest", "GET")
+                .expect("the rules match the request"),
+        )
+    }
+
+    /// A `$jsonprune` plan alone rewrites the body the origin sends — the
+    /// document goes out with the items removed and a head whose length names
+    /// what the client will actually read, with no script or cosmetic to keep
+    /// the rewriter awake.
+    #[test]
+    fn a_jsonprune_plan_alone_rewrites_the_body() {
+        let ca = CertificateAuthority::generate().expect("ca");
+        let mut proxy = quiet_proxy(&ca);
+        let plan = jsonprune_plan(
+            "jsonprune-body",
+            "||origin.example.com^$jsonprune=\\$.ads\n",
+            "https://origin.example.com/x",
+        );
+        proxy.head_requests.push_back(ResponseEdit {
+            info: http::RequestInfo {
+                head: false,
+                http10: false,
+            },
+            replace: None,
+            headers: None,
+            cookies: None,
+            jsonprune: Some(plan),
+        });
+
+        let body = br#"{"ads": [1, 2], "keep": 3}"#;
+        let mut response = format!(
+            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n",
+            body.len()
+        )
+        .into_bytes();
+        response.extend_from_slice(body);
+        let (out, _) = proxy.rewrite_response(&response);
+
+        let text = String::from_utf8(out).expect("utf8");
+        assert!(text.contains(r#"{"keep":3}"#), "{text}");
+        assert!(!text.contains("ads"), "{text}");
+        assert!(text.contains("Content-Length: 10"), "{text}");
+    }
+
     /// A connection that carries a `$cookie` plan and nothing else still needs
     /// the rewriter: the response head is where a `set-cookie` the rules name
     /// is taken off, and with no plan at all the bytes would bypass it.
@@ -2542,6 +2661,7 @@ mod tests {
             replace: None,
             headers: None,
             cookies: Some(plan),
+            jsonprune: None,
         });
 
         let response =
@@ -2592,6 +2712,7 @@ mod tests {
                 replace: None,
                 headers: None,
                 cookies: Some(Arc::clone(&plan)),
+                jsonprune: None,
             });
         }
         // The first response — the shape the device showed: a JSON body
@@ -2641,6 +2762,7 @@ mod tests {
                 replace: None,
                 headers: None,
                 cookies: Some(Arc::clone(&plan)),
+                jsonprune: None,
             });
         }
         let broken = b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\nzz\r\nnot hex at all";

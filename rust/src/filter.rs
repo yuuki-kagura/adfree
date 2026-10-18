@@ -19,6 +19,7 @@
 //! `Send + Sync`.
 
 use crate::fxhash::hash_str;
+use crate::jsonprune::{JsonPrune, JsonpruneRule};
 use adblock::cosmetic_filter_cache::ProceduralOrActionFilter;
 use adblock::engine::Engine;
 use adblock::lists::{FilterFormat, FilterSet, ParseOptions, RuleTypes};
@@ -771,9 +772,14 @@ impl FilterEngine {
                 .iter()
                 .filter(|rule| rule.family.is_url())
                 .count();
+            let jsonprune = rules
+                .rules
+                .iter()
+                .filter(|rule| rule.family == ModifierFamily::Jsonprune)
+                .count();
             crate::logbuf::push(&format!(
-                "filter: {url} URL modifier rules + {} header modifier rules ({} dropped)",
-                rules.rules.len() - url,
+                "filter: {url} URL modifier rules + {} header modifier rules + {jsonprune} $jsonprune rules ({} dropped)",
+                rules.rules.len() - url - jsonprune,
                 rules.dropped,
             ));
         }
@@ -1645,6 +1651,7 @@ enum ModifierFamily {
     Csp,
     Permissions,
     RemoveHeader,
+    Jsonprune,
 }
 
 impl ModifierFamily {
@@ -1652,6 +1659,15 @@ impl ModifierFamily {
     /// runs through [`FilterEngine::url_edit`].
     fn is_url(self) -> bool {
         matches!(self, ModifierFamily::Transform | ModifierFamily::RemoveParam)
+    }
+
+    /// Whether the family shapes the answer's headers — the three
+    /// [`FilterEngine::header_edit`] carries.
+    fn is_header(self) -> bool {
+        matches!(
+            self,
+            ModifierFamily::Csp | ModifierFamily::Permissions | ModifierFamily::RemoveHeader
+        )
     }
 }
 
@@ -1681,6 +1697,8 @@ enum ModifierKind {
     /// The `Permissions-Policy` value the response gains.
     Permissions(String),
     RemoveHeader(HeaderName),
+    /// The expression the response body loses its matches of.
+    Jsonprune(JsonPrune),
 }
 
 /// One `$removeheader` payload: the header to take out, and the direction.
@@ -1939,6 +1957,25 @@ pub struct HeaderEdit {
     pub rules: Vec<String>,
 }
 
+/// The `$jsonprune` rules that apply to one request, as a plan for the
+/// response body.
+///
+/// The reference sorts the matching rules lexicographically and applies the
+/// first to the original response, each next one to the result of the
+/// previous; [`JsonprunePlan::apply`] reads the plan in exactly that order.
+pub struct JsonprunePlan {
+    rules: Vec<JsonpruneRule>,
+}
+
+impl JsonprunePlan {
+    /// Applies the plan to one response body, returning the rewritten body
+    /// and the rules that changed it. `None` when the body is not JSON, or no
+    /// rule took anything out of it.
+    pub fn apply(&self, body: &[u8]) -> Option<(Vec<u8>, Vec<String>)> {
+        crate::jsonprune::prune_body(&self.rules, body)
+    }
+}
+
 /// Reads the rules the crate refuses because of their modifier: `$urltransform`
 /// and the `$removeparam` shapes it does not implement (bare, `~`, and
 /// `/regexp/`; only `=name` ever reached the crate) rewrite the request URL,
@@ -1980,8 +2017,10 @@ fn scan_modifier_rules(text: &str, scan: &mut ModifierScan) {
         let token = families[0];
         // `$cookie` is not one of the modifier families: it is matched by
         // machinery of its own (see [`CookieRules`]) and takes the branch below
-        // before a family is read.
+        // before a family is read. `$jsonprune` is a family like the others —
+        // per-rule probes carry it — but the reference scopes its type options.
         let cookie = token.split('=').next() == Some("cookie");
+        let jsonprune = token.split('=').next() == Some("jsonprune");
         let value = token.split_once('=').map(|(_, value)| value).unwrap_or("");
         let badfilter = tokens.iter().any(|token| {
             let bare = token.trim_start_matches('~');
@@ -2045,6 +2084,20 @@ fn scan_modifier_rules(text: &str, scan: &mut ModifierScan) {
                 // answer a different question than the list asked, and the
                 // rule is dropped rather than half-run.
                 if name == "all" && !token.starts_with('~') {
+                    continue;
+                }
+                faithful = false;
+                continue;
+            }
+            if jsonprune && TYPE_OPTIONS.contains(&name) {
+                // The reference takes `$jsonprune` with `$xmlhttprequest`
+                // only, and the live corpus also spells `all` — every type by
+                // definition. Any other type, or a negated one (which the
+                // compatibility list does not have), would make the probe
+                // answer a question the list did not ask: the rule is dropped
+                // rather than half-run.
+                if !token.starts_with('~') && matches!(name, "xmlhttprequest" | "xhr" | "all") {
+                    kept.push(token);
                     continue;
                 }
                 faithful = false;
@@ -2210,6 +2263,7 @@ fn is_modifier_token(token: &str) -> bool {
             | "permissions"
             | "removeheader"
             | "cookie"
+            | "jsonprune"
     )
 }
 
@@ -2219,6 +2273,7 @@ fn modifier_family_of(token: &str) -> ModifierFamily {
         Some("csp") => ModifierFamily::Csp,
         Some("permissions") => ModifierFamily::Permissions,
         Some("removeheader") => ModifierFamily::RemoveHeader,
+        Some("jsonprune") => ModifierFamily::Jsonprune,
         _ => ModifierFamily::RemoveParam,
     }
 }
@@ -2233,6 +2288,7 @@ fn payload(family: ModifierFamily, value: &str) -> Option<ModifierKind> {
         ModifierFamily::Csp => csp_payload(value).map(ModifierKind::Csp),
         ModifierFamily::Permissions => permissions_payload(value).map(ModifierKind::Permissions),
         ModifierFamily::RemoveHeader => removeheader_payload(value).map(ModifierKind::RemoveHeader),
+        ModifierFamily::Jsonprune => JsonPrune::parse(value).map(ModifierKind::Jsonprune),
     }
 }
 
@@ -2411,7 +2467,10 @@ fn has_positive_type(tokens: &[&str]) -> bool {
 /// names no type, so the default has to be spelled out on the probe line.
 fn default_types(family: ModifierFamily) -> &'static str {
     match family {
-        ModifierFamily::Transform | ModifierFamily::Csp | ModifierFamily::RemoveHeader => "all",
+        ModifierFamily::Transform
+        | ModifierFamily::Csp
+        | ModifierFamily::RemoveHeader
+        | ModifierFamily::Jsonprune => "all",
         ModifierFamily::RemoveParam | ModifierFamily::Permissions => "document,subdocument",
     }
 }
@@ -3136,12 +3195,25 @@ impl FilterEngine {
         self.compiled()
             .modifier_rules
             .as_ref()
-            .is_some_and(|rules| rules.rules.iter().any(|rule| !rule.family.is_url()))
+            .is_some_and(|rules| rules.rules.iter().any(|rule| rule.family.is_header()))
     }
 
     /// Whether the loaded lists carry `$cookie` rules.
     pub fn has_cookie_rules(&self) -> bool {
         self.compiled().cookie_rules.is_some()
+    }
+
+    /// Whether the loaded lists carry `$jsonprune` rules.
+    pub fn has_jsonprune_rules(&self) -> bool {
+        self.compiled()
+            .modifier_rules
+            .as_ref()
+            .is_some_and(|rules| {
+                rules
+                    .rules
+                    .iter()
+                    .any(|rule| rule.family == ModifierFamily::Jsonprune)
+            })
     }
 
     /// The `$cookie` rules that apply to one request, matched once per exchange
@@ -3213,7 +3285,7 @@ impl FilterEngine {
                 rules
                     .rules
                     .iter()
-                    .filter(|rule| !rule.family.is_url())
+                    .filter(|rule| rule.family.is_header())
                     .count() as u64
             })
             .unwrap_or(0)
@@ -3357,7 +3429,7 @@ impl FilterEngine {
         let subdocument = request_type == "subdocument";
         let mut edit = HeaderEdit::default();
         for (rule, engine) in rules.rules.iter().zip(rules.probes.iter()) {
-            if rule.family.is_url() || !engine.check_network_request(&request).should_block() {
+            if !rule.family.is_header() || !engine.check_network_request(&request).should_block() {
                 continue;
             }
             match &rule.kind {
@@ -3384,7 +3456,9 @@ impl FilterEngine {
                     }
                     list.push(header.name.clone());
                 }
-                ModifierKind::Transform(_) | ModifierKind::RemoveParam(_) => continue,
+                ModifierKind::Transform(_)
+                | ModifierKind::RemoveParam(_)
+                | ModifierKind::Jsonprune(_) => continue,
             }
             edit.rules.push(rule.text.clone());
         }
@@ -3392,6 +3466,68 @@ impl FilterEngine {
             return None;
         }
         Some(edit)
+    }
+
+    /// The `$jsonprune` rules that apply to one request, matched once per
+    /// exchange and held for the response that request produces.
+    ///
+    /// A page exception (`$content`, an empty `$replace`) switches the family
+    /// off, like it switches `$replace` off — `$jsonprune` is a content
+    /// modifier, not network filtering. The rules themselves are sorted the
+    /// way the reference applies them, lexicographically, and each one reads
+    /// what the rules before it left (see [`JsonprunePlan::apply`]).
+    pub fn jsonprune_plan(
+        &self,
+        url: &str,
+        source: &str,
+        request_type: &str,
+        method: &str,
+    ) -> Option<JsonprunePlan> {
+        let compiled = self.compiled();
+        let rules = compiled.modifier_rules.as_ref()?;
+        if page_vetoed(&compiled, url, source, request_type) {
+            return None;
+        }
+        let request = Request::new(url, source, request_type, method).ok()?;
+        // The same fast path as the other edits: a miss on the shared engine
+        // means no rule of any family can match, whatever the exceptions say.
+        rules.any.check_network_request(&request).redirect.as_ref()?;
+        let mut matched: Vec<&ModifierRule> = rules
+            .rules
+            .iter()
+            .zip(rules.probes.iter())
+            .filter(|(rule, engine)| {
+                rule.family == ModifierFamily::Jsonprune
+                    && engine.check_network_request(&request).should_block()
+            })
+            .map(|(rule, _)| rule)
+            .collect();
+        matched.sort_by(|a, b| a.text.cmp(&b.text));
+        let rules: Vec<JsonpruneRule> = matched
+            .into_iter()
+            .filter_map(|rule| match &rule.kind {
+                ModifierKind::Jsonprune(expression) => {
+                    Some(JsonpruneRule::new(rule.text.clone(), expression.clone()))
+                }
+                _ => None,
+            })
+            .collect();
+        (!rules.is_empty()).then_some(JsonprunePlan { rules })
+    }
+
+    /// How many `$jsonprune` rules they carry (diagnostics).
+    pub fn jsonprune_rules_count(&self) -> u64 {
+        self.compiled()
+            .modifier_rules
+            .as_ref()
+            .map(|rules| {
+                rules
+                    .rules
+                    .iter()
+                    .filter(|rule| rule.family == ModifierFamily::Jsonprune)
+                    .count() as u64
+            })
+            .unwrap_or(0)
     }
 }
 
@@ -4244,6 +4380,148 @@ mod tests {
              ||shop.test^$cookie=dropme;maxAge=30,badfilter\n",
         );
         assert!(!fe.has_cookie_rules());
+    }
+
+    /// The `$jsonprune` plan covering one request, the way the HTTPS path asks
+    /// about it.
+    fn prunes(fe: &FilterEngine, url: &str, source: &str, kind: &str) -> Option<JsonprunePlan> {
+        fe.jsonprune_plan(url, source, kind, "GET")
+    }
+
+    #[test]
+    fn jsonprune_rules_edit_the_json_bodies_they_cover() {
+        let fe = cosmetic_engine("||api.test/graphql^$jsonprune=\\$.ads\n");
+        assert!(fe.has_jsonprune_rules());
+        assert_eq!(fe.jsonprune_rules_count(), 1);
+        // A `$jsonprune` rule is not a URL, header or cookie rule, and it
+        // edits instead of blocking.
+        assert!(!fe.has_url_rules() && !fe.has_header_rules() && !fe.has_cookie_rules());
+        let plan = prunes(&fe, "https://api.test/graphql", "https://page.test/", "xmlhttprequest")
+            .expect("the rule covers the request");
+        let (body, applied) = plan
+            .apply(br#"{"ads": [1, 2], "keep": 3}"#)
+            .expect("the item goes");
+        assert_eq!(String::from_utf8(body).expect("utf8"), r#"{"keep":3}"#);
+        assert_eq!(applied.join("; "), "||api.test/graphql^$jsonprune=\\$.ads");
+        // Nothing selected, nothing written: the plan says so.
+        let plan = prunes(&fe, "https://api.test/graphql", "https://page.test/", "xmlhttprequest")
+            .expect("the rule covers the request");
+        assert!(plan.apply(br#"{"keep": 3}"#).is_none());
+        // The pattern scopes the rule to the requests it names.
+        assert!(
+            prunes(&fe, "https://api.test/other", "https://page.test/", "xmlhttprequest").is_none()
+        );
+    }
+
+    #[test]
+    fn jsonprune_applies_the_rules_in_the_reference_order() {
+        // The reference sorts the matching rules lexicographically by text and
+        // applies each to the last one's result; `$.a` runs before `$.z`.
+        let fe = cosmetic_engine("||api.test^$jsonprune=\\$.z\n||api.test^$jsonprune=\\$.a\n");
+        let plan = prunes(&fe, "https://api.test/x", "https://page.test/", "xmlhttprequest")
+            .expect("both rules cover the request");
+        let (body, applied) = plan
+            .apply(br#"{"z": 1, "a": 2, "keep": 3}"#)
+            .expect("both items go");
+        assert_eq!(String::from_utf8(body).expect("utf8"), r#"{"keep":3}"#);
+        assert_eq!(
+            applied.join("; "),
+            "||api.test^$jsonprune=\\$.a; ||api.test^$jsonprune=\\$.z"
+        );
+    }
+
+    #[test]
+    fn jsonprune_takes_the_request_types_the_reference_allows() {
+        // The reference pairs `$jsonprune` with `$xmlhttprequest`; the live
+        // lists also spell `all`, every type by definition.
+        let fe = cosmetic_engine("||api.test^$jsonprune=\\$.ads,xmlhttprequest\n");
+        assert!(prunes(&fe, "https://api.test/x", "https://page.test/", "xmlhttprequest").is_some());
+        assert!(prunes(&fe, "https://api.test/x", "https://page.test/", "script").is_none());
+        let fe = cosmetic_engine("||api.test^$jsonprune=\\$.ads,all\n");
+        assert!(prunes(&fe, "https://api.test/x", "https://page.test/", "document").is_some());
+        // Party and domain options are crate options and stay.
+        let fe = cosmetic_engine("||api.test^$jsonprune=\\$.ads,~third-party\n");
+        assert!(prunes(&fe, "https://api.test/x", "https://api.test/", "xmlhttprequest").is_some());
+        assert!(prunes(&fe, "https://api.test/x", "https://other.test/", "xmlhttprequest").is_none());
+        let fe = cosmetic_engine("||api.test^$jsonprune=\\$.ads,domain=page.test\n");
+        assert!(prunes(&fe, "https://api.test/x", "https://page.test/", "xmlhttprequest").is_some());
+        assert!(prunes(&fe, "https://api.test/x", "https://other.test/", "xmlhttprequest").is_none());
+        // A type the compatibility list does not carry — negated or not —
+        // would make the probe answer a question the list did not ask.
+        for spec in ["\\$.ads,script", "\\$.ads,~xmlhttprequest", "\\$.ads,subdocument"] {
+            let fe = cosmetic_engine(&format!("||api.test^$jsonprune={spec}\n"));
+            assert!(!fe.has_jsonprune_rules(), "{spec} must be dropped");
+        }
+    }
+
+    #[test]
+    fn jsonprune_exceptions_fold_into_the_rules_they_cancel() {
+        let url = "https://api.test/graphql";
+        // A bare exception cancels every rule of the family for the responses
+        // its pattern names.
+        let fe = cosmetic_engine("||api.test^$jsonprune=\\$.ads\n@@||api.test^$jsonprune\n");
+        assert!(fe.has_jsonprune_rules());
+        assert!(prunes(&fe, url, "https://page.test/", "xmlhttprequest").is_none());
+        // A rule the exception's pattern does not name still applies.
+        let fe = cosmetic_engine("||api.test^$jsonprune=\\$.ads\n@@||other.test^$jsonprune\n");
+        assert!(prunes(&fe, url, "https://page.test/", "xmlhttprequest").is_some());
+        // A valued exception cancels the rules repeating its value, and only
+        // them.
+        let fe =
+            cosmetic_engine("||api.test^$jsonprune=\\$.ads\n@@||api.test^$jsonprune=\\$.ads\n");
+        assert!(prunes(&fe, url, "https://page.test/", "xmlhttprequest").is_none());
+        let fe = cosmetic_engine(
+            "||api.test^$jsonprune=\\$.ads\n@@||api.test^$jsonprune=\\$.trackers\n",
+        );
+        assert!(prunes(&fe, url, "https://page.test/", "xmlhttprequest").is_some());
+    }
+
+    #[test]
+    fn jsonprune_badfilter_cancels_across_lists() {
+        let fe = engine(vec![
+            temp_list(
+                "cancel-jsonprune-a.txt",
+                "||api.test^$jsonprune=\\$.ads,badfilter\n",
+                ListFormat::Standard,
+                15,
+            ),
+            temp_list(
+                "cancel-jsonprune-b.txt",
+                "||api.test^$jsonprune=\\$.ads\n",
+                ListFormat::Standard,
+                16,
+            ),
+        ]);
+        assert!(!fe.has_jsonprune_rules());
+        assert_eq!(fe.jsonprune_rules_count(), 0);
+        assert!(prunes(&fe, "https://api.test/x", "https://page.test/", "xmlhttprequest").is_none());
+    }
+
+    #[test]
+    fn jsonprune_values_the_engine_cannot_run_are_dropped() {
+        // Script expressions, a trailing `..`: the dialect has neither, and a
+        // rule that cannot run does not run half-way.
+        let fe = cosmetic_engine(
+            "||api.test^$jsonprune=\\$[?(@.x == 1)]\n\
+             ||api.test^$jsonprune=\\$.a..\n",
+        );
+        assert!(!fe.has_jsonprune_rules());
+        assert_eq!(fe.jsonprune_rules_count(), 0);
+    }
+
+    #[test]
+    fn page_exceptions_switch_jsonprune_off() {
+        // `$jsonprune` is content modification: a page that switched it off
+        // keeps its responses intact.
+        let url = "https://api.test/graphql";
+        for exception in ["@@||quiet.test^$content\n", "@@||quiet.test^$replace\n"] {
+            let fe = cosmetic_engine(&format!("||api.test^$jsonprune=\\$.ads\n{exception}"));
+            assert!(
+                prunes(&fe, url, "https://quiet.test/", "xmlhttprequest").is_none(),
+                "{exception}"
+            );
+            assert!(prunes(&fe, url, "https://loud.test/", "xmlhttprequest").is_some());
+        }
     }
 
     /// Whether any `$replace` rule covers a request, the way the HTTPS path

@@ -338,6 +338,15 @@ fn start_origin_mode(html: &'static str, mode: OriginBody) -> Origin {
                      Content-Length: 2\r\nConnection: keep-alive\r\n\r\n{body}"
                 )
                 .into_bytes()
+            } else if line.starts_with("GET /jsonprune ") {
+                // A JSON API answer a `$jsonprune` rule takes items out of.
+                let body = r#"{"ads": [1, 2], "keep": 3}"#;
+                format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n\
+                     Content-Length: {}\r\nConnection: keep-alive\r\n\r\n{body}",
+                    body.len()
+                )
+                .into_bytes()
             } else if line.starts_with("GET / ") {
                 match mode {
                     OriginBody::Plain => format!(
@@ -1238,6 +1247,37 @@ fn cookie_rules_trim_the_https_exchange() {
     assert!(
         !lower.contains("set-cookie: dropme") && !lower.contains("set-cookie: other"),
         "a dropped cookie must not come back in a set-cookie: {head}"
+    );
+
+    tcp.close();
+}
+
+/// The `$jsonprune` rule: the answer's JSON loses the item it names.
+const JSONPRUNE_LIST: &str = "! Title: e2e jsonprune rules\n\
+                              ||shop.test/jsonprune$jsonprune=\\$.ads\n";
+
+/// `$jsonprune` takes the items the expression names out of a JSON response
+/// body — and the head the client reads is told the truth about the length.
+#[test]
+fn jsonprune_rules_trim_the_https_body() {
+    let origin = start_origin(HTML);
+    let (core, ca_der) = setup_core_with_list(&origin, "jsonprune", JSONPRUNE_LIST);
+
+    let mut tcp = Client::connect(core.clone(), origin.port);
+    let mut conn = handshake(&mut tcp, client_config(ca_der));
+    assert!(!conn.is_handshaking(), "the MITM handshake must complete");
+
+    let (head, body) = request_with(
+        &mut tcp,
+        &mut conn,
+        "/jsonprune",
+        "Sec-Fetch-Dest: empty\r\nReferer: https://shop.test/\r\n",
+    );
+    assert!(head.starts_with("HTTP/1.1 200"), "{head}");
+    assert_eq!(body, br#"{"keep":3}"#, "the ad item must be gone: {head}");
+    assert!(
+        head.to_lowercase().contains("content-length: 10"),
+        "the head must tell the length the client reads: {head}"
     );
 
     tcp.close();
