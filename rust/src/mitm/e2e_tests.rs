@@ -338,7 +338,9 @@ fn start_origin_mode(html: &'static str, mode: OriginBody) -> Origin {
                      Content-Length: 2\r\nConnection: keep-alive\r\n\r\n{body}"
                 )
                 .into_bytes()
-            } else if line.starts_with("GET /jsonprune ") {
+            } else if line.starts_with("GET /jsonprune ")
+                || line.starts_with("POST /jsonprune ")
+            {
                 // A JSON API answer a `$jsonprune` rule takes items out of.
                 let body = r#"{"ads": [1, 2], "keep": 3}"#;
                 format!(
@@ -633,7 +635,31 @@ fn request_with(
     let req = format!(
         "GET {path} HTTP/1.1\r\nHost: shop.test\r\nConnection: keep-alive\r\n{extra}\r\n"
     );
-    conn.writer().write_all(req.as_bytes()).expect("write request");
+    send_and_read(tcp, conn, &req.into_bytes())
+}
+
+/// A request with a body, the way an API client sends one: the head counts
+/// the bytes, and they follow it.
+fn post_with(
+    tcp: &mut Client,
+    conn: &mut ClientConnection,
+    path: &str,
+    body: &[u8],
+    extra: &str,
+) -> (String, Vec<u8>) {
+    let head = format!(
+        "POST {path} HTTP/1.1\r\nHost: shop.test\r\nConnection: keep-alive\r\n\
+         Content-Length: {}\r\n{extra}\r\n",
+        body.len()
+    );
+    let mut req = head.into_bytes();
+    req.extend_from_slice(body);
+    send_and_read(tcp, conn, &req)
+}
+
+/// Writes one raw request and reads one response back.
+fn send_and_read(tcp: &mut Client, conn: &mut ClientConnection, req: &[u8]) -> (String, Vec<u8>) {
+    conn.writer().write_all(req).expect("write request");
     flush_tls(tcp, conn);
 
     let mut raw = Vec::new();
@@ -644,7 +670,7 @@ fn request_with(
         }
         assert!(
             Instant::now() < deadline,
-            "response timeout for {path}: {} bytes so far",
+            "response timeout: {} bytes so far",
             raw.len()
         );
         flush_tls(tcp, conn);
@@ -1207,6 +1233,31 @@ fn url_rules_are_applied_on_the_https_path() {
         .expect("the head must be complete");
     assert_eq!(raw.len(), end, "a HEAD answer must carry no body: {head}");
 
+    // 5. The same `$removeparam` on a POST: the request carries a body, and
+    //    the parameter still goes — a POST is a method the modifier reaches.
+    let (head, _) = post_with(
+        &mut tcp,
+        &mut conn,
+        "/api?secret=1&keep=2",
+        br#"{"x": 1}"#,
+        "Content-Type: application/json\r\nSec-Fetch-Dest: empty\r\n\
+         Referer: https://shop.test/\r\n",
+    );
+    assert!(
+        head.starts_with("HTTP/1.1 404"),
+        "the origin answers what it has, so the request reached it: {head}"
+    );
+    let seen = origin.requests.lock().expect("requests");
+    let post = seen
+        .iter()
+        .find(|r| r.starts_with("POST /api"))
+        .expect("the POST reached the origin");
+    assert!(
+        post.starts_with("POST /api?keep=2 "),
+        "the dropped parameter must be gone from a POST too: {post:?}"
+    );
+    drop(seen);
+
     tcp.close();
 }
 
@@ -1413,6 +1464,87 @@ fn jsonprune_rules_trim_the_https_body() {
         head.to_lowercase().contains("content-length: 10"),
         "the head must tell the length the client reads: {head}"
     );
+
+    tcp.close();
+}
+
+/// The same rule on a request that carries a body: `$jsonprune` trims the
+/// answer to a POST like it trims the answer to a GET, and the request itself
+/// still goes to the origin whole.
+#[test]
+fn jsonprune_rules_reach_a_request_with_a_body() {
+    let origin = start_origin(HTML);
+    let (core, ca_der) = setup_core_with_list(&origin, "jsonprune-post", JSONPRUNE_LIST);
+
+    let mut tcp = Client::connect(core.clone(), origin.port);
+    let mut conn = handshake(&mut tcp, client_config(ca_der));
+    assert!(!conn.is_handshaking(), "the MITM handshake must complete");
+
+    let (head, body) = post_with(
+        &mut tcp,
+        &mut conn,
+        "/jsonprune",
+        br#"{"q": 1}"#,
+        "Content-Type: application/json\r\nSec-Fetch-Dest: empty\r\n\
+         Referer: https://shop.test/\r\n",
+    );
+    assert!(head.starts_with("HTTP/1.1 200"), "{head}");
+    assert_eq!(body, br#"{"keep":3}"#, "the ad item must be gone: {head}");
+    assert!(
+        head.to_lowercase().contains("content-length: 10"),
+        "the head must tell the length the client reads: {head}"
+    );
+    {
+        let seen = origin.requests.lock().expect("requests");
+        let sent = seen.first().expect("the request reached the origin");
+        assert!(
+            sent.starts_with("POST /jsonprune HTTP/1.1"),
+            "the request goes out as it was sent: {sent:?}"
+        );
+    }
+
+    tcp.close();
+}
+
+/// A blocked URL on a request that carries a body.
+const POST_BLOCK_LIST: &str = "! Title: e2e post blocks\n\
+                               ||shop.test/blockme^\n";
+
+/// The block on a request with a body: the answer goes out at the head, and
+/// the body bytes that follow are swallowed before anything is parsed again —
+/// the next request on the connection is read where it really starts.
+#[test]
+fn a_blocked_request_body_is_swallowed_and_the_connection_goes_on() {
+    let origin = start_origin(HTML);
+    let (core, ca_der) = setup_core_with_list(&origin, "post-block", POST_BLOCK_LIST);
+
+    let mut tcp = Client::connect(core.clone(), origin.port);
+    let mut conn = handshake(&mut tcp, client_config(ca_der));
+    assert!(!conn.is_handshaking(), "the MITM handshake must complete");
+
+    // A declared length first.
+    let (head, body) = post_with(&mut tcp, &mut conn, "/blockme", b"{\"track\": true}", "");
+    assert!(head.starts_with("HTTP/1.1 204 No Content"), "{head}");
+    assert!(body.is_empty(), "{body:?}");
+
+    // Then a chunked body: the swallow has to follow its framing.
+    let chunked = b"POST /blockme HTTP/1.1\r\nHost: shop.test\r\nConnection: keep-alive\r\n\
+                    Transfer-Encoding: chunked\r\n\r\n5\r\nhello\r\n0\r\n\r\n";
+    let (head, body) = send_and_read(&mut tcp, &mut conn, chunked);
+    assert!(head.starts_with("HTTP/1.1 204 No Content"), "{head}");
+    assert!(body.is_empty(), "{body:?}");
+
+    // The next request on the same connection is read as a request, not as
+    // body bytes: had one byte of either body been read as a head, this would
+    // not be a page, and the origin would have heard it.
+    let (head, body) = request(&mut tcp, &mut conn, "/");
+    assert!(head.starts_with("HTTP/1.1 200"), "{head}");
+    assert!(
+        contains_bytes(&body, local_asset("/adfree-user.js").as_bytes()),
+        "the page must come back with its tags injected"
+    );
+    let seen = origin.requests.lock().expect("requests");
+    assert_eq!(seen.len(), 1, "only the page may reach the origin: {seen:?}");
 
     tcp.close();
 }

@@ -185,6 +185,11 @@ pub struct ProxySession {
     pub peer_buffer: Vec<u8>,
     /// Bytes from the client that are not yet processed.
     pub client_buffer: Vec<u8>,
+    /// The body bytes of a request this proxy answered itself, still to be
+    /// swallowed before anything is parsed again (see [`swallow_body`]). A
+    /// body may look like a request line at any offset, so nothing after the
+    /// head of an answered request may ever be read.
+    client_discard: Option<ClientDiscard>,
     /// Scripts to inject into HTML (already combined).
     pub script_src: String,
     /// The tag the browser sees: `script_src` plus the content hash of
@@ -526,6 +531,7 @@ impl ProxySession {
             page_url: None,
             stats: None,
             sink: None,
+            client_discard: None,
         }
     }
 
@@ -567,6 +573,7 @@ impl ProxySession {
             page_url: None,
             stats: None,
             sink: None,
+            client_discard: None,
         })
     }
 
@@ -607,6 +614,7 @@ impl ProxySession {
             page_url: None,
             stats: None,
             sink: None,
+            client_discard: None,
         })
     }
 
@@ -823,6 +831,18 @@ impl ProxySession {
         if !plain.is_empty() {
             self.client_buffer.extend_from_slice(&plain);
         }
+        // What a request answered earlier still owes comes off the front:
+        // body bytes belong to no request and must not be parsed as one.
+        if self.client_discard.is_some() {
+            let mut buffer = std::mem::take(&mut self.client_buffer);
+            self.client_discard = swallow_body(
+                self.client_discard.take(),
+                None,
+                &mut buffer,
+                self.captured.as_deref(),
+            );
+            self.client_buffer = buffer;
+        }
         // Open the upstream handshake: rustls queues the ClientHello inside
         // the connection and nobody sends it unless we drain it here. Without
         // this the real server is never asked and every HTTPS page hangs.
@@ -840,6 +860,7 @@ impl ProxySession {
             self.sink,
             &mut self.head_requests,
             &mut outcome,
+            &mut self.client_discard,
         )?;
         Ok(outcome)
     }
@@ -852,6 +873,7 @@ impl ProxySession {
     /// dynamic-rule lookups; without this the session would forward them (and
     /// a legacy same-origin tag lands here the same way). A request whose
     /// head is not ours goes to the real server untouched.
+    #[allow(clippy::too_many_arguments)]
     fn flush_client_requests(
         session: &mut TlsSession,
         buffer: &mut Vec<u8>,
@@ -863,6 +885,7 @@ impl ProxySession {
         sink: Option<MitmSink>,
         head_requests: &mut VecDeque<ResponseEdit>,
         outcome: &mut Outcome,
+        discard: &mut Option<ClientDiscard>,
     ) -> Result<(), String> {
         if tls::client_handshaking(&session.client) || buffer.is_empty() {
             return Ok(());
@@ -893,6 +916,7 @@ impl ProxySession {
                     stats,
                     sink,
                     outcome,
+                    discard,
                 )?;
             }
         }
@@ -936,9 +960,12 @@ impl ProxySession {
     /// instead of blocking outright — what keeps an anti-adblock page alive),
     /// `$removeparam` and `$urltransform` (the forwarded request line is
     /// rewritten, see [`FilterEngine::url_edit`]) and blocks scoped to a path
-    /// or a request type. A request that carries a body is left alone: its head
-    /// is not the last thing on the wire, and swallowing it would desync the
-    /// connection.
+    /// or a request type. A request that carries a body is read like any
+    /// other — the head is all these rules touch — and when one of them
+    /// answers here, the body bytes that follow go to `discard`
+    /// ([`swallow_body`]) instead of the origin. The one exception is a body
+    /// the proxy cannot count: such a request is never answered here.
+    #[allow(clippy::too_many_arguments)]
     fn filter_url_request(
         session: &mut TlsSession,
         buffer: &mut Vec<u8>,
@@ -947,6 +974,7 @@ impl ProxySession {
         stats: Option<&Stats>,
         sink: Option<MitmSink>,
         outcome: &mut Outcome,
+        discard: &mut Option<ClientDiscard>,
     ) -> Result<RequestPlan, String> {
         let Some(mut head_end) = header_end(buffer) else {
             return Ok(RequestPlan::default());
@@ -974,10 +1002,11 @@ impl ProxySession {
         // Only `[$path=…]` rules read it, so it is only carried when the
         // loaded lists hold any.
         let page_url = filter.has_path_rules().then(|| url.clone());
-        // A request with a body is not edited here — its head cannot be
-        // drained and rewritten without the body — but its response can still
-        // be a page, and the injection still needs to know which one.
-        if facts.has_body {
+        // A `Content-Length` the proxy cannot read is a body it cannot count:
+        // the bytes after the head can never be told from the next request, so
+        // this exchange is never answered here — it goes to the origin whole,
+        // the way every body request used to.
+        if matches!(facts.body, Some(RequestBody::Unknown)) {
             return Ok(RequestPlan {
                 page_url,
                 ..RequestPlan::default()
@@ -996,6 +1025,8 @@ impl ProxySession {
             _ => String::new(),
         };
         let closes = facts.closes;
+        // What the request's body amounts to if the rules answer it here.
+        let body = facts.body;
 
         // `$urlblock` (and `$document`, which implies it): the page asked for
         // its own requests not to be blocked. The page is the document itself,
@@ -1108,6 +1139,7 @@ impl ProxySession {
                                 response = closing_response(response);
                             }
                             buffer.drain(..head_end);
+                            *discard = swallow_body(None, body, buffer, Some(host.as_str()));
                             let started = Instant::now();
                             let handshaking = tls::server_handshaking(&session.server);
                             outcome
@@ -1147,8 +1179,8 @@ impl ProxySession {
             {
                 // A `$removeparam` rule the crate implements itself: the
                 // request still goes out, with the parameters the list dropped
-                // taken off. GET, HEAD and OPTIONS only, so anything else keeps
-                // its query.
+                // taken off. GET, HEAD, OPTIONS and POST — see [`rewritable`]
+                // — so anything else keeps its query.
                 if let Some(new_target) = origin_form(rewritten) {
                     if new_target != target {
                         rewritten_target = Some(new_target);
@@ -1198,6 +1230,7 @@ impl ProxySession {
             response = closing_response(response);
         }
         buffer.drain(..head_end);
+        *discard = swallow_body(None, body, buffer, Some(host.as_str()));
         let started = Instant::now();
         let handshaking = tls::server_handshaking(&session.server);
         outcome
@@ -1341,6 +1374,7 @@ impl ProxySession {
                 self.sink,
                 &mut self.head_requests,
                 &mut outcome,
+                &mut self.client_discard,
             )?;
 
             if tls::server_handshaking(&session.server) {
@@ -2432,6 +2466,100 @@ pub(super) fn redirect_response(data_url: &str) -> Option<Vec<u8>> {
     Some(local_response(mime, "max-age=3600", &body, false, true))
 }
 
+/// The body a request announced, as far as answering it locally goes.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum RequestBody {
+    /// `Content-Length: n`, n > 0.
+    Length(u64),
+    /// `Transfer-Encoding`: the body is chunked and ends at its last chunk.
+    Chunked,
+    /// A `Content-Length` this proxy cannot read. The body cannot be counted,
+    /// so a body byte can never be told from the next request: the request is
+    /// not answered locally.
+    Unknown,
+}
+
+/// A body the proxy owes itself: the request it belongs to was answered
+/// locally, and the bytes that follow its head are nobody's.
+///
+/// `pub(super)` so the splice's own tests can drive the swallow directly.
+pub(super) enum ClientDiscard {
+    /// `Content-Length` bytes still to come.
+    Length(u64),
+    /// A chunked body, followed as far as its last chunk.
+    Chunked(http::DechunkState),
+    /// A body whose framing could not be followed: everything the client sends
+    /// from here on is dropped, so no body byte is ever parsed as a request of
+    /// its own. The connection is left to end on its own terms.
+    Poisoned,
+}
+
+/// Swallows the body bytes of a request this proxy answered itself.
+///
+/// The head was taken out of `buffer` when the answer went out; the bytes
+/// after it belong to nobody and must be gone before anything is parsed again
+/// — a body may look like a request line at any offset. What the buffer
+/// already carries is dropped here, and the state for what is still on its
+/// way comes back (`None` once the body is done).
+///
+/// `state` says a swallow is already running, `body` only says how one
+/// starts; a caller continuing one passes `None` there.
+///
+/// `pub(super)` so the splice's own tests can drive it directly.
+pub(super) fn swallow_body(
+    state: Option<ClientDiscard>,
+    body: Option<RequestBody>,
+    buffer: &mut Vec<u8>,
+    host: Option<&str>,
+) -> Option<ClientDiscard> {
+    let state = match state {
+        Some(state) => state,
+        None => match body? {
+            // A length nobody can read is never answered locally: see
+            // [`RequestBody::Unknown`].
+            RequestBody::Unknown => return None,
+            RequestBody::Length(left) => ClientDiscard::Length(left),
+            RequestBody::Chunked => ClientDiscard::Chunked(http::DechunkState::new()),
+        },
+    };
+    match state {
+        ClientDiscard::Length(left) => {
+            let take = (left.min(buffer.len() as u64)) as usize;
+            buffer.drain(..take);
+            let left = left - take as u64;
+            (left > 0).then_some(ClientDiscard::Length(left))
+        }
+        ClientDiscard::Chunked(mut framing) => match framing.walk(buffer) {
+            Ok(false) => {
+                // All of it was body: the rest of the framing is still to
+                // come, and the walker kept what it could not place yet.
+                buffer.clear();
+                Some(ClientDiscard::Chunked(framing))
+            }
+            Ok(true) => {
+                // Whatever follows the last chunk is the next request.
+                let leftover = framing.leftover().to_vec();
+                buffer.clear();
+                buffer.extend_from_slice(&leftover);
+                None
+            }
+            Err(e) => {
+                crate::logbuf::push(&format!(
+                    "mitm {}: the body of an answered request is not chunked framing ({e}), \
+                     dropping the rest of the connection's requests",
+                    host.unwrap_or("?")
+                ));
+                buffer.clear();
+                Some(ClientDiscard::Poisoned)
+            }
+        },
+        ClientDiscard::Poisoned => {
+            buffer.clear();
+            Some(ClientDiscard::Poisoned)
+        }
+    }
+}
+
 /// One client request head, as far as the URL filter needs it.
 ///
 /// `pub(super)` so the splice's own tests can drive the parser directly.
@@ -2442,8 +2570,10 @@ pub(super) struct RequestFacts<'a> {
     pub(super) referer: Option<&'a str>,
     /// `Sec-Fetch-Dest`, the only trustworthy word on what the request is for.
     pub(super) dest: Option<&'a str>,
-    /// The request carries a body: its head is not the last thing on the wire.
-    pub(super) has_body: bool,
+    /// The body the head announced, when there is one and it said how to
+    /// count it — what a locally served answer has to swallow
+    /// ([`swallow_body`]). A bodyless request leaves this `None`.
+    pub(super) body: Option<RequestBody>,
     /// The connection ends after this exchange: a locally answered response
     /// has to say so, because no origin ever will.
     pub(super) closes: bool,
@@ -2488,7 +2618,7 @@ pub(super) fn request_facts(head: &[u8]) -> Option<RequestFacts<'_>> {
         authority: None,
         referer: None,
         dest: None,
-        has_body: false,
+        body: None,
         closes: false,
     };
     let mut connection = None;
@@ -2505,10 +2635,19 @@ pub(super) fn request_facts(head: &[u8]) -> Option<RequestFacts<'_>> {
             "referer" => facts.referer = Some(value),
             "sec-fetch-dest" => facts.dest = Some(value),
             "connection" => connection = Some(value),
-            "transfer-encoding" => facts.has_body = true,
-            "content-length" => {
-                facts.has_body |= value.parse::<u64>().map(|len| len > 0).unwrap_or(true);
+            "transfer-encoding" => {
+                facts.body = Some(RequestBody::Chunked);
             }
+            "content-length" => match value.parse::<u64>() {
+                Ok(0) => {}
+                Ok(len) => {
+                    // `Transfer-Encoding` wins when both are spelled.
+                    facts.body.get_or_insert(RequestBody::Length(len));
+                }
+                Err(_) => {
+                    facts.body.get_or_insert(RequestBody::Unknown);
+                }
+            },
             _ => {}
         }
     }
@@ -2567,12 +2706,15 @@ pub(super) fn rebuilt_head(head: &[u8], target: &str) -> Vec<u8> {
     rebuilt
 }
 
-/// Whether `$removeparam` may touch this request.
+/// Whether a URL rewrite may touch this request.
 ///
-/// AdGuard applies the modifier to GET, HEAD and OPTIONS only; anything else
-/// keeps its query untouched.
+/// `$removeparam` is "only applied to `GET`, `HEAD`, `OPTIONS`, and sometimes
+/// `POST` requests" (the knowledge base), so a POST that reached this far may
+/// have its query rewritten; anything else keeps it untouched. `$urltransform`
+/// changes of origin are gated separately — they need a redirect, and only a
+/// request-line method may be answered with one.
 pub(super) fn rewritable(method: &str) -> bool {
-    matches!(method, "GET" | "HEAD" | "OPTIONS")
+    matches!(method, "GET" | "HEAD" | "OPTIONS" | "POST")
 }
 
 /// FNV-1a over the bytes: a cheap, stable content hash for cache busting.

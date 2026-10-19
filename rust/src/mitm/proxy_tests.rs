@@ -6,8 +6,8 @@
 
 use super::proxy::{
     blocked_response, closing_response, content_hash, local_asset, origin_form, redirect_response,
-    rebuilt_head, request_facts, request_url, rewritable, take_local_request, ProxySession,
-    HIDE_PATH,
+    rebuilt_head, request_facts, request_url, rewritable, swallow_body, take_local_request,
+    ClientDiscard, ProxySession, RequestBody, HIDE_PATH,
 };
 use super::*;
 use crate::mitm::ca::CertificateAuthority;
@@ -1235,11 +1235,11 @@ fn the_user_script_is_served_from_a_content_addressed_url() {
     assert_eq!(String::from_utf8(plain).expect("utf8"), script);
 }
 
-/// The request parser behind the URL rules: a head it does not understand, or
-/// one that carries a body, must never be filtered — the bytes after the head
-/// are not ours to drop.
+/// The request parser behind the URL rules: what it makes of a head, and the
+/// body it announces — what a locally served answer has to swallow to keep
+/// the bytes after the head from being read as the next request.
 #[test]
-fn request_facts_read_only_whole_requests() {
+fn request_facts_read_whole_requests_and_their_bodies() {
     let head = b"GET /ads.js?x=1 HTTP/1.1\r\nHost: shop.test:8443\r\n\
                  Referer: https://page.test/p\r\nSec-Fetch-Dest: script\r\n\
                  Accept: */*\r\n\r\n";
@@ -1250,19 +1250,93 @@ fn request_facts_read_only_whole_requests() {
     assert_eq!(facts.referer, Some("https://page.test/p"));
     assert_eq!(facts.dest, Some("script"));
     assert_eq!(facts.request_type(), "script");
-    assert!(!facts.has_body);
+    assert_eq!(facts.body, None);
 
-    // A declared body means the head is not the last thing on the wire.
+    // A declared body: the head is not the last thing on the wire, and how it
+    // is counted decides what an answer served here has to swallow.
     let with_body = b"POST /api HTTP/1.1\r\nHost: shop.test\r\nContent-Length: 5\r\n\r\nhello";
-    assert!(request_facts(with_body).expect("parseable").has_body);
+    assert_eq!(
+        request_facts(with_body).expect("parseable").body,
+        Some(RequestBody::Length(5))
+    );
     let chunked = b"POST /api HTTP/1.1\r\nHost: shop.test\r\nTransfer-Encoding: chunked\r\n\r\n";
-    assert!(request_facts(chunked).expect("parseable").has_body);
+    assert_eq!(
+        request_facts(chunked).expect("parseable").body,
+        Some(RequestBody::Chunked)
+    );
+    // `Transfer-Encoding` wins when a client spells both.
+    let both = b"POST /api HTTP/1.1\r\nHost: shop.test\r\nContent-Length: 5\r\n\
+                 Transfer-Encoding: chunked\r\n\r\n";
+    assert_eq!(
+        request_facts(both).expect("parseable").body,
+        Some(RequestBody::Chunked)
+    );
     let empty_body = b"POST /api HTTP/1.1\r\nHost: shop.test\r\nContent-Length: 0\r\n\r\n";
-    assert!(!request_facts(empty_body).expect("parseable").has_body);
+    assert_eq!(request_facts(empty_body).expect("parseable").body, None);
+    // A length nobody can read cannot be swallowed either.
+    let broken = b"POST /api HTTP/1.1\r\nHost: shop.test\r\nContent-Length: soon\r\n\r\n";
+    assert_eq!(
+        request_facts(broken).expect("parseable").body,
+        Some(RequestBody::Unknown)
+    );
 
     // Not an HTTP/1.x request: nothing else may be read as a request line.
     assert!(request_facts(b"\x16\x03\x01\x00\x00binary").is_none());
     assert!(request_facts(b"hello there\r\n\r\n").is_none());
+}
+
+/// The body of a request answered locally is swallowed byte for byte —
+/// whatever frames it, and across feeds when it does not arrive whole — so
+/// the next request is parsed where it really starts.
+#[test]
+fn an_answered_request_body_is_swallowed_before_the_next_parse() {
+    // A declared length: what has arrived goes, what follows it survives.
+    let mut buffer = b"hello world".to_vec();
+    let state = swallow_body(None, Some(RequestBody::Length(5)), &mut buffer, None);
+    assert_eq!(buffer, b" world");
+    assert!(state.is_none());
+
+    // Cut short: the rest is owed, and the next feed pays it.
+    let mut buffer = b"hel".to_vec();
+    let mut state = swallow_body(None, Some(RequestBody::Length(5)), &mut buffer, None);
+    assert!(matches!(state, Some(ClientDiscard::Length(2))));
+    assert!(buffer.is_empty());
+    let mut buffer = b"loGET /x HTTP/1.1\r\n\r\n".to_vec();
+    state = swallow_body(state, None, &mut buffer, None);
+    assert_eq!(buffer, b"GET /x HTTP/1.1\r\n\r\n");
+    assert!(state.is_none());
+
+    // A chunked body: its last chunk ends it, and what follows survives.
+    let mut buffer = b"5\r\nhello\r\n0\r\n\r\nGET /x HTTP/1.1\r\n\r\n".to_vec();
+    let state = swallow_body(None, Some(RequestBody::Chunked), &mut buffer, None);
+    assert!(state.is_none());
+    assert_eq!(buffer, b"GET /x HTTP/1.1\r\n\r\n");
+
+    // Chunked framing cut in half: the state carries it across feeds.
+    let mut buffer = b"5\r\nhel".to_vec();
+    let mut state = swallow_body(None, Some(RequestBody::Chunked), &mut buffer, None);
+    assert!(matches!(state, Some(ClientDiscard::Chunked(_))));
+    assert!(buffer.is_empty());
+    let mut buffer = b"lo\r\n0\r\n\r\nGET /y HTTP/1.1\r\n\r\n".to_vec();
+    state = swallow_body(state, None, &mut buffer, None);
+    assert!(state.is_none());
+    assert_eq!(buffer, b"GET /y HTTP/1.1\r\n\r\n");
+
+    // Framing nobody can follow: everything from here on goes nowhere, so no
+    // body byte is ever read as a request of its own.
+    let mut buffer = b"zz\r\nGET /x HTTP/1.1\r\n\r\n".to_vec();
+    let state = swallow_body(None, Some(RequestBody::Chunked), &mut buffer, None);
+    assert!(matches!(state, Some(ClientDiscard::Poisoned)));
+    assert!(buffer.is_empty());
+    let mut buffer = b"GET /x HTTP/1.1\r\n\r\n".to_vec();
+    let state = swallow_body(state, None, &mut buffer, None);
+    assert!(matches!(state, Some(ClientDiscard::Poisoned)));
+    assert!(buffer.is_empty());
+
+    // No body at all: nothing to swallow.
+    let mut buffer = b"GET /x HTTP/1.1\r\n\r\n".to_vec();
+    assert!(swallow_body(None, None, &mut buffer, None).is_none());
+    assert_eq!(buffer, b"GET /x HTTP/1.1\r\n\r\n");
 }
 
 /// Who asked for the connection to end: HTTP/1.1 keeps it unless it says
@@ -1353,9 +1427,10 @@ fn a_rewritten_head_only_changes_the_target() {
     // A line we cannot make sense of is handed back untouched.
     assert_eq!(rebuilt_head(b"garbage\r\n\r\n", "/x"), b"garbage\r\n\r\n");
 
-    // `$removeparam` is AdGuard's GET/HEAD/OPTIONS affair.
+    // `$removeparam` is AdGuard's GET/HEAD/OPTIONS (and sometimes POST)
+    // affair; everything else keeps its query untouched.
     assert!(rewritable("GET") && rewritable("HEAD") && rewritable("OPTIONS"));
-    assert!(!rewritable("POST") && !rewritable("DELETE"));
+    assert!(rewritable("POST") && !rewritable("DELETE"));
 }
 
 /// The two answers the URL rules produce locally: an empty block and the
