@@ -611,6 +611,127 @@ struct Compiled {
     /// The raw JavaScript rules (`#%#script`), found by [`scan_js_rules`]
     /// in the trusted lists. `None` when none carries one.
     js_rules: Option<JsRules>,
+    /// The `$app=` rules, found by [`scan_app_rules`]. `None` when no loaded
+    /// list carries one.
+    app_rules: Option<AppRules>,
+}
+
+/// One entry of an `$app=` value list (KB §`$app`): a plain name, a name with
+/// a trailing `*`, or a `/…/` regexp.
+enum AppEntry {
+    /// A plain application name, matched lexicographically.
+    Name(String),
+    /// A wildcard entry: every application whose name starts with the prefix.
+    Prefix(String),
+    /// A regexp entry. It matches the way a basic URL regexp pattern does — a
+    /// search, not an anchored match; the KB's own examples anchor with
+    /// `^…$` where anchoring is meant.
+    Regex(regex::Regex),
+}
+
+impl AppEntry {
+    fn matches(&self, app: &str) -> bool {
+        match self {
+            AppEntry::Name(name) => name == app,
+            AppEntry::Prefix(prefix) => app.starts_with(prefix.as_str()),
+            AppEntry::Regex(regex) => regex.is_match(app),
+        }
+    }
+}
+
+/// One `$app=` rule, read out of a list by [`scan_app_rules`].
+struct AppRuleDef {
+    /// The line as the list wrote it, `$app=…` included — what the log shows.
+    raw: String,
+    /// The line a shard engine is given: the same rule without the `app=…`
+    /// tokens (the crate refuses the modifier, and inside a shard the rule is
+    /// about the app already).
+    text: String,
+    /// The list the rule came from; `Compiled::sources` maps it back to a
+    /// name for the log and the UI.
+    list_id: u16,
+    category: u8,
+    /// `true` for an `@@` rule.
+    exception: bool,
+    entries: Vec<AppEntry>,
+    /// A `~`-negated rule: it applies to every app its entries do not match.
+    negated: bool,
+}
+
+/// The `$app=` rules of the loaded lists, with one engine per app on demand.
+///
+/// The crate refuses the modifier, and unlike `$replace` a single probe engine
+/// would be wrong: the rule must match *the app the flow belongs to*, which
+/// changes per connection. Every app that shows up gets a shard — an engine
+/// carrying only the rules that apply to it (its exact names, matching
+/// wildcards and regexps, and the `~`-negated rules whose exclusions it is
+/// not part of), built once and reused. A request of an attributed app is the
+/// union of the main engine and its shards (see [`app_merge`]).
+struct AppRules {
+    rules: Vec<AppRuleDef>,
+    /// `None` marks an app with no applicable rules, so the per-rule walk
+    /// happens once per app name.
+    shards: Mutex<HashMap<String, Option<Arc<AppShard>>>>,
+    /// Rules the scanner refused, for the build log.
+    dropped: u32,
+    /// How many of [`Self::rules`] are exceptions, for the build log.
+    exceptions: u32,
+}
+
+/// The engine one app's `$app=` rules are matched in.
+struct AppShard {
+    engine: Engine,
+    /// `source_index` in `engine` -> index in [`AppRules::rules`].
+    sources: Vec<(u32, usize)>,
+}
+
+impl AppRules {
+    /// The shard for `app`, built on first sight; `None` when no rule of the
+    /// loaded lists applies to it.
+    fn shard_for(&self, app: &str) -> Option<Arc<AppShard>> {
+        let mut shards = self.shards.lock().unwrap();
+        if let Some(cached) = shards.get(app) {
+            return cached.clone();
+        }
+        let applicable = self.applicable(app);
+        let shard = (!applicable.is_empty()).then(|| Arc::new(self.build_shard(&applicable)));
+        shards.insert(app.to_string(), shard.clone());
+        shard
+    }
+
+    /// The rules whose entries match `app` (or, for a negated rule, do not).
+    /// The lists are small — the live corpus is a few hundred rules — so a
+    /// walk per app name is cheaper than the indexes it would replace.
+    fn applicable(&self, app: &str) -> Vec<usize> {
+        let mut out = Vec::new();
+        for (index, rule) in self.rules.iter().enumerate() {
+            let hit = rule.entries.iter().any(|entry| entry.matches(app));
+            if hit != rule.negated {
+                out.push(index);
+            }
+        }
+        out
+    }
+
+    fn build_shard(&self, applicable: &[usize]) -> AppShard {
+        let mut set = FilterSet::new(true);
+        let mut sources = Vec::with_capacity(applicable.len());
+        for &index in applicable {
+            let rule = &self.rules[index];
+            let line = if rule.exception {
+                format!("@@{}", rule.text)
+            } else {
+                rule.text.clone()
+            };
+            let record = set.add_filter_list(line, ParseOptions::default());
+            sources.push((record.source_index as u32, index));
+        }
+        let mut engine = Engine::new_with_filter_set(set);
+        // `$redirect` resources only: cosmetic rules cannot carry `$app=`,
+        // so no scriptlet table is needed here.
+        engine.use_resources(redirect_resources().iter().cloned());
+        AppShard { engine, sources }
+    }
 }
 
 /// The `$replace` rules of the loaded lists, with the engine that finds them.
@@ -671,6 +792,7 @@ impl FilterEngine {
                 html_rules: None,
                 path_cosmetics: None,
                 js_rules: None,
+                app_rules: None,
             })),
             cache: RwLock::new(DecisionCache::new(1 << 15)),
             build_ns: AtomicU64::new(0),
@@ -693,6 +815,7 @@ impl FilterEngine {
         let mut path_scan = PathScan::default();
         let mut js_scan = JsScan::default();
         let mut html_scan = HtmlScan::default();
+        let mut app_scan = AppScan::default();
         // Rules the reference keeps for trusted lists, seen in a list that is
         // not one (see [`scrub_untrusted`]).
         let mut untrusted_dropped = 0u32;
@@ -725,6 +848,7 @@ impl FilterEngine {
                                 scan_modifier_rules(&text, &mut url_scan);
                                 scan_js_rules(&text, &mut js_scan);
                                 scan_html_rules(&text, &mut html_scan);
+                                scan_app_rules(&text, &mut app_scan, list.id, list.category);
                                 convert_adguard_cosmetics(text, &mut path_scan)
                             }
                             ListFormat::Hosts => text,
@@ -778,6 +902,9 @@ impl FilterEngine {
             scan_modifier_rules(&joined, &mut url_scan);
             scan_js_rules(&joined, &mut js_scan);
             scan_html_rules(&joined, &mut html_scan);
+            // User rules have no list row: id 0 is the source map's own
+            // "User Custom Filter" entry.
+            scan_app_rules(&joined, &mut app_scan, 0, CAT_CUSTOM);
             let record = set.add_filter_list(
                 convert_adguard_cosmetics(joined, &mut path_scan),
                 ParseOptions::default(),
@@ -878,6 +1005,15 @@ impl FilterEngine {
                 path.dropped,
             ));
         }
+        let app_rules = build_app_rules(app_scan);
+        if let Some(rules) = app_rules.as_ref() {
+            crate::logbuf::push(&format!(
+                "filter: {} app rules ({} exceptions, {} dropped)",
+                rules.rules.len(),
+                rules.exceptions,
+                rules.dropped,
+            ));
+        }
         let compiled = Arc::new(Compiled {
             engine,
             generation,
@@ -891,6 +1027,7 @@ impl FilterEngine {
             html_rules,
             path_cosmetics,
             js_rules,
+            app_rules,
         });
         *self.inner.write().unwrap() = compiled;
         self.cache.write().unwrap().clear();
@@ -1202,34 +1339,41 @@ impl FilterEngine {
     ///
     /// `request_type` is one of the crate's names (`document`, `script`,
     /// `subdocument`, `image`, `stylesheet`, `xmlhttprequest`, `media`, ...).
+    ///
+    /// `apps` names the applications the flow belongs to (the MITM session
+    /// carries what the kernel table said at connect time, see
+    /// [`crate::uidmap`]); it is what the `$app=` rules are matched against.
+    /// Empty when nothing was attributed — the app rules then apply to no one,
+    /// the way a list that names an app the device does not run applies to no
+    /// app — and the main engine decides alone.
     pub fn check_url(
         &self,
         url: &str,
         source: &str,
         request_type: &str,
         method: &str,
+        apps: &[String],
     ) -> UrlVerdict {
         let compiled = self.compiled();
         let Ok(request) = Request::new(url, source, request_type, method) else {
             return UrlVerdict::default();
         };
         let result = compiled.engine.check_network_request(&request);
-        let blocked = result.should_block();
-        let (rule_text, list_name, category) = matched_details(&compiled, &result, url_host(url));
-        UrlVerdict {
-            blocked,
-            // A redirect only ever stands in for a block: `$redirect-rule`
-            // means "redirect instead, if something else blocks this".
-            redirect: if blocked {
-                result.redirect.clone()
-            } else {
-                None
-            },
-            rewritten_url: result.rewritten_url.clone(),
-            rule_text,
-            list_name,
-            category,
-        }
+        let Some(app_rules) = compiled
+            .app_rules
+            .as_ref()
+            .filter(|_| !apps.is_empty())
+        else {
+            return url_verdict(&compiled, &result, url_host(url));
+        };
+        app_merge(&compiled, app_rules, &request, result, apps, url_host(url))
+    }
+
+    /// Whether the loaded lists carry any `$app=` rule. The relay asks this
+    /// before it reads the kernel's socket tables: attribution is only worth
+    /// its lookups when something can use it.
+    pub fn has_app_rules(&self) -> bool {
+        self.compiled().app_rules.is_some()
     }
 
     /// Whether any `$replace` rule is loaded: the HTTPS path only pays for the
@@ -1364,8 +1508,18 @@ fn scan_cosmetic_exceptions(text: &str, into: &mut CosmeticExceptionScan) {
         let mut switches = CosmeticSwitches::default();
         let mut scoped = false;
         let mut cancel = false;
+        // An `$app=` scope makes the exception about one application, and the
+        // switch table is keyed by hostname alone: honouring the rule here
+        // would switch filtering off for every app on the device. The app
+        // scan still reads the rule (as an app-scoped exception), so it is
+        // skipped rather than dropped-and-counted.
+        let mut app_scoped = false;
         for option in options.split(',') {
-            match option.trim() {
+            let option = option.trim();
+            if option.starts_with("app=") || option.starts_with("~app=") {
+                app_scoped = true;
+            }
+            match option {
                 "elemhide" | "ehide" => switches.elemhide = true,
                 "specifichide" | "shide" => switches.specifichide = true,
                 "jsinject" => switches.jsinject = true,
@@ -1387,7 +1541,7 @@ fn scan_cosmetic_exceptions(text: &str, into: &mut CosmeticExceptionScan) {
                 _ => {}
             }
         }
-        if scoped || switches == CosmeticSwitches::default() {
+        if scoped || app_scoped || switches == CosmeticSwitches::default() {
             continue;
         }
         if let Some(host) = exception_host(pattern) {
@@ -3621,6 +3775,316 @@ fn veto_matches_page(veto: &Engine, url: &str, source: &str, request_type: &str)
         .unwrap_or(false)
 }
 
+/// One `$app=` rule seen by [`scan_app_rules`], before its value entries are
+/// parsed.
+struct PendingAppRule {
+    /// The line as written, `@@` included — what the log shows.
+    raw: String,
+    /// The line a shard engine is given: the pattern plus the kept options,
+    /// `app=…` gone.
+    text: String,
+    list_id: u16,
+    category: u8,
+    exception: bool,
+    /// The raw value of every `app=` token of the line, in order.
+    values: Vec<String>,
+}
+
+#[derive(Default)]
+struct AppScan {
+    pending: Vec<PendingAppRule>,
+    dropped: u32,
+}
+
+/// Reads the `$app=` network rules out of a list.
+///
+/// The crate refuses the modifier, so a rule cannot go into the main engine as
+/// it stands; the layer that runs it is [`AppRules`], per app. Only rules that
+/// layer can run faithfully are read: one carrying a modifier this engine
+/// reads elsewhere (`$replace`, `$removeparam`, ...) is left to that scan,
+/// which drops and counts it — `app=` is not an option its probes keep — and
+/// nothing here may count it a second time. The kept-option rules mirror
+/// [`scan_modifier_rules`].
+fn scan_app_rules(text: &str, scan: &mut AppScan, list_id: u16, category: u8) {
+    for line in text.lines() {
+        let line = line.trim();
+        if line.is_empty() || line.starts_with(['!', '[', '#']) {
+            continue;
+        }
+        let exception = line.starts_with("@@");
+        let rule = line.strip_prefix("@@").unwrap_or(line);
+        let Some((pattern, tokens)) = split_app_rule(rule) else {
+            continue;
+        };
+        if tokens.iter().any(|token| {
+            let bare = token.trim_start_matches('~');
+            let name = bare.split('=').next().unwrap_or(bare);
+            is_modifier_token(token) || matches!(name, "replace" | "content")
+        }) {
+            continue;
+        }
+
+        let mut kept: Vec<&str> = Vec::new();
+        let mut values: Vec<String> = Vec::new();
+        let mut faithful = true;
+        for token in &tokens {
+            let bare = token.trim_start_matches('~');
+            let name = bare.split('=').next().unwrap_or(bare);
+            if name.is_empty() {
+                faithful = false;
+                continue;
+            }
+            if name == "app" {
+                // `~app=…` is not a modifier the reference defines, and every
+                // other form needs a value to name an app.
+                let value = (!token.starts_with('~'))
+                    .then(|| bare.split_once('=').map(|(_, value)| value))
+                    .flatten()
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty());
+                match value {
+                    Some(value) => values.push(value.to_string()),
+                    None => faithful = false,
+                }
+                continue;
+            }
+            if name == "badfilter" {
+                // Cancelling an app-scoped rule by app is not modelled; the
+                // rule is dropped rather than half-run.
+                faithful = false;
+                continue;
+            }
+            if name == "to" {
+                // The crate parses `$to` and then leaves the rule out of every
+                // list, so a shard rule carrying it would never match.
+                faithful = false;
+                continue;
+            }
+            if name == "method" {
+                // The crate knows GET, HEAD and POST; a rule asking for any
+                // other method (or to exclude one) would come out wider than
+                // the list wrote it.
+                let methods_ok = !token.starts_with('~')
+                    && bare
+                        .split_once('=')
+                        .map(|(_, value)| {
+                            !value.is_empty()
+                                && value.split('|').all(|method| {
+                                    matches!(
+                                        method.trim().to_ascii_lowercase().as_str(),
+                                        "get" | "head" | "post"
+                                    )
+                                })
+                        })
+                        .unwrap_or(false);
+                if !methods_ok {
+                    faithful = false;
+                    continue;
+                }
+            }
+            if name == "match-case" && match_case_without_regexp(pattern) {
+                // The crate refuses a non-regexp rule carrying `$match-case`
+                // without a trace: dropped here instead of matching
+                // case-insensitively.
+                faithful = false;
+                continue;
+            }
+            // `$redirect`/`$redirect-rule` are the crate's own options — the
+            // shard engine carries the resource table, and the merge reads
+            // the shard's answer back (see [`app_merge`]); `KEPT_OPTIONS` is
+            // what the modifier probes carry, and it does not list them.
+            if KEPT_OPTIONS.contains(&name)
+                || matches!(name, "redirect" | "rewrite" | "redirect-rule")
+            {
+                kept.push(token);
+            } else {
+                faithful = false;
+            }
+        }
+        if !faithful || values.is_empty() {
+            scan.dropped += 1;
+            continue;
+        }
+        scan.pending.push(PendingAppRule {
+            raw: if exception {
+                format!("@@{rule}")
+            } else {
+                rule.to_string()
+            },
+            text: probe_line(pattern, &kept, None),
+            list_id,
+            category,
+            exception,
+            values,
+        });
+    }
+}
+
+/// Splits `pattern$option,option,...` at the `$` that starts the modifier
+/// list, the way [`split_modifier_rule`] does, but keyed on the `app=` token
+/// instead of the modifiers this engine reads itself. A `$` a backslash
+/// escapes belongs to a value, never to the options.
+fn split_app_rule(text: &str) -> Option<(&str, Vec<&str>)> {
+    let mut search = 0;
+    while let Some(offset) = text[search..].find('$') {
+        let index = search + offset;
+        if index > 0 && text.as_bytes()[index - 1] == b'\\' {
+            search = index + 1;
+            continue;
+        }
+        let pattern = &text[..index];
+        let tokens = split_options(&text[index + 1..]);
+        if tokens.iter().any(|token| {
+            token
+                .trim_start_matches('~')
+                .split('=')
+                .next()
+                .unwrap_or(token)
+                == "app"
+        }) {
+            return Some((pattern, tokens));
+        }
+        search = index + 1;
+    }
+    None
+}
+
+/// Splits the value of one `app=` token into entries: `|` separates them and a
+/// backslash escapes it (as well as every character the entry parsers treat
+/// specially inside a regexp).
+fn split_app_value(value: &str) -> Vec<&str> {
+    let bytes = value.as_bytes();
+    let mut out = Vec::new();
+    let mut start = 0usize;
+    let mut index = 0usize;
+    while index < bytes.len() {
+        if bytes[index] == b'\\' && index + 1 < bytes.len() {
+            index += 2;
+            continue;
+        }
+        if bytes[index] == b'|' {
+            out.push(&value[start..index]);
+            start = index + 1;
+        }
+        index += 1;
+    }
+    out.push(&value[start..]);
+    out
+}
+
+/// Parses the values of every `app=` token of one rule into entries, or `None`
+/// when the rule cannot be run faithfully: an entry that names nothing, an
+/// entry form the KB does not have, a regexp the regexp crate cannot run, or a
+/// mix of negated and plain entries — the KB forbids one.
+fn parse_app_entries(values: &[String]) -> Option<(Vec<AppEntry>, bool)> {
+    let mut entries = Vec::new();
+    let mut negated = None::<bool>;
+    for value in values {
+        for raw in split_app_value(value) {
+            let raw = raw.trim();
+            let (is_negated, body) = match raw.strip_prefix('~') {
+                Some(body) => (true, body.trim()),
+                None => (false, raw),
+            };
+            if body.is_empty() {
+                return None;
+            }
+            if let Some(seen) = negated {
+                if seen != is_negated {
+                    return None;
+                }
+            } else {
+                negated = Some(is_negated);
+            }
+            entries.push(parse_app_entry(body)?);
+        }
+    }
+    (!entries.is_empty()).then(|| (entries, negated.unwrap_or(false)))
+}
+
+/// One entry of an `app=` value: a `/…/` regexp, a trailing-`*` wildcard, or a
+/// plain name. `None` for anything else — an entry this engine cannot name is
+/// a rule it must not half-run.
+fn parse_app_entry(body: &str) -> Option<AppEntry> {
+    if body.starts_with('/') {
+        let rest = body.strip_suffix('/')?;
+        if rest.len() < 2 {
+            return None;
+        }
+        let source = app_regex_unescape(&rest[1..]);
+        return regex::Regex::new(&source).ok().map(AppEntry::Regex);
+    }
+    if let Some(prefix) = body.strip_suffix('*') {
+        // The wildcard is the last character and the only one; a bare `*`
+        // names no application.
+        if prefix.is_empty() || prefix.contains('*') {
+            return None;
+        }
+        return Some(AppEntry::Prefix(prefix.to_string()));
+    }
+    if body.contains(['*', '|', '\\']) {
+        return None;
+    }
+    Some(AppEntry::Name(body.to_string()))
+}
+
+/// Removes the rule-syntax escapes from a regexp entry (`/`, `$`, `,` and `|`
+/// are escaped for the line parser, KB §`$app`); the regexp crate sees the
+/// bare characters — `\$` is the end anchor there, not a literal dollar.
+fn app_regex_unescape(source: &str) -> String {
+    let mut out = String::with_capacity(source.len());
+    let mut chars = source.chars();
+    while let Some(ch) = chars.next() {
+        if ch != '\\' {
+            out.push(ch);
+            continue;
+        }
+        match chars.next() {
+            Some(next) if matches!(next, '/' | '$' | ',' | '|') => out.push(next),
+            Some(next) => {
+                out.push('\\');
+                out.push(next);
+            }
+            None => out.push('\\'),
+        }
+    }
+    out
+}
+
+/// The `$app=` rules the loaded lists carry, or `None` when they carry none.
+fn build_app_rules(scan: AppScan) -> Option<AppRules> {
+    let mut rules = Vec::with_capacity(scan.pending.len());
+    let mut dropped = scan.dropped;
+    let mut exceptions = 0u32;
+    for pending in scan.pending {
+        let Some((entries, negated)) = parse_app_entries(&pending.values) else {
+            dropped += 1;
+            continue;
+        };
+        if pending.exception {
+            exceptions += 1;
+        }
+        rules.push(AppRuleDef {
+            raw: pending.raw,
+            text: pending.text,
+            list_id: pending.list_id,
+            category: pending.category,
+            exception: pending.exception,
+            entries,
+            negated,
+        });
+    }
+    if rules.is_empty() {
+        return None;
+    }
+    Some(AppRules {
+        rules,
+        shards: Mutex::new(HashMap::new()),
+        dropped,
+        exceptions,
+    })
+}
+
 /// Builds the engines a list's modifier rules need, or `None`/`None` when the
 /// loaded lists carry none: the request/response-header rules and the cookie
 /// rules, which share the scan (and its `$badfilter` pass) but not the way
@@ -4475,6 +4939,171 @@ fn evaluate(compiled: &Compiled, host: &str) -> HostVerdict {
     }
 }
 
+/// The verdict one engine's result makes, app rules out of the picture.
+fn url_verdict(
+    compiled: &Compiled,
+    result: &adblock::blocker::BlockerResult,
+    host: &str,
+) -> UrlVerdict {
+    let blocked = result.should_block();
+    let (rule_text, list_name, category) = matched_details(compiled, result, host);
+    UrlVerdict {
+        blocked,
+        // A redirect only ever stands in for a block: `$redirect-rule`
+        // means "redirect instead, if something else blocks this".
+        redirect: if blocked {
+            result.redirect.clone()
+        } else {
+            None
+        },
+        rewritten_url: result.rewritten_url.clone(),
+        rule_text,
+        list_name,
+        category,
+    }
+}
+
+/// The union of the main engine and one request's app shards.
+///
+/// The crate decides one engine at a time, so precedence is applied across
+/// the engines the way it is applied inside one: an `$important` match
+/// anywhere wins (the crate never lets an exception cancel one), otherwise
+/// any blocking match is cancelled by any exception match — including one
+/// that lives in the *other* engine. That cross-engine half is what the
+/// corpus needs: most app exceptions exist to lift a generic block for one
+/// app, and app blocks exist to out-block a generic exception for one app.
+/// An engine with no blocking match of its own is asked for its exceptions
+/// with [`Engine::check_network_request_subset`] — the crate's own "a match
+/// already happened elsewhere" query, forced to answer about exceptions
+/// alone.
+fn app_merge(
+    compiled: &Compiled,
+    app_rules: &AppRules,
+    request: &Request,
+    main: adblock::blocker::BlockerResult,
+    apps: &[String],
+    host: &str,
+) -> UrlVerdict {
+    let mut important = main.important;
+    let mut block = main.filter.is_some();
+    let mut exception = main.exception.is_some();
+    let mut redirect = main.redirect.clone();
+    // The shard whose match decided the outcome, for the log: the app rule is
+    // the more specific one, so it is preferred over the main engine's.
+    let mut important_from_shard: Option<(Arc<AppShard>, Option<u32>)> = None;
+    let mut block_from_shard: Option<(Arc<AppShard>, Option<u32>)> = None;
+    let mut silent_shards: Vec<Arc<AppShard>> = Vec::new();
+    let mut shards: Vec<Arc<AppShard>> = Vec::new();
+    for app in apps {
+        let Some(shard) = app_rules.shard_for(app) else {
+            continue;
+        };
+        if shards.iter().any(|seen| Arc::ptr_eq(seen, &shard)) {
+            continue;
+        }
+        shards.push(shard);
+    }
+    for shard in &shards {
+        let result = shard.engine.check_network_request(request);
+        let source = filter_source_index(&result);
+        if result.important {
+            important = true;
+            if important_from_shard.is_none() {
+                important_from_shard = Some((Arc::clone(shard), source));
+            }
+        }
+        if result.filter.is_some() {
+            block = true;
+            if block_from_shard.is_none() {
+                block_from_shard = Some((Arc::clone(shard), source));
+            }
+        } else {
+            // No blocking match here: only a forced query can tell whether an
+            // exception of this shard cancels a block found elsewhere.
+            silent_shards.push(Arc::clone(shard));
+        }
+        if result.exception.is_some() {
+            exception = true;
+        }
+        if result.redirect.is_some() {
+            // A `$redirect-rule` may answer a block decided by another
+            // engine; the app-scoped redirect is the specific answer.
+            redirect = result.redirect.clone();
+        }
+    }
+    if block && !important {
+        if main.filter.is_none() {
+            let forced = compiled
+                .engine
+                .check_network_request_subset(request, true, true);
+            exception |= forced.exception.is_some();
+        }
+        for shard in &silent_shards {
+            let forced = shard
+                .engine
+                .check_network_request_subset(request, true, true);
+            exception |= forced.exception.is_some();
+        }
+    }
+    let blocked = important || (block && !exception);
+    let from_shard = if important {
+        if main.important {
+            None
+        } else {
+            important_from_shard
+        }
+    } else {
+        block_from_shard
+    };
+    let (rule_text, list_name, category) = match &from_shard {
+        Some((shard, source)) => shard_details(compiled, app_rules, shard, *source, host),
+        None => matched_details(compiled, &main, host),
+    };
+    UrlVerdict {
+        blocked,
+        redirect: if blocked { redirect } else { None },
+        rewritten_url: main.rewritten_url.clone(),
+        rule_text,
+        list_name,
+        category,
+    }
+}
+
+/// The `source_index` of a match, when the engine was built with debug info.
+fn filter_source_index(result: &adblock::blocker::BlockerResult) -> Option<u32> {
+    result
+        .filter
+        .as_ref()?
+        .source_location
+        .as_ref()
+        .map(|location| location.source_index)
+}
+
+/// Same as [`matched_details`] for a rule that lives in an app shard: the raw
+/// line (with `app=…`, the way the list wrote it) and the list it came from.
+fn shard_details(
+    compiled: &Compiled,
+    app_rules: &AppRules,
+    shard: &AppShard,
+    source_index: Option<u32>,
+    host: &str,
+) -> (Option<String>, Option<String>, u8) {
+    let rule = source_index
+        .and_then(|index| shard.sources.iter().find(|(source, _)| *source == index))
+        .and_then(|(_, rule)| app_rules.rules.get(*rule));
+    match rule {
+        Some(rule) => {
+            let list_name = compiled
+                .sources
+                .iter()
+                .find(|source| source.list_id == rule.list_id)
+                .map(|source| source.name.clone());
+            (Some(rule.raw.clone()), list_name, rule.category)
+        }
+        None => (None, None, categorise(None, host)),
+    }
+}
+
 /// The rule, list and category behind a match, for the log and the UI.
 fn matched_details(
     compiled: &Compiled,
@@ -4643,6 +5272,7 @@ mod tests {
             "https://shop.test/",
             "script",
             "GET",
+            &[],
         );
         assert!(hit.blocked, "{hit:?}");
         assert_eq!(
@@ -4655,22 +5285,23 @@ mod tests {
                 "https://shop.test/ads/tracker.js",
                 "https://shop.test/",
                 "image",
-                "GET"
+                "GET",
+                &[],
             )
             .blocked
         );
         // Same host, another path.
         assert!(
-            !fe.check_url("https://shop.test/app.js", "https://shop.test/", "script", "GET").blocked
+            !fe.check_url("https://shop.test/app.js", "https://shop.test/", "script", "GET", &[]).blocked
         );
         // The source decides third-party rules, and it is the referrer.
         let fe = cosmetic_engine("||cdn.test^$third-party\n");
         assert!(
-            fe.check_url("https://cdn.test/x.js", "https://shop.test/", "script", "GET")
+            fe.check_url("https://cdn.test/x.js", "https://shop.test/", "script", "GET", &[])
                 .blocked
         );
         assert!(
-            !fe.check_url("https://cdn.test/x.js", "https://cdn.test/", "script", "GET").blocked
+            !fe.check_url("https://cdn.test/x.js", "https://cdn.test/", "script", "GET", &[]).blocked
         );
     }
 
@@ -4682,6 +5313,7 @@ mod tests {
             "https://shop.test/",
             "xmlhttprequest",
             "GET",
+            &[],
         );
         assert!(!v.blocked, "{v:?}");
         assert_eq!(
@@ -4694,6 +5326,7 @@ mod tests {
             "https://shop.test/",
             "xmlhttprequest",
             "GET",
+            &[],
         );
         assert_eq!(v.rewritten_url, None);
     }
@@ -5716,6 +6349,7 @@ mod tests {
             "https://shop.test/",
             "script",
             "GET",
+            &[],
         );
         assert!(!v.blocked, "{v:?}");
         let rule = replace_rule(&fe, "https://shop.test/ad.js");
@@ -5734,6 +6368,7 @@ mod tests {
             "https://shop.test/",
             "script",
             "GET",
+            &[],
         );
         assert!(v.blocked, "{v:?}");
         let (url, page) = ("https://shop.test/other.js", "https://shop.test/");
@@ -5869,6 +6504,7 @@ mod tests {
             "https://shop.test/",
             "script",
             "GET",
+            &[],
         );
         assert!(v.blocked, "a `$redirect` rule blocks as well: {v:?}");
         let body = v.redirect.expect("the resource is registered");
@@ -5885,6 +6521,7 @@ mod tests {
             "https://shop.test/",
             "script",
             "GET",
+            &[],
         );
         assert!(v.redirect.is_none(), "{v:?}");
         // Together with a block it fires, which is the whole point of the pair.
@@ -5897,6 +6534,7 @@ mod tests {
             "https://shop.test/",
             "script",
             "GET",
+            &[],
         );
         assert!(v.blocked && v.redirect.is_some(), "{v:?}");
 
@@ -5907,6 +6545,7 @@ mod tests {
             "https://shop.test/",
             "script",
             "GET",
+            &[],
         );
         assert!(v.blocked && v.redirect.is_none(), "{v:?}");
     }
@@ -6405,6 +7044,7 @@ mod tests {
             "https://shop.test/",
             "xmlhttprequest",
             "GET",
+            &[],
         );
         assert_eq!(
             rewritten.rewritten_url.as_deref(),
@@ -6432,6 +7072,7 @@ mod tests {
             "https://shop.test/",
             "xmlhttprequest",
             "GET",
+            &[],
         );
         assert_eq!(kept.rewritten_url, None, "no removeparam for an untrusted list");
         assert!(!kept.blocked, "{kept:?}");
@@ -6648,6 +7289,303 @@ mod tests {
             res.hide_selectors
         );
         assert!(res.generichide);
+    }
+
+    // ---------------------------------------------------------------- `$app=`
+
+    fn apps(names: &[&str]) -> Vec<String> {
+        names.iter().map(|name| name.to_string()).collect()
+    }
+
+    #[test]
+    fn app_rules_load_and_bind_to_their_app() {
+        let fe = cosmetic_engine(
+            "||ads.test^$app=com.example.app\n\
+             @@||cdn.ads.test^$app=com.example.app|org.other.app\n",
+        );
+        let compiled = fe.compiled();
+        let rules = compiled.app_rules.as_ref().expect("scan");
+        assert_eq!(rules.rules.len(), 2);
+        assert_eq!(rules.exceptions, 1);
+        assert_eq!(rules.dropped, 0);
+        assert!(fe.has_app_rules());
+        // The main engine never sees them: a flow nobody was attributed to
+        // must not be blocked because of an app rule.
+        assert!(
+            !fe.check_url("https://ads.test/x.js", "https://ads.test/", "script", "GET", &[])
+                .blocked
+        );
+        // Another app is not the one the rule names.
+        let other = apps(&["org.other.app"]);
+        assert!(
+            !fe.check_url("https://ads.test/x.js", "https://ads.test/", "script", "GET", &other)
+                .blocked
+        );
+        let hit = fe.check_url(
+            "https://ads.test/x.js",
+            "https://ads.test/",
+            "script",
+            "GET",
+            &apps(&["com.example.app"]),
+        );
+        assert!(hit.blocked, "{hit:?}");
+        assert_eq!(hit.rule_text.as_deref(), Some("||ads.test^$app=com.example.app"));
+        assert!(hit.list_name.is_some(), "the list must be reported: {hit:?}");
+    }
+
+    #[test]
+    fn app_exception_lifts_the_generic_block_for_one_app() {
+        // The corpus shape: a generic list blocks the domain, an app list
+        // excepts it for a single app (the exception lives in the *other*
+        // engine, so the merge is what has to find it).
+        let fe = cosmetic_engine(
+            "||branch.test^\n\
+             @@||branch.test^$app=com.example.app\n",
+        );
+        let url = "https://branch.test/v1/open";
+        let src = "https://branch.test/";
+        assert!(
+            fe.check_url(url, src, "xmlhttprequest", "GET", &apps(&["com.other.app"]))
+                .blocked
+        );
+        assert!(
+            !fe.check_url(url, src, "xmlhttprequest", "GET", &apps(&["com.example.app"]))
+                .blocked
+        );
+    }
+
+    #[test]
+    fn a_generic_exception_cancels_an_app_block_by_priority() {
+        // Both match for the named app. AdGuard orders exceptions above plain
+        // blocks whatever scopes they carry, and the union of the engines
+        // must answer the same way.
+        let fe = cosmetic_engine(
+            "@@||facebook.test^\n\
+             ||facebook.test^$app=com.example.app\n",
+        );
+        assert!(
+            !fe.check_url(
+                "https://facebook.test/x.js",
+                "https://facebook.test/",
+                "script",
+                "GET",
+                &apps(&["com.example.app"])
+            )
+            .blocked
+        );
+    }
+
+    #[test]
+    fn app_important_beats_an_exception() {
+        let fe = cosmetic_engine(
+            "@@||ads.test^\n\
+             ||ads.test^$app=com.example.app,important\n",
+        );
+        let hit = fe.check_url(
+            "https://ads.test/x.js",
+            "https://ads.test/",
+            "script",
+            "GET",
+            &apps(&["com.example.app"]),
+        );
+        assert!(hit.blocked, "$important is not subject to exceptions: {hit:?}");
+    }
+
+    #[test]
+    fn negated_app_rules_apply_to_every_other_app() {
+        let fe = cosmetic_engine("||ads.test^$app=~com.example.app\n");
+        let url = "https://ads.test/x.js";
+        let src = "https://ads.test/";
+        // The excluded app is left alone; everybody else is blocked.
+        assert!(
+            !fe.check_url(url, src, "script", "GET", &apps(&["com.example.app"])).blocked
+        );
+        assert!(fe.check_url(url, src, "script", "GET", &apps(&["com.other.app"])).blocked);
+        // A flow nobody was attributed to is nobody's rule, either.
+        assert!(!fe.check_url(url, src, "script", "GET", &[]).blocked);
+    }
+
+    #[test]
+    fn app_wildcards_and_regexps_pick_their_apps() {
+        let fe = cosmetic_engine(
+            "||wild.test^$app=com.example.*\n\
+             ||regex.test^$app=/^com\\.other\\.app\\$\\|^org\\.other\\./\n",
+        );
+        let url = |host: &str| format!("https://{host}/x.js");
+        let src = "https://page.test/";
+        // `com.example.*` is a prefix match.
+        assert!(
+            fe.check_url(&url("wild.test"), src, "script", "GET", &apps(&["com.example.app"]))
+                .blocked
+        );
+        assert!(
+            !fe.check_url(&url("wild.test"), src, "script", "GET", &apps(&["com.examples"]))
+                .blocked
+        );
+        // The regexp entries: `\$` is the end anchor after the syntax
+        // unescape, and the two alternatives are one entry (the `\|`).
+        assert!(
+            fe.check_url(&url("regex.test"), src, "script", "GET", &apps(&["com.other.app"]))
+                .blocked
+        );
+        assert!(
+            fe.check_url(&url("regex.test"), src, "script", "GET", &apps(&["org.other.shop"]))
+                .blocked
+        );
+        assert!(
+            !fe.check_url(&url("regex.test"), src, "script", "GET", &apps(&["com.other.app2"]))
+                .blocked
+        );
+    }
+
+    #[test]
+    fn several_apps_of_one_flow_share_the_merge() {
+        // One process can carry several package names (the platform pushes
+        // every app of a uid) and one rule can name several apps.
+        let fe = cosmetic_engine(
+            "||shared.test^$app=com.first.app|com.second.app\n\
+             @@||shared.test^$app=com.second.app\n",
+        );
+        let url = "https://shared.test/x.js";
+        let src = "https://shared.test/";
+        // The exception of the second app cancels the block of the first.
+        assert!(
+            !fe.check_url(url, src, "script", "GET", &apps(&["com.first.app", "com.second.app"]))
+                .blocked
+        );
+        assert!(
+            fe.check_url(url, src, "script", "GET", &apps(&["com.first.app"])).blocked
+        );
+    }
+
+    #[test]
+    fn app_rules_keep_the_options_the_crate_reads() {
+        let fe = cosmetic_engine(
+            "||third.test^$third-party,app=com.example.app\n\
+             ||get.test^$method=get,app=com.example.app\n",
+        );
+        let url = "https://third.test/x.js";
+        // `$third-party` survives the rewrite: the app is the same, the page
+        // decides.
+        assert!(
+            fe.check_url(url, "https://page.test/", "script", "GET", &apps(&["com.example.app"]))
+                .blocked
+        );
+        assert!(
+            !fe.check_url(url, "https://third.test/", "script", "GET", &apps(&["com.example.app"]))
+                .blocked
+        );
+        assert!(
+            fe.check_url("https://get.test/x.js", "https://get.test/", "script", "GET", &apps(&["com.example.app"]))
+                .blocked
+        );
+        assert!(
+            !fe.check_url("https://get.test/x.js", "https://get.test/", "script", "POST", &apps(&["com.example.app"]))
+                .blocked
+        );
+    }
+
+    #[test]
+    fn app_rules_that_cannot_run_faithfully_are_dropped() {
+        let fe = cosmetic_engine(
+            "||mixed.test^$app=com.example.app|~com.other.app\n\
+             ||network.test^$network,app=com.example.app\n\
+             ||stealth.test^$stealth,app=com.example.app\n\
+             ||bf.test^$app=com.example.app,badfilter\n\
+             ||to.test^$to=other.test,app=com.example.app\n\
+             ||case.test^$match-case,app=com.example.app\n\
+             ||empty.test^$app=\n\
+             ||star.test^$app=com.exa*ple.app\n\
+             ||kept.test^$app=com.example.app\n",
+        );
+        let compiled = fe.compiled();
+        let rules = compiled.app_rules.as_ref().expect("scan");
+        assert_eq!(rules.rules.len(), 1, "only `kept.test` may run");
+        assert_eq!(rules.dropped, 8);
+    }
+
+    #[test]
+    fn app_rules_a_modifier_scan_owns_are_not_counted_twice() {
+        // `$replace` rules are read (and dropped) by the replace scan — the
+        // app scan leaves them to it, so the rule shows up once, in the
+        // replace engine's count, and never in a shard.
+        let fe = cosmetic_engine(
+            "||ads.test^$replace=/a/b/,app=com.example.app\n\
+             ||other.test^$replace=/c/d/\n",
+        );
+        let compiled = fe.compiled();
+        assert!(compiled.app_rules.is_none(), "the app scan must skip it");
+        assert_eq!(compiled.replace.as_ref().expect("scan").dropped, 1);
+        // And it must not run for anyone: the app scan did not smuggle it
+        // into a shard.
+        assert!(
+            !fe.check_url(
+                "https://ads.test/x.js",
+                "https://ads.test/",
+                "script",
+                "GET",
+                &apps(&["com.example.app"])
+            )
+            .blocked
+        );
+    }
+
+    #[test]
+    fn app_rules_in_user_rules_report_the_user_list() {
+        let fe = FilterEngine::new();
+        fe.rebuild(
+            &[temp_list("base.txt", "! empty\n", ListFormat::Standard, 1)],
+            &["||ads.test^$app=com.example.app".to_string()],
+        );
+        let hit = fe.check_url(
+            "https://ads.test/x.js",
+            "https://ads.test/",
+            "script",
+            "GET",
+            &apps(&["com.example.app"]),
+        );
+        assert!(hit.blocked, "{hit:?}");
+        assert_eq!(hit.list_name.as_deref(), Some("User Custom Filter"));
+    }
+
+    #[test]
+    fn an_app_scoped_document_exception_is_not_a_global_switch() {
+        // `@@||host^$app=…,document` lifts filtering for one app; the switch
+        // table is by hostname alone, so it must stay out of it.
+        let fe = cosmetic_engine(
+            "@@||mafia.test^$app=net.bestmafia,document\n\
+             @@||open.test^$document\n",
+        );
+        assert_eq!(
+            fe.cosmetic_switches_for("mafia.test"),
+            CosmeticSwitches::default()
+        );
+        let open = fe.cosmetic_switches_for("open.test");
+        assert!(open.elemhide && open.urlblock, "{open:?}");
+    }
+
+    #[test]
+    fn app_redirect_rules_answer_with_their_resource() {
+        let fe = cosmetic_engine("||fake.test/x.js$redirect=nooptext,app=com.example.app\n");
+        let hit = fe.check_url(
+            "https://fake.test/x.js",
+            "https://fake.test/",
+            "script",
+            "GET",
+            &apps(&["com.example.app"]),
+        );
+        assert!(hit.blocked && hit.redirect.is_some(), "{hit:?}");
+        // Nobody else is served the redirect.
+        assert!(
+            !fe.check_url(
+                "https://fake.test/x.js",
+                "https://fake.test/",
+                "script",
+                "GET",
+                &apps(&["com.other.app"])
+            )
+            .blocked
+        );
     }
 }
 

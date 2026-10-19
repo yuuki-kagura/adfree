@@ -1,7 +1,9 @@
 package git.shin.adfree.core
 
 import android.content.ContentValues
+import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Build
 import android.os.Environment
@@ -164,6 +166,49 @@ class CoreEngine {
 
     fun setDohRanges(ranges: List<String>) {
         runCatching { git.shin.adfree.core.coreSetDohRanges(ranges) }
+    }
+
+    /**
+     * Pushes the uid -> packages table the core matches `$app=` network rules
+     * against.
+     *
+     * The core cannot read other apps' uid on Android 10+, so the platform has
+     * to tell it: one row per uid, every package sharing it included. Cheap
+     * enough to redo whenever an app is installed, removed or replaced.
+     */
+    fun pushUidApps(context: Context) {
+        val pm = context.packageManager
+        val installed = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            pm.getInstalledApplications(PackageManager.ApplicationInfoFlags.of(0L))
+        } else {
+            @Suppress("DEPRECATION")
+            pm.getInstalledApplications(0)
+        }
+        val byUid = LinkedHashMap<Int, MutableList<String>>()
+        for (info in installed) {
+            byUid.getOrPut(info.uid) { mutableListOf() } += info.packageName
+        }
+        val rows = byUid.map { (uid, packages) ->
+            git.shin.adfree.core.UidApps(uid = uid.toUInt(), packages = packages)
+        }
+        runCatching { git.shin.adfree.core.coreSetUidApps(rows) }
+            .onFailure { Log.w(tag, "setUidApps failed", it) }
+    }
+
+    /**
+     * Installs the callback the core uses to name the app that owns one TCP
+     * connection, which is what `$app=` rules are matched against.
+     *
+     * `pushUidApps` above answers "which packages have this uid"; this answers
+     * "whose uid is this connection". The kernel table the desktop core reads
+     * (`/proc/net/tcp`) has been closed to apps since Android 10, but a
+     * VpnService may ask the framework about the connections its own tunnel
+     * carries — which is exactly the traffic being filtered.
+     */
+    fun setConnectionUidLookup(context: Context) {
+        runCatching {
+            git.shin.adfree.core.coreSetUidLookup(FrameworkUidLookup(context.applicationContext))
+        }.onFailure { Log.w(tag, "setUidLookup failed", it) }
     }
 
     /**
@@ -497,3 +542,43 @@ data class DownloadResult(
     val updatedText: String? = null,
     val detectedFormat: String? = null,
 )
+
+/**
+ * The core's `$app=` attribution, answered by the framework.
+ *
+ * `ConnectivityManager.getConnectionOwnerUid` (API 34+) is the only
+ * unprivileged way to learn which app owns a connection: a VpnService may ask
+ * it about the flows its own tunnel carries, and the system names their owner
+ * from the kernel's socket table on our behalf. `/proc/net/tcp` — what the
+ * desktop core reads — has been closed to apps since Android 10.
+ *
+ * Every failure has to look like "no answer": an older release, a flow the
+ * kernel already forgot, a permission the system no longer grants. The core
+ * reads a missing uid as "apply no `$app=` rule at all", never as "apply every
+ * one of them", so this stays safe while remaining useful.
+ */
+private class FrameworkUidLookup(private val context: Context) :
+    git.shin.adfree.core.ConnectionUidLookup {
+
+    override fun ownerUid(
+        protocol: UByte,
+        localIp: String,
+        localPort: UShort,
+        remoteIp: String,
+        remotePort: UShort,
+    ): UInt? {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.UPSIDE_DOWN_CAKE) return null
+        return runCatching {
+            val connections = context.getSystemService(android.net.ConnectivityManager::class.java)
+                ?: return null
+            // The core hands us the IP protocol number (6 TCP, 17 UDP), which
+            // is what `getConnectionOwnerUid` documents as its first argument.
+            val uid = connections.getConnectionOwnerUid(
+                protocol.toInt(),
+                java.net.InetSocketAddress(localIp, localPort.toInt()),
+                java.net.InetSocketAddress(remoteIp, remotePort.toInt()),
+            )
+            if (uid == android.os.Process.INVALID_UID) null else uid.toUInt()
+        }.getOrNull()
+    }
+}

@@ -214,6 +214,10 @@ pub struct ProxySession {
     /// Where requests answered locally (`$redirect`, URL-level blocks) are
     /// reported. `None` when no engine owns the session (tests).
     sink: Option<MitmSink>,
+    /// The applications the flow belongs to, as the kernel's socket table
+    /// named them when the connection opened (see [`crate::uidmap`]). Empty
+    /// when nothing was attributed — the `$app=` rules then apply to no app.
+    apps: Vec<String>,
 }
 
 /// Where a connection's response stream stands.
@@ -559,6 +563,7 @@ impl ProxySession {
             stats: None,
             sink: None,
             client_discard: None,
+            apps: Vec::new(),
         }
     }
 
@@ -601,6 +606,7 @@ impl ProxySession {
             stats: None,
             sink: None,
             client_discard: None,
+            apps: Vec::new(),
         })
     }
 
@@ -642,6 +648,7 @@ impl ProxySession {
             stats: None,
             sink: None,
             client_discard: None,
+            apps: Vec::new(),
         })
     }
 
@@ -655,6 +662,13 @@ impl ProxySession {
     /// (`$redirect`, a URL-scoped block) is visible in it like any other.
     pub fn set_sink(&mut self, sink: MitmSink) {
         self.sink = Some(sink);
+    }
+
+    /// Names the applications the flow belongs to: what the `$app=` rules of
+    /// the loaded lists are matched against. Set once, when the connection
+    /// opens; empty (the default) means nothing was attributed.
+    pub fn set_apps(&mut self, apps: Vec<String>) {
+        self.apps = apps;
     }
 
     /// The SNI captured from the ClientHello, once it has arrived.
@@ -885,6 +899,7 @@ impl ProxySession {
             self.captured.as_deref(),
             self.stats.as_deref(),
             self.sink,
+            &self.apps,
             &mut self.head_requests,
             &mut outcome,
             &mut self.client_discard,
@@ -910,6 +925,7 @@ impl ProxySession {
         session_host: Option<&str>,
         stats: Option<&Stats>,
         sink: Option<MitmSink>,
+        apps: &[String],
         head_requests: &mut VecDeque<ResponseEdit>,
         outcome: &mut Outcome,
         discard: &mut Option<ClientDiscard>,
@@ -942,6 +958,7 @@ impl ProxySession {
                     session_host,
                     stats,
                     sink,
+                    apps,
                     outcome,
                     discard,
                 )?;
@@ -1003,6 +1020,7 @@ impl ProxySession {
         session_host: Option<&str>,
         stats: Option<&Stats>,
         sink: Option<MitmSink>,
+        apps: &[String],
         outcome: &mut Outcome,
         discard: &mut Option<ClientDiscard>,
     ) -> Result<RequestPlan, String> {
@@ -1151,7 +1169,7 @@ impl ProxySession {
             }
         }
 
-        let mut verdict = filter.check_url(&url, &source, request_type, &method);
+        let mut verdict = filter.check_url(&url, &source, request_type, &method, apps);
         if !verdict.blocked {
             // The request-URL modifiers. `$urltransform` and the shapes of
             // `$removeparam` the crate refuses are run by our own engine here;
@@ -1202,8 +1220,13 @@ impl ProxySession {
                                 // The transformed URL is a request of its own:
                                 // it is matched against the rest of the rules
                                 // before it goes out.
-                                verdict =
-                                    filter.check_url(&edit.url, &source, request_type, &method);
+                                verdict = filter.check_url(
+                                    &edit.url,
+                                    &source,
+                                    request_type,
+                                    &method,
+                                    apps,
+                                );
                                 if !verdict.blocked {
                                     rewritten_target = Some(new_target);
                                     transformed = Some(edit);
@@ -1412,6 +1435,7 @@ impl ProxySession {
                 self.captured.as_deref(),
                 self.stats.as_deref(),
                 self.sink,
+                &self.apps,
                 &mut self.head_requests,
                 &mut outcome,
                 &mut self.client_discard,

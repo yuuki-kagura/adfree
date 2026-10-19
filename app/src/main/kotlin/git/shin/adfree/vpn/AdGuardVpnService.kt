@@ -56,6 +56,22 @@ class AdGuardVpnService : VpnService() {
         }
     }
 
+    /**
+     * Apps come and go while the tunnel runs, and their uids are reused: the
+     * core's uid -> package table has to follow, or `$app=` rules would keep
+     * naming the app that used to own a uid.
+     */
+    private val packageReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context?, intent: Intent?) {
+            if (!isRunning) return
+            // The callback runs on the main thread and enumerating every
+            // installed app does not belong there.
+            serviceScope.launch(Dispatchers.IO) {
+                container.coreEngine.pushUidApps(this@AdGuardVpnService)
+            }
+        }
+    }
+
     override fun onCreate() {
         super.onCreate()
         registerReceiver(
@@ -63,6 +79,15 @@ class AdGuardVpnService : VpnService() {
             IntentFilter().apply {
                 addAction(Intent.ACTION_SCREEN_OFF)
                 addAction(Intent.ACTION_SCREEN_ON)
+            },
+        )
+        registerReceiver(
+            packageReceiver,
+            IntentFilter().apply {
+                addAction(Intent.ACTION_PACKAGE_ADDED)
+                addAction(Intent.ACTION_PACKAGE_REMOVED)
+                addAction(Intent.ACTION_PACKAGE_REPLACED)
+                addDataScheme("package")
             },
         )
     }
@@ -174,6 +199,14 @@ class AdGuardVpnService : VpnService() {
             override fun protect(fd: Int): Boolean =
                 runCatching { this@AdGuardVpnService.protect(fd) }.getOrDefault(false)
         })
+        // The `$app=` rules need the uid -> package table, and this is the
+        // moment that matters: pushed before the first packet, every flow the
+        // tunnel sees is already attributed.
+        container.coreEngine.pushUidApps(this)
+        // ... and the other half of the pair: which uid owns a connection.
+        // The framework answers that for the flows this tunnel carries, which
+        // is the only source Android leaves to apps.
+        container.coreEngine.setConnectionUidLookup(this)
         container.coreEngine.start(fd)
         container.vpnController.onVpnStarted()
         Log.i(TAG, "TUN up (fd=$fd), dns=${dns.address}")
@@ -209,6 +242,7 @@ class AdGuardVpnService : VpnService() {
     override fun onDestroy() {
         serviceScope.cancel()
         runCatching { unregisterReceiver(screenReceiver) }
+        runCatching { unregisterReceiver(packageReceiver) }
         stopVpn()
         super.onDestroy()
     }

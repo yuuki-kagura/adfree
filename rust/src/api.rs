@@ -172,6 +172,15 @@ pub struct HostVerdictBinding {
     pub category: i32,
 }
 
+/// One `uid -> packages` row of the runtime app table (see
+/// [`core_set_uid_apps`]).
+#[derive(uniffi::Record, Clone, Debug)]
+pub struct UidApps {
+    pub uid: u32,
+    /// Package names sharing the uid; order is not significant.
+    pub packages: Vec<String>,
+}
+
 /// One line of the Activity log.
 #[derive(uniffi::Record, Clone, Debug, Default)]
 pub struct LogEvent {
@@ -336,6 +345,21 @@ pub fn core_set_lists_async(lists: Vec<FilterListBinding>, user_rules: Vec<Strin
     guard(false, || {
         let native: Vec<FilterListInfo> = lists.iter().map(FilterListInfo::from).collect();
         crate::core().rebuild_async(native, user_rules);
+        true
+    })
+}
+
+/// Replaces the uid -> packages table the `$app=` network rules are matched
+/// against. The platform calls this with what its package manager knows (the
+/// core cannot see other apps); the table stays until the next call.
+#[uniffi::export]
+pub fn core_set_uid_apps(entries: Vec<UidApps>) -> bool {
+    guard(false, || {
+        let rows = entries
+            .into_iter()
+            .map(|entry| (entry.uid, entry.packages))
+            .collect();
+        crate::core().set_uid_apps(rows);
         true
     })
 }
@@ -700,6 +724,39 @@ pub trait SocketProtector: Send + Sync {
 #[uniffi::export]
 pub fn core_set_socket_protector(protector: Arc<dyn SocketProtector>) {
     guard((), || crate::core().set_socket_protector(protector));
+}
+
+/// Names the app behind one connection, on the side that can ask the
+/// operating system.
+///
+/// The kernel's socket table (`/proc/net/{tcp,udp}`, see [`crate::uidmap`]) is
+/// the source every desktop platform offers, but Android closed those files to
+/// apps in API 29. What a VPN app may still ask there is the framework:
+/// `ConnectivityManager.getConnectionOwnerUid` names the owner of a connection
+/// the app's own tunnel carries, which is exactly the traffic being filtered.
+/// The core asks per new flow, and only while some `$app=` rule is loaded.
+#[uniffi::export(with_foreign)]
+pub trait ConnectionUidLookup: Send + Sync {
+    /// `protocol` is the IP protocol number (6 TCP, 17 UDP). `None` means the
+    /// connection could not be attributed — an unknown flow, an old platform,
+    /// a revoked permission; the core then applies no `$app=` rule at all,
+    /// rather than a rule aimed at another app.
+    fn owner_uid(
+        &self,
+        protocol: u8,
+        local_ip: String,
+        local_port: u16,
+        remote_ip: String,
+        remote_port: u16,
+    ) -> Option<u32>;
+}
+
+/// Installs the platform connection-to-app lookup (called before the tunnel
+/// starts, next to the socket protector). Without it the kernel table is read
+/// instead, as on desktop Linux.
+#[uniffi::export]
+pub fn core_set_uid_lookup(lookup: Arc<dyn ConnectionUidLookup>) {
+    guard((), || crate::core().set_uid_lookup(lookup));
 }
 
 /// Number of relays currently alive (for the UI).

@@ -20,6 +20,7 @@ use rustls::{ClientConfig, ClientConnection, RootCertStore, ServerConfig, Server
 use std::collections::BTreeMap;
 use std::io::{Read, Write};
 use std::net::TcpListener;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -2507,4 +2508,201 @@ fn a_page_larger_than_one_window_streams_to_the_client() {
     assert!(page.contains("ad-box"), "the origin's own content survived");
 
     tcp.close();
+}
+
+// ------------------------------------------------------------------ `$app=`
+
+/// The app rules of the e2e: a generic block an app exception lifts, and an
+/// app-scoped block no generic rule carries.
+///
+/// Each test owns one connection: the flow is the app attribution surface, and
+/// a client port recycled between two connections would keep the older flow's
+/// attribution — the harness always starts a fresh origin and core instead.
+const APP_EXCEPTION_LIST: &str = "! Title: e2e app exception\n\
+                                  ||shop.test/pathpage\n\
+                                  @@||shop.test/pathpage$app=com.test.allowed\n";
+
+const APP_BLOCK_LIST: &str = "! Title: e2e app block\n\
+                              ||shop.test/pathpage$app=com.test.blocked\n";
+
+#[test]
+fn an_app_exception_does_not_lift_a_generic_block_for_other_apps() {
+    let origin = start_origin(HTML);
+    let (core, ca_der) = setup_core_with_list(&origin, "app-exception-thaw", APP_EXCEPTION_LIST);
+
+    // Nobody owns this flow: the generic block decides, and the app exception
+    // is not allowed to stand in for every app on the device.
+    let mut tcp = Client::connect(core.clone(), origin.port);
+    let mut conn = handshake(&mut tcp, client_config(ca_der));
+    let (head, body) = request(&mut tcp, &mut conn, "/pathpage");
+    assert!(head.starts_with("HTTP/1.1 204"), "{head}");
+    assert!(body.is_empty(), "{body:?}");
+    assert!(
+        origin.requests.lock().expect("requests").is_empty(),
+        "a blocked request must not reach the origin"
+    );
+}
+
+#[test]
+fn an_app_exception_lifts_a_generic_block_for_its_app() {
+    let origin = start_origin(HTML);
+    let (core, ca_der) = setup_core_with_list(&origin, "app-exception-keep", APP_EXCEPTION_LIST);
+
+    // The flow the kernel tables would name: the exception lives in the app
+    // shard, the block in the main engine, and the merge is what cancels it.
+    core.set_uid_apps(vec![(42_424, vec!["com.test.allowed".to_string()])]);
+    core.pin_uid_for_port(CLIENT_PORT, 42_424);
+    let mut tcp = Client::connect(core.clone(), origin.port);
+    let mut conn = handshake(&mut tcp, client_config(ca_der));
+    let (head, body) = request(&mut tcp, &mut conn, "/pathpage");
+    assert!(
+        head.starts_with("HTTP/1.1 200"),
+        "the app exception must let it through: {head}"
+    );
+    assert!(contains_bytes(&body, b"e2e"), "the page arrives whole");
+    let seen = origin.requests.lock().expect("requests");
+    assert!(
+        seen.iter().any(|r| r.contains("/pathpage")),
+        "the request must reach the origin: {seen:?}"
+    );
+}
+
+#[test]
+fn an_app_scoped_block_spares_the_apps_it_does_not_name() {
+    let origin = start_origin(HTML);
+    let (core, ca_der) = setup_core_with_list(&origin, "app-block-spare", APP_BLOCK_LIST);
+
+    // An unattributed flow is nobody's app rule: the page comes through.
+    let mut tcp = Client::connect(core.clone(), origin.port);
+    let mut conn = handshake(&mut tcp, client_config(ca_der));
+    let (head, _) = request(&mut tcp, &mut conn, "/pathpage");
+    assert!(
+        head.starts_with("HTTP/1.1 200"),
+        "no app is named, no app rule fires: {head}"
+    );
+}
+
+#[test]
+fn an_app_scoped_block_applies_to_its_app() {
+    let origin = start_origin(HTML);
+    let (core, ca_der) = setup_core_with_list(&origin, "app-block", APP_BLOCK_LIST);
+
+    core.set_uid_apps(vec![(42_425, vec!["com.test.blocked".to_string()])]);
+    core.pin_uid_for_port(CLIENT_PORT, 42_425);
+    let mut tcp = Client::connect(core.clone(), origin.port);
+    let mut conn = handshake(&mut tcp, client_config(ca_der));
+    let (head, body) = request(&mut tcp, &mut conn, "/pathpage");
+    assert!(
+        head.starts_with("HTTP/1.1 204"),
+        "the named app is blocked: {head}"
+    );
+    assert!(body.is_empty(), "{body:?}");
+}
+
+// ------------------------------------------- `$app=` (the platform lookup)
+
+/// A list with no `$app=` rule at all: the platform must not be asked.
+const PLAIN_LIST: &str = "! Title: e2e plain\n||shop.test/ads/tracker.js$script\n";
+
+/// The Android path: no kernel table is involved, the platform callback
+/// answers — and it has to be asked about exactly the connection the tunnel
+/// opened, or the flow would be attributed to the wrong app.
+struct PlatformLookup {
+    /// uid the "framework" reports; `None` for an unattributable connection.
+    uid: Option<u32>,
+    /// The origin this test dials, asserted on every call.
+    origin_port: u16,
+    calls: AtomicUsize,
+}
+
+impl crate::api::ConnectionUidLookup for PlatformLookup {
+    fn owner_uid(
+        &self,
+        protocol: u8,
+        local_ip: String,
+        local_port: u16,
+        remote_ip: String,
+        remote_port: u16,
+    ) -> Option<u32> {
+        self.calls.fetch_add(1, Ordering::SeqCst);
+        assert_eq!(protocol, 6, "the tunnel's TCP flows are what is asked");
+        assert_eq!(local_ip, "10.0.2.15");
+        assert_eq!(local_port, CLIENT_PORT);
+        assert_eq!(remote_ip, "127.0.0.1");
+        assert_eq!(remote_port, self.origin_port);
+        self.uid
+    }
+}
+
+#[test]
+fn a_platform_lookup_drives_the_app_shard() {
+    let origin = start_origin(HTML);
+    let (core, ca_der) = setup_core_with_list(&origin, "app-platform-block", APP_BLOCK_LIST);
+    core.set_uid_apps(vec![(42_426, vec!["com.test.blocked".to_string()])]);
+    let lookup = Arc::new(PlatformLookup {
+        uid: Some(42_426),
+        origin_port: origin.port,
+        calls: AtomicUsize::new(0),
+    });
+    core.set_uid_lookup(lookup.clone());
+
+    let mut tcp = Client::connect(core.clone(), origin.port);
+    let mut conn = handshake(&mut tcp, client_config(ca_der));
+    let (head, body) = request(&mut tcp, &mut conn, "/pathpage");
+    assert!(
+        head.starts_with("HTTP/1.1 204"),
+        "the app the platform named is blocked: {head}"
+    );
+    assert!(body.is_empty(), "{body:?}");
+    assert_eq!(
+        lookup.calls.load(Ordering::SeqCst),
+        1,
+        "one connection asks the platform once"
+    );
+}
+
+#[test]
+fn a_platform_lookup_that_cannot_answer_leaves_the_flow_unattributed() {
+    let origin = start_origin(HTML);
+    let (core, ca_der) = setup_core_with_list(&origin, "app-platform-unknown", APP_BLOCK_LIST);
+    // The table has the uid; the platform just cannot name the connection, so
+    // no app is ever attached to it.
+    core.set_uid_apps(vec![(42_427, vec!["com.test.blocked".to_string()])]);
+    let lookup = Arc::new(PlatformLookup {
+        uid: None,
+        origin_port: origin.port,
+        calls: AtomicUsize::new(0),
+    });
+    core.set_uid_lookup(lookup.clone());
+
+    let mut tcp = Client::connect(core.clone(), origin.port);
+    let mut conn = handshake(&mut tcp, client_config(ca_der));
+    let (head, _) = request(&mut tcp, &mut conn, "/pathpage");
+    assert!(
+        head.starts_with("HTTP/1.1 200"),
+        "an unknown app matches no app rule: {head}"
+    );
+    assert_eq!(lookup.calls.load(Ordering::SeqCst), 1);
+}
+
+#[test]
+fn the_platform_is_not_asked_when_no_app_rule_is_loaded() {
+    let origin = start_origin(HTML);
+    let (core, ca_der) = setup_core_with_list(&origin, "app-platform-idle", PLAIN_LIST);
+    let lookup = Arc::new(PlatformLookup {
+        uid: Some(42_428),
+        origin_port: origin.port,
+        calls: AtomicUsize::new(0),
+    });
+    core.set_uid_lookup(lookup.clone());
+
+    let mut tcp = Client::connect(core.clone(), origin.port);
+    let mut conn = handshake(&mut tcp, client_config(ca_der));
+    let (head, _) = request(&mut tcp, &mut conn, "/pathpage");
+    assert!(head.starts_with("HTTP/1.1 200"), "{head}");
+    assert_eq!(
+        lookup.calls.load(Ordering::SeqCst),
+        0,
+        "no `$app=` rule is loaded, so nothing is asked of the platform"
+    );
 }

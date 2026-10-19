@@ -28,7 +28,7 @@ use crate::conntrack::{CidrSet, ConnTable, IpVerdict};
 use crate::dns::{self, BlockMode, Query};
 use crate::events::{self, Event, EventLog};
 use crate::filter::{FilterEngine, FilterListInfo, HostVerdict};
-use crate::fxhash::hash_str;
+use crate::fxhash::{hash_str, FxHashMap};
 use crate::packet::{self, IpKey, Packet, PROTO_TCP, PROTO_UDP};
 use crate::stats::{self, Stats};
 use crate::udpnat::{UdpFlow, UdpKey, UdpNat, UDP_MAX_FLOWS};
@@ -186,7 +186,17 @@ pub struct Core {
     /// log database and (later) everything else the app persists. `None` until
     /// `set_data_root` runs, and tests run without it.
     store: OnceLock<Arc<crate::store::Store>>,
+    /// The port->uid table of the kernel, which says whose UDP/TCP sockets
+    /// are whose.
     uidmap: Mutex<UidMap>,
+    /// uid -> package names, pushed down by the platform (Kotlin, the only
+    /// side with a package manager); the kernel knows uids alone. Empty until
+    /// the first push.
+    uid_apps: RwLock<FxHashMap<u32, Vec<String>>>,
+    /// Platform callback that names the uid owning one connection (Android's
+    /// `ConnectivityManager`). `None` — desktop, tests — falls back to the
+    /// kernel's own table in [`crate::uidmap`].
+    uid_lookup: RwLock<Option<Arc<dyn crate::api::ConnectionUidLookup>>>,
     screen_off: AtomicBool,
     running: AtomicBool,
     tun_fd: AtomicI32,
@@ -278,6 +288,8 @@ impl Core {
             events: Mutex::new(EventLog::default()),
             store: OnceLock::new(),
             uidmap: Mutex::new(UidMap::new()),
+            uid_apps: RwLock::new(FxHashMap::default()),
+            uid_lookup: RwLock::new(None),
             screen_off: AtomicBool::new(false),
             running: AtomicBool::new(false),
             tun_fd: AtomicI32::new(-1),
@@ -1026,6 +1038,10 @@ impl Core {
                     // Requests the session answers itself (URL-scoped blocks,
                     // `$redirect` resources) belong in the app's log.
                     proxy.set_sink(log_mitm_block);
+                    // Who the flow belongs to, resolved once at SYN time: the
+                    // platform names the app the `$app=` rules are about, and
+                    // the flow keeps that name for as long as it lives.
+                    proxy.set_apps(self.apps_for_packet(pkt));
                     Some(proxy)
                 }
                 Err(e) => {
@@ -1661,6 +1677,74 @@ impl Core {
     /// Uid of the app that owns a given source port (0 = unknown).
     pub fn uid_for_port(&self, port: u16) -> u32 {
         self.uidmap.lock().unwrap().lookup(port)
+    }
+
+    /// Test hook: pins a TCP source port to a uid, the way the kernel table
+    /// would on a device. The engine e2e drives synthetic packets whose
+    /// source port belongs to no real process.
+    #[cfg(test)]
+    pub fn pin_uid_for_port(&self, port: u16, uid: u32) {
+        self.uidmap.lock().unwrap().pin_tcp(port, uid);
+    }
+
+    /// Replaces the uid -> packages table the `$app=` rules are matched
+    /// against. Pushed by the platform, the only side holding a package
+    /// manager; the core keeps it until the next push.
+    pub fn set_uid_apps(&self, entries: Vec<(u32, Vec<String>)>) {
+        let mut table = self.uid_apps.write().unwrap();
+        table.clear();
+        for (uid, names) in entries {
+            // 0 is the kernel's `android`/unknown uid: nobody's rules.
+            if uid != 0 && !names.is_empty() {
+                table.insert(uid, names);
+            }
+        }
+    }
+
+    /// Installs the platform connection-to-app lookup (Android's
+    /// `ConnectivityManager`). Without it the kernel's `/proc` table is read.
+    pub fn set_uid_lookup(&self, lookup: Arc<dyn crate::api::ConnectionUidLookup>) {
+        *self.uid_lookup.write().unwrap() = Some(lookup);
+    }
+
+    /// The package names behind the app that owns the TCP flow `pkt` opens,
+    /// for the `$app=` rules. Empty when the flow is unattributed, when the
+    /// platform has not pushed the table yet, or when no loaded list carries an
+    /// `$app=` rule (nothing is then asked of the platform or of the kernel).
+    ///
+    /// One lookup per connection, at SYN time: the app is a property of the
+    /// flow, not of the request, and asking later would race with the first
+    /// request of the same connection.
+    fn apps_for_packet(&self, pkt: &Packet<'_>) -> Vec<String> {
+        if !self.filter.has_app_rules() {
+            return Vec::new();
+        }
+        let lookup = self.uid_lookup.read().unwrap().clone();
+        let uid = match lookup {
+            Some(lookup) => lookup
+                .owner_uid(
+                    PROTO_TCP,
+                    pkt.src_ip_text(),
+                    pkt.src_port,
+                    pkt.dst_ip_text(),
+                    pkt.dst_port,
+                )
+                .unwrap_or(0),
+            // No platform callback: the kernel's socket table answers, as it
+            // does on desktop Linux. The end-to-end tests drive this path with
+            // `pin_uid_for_port`, since their synthetic ports belong to no
+            // real process.
+            None => self.uidmap.lock().unwrap().lookup_tcp(pkt.src_port),
+        };
+        if uid == 0 {
+            return Vec::new();
+        }
+        self.uid_apps
+            .read()
+            .unwrap()
+            .get(&uid)
+            .cloned()
+            .unwrap_or_default()
     }
 
     /// The shared per-SNI resolver, creating it on first use.
