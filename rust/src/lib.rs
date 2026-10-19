@@ -25,6 +25,7 @@ pub mod events;
 pub mod filter;
 pub mod fxhash;
 pub mod hls;
+pub mod htmlfilter;
 pub mod jsonprune;
 pub mod logbuf;
 pub mod packet;

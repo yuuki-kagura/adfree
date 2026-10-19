@@ -361,6 +361,16 @@ fn start_origin_mode(html: &'static str, mode: OriginBody) -> Origin {
                     body.len()
                 )
                 .into_bytes()
+            } else if line.starts_with("GET /missing ") {
+                // A page that never arrived: a status apart from 200 is not
+                // one HTML filtering reads.
+                format!(
+                    "HTTP/1.1 404 Not Found\r\nContent-Type: text/html\r\n\
+                     Content-Length: {}\r\nConnection: keep-alive\r\n\r\n{}",
+                    html.len(),
+                    html
+                )
+                .into_bytes()
             } else if line.starts_with("GET /pathpage ") {
                 // The same page under another path: the `$path` rules have to
                 // tell the two apart.
@@ -1873,6 +1883,266 @@ fn a_body_over_the_replace_cap_keeps_its_bytes() {
         page.ends_with("</body></html>"),
         "the body must be complete"
     );
+
+    tcp.close();
+}
+
+/// The `$$` rules: the answer loses the elements they name, the bytes around
+/// them untouched, and the injection that follows still lands on the cut
+/// body.
+const HTML_LIST: &str = "! Title: e2e html filtering\n\
+                         shop.test$$div[class=\"adsbygoogle\"]\n\
+                         shop.test$$p[class=\"sponsored\"]\n";
+
+/// The same rules with the `$@$` exception that cancels one of them.
+const HTML_EXCEPTION_LIST: &str = "! Title: e2e html filtering exception\n\
+                                   shop.test$$div[class=\"adsbygoogle\"]\n\
+                                   shop.test$$p[class=\"sponsored\"]\n\
+                                   shop.test$@$p[class=\"sponsored\"]\n";
+
+/// The `$content` exception: it switches the whole family off, the way the
+/// knowledge base says it switches content modification off.
+const HTML_CONTENT_LIST: &str = "! Title: e2e html filtering veto\n\
+                                 shop.test$$div[class=\"adsbygoogle\"]\n\
+                                 @@||shop.test^$content\n";
+
+/// One rule for the `ad-box` element every noisy page carries.
+const HTML_BIG_LIST: &str = "! Title: e2e html filtering big\n\
+                             shop.test$$div[class=\"ad-box\"]\n";
+
+/// The same response edited by two families in one pass: HTML filtering
+/// first, `$replace` on what it left.
+const HTML_REPLACE_LIST: &str = "! Title: e2e html filtering replace\n\
+                                 shop.test$$div[class=\"adsbygoogle\"]\n\
+                                 ||shop.test^$document,replace=/<title>e2e<\\/title>/<title>clean<\\/title>/\n";
+
+/// `$$`: the elements the rules name are cut out of the page, everything
+/// around them travels as it came, and the injection the page's own handling
+/// adds still lands — one pass, one nonce, one length.
+#[test]
+fn html_rules_cut_elements_on_the_https_path() {
+    let origin = start_origin(HTML);
+    let (core, ca_der) = setup_core_with_list(&origin, "html", HTML_LIST);
+
+    let mut tcp = Client::connect(core.clone(), origin.port);
+    let mut conn = handshake(&mut tcp, client_config(ca_der));
+    assert!(!conn.is_handshaking(), "the MITM handshake must complete");
+
+    let (head, body) = request_with(
+        &mut tcp,
+        &mut conn,
+        "/",
+        "Sec-Fetch-Dest: document\r\nReferer: https://shop.test/\r\n",
+    );
+    assert!(head.starts_with("HTTP/1.1 200 OK"), "{head}");
+    let nonce = nonce_of(&head);
+    let page = page_text(&head, &body);
+    assert!(
+        !page.contains("adsbygoogle"),
+        "the attribute rule's element must be gone: {page}"
+    );
+    assert!(
+        !page.contains("sponsored"),
+        "the class rule's element must be gone: {page}"
+    );
+    assert!(
+        page.contains("<div class=\"ad-box\">ad</div>"),
+        "nothing else may move: {page}"
+    );
+    assert!(
+        page.contains(&format!(" nonce=\"{nonce}\"")),
+        "the injection must land on the cut body: {page}"
+    );
+    assert!(page.ends_with("</html>"), "the body must be complete: {page}");
+    assert_eq!(declared_length(&head), body.len());
+
+    // The same connection, one more round: a cut response is framed like any
+    // other, and the splice stays in sync.
+    let (head, body) = request_with(
+        &mut tcp,
+        &mut conn,
+        "/",
+        "Sec-Fetch-Dest: document\r\nReferer: https://shop.test/\r\n",
+    );
+    assert!(head.starts_with("HTTP/1.1 200 OK"), "{head}");
+    assert!(!page_text(&head, &body).contains("adsbygoogle"));
+
+    tcp.close();
+}
+
+/// `$@$`: the exception cancels the rule whose selector it repeats, and only
+/// that one.
+#[test]
+fn an_html_exception_saves_the_element_it_names() {
+    let origin = start_origin(HTML);
+    let (core, ca_der) = setup_core_with_list(&origin, "html-exception", HTML_EXCEPTION_LIST);
+
+    let mut tcp = Client::connect(core.clone(), origin.port);
+    let mut conn = handshake(&mut tcp, client_config(ca_der));
+    assert!(!conn.is_handshaking(), "the MITM handshake must complete");
+
+    let (head, body) = request_with(
+        &mut tcp,
+        &mut conn,
+        "/",
+        "Sec-Fetch-Dest: document\r\nReferer: https://shop.test/\r\n",
+    );
+    let page = page_text(&head, &body);
+    assert!(
+        !page.contains("adsbygoogle"),
+        "the rule without an exception still runs: {page}"
+    );
+    assert!(
+        page.contains("Sponsored content"),
+        "the exception's element must stay: {page}"
+    );
+    assert_eq!(declared_length(&head), body.len());
+
+    tcp.close();
+}
+
+/// `$content`: the page exception switches HTML filtering off, like it
+/// switches `$replace` off.
+#[test]
+fn a_content_exception_switches_html_filtering_off() {
+    let origin = start_origin(HTML);
+    let (core, ca_der) = setup_core_with_list(&origin, "html-content", HTML_CONTENT_LIST);
+
+    let mut tcp = Client::connect(core.clone(), origin.port);
+    let mut conn = handshake(&mut tcp, client_config(ca_der));
+    assert!(!conn.is_handshaking(), "the MITM handshake must complete");
+
+    let (head, body) = request_with(
+        &mut tcp,
+        &mut conn,
+        "/",
+        "Sec-Fetch-Dest: document\r\nReferer: https://shop.test/\r\n",
+    );
+    let page = page_text(&head, &body);
+    assert!(
+        page.contains("adsbygoogle"),
+        "`$content` must leave the page whole: {page}"
+    );
+    assert_eq!(declared_length(&head), body.len());
+
+    tcp.close();
+}
+
+/// A page past the streaming threshold (32 KiB) is still held: an HTML rule
+/// reads the whole document, and the cap that lets an edit hold one is the
+/// `$replace` one.
+#[test]
+fn html_rules_reach_a_page_over_the_streaming_threshold() {
+    let origin = start_origin(noisy_page(96 * 1024));
+    let (core, ca_der) = setup_core_with_list(&origin, "html-big", HTML_BIG_LIST);
+
+    let mut tcp = Client::connect(core.clone(), origin.port);
+    let mut conn = handshake(&mut tcp, client_config(ca_der));
+    assert!(!conn.is_handshaking(), "the MITM handshake must complete");
+
+    let (head, body) = request_with(
+        &mut tcp,
+        &mut conn,
+        "/",
+        "Sec-Fetch-Dest: document\r\nReferer: https://shop.test/\r\n",
+    );
+    assert!(head.starts_with("HTTP/1.1 200 OK"), "{head}");
+    let page = page_text(&head, &body);
+    assert!(
+        !page.contains("ad-box"),
+        "the rule's element must be gone from a big page: {page:.200}"
+    );
+    assert!(page.ends_with("</body></html>"), "complete body");
+    assert_eq!(declared_length(&head), body.len());
+
+    tcp.close();
+}
+
+/// Past the edit cap (512 KiB) the bytes travel as they are — and a page among
+/// those still gets its injection, streamed exactly as before.
+#[test]
+fn an_html_rule_over_the_cap_leaves_the_bytes_alone() {
+    let origin = start_origin(noisy_page(600 * 1024));
+    let (core, ca_der) = setup_core_with_list(&origin, "html-cap", HTML_BIG_LIST);
+
+    let mut tcp = Client::connect(core.clone(), origin.port);
+    let mut conn = handshake(&mut tcp, client_config(ca_der));
+    assert!(!conn.is_handshaking(), "the MITM handshake must complete");
+
+    let (head, body) = request_streamed(&mut tcp, &mut conn, "/");
+    let nonce = nonce_of(&head);
+    let page = page_text(&head, &body);
+    assert!(
+        page.contains("ad-box"),
+        "over the cap the bytes travel untouched: {page:.200}"
+    );
+    assert!(
+        page.contains(&format!(" nonce=\"{nonce}\"")),
+        "and still injected: {page:.200}"
+    );
+    assert!(
+        page.ends_with("</body></html>"),
+        "the body must be complete"
+    );
+
+    tcp.close();
+}
+
+/// A page that never arrived with a 200 is not HTML filtering's to read: the
+/// element stays where the origin put it.
+#[test]
+fn html_rules_skip_a_response_that_is_not_a_200() {
+    let origin = start_origin(HTML);
+    let (core, ca_der) = setup_core_with_list(&origin, "html-status", HTML_LIST);
+
+    let mut tcp = Client::connect(core.clone(), origin.port);
+    let mut conn = handshake(&mut tcp, client_config(ca_der));
+    assert!(!conn.is_handshaking(), "the MITM handshake must complete");
+
+    let (head, body) = request_with(
+        &mut tcp,
+        &mut conn,
+        "/missing",
+        "Sec-Fetch-Dest: document\r\nReferer: https://shop.test/\r\n",
+    );
+    assert!(head.starts_with("HTTP/1.1 404"), "{head}");
+    let page = page_text(&head, &body);
+    assert!(
+        page.contains("adsbygoogle"),
+        "a 404 is not the page the rules were written for: {page}"
+    );
+
+    tcp.close();
+}
+
+/// HTML filtering and `$replace` edit one response in one pass: the cut comes
+/// first, and what `$replace` reads is what the client will get.
+#[test]
+fn html_filtering_and_replace_edit_the_same_pass() {
+    let origin = start_origin(HTML);
+    let (core, ca_der) = setup_core_with_list(&origin, "html-replace", HTML_REPLACE_LIST);
+
+    let mut tcp = Client::connect(core.clone(), origin.port);
+    let mut conn = handshake(&mut tcp, client_config(ca_der));
+    assert!(!conn.is_handshaking(), "the MITM handshake must complete");
+
+    let (head, body) = request_with(
+        &mut tcp,
+        &mut conn,
+        "/",
+        "Sec-Fetch-Dest: document\r\nReferer: https://shop.test/\r\n",
+    );
+    assert!(head.starts_with("HTTP/1.1 200 OK"), "{head}");
+    let page = page_text(&head, &body);
+    assert!(
+        page.contains("<title>clean</title>"),
+        "the rewrite must land: {page}"
+    );
+    assert!(
+        !page.contains("adsbygoogle"),
+        "and the cut must too: {page}"
+    );
+    assert_eq!(declared_length(&head), body.len());
 
     tcp.close();
 }

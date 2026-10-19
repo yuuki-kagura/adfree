@@ -39,6 +39,9 @@ serde_json = { version = "1", features = ["preserve_order"] }
 # regular expressions applied to response bodies. The same engine the adblock
 # crate already pulls in, used through its byte API.
 regex = "1"
+# Byte-level searching for the HTML filter (substrings inside response
+# bodies); already in the tree through `regex`, named here to use it directly.
+memchr = "2"
 # `$redirect` resources come out of the engine as `data:` URLs; the HTTPS path
 # decodes them into a response body.
 base64 = "0.22"

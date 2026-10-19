@@ -47,6 +47,7 @@ dependencies = [
  "base64",
  "flate2",
  "libc",
+ "memchr",
  "rcgen",
  "regex",
  "ring",

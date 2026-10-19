@@ -8,7 +8,9 @@
 //! Everything is non-blocking and returns the payloads to write back, so the
 //! packet loop stays in charge of TCP segmentation and never blocks a syscall.
 
-use crate::filter::{CookiePlan, FilterEngine, HeaderEdit, HlsPlan, JsonprunePlan, Replace};
+use crate::filter::{
+    CookiePlan, FilterEngine, HeaderEdit, HlsPlan, HtmlPlan, JsonprunePlan, Replace,
+};
 use crate::mitm::http;
 use crate::mitm::tls::{
     self, feed_client, feed_client_wire, feed_server, send_to_client, FlowResolver, TlsSession,
@@ -238,6 +240,9 @@ enum RespPhase {
         /// The `$hls` rules the request matched: applied to the body before
         /// `$jsonprune` and `$replace` have it.
         hls: Option<Arc<HlsPlan>>,
+        /// The `$$` / `##^` HTML filtering rules the request matched: applied
+        /// to the body after `$jsonprune` and before `$replace` has it.
+        html: Option<Arc<HtmlPlan>>,
         /// The body may be a page: only then does the injector look at it.
         inject: bool,
     },
@@ -269,6 +274,9 @@ struct ResponseEdit {
     /// The `$hls` rules the request matched: the response body loses the
     /// playlist segments they name.
     hls: Option<Arc<HlsPlan>>,
+    /// The `$$` / `##^` HTML filtering rules the request matched: the
+    /// response body loses the elements they name.
+    html: Option<Arc<HtmlPlan>>,
     /// The URL of the page this request is for, when the loaded lists carry
     /// `[$path=…]` rules: the injection matches those rules against it. The
     /// request head is the only place the URL exists, so it rides along.
@@ -293,6 +301,9 @@ struct RequestPlan {
     /// The `$hls` rules the request matched: held until the response body
     /// arrives.
     hls: Option<Arc<HlsPlan>>,
+    /// The `$$` / `##^` HTML filtering rules the request matched: held until
+    /// the response body arrives.
+    html: Option<Arc<HtmlPlan>>,
     /// The request's page URL when the loaded lists carry `[$path=…]` rules:
     /// what the injection matches those rules against. Rides on the plan so
     /// the response edit — which happens long after the head was read — can
@@ -402,10 +413,13 @@ fn streamable(encoding: http::Encoding) -> bool {
 }
 
 /// The name of the body edit a response gave up on: the log lines that say
-/// which modifier could not run name the first one the request carried.
-fn body_edit_name(replace: bool, jsonprune: bool) -> &'static str {
+/// which modifier could not run name the first one the request carried —
+/// `$replace`, then `$$`, then `$jsonprune` and `$hls`.
+fn body_edit_name(replace: bool, jsonprune: bool, html: bool) -> &'static str {
     if replace {
         "$replace"
+    } else if html {
+        "$$"
     } else if jsonprune {
         "$jsonprune"
     } else {
@@ -477,6 +491,19 @@ fn payload_summary(payload: &str) -> String {
         return payload.to_string();
     }
     let cut: String = payload.chars().take(MAX - 1).collect();
+    format!("{cut}…")
+}
+
+/// The text of the rules one response edit applied, short enough for a log
+/// line: the rules as they come, cut on a character boundary when there are
+/// too many or they are too long.
+fn rules_summary(rules: &[String]) -> String {
+    const MAX: usize = 160;
+    let joined = rules.join("; ");
+    if joined.chars().count() <= MAX {
+        return joined;
+    }
+    let cut: String = joined.chars().take(MAX - 1).collect();
     format!("{cut}…")
 }
 
@@ -927,8 +954,10 @@ impl ProxySession {
         if let Some(info) = http::request_info(buffer) {
             // A body edit cannot read a response the request did not ask to
             // be encoded readably.
-            let forced =
-                plan.replace.is_some() || plan.jsonprune.is_some() || plan.hls.is_some();
+            let forced = plan.replace.is_some()
+                || plan.jsonprune.is_some()
+                || plan.hls.is_some()
+                || plan.html.is_some();
             head_requests.push_back(ResponseEdit {
                 info,
                 replace: plan.replace,
@@ -936,6 +965,7 @@ impl ProxySession {
                 cookies: plan.cookies,
                 jsonprune: plan.jsonprune,
                 hls: plan.hls,
+                html: plan.html,
                 page_url: plan.page_url,
             });
             if let Some(fixed) = http::drop_undecodable_encodings(buffer, forced) {
@@ -1094,6 +1124,16 @@ impl ProxySession {
         if filter.has_hls_rules() {
             if let Some(rules) = filter.hls_plan(&url, &source, request_type, &method) {
                 plan.hls = Some(Arc::new(rules));
+            }
+        }
+
+        // `$$` / `##^`: the response body loses the elements the matching
+        // rules name. Matched here like the other body edits and held until
+        // the body comes back; the body pipeline runs it after `$jsonprune`
+        // and before `$replace`.
+        if filter.has_html_rules() {
+            if let Some(rules) = filter.html_plan(&url, &source, request_type) {
+                plan.html = Some(Arc::new(rules));
             }
         }
 
@@ -1550,7 +1590,17 @@ impl ProxySession {
                     let replace = req.replace.filter(|_| info.text && editable);
                     let jsonprune = req.jsonprune.filter(|_| info.text && editable);
                     let hls = req.hls.filter(|_| info.text && editable);
-                    let holding = replace.is_some() || jsonprune.is_some() || hls.is_some();
+                    // `$$` / `##^` read only a page that arrived whole: a
+                    // document response with 200. What the response holds is
+                    // read as bytes, so the content type only has to say
+                    // `text/html` — nothing is decoded but the body itself.
+                    let html = req
+                        .html
+                        .filter(|_| info.html && info.status == 200 && editable);
+                    let holding = replace.is_some()
+                        || jsonprune.is_some()
+                        || hls.is_some()
+                        || html.is_some();
                     // A body edit needs the whole body, which is the one thing
                     // streaming cannot give it: a body already known to be over
                     // the cap is left to the page's own handling below.
@@ -1581,6 +1631,7 @@ impl ProxySession {
                             replace,
                             jsonprune,
                             hls,
+                            html,
                             inject: html_edit,
                         };
                         continue;
@@ -1594,7 +1645,11 @@ impl ProxySession {
                             self.captured.as_deref().unwrap_or("?"),
                             info.status,
                             framing.expect("over the cap means a length was known"),
-                            body_edit_name(replace.is_some(), jsonprune.is_some()),
+                            body_edit_name(
+                                replace.is_some(),
+                                jsonprune.is_some(),
+                                html.is_some()
+                            ),
                         ));
                     }
                     if html_edit {
@@ -1626,6 +1681,7 @@ impl ProxySession {
                             replace: None,
                             jsonprune: None,
                             hls: None,
+                            html: None,
                             inject: true,
                         };
                         continue;
@@ -1660,10 +1716,15 @@ impl ProxySession {
                     inject,
                     jsonprune,
                     hls,
+                    html,
                 } => {
                     // A body edit needs the whole body, so it holds one far
                     // longer than an injection does.
-                    let cap = if replace.is_some() || jsonprune.is_some() || hls.is_some() {
+                    let cap = if replace.is_some()
+                        || jsonprune.is_some()
+                        || hls.is_some()
+                        || html.is_some()
+                    {
                         http::REPLACE_AFTER
                     } else {
                         http::STREAM_AFTER
@@ -1676,13 +1737,21 @@ impl ProxySession {
                                 // Only a page can fall back this way — the
                                 // injector re-encodes on the fly, a body edit
                                 // cannot.
-                                if replace.is_some() || jsonprune.is_some() || hls.is_some() {
+                                if replace.is_some()
+                                    || jsonprune.is_some()
+                                    || hls.is_some()
+                                    || html.is_some()
+                                {
                                     crate::logbuf::push(&format!(
                                         "mitm {}: body over {} bytes in {:?}, {} dropped",
                                         self.captured.as_deref().unwrap_or("?"),
                                         cap,
                                         encoding,
-                                        body_edit_name(replace.is_some(), jsonprune.is_some()),
+                                        body_edit_name(
+                                            replace.is_some(),
+                                            jsonprune.is_some(),
+                                            html.is_some()
+                                        ),
                                     ));
                                 }
                                 self.resp_phase = RespPhase::Stream(Box::new(StreamState::new(
@@ -1709,6 +1778,7 @@ impl ProxySession {
                                 replace,
                                 jsonprune,
                                 hls,
+                                html,
                                 inject,
                             };
                         }
@@ -1763,6 +1833,25 @@ impl ProxySession {
                             applied.join("; "),
                         ));
                     }
+                    // `$$` / `##^`: the elements the matching rules name are
+                    // cut out of the document itself, and the `$replace` pass
+                    // below then reads what they left — a regexp written for
+                    // what the client will get.
+                    let before_html = plain.len();
+                    let cut = html.as_ref().and_then(|plan| plan.apply(plain));
+                    let plain = cut
+                        .as_ref()
+                        .map(|(body, _)| body.as_slice())
+                        .unwrap_or(plain);
+                    if let Some((_, applied)) = cut.as_ref() {
+                        crate::logbuf::push(&format!(
+                            "mitm {}: $$ applied ({} to {} bytes): {}",
+                            self.captured.as_deref().unwrap_or("?"),
+                            before_html,
+                            plain.len(),
+                            rules_summary(applied),
+                        ));
+                    }
                     // `$replace` second: what a list rewrites is the page's own
                     // bytes, and the snippet injected below is ours, not the
                     // list's — the two never feed into one another.
@@ -1778,7 +1867,8 @@ impl ProxySession {
                             payload_summary(rule.payload())
                         ));
                     }
-                    let edited = replaced.is_some() || pruned.is_some() || trimmed.is_some();
+                    let edited =
+                        replaced.is_some() || pruned.is_some() || trimmed.is_some() || cut.is_some();
                     // One nonce for this response: the tags carry it, and the
                     // policy does too when the head goes out rewritten below.
                     let nonce = http::new_nonce();
@@ -2891,6 +2981,7 @@ mod tests {
             cookies: None,
             jsonprune: Some(plan),
             hls: None,
+            html: None,
             page_url: None,
         });
 
@@ -2960,6 +3051,7 @@ mod tests {
             cookies: None,
             jsonprune: None,
             hls: Some(plan),
+            html: None,
             page_url: None,
         });
 
@@ -3005,6 +3097,7 @@ mod tests {
             cookies: Some(plan),
             jsonprune: None,
             hls: None,
+            html: None,
             page_url: None,
         });
 
@@ -3058,6 +3151,7 @@ mod tests {
                 cookies: Some(Arc::clone(&plan)),
                 jsonprune: None,
                 hls: None,
+                html: None,
                 page_url: None,
             });
         }
@@ -3110,6 +3204,7 @@ mod tests {
                 cookies: Some(Arc::clone(&plan)),
                 jsonprune: None,
                 hls: None,
+                html: None,
                 page_url: None,
             });
         }

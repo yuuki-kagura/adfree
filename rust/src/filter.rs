@@ -602,6 +602,9 @@ struct Compiled {
     /// The `$cookie` rules, found by [`scan_modifier_rules`] too. `None` when
     /// no loaded list carries one.
     cookie_rules: Option<CookieRules>,
+    /// The `$$` / `##^` HTML filtering rules, found by [`scan_html_rules`].
+    /// `None` when no loaded list carries one.
+    html_rules: Option<HtmlRules>,
     /// The cosmetic rules pinned to page paths (`[$path=…]`), found by
     /// [`convert_adguard_cosmetics`]. `None` when no loaded list carries one.
     path_cosmetics: Option<PathCosmetics>,
@@ -627,6 +630,9 @@ struct ReplaceEngine {
     /// `$replace`), kept as plain blocking rules: a match there means "do not
     /// modify the response".
     veto: Option<Engine>,
+    /// The `$content` exceptions among them: the same rules, but asked by the
+    /// HTML filtering path, which those exceptions switch off as well.
+    veto_content: Option<Engine>,
     /// How many content exceptions went into [`ReplaceEngine::veto`].
     veto_rules: u32,
     /// Rules left out because the crate cannot be told about them the way the
@@ -662,6 +668,7 @@ impl FilterEngine {
                 replace: None,
                 modifier_rules: None,
                 cookie_rules: None,
+                html_rules: None,
                 path_cosmetics: None,
                 js_rules: None,
             })),
@@ -685,6 +692,7 @@ impl FilterEngine {
         let mut url_scan = ModifierScan::default();
         let mut path_scan = PathScan::default();
         let mut js_scan = JsScan::default();
+        let mut html_scan = HtmlScan::default();
         // Rules the reference keeps for trusted lists, seen in a list that is
         // not one (see [`scrub_untrusted`]).
         let mut untrusted_dropped = 0u32;
@@ -716,6 +724,7 @@ impl FilterEngine {
                                 scan_replace_rules(&text, &mut replace_scan);
                                 scan_modifier_rules(&text, &mut url_scan);
                                 scan_js_rules(&text, &mut js_scan);
+                                scan_html_rules(&text, &mut html_scan);
                                 convert_adguard_cosmetics(text, &mut path_scan)
                             }
                             ListFormat::Hosts => text,
@@ -768,6 +777,7 @@ impl FilterEngine {
             scan_replace_rules(&joined, &mut replace_scan);
             scan_modifier_rules(&joined, &mut url_scan);
             scan_js_rules(&joined, &mut js_scan);
+            scan_html_rules(&joined, &mut html_scan);
             let record = set.add_filter_list(
                 convert_adguard_cosmetics(joined, &mut path_scan),
                 ParseOptions::default(),
@@ -820,6 +830,15 @@ impl FilterEngine {
                 replace.dropped,
             ));
         }
+        let html_rules = build_html_rules(html_scan);
+        if let Some(rules) = html_rules.as_ref() {
+            crate::logbuf::push(&format!(
+                "filter: {} HTML rules ({} exceptions, {} dropped)",
+                rules.rules.len(),
+                rules.exceptions.len(),
+                rules.dropped,
+            ));
+        }
         let (modifier_rules, cookie_rules) = build_modifier_rules(url_scan);
         if let Some(rules) = modifier_rules.as_ref() {
             let url = rules
@@ -869,6 +888,7 @@ impl FilterEngine {
             replace,
             modifier_rules,
             cookie_rules,
+            html_rules,
             path_cosmetics,
             js_rules,
         });
@@ -1227,6 +1247,22 @@ impl FilterEngine {
             .replace
             .as_ref()
             .map(|replace| replace.rules.len() as u64)
+            .unwrap_or(0)
+    }
+
+    /// Whether the loaded lists carry `$$` / `##^` HTML filtering rules: the
+    /// HTTPS path only pays for the plan when one is.
+    pub fn has_html_rules(&self) -> bool {
+        self.compiled().html_rules.is_some()
+    }
+
+    /// How many `$$` / `##^` HTML filtering rules the loaded lists carry
+    /// (diagnostics).
+    pub fn html_rules_count(&self) -> u64 {
+        self.compiled()
+            .html_rules
+            .as_ref()
+            .map(|rules| rules.rules.len() as u64)
             .unwrap_or(0)
     }
 
@@ -1851,6 +1887,59 @@ fn scan_js_rules(text: &str, scan: &mut JsScan) {
     }
 }
 
+/// The `$$` / `##^` HTML filtering rules read out of the lists by
+/// [`scan_html_rules`].
+#[derive(Default)]
+struct HtmlScan {
+    rules: Vec<crate::htmlfilter::Rule>,
+    exceptions: Vec<crate::htmlfilter::Rule>,
+    dropped: u32,
+}
+
+/// The HTML filtering rules of the loaded lists.
+struct HtmlRules {
+    rules: Vec<crate::htmlfilter::Rule>,
+    exceptions: Vec<crate::htmlfilter::Rule>,
+    dropped: u32,
+}
+
+fn build_html_rules(scan: HtmlScan) -> Option<HtmlRules> {
+    if scan.rules.is_empty() && scan.exceptions.is_empty() {
+        return None;
+    }
+    Some(HtmlRules {
+        rules: scan.rules,
+        exceptions: scan.exceptions,
+        dropped: scan.dropped,
+    })
+}
+
+/// Reads the HTML filtering rules a list carries: `[domains]$$selector` and
+/// its `[domains]$@$selector` exceptions (CoreLibs' own form, the product this
+/// engine aims at), plus uBO's `[domains]##^selector` and `#@^`.
+///
+/// The crate has no action for either — `$$` lines are network rules it
+/// cannot parse, `##^` lines cosmetic selectors it cannot run — so they are
+/// read here and assembled per page ([`crate::htmlfilter::Plan`]). A line is
+/// only taken for HTML filtering when its prefix is a domain position (see
+/// [`crate::htmlfilter::parse_line`]); anything else passes through untouched,
+/// which is what keeps scriptlets and cosmetic rules carrying `$$` inside an
+/// argument out of this scanner.
+fn scan_html_rules(text: &str, scan: &mut HtmlScan) {
+    for line in text.lines() {
+        let line = line.trim();
+        if line.is_empty() || line.starts_with('!') {
+            continue;
+        }
+        match crate::htmlfilter::parse_line(line) {
+            crate::htmlfilter::Parsed::Rule(rule) => scan.rules.push(rule),
+            crate::htmlfilter::Parsed::Exception(rule) => scan.exceptions.push(rule),
+            crate::htmlfilter::Parsed::Unsupported => scan.dropped += 1,
+            crate::htmlfilter::Parsed::NotHtml => {}
+        }
+    }
+}
+
 /// Whether a cosmetic rule's domain position lets `host` through.
 ///
 /// The list's spelling, as the reference reads it: entries separated by
@@ -1859,7 +1948,7 @@ fn scan_js_rules(text: &str, scan: &mut JsScan) {
 /// `sub.example.co.uk` alike — matched here by the label's place in the host,
 /// close enough to the public-suffix reading for the rules that use it). A
 /// rule with no positive entry applies everywhere.
-fn domains_match(domains: Option<&str>, host: &str) -> bool {
+pub(crate) fn domains_match(domains: Option<&str>, host: &str) -> bool {
     let Some(domains) = domains else {
         return true;
     };
@@ -1952,6 +2041,10 @@ struct ReplaceScan {
     payloads: Vec<String>,
     /// Rules that switch content modification off, as plain blocking rules.
     veto: Vec<String>,
+    /// The `$content` exceptions among them, kept apart: they also switch
+    /// HTML filtering off (see [`content_vetoed`]), which is their own
+    /// promise — an empty `$replace` makes no such promise.
+    veto_content: Vec<String>,
     /// Rules left out (see [`ReplaceEngine::dropped`]).
     dropped: u32,
 }
@@ -2009,8 +2102,13 @@ fn scan_replace_rules(text: &str, scan: &mut ReplaceScan) {
             .unwrap_or_default();
         if content || (replace.is_some() && payload.is_empty()) {
             // Both say "do not modify the response here", and only an
-            // exception can say it.
+            // exception can say it. `$content` is the exception that also
+            // switches HTML filtering off — the knowledge base names it and
+            // only it — so those lines go into a veto of their own as well.
             if exception {
+                if content {
+                    scan.veto_content.push(probe_line(pattern, &kept, None));
+                }
                 scan.veto.push(probe_line(pattern, &kept, None));
             } else {
                 scan.dropped += 1;
@@ -2185,13 +2283,19 @@ fn build_replace(scan: ReplaceScan) -> Option<ReplaceEngine> {
         set.add_filter_list(scan.veto.join("\n"), ParseOptions::default());
         Engine::new_with_filter_set(set)
     });
-    if probe.is_none() && veto.is_none() {
+    let veto_content = (!scan.veto_content.is_empty()).then(|| {
+        let mut set = FilterSet::new(false);
+        set.add_filter_list(scan.veto_content.join("\n"), ParseOptions::default());
+        Engine::new_with_filter_set(set)
+    });
+    if probe.is_none() && veto.is_none() && veto_content.is_none() {
         return None;
     }
     Some(ReplaceEngine {
         probe,
         rules,
         veto,
+        veto_content,
         veto_rules,
         dropped: scan.dropped,
     })
@@ -2577,6 +2681,26 @@ impl HlsPlan {
     /// playlist, or no rule removed a segment from it.
     pub fn apply(&self, body: &[u8]) -> Option<(Vec<u8>, Vec<String>)> {
         crate::hls::apply_rules(&self.rules, &self.base, body)
+    }
+}
+
+/// The `$$` / `##^` HTML filtering rules that apply to one request, as a plan
+/// for the response body.
+///
+/// The plan is assembled once per exchange ([`FilterEngine::html_plan`]) and
+/// held for the answer; [`HtmlPlan::apply`] then walks the document once and
+/// cuts every element the rules name.
+pub struct HtmlPlan {
+    plan: crate::htmlfilter::Plan,
+}
+
+impl HtmlPlan {
+    /// Cuts the matching elements out of one response body, returning the new
+    /// bytes and the text of the rules that removed something. `None` when
+    /// nothing matched: the body then travels with its own length and framing
+    /// still in place.
+    pub fn apply(&self, body: &[u8]) -> Option<(Vec<u8>, Vec<String>)> {
+        self.plan.apply(body)
     }
 }
 
@@ -3457,6 +3581,32 @@ fn page_vetoed(compiled: &Compiled, url: &str, source: &str, request_type: &str)
     else {
         return false;
     };
+    veto_matches_page(veto, url, source, request_type)
+}
+
+/// Whether a `$content` exception switches HTML filtering off for the page a
+/// request belongs to.
+///
+/// The knowledge base names `$content` — and only it — as the way to tell the
+/// engine not to touch a page's body, so HTML filtering answers to a veto of
+/// its own: an empty `$replace` promises nothing about reading the document.
+/// A `$document` exception never gets this far (the `$urlblock` switch turns
+/// the whole exchange off before any plan is built), and the `$elemhide`
+/// family tolerates content modification by its own definition.
+fn content_vetoed(compiled: &Compiled, url: &str, source: &str, request_type: &str) -> bool {
+    let Some(veto) = compiled
+        .replace
+        .as_ref()
+        .and_then(|replace| replace.veto_content.as_ref())
+    else {
+        return false;
+    };
+    veto_matches_page(veto, url, source, request_type)
+}
+
+/// The question both vetoes ask: does this engine match the page a request
+/// belongs to?
+fn veto_matches_page(veto: &Engine, url: &str, source: &str, request_type: &str) -> bool {
     // The exceptions name *pages*, so a subresource is asked about the document
     // it came from. `other` keeps the crate from reading a path-scoped pattern
     // as "not a document": a page URL is the only URL the rule is about,
@@ -4227,6 +4377,35 @@ impl FilterEngine {
             rules,
             base: url.to_string(),
         })
+    }
+
+    /// The `$$` / `##^` HTML filtering rules that apply to one request,
+    /// matched once per exchange and held for the response that request
+    /// produces.
+    ///
+    /// The rules name *pages* — their domain positions and `[$path=…]`
+    /// brackets are about the document a response renders — so a document
+    /// asks about itself and a subresource about the document it came from.
+    /// A `$content` exception switches the family off for its pages (see
+    /// [`content_vetoed`]); the plan is `None` when no rule applies at all.
+    pub fn html_plan(&self, url: &str, source: &str, request_type: &str) -> Option<HtmlPlan> {
+        let compiled = self.compiled();
+        let rules = compiled.html_rules.as_ref()?;
+        if content_vetoed(&compiled, url, source, request_type) {
+            return None;
+        }
+        let page = if request_type == "document" || source.is_empty() {
+            url
+        } else {
+            source
+        };
+        crate::htmlfilter::Plan::build(
+            &rules.rules,
+            &rules.exceptions,
+            url_host(page),
+            crate::pathmask::path_and_query(page),
+        )
+        .map(|plan| HtmlPlan { plan })
     }
 
     /// How many `$jsonprune` rules they carry (diagnostics).
@@ -5436,6 +5615,80 @@ mod tests {
         }
     }
 
+    /// The `$$` / `##^` plan covering one request, the way the HTTPS path
+    /// asks about it.
+    fn cuts(fe: &FilterEngine, url: &str, source: &str, kind: &str) -> Option<HtmlPlan> {
+        fe.html_plan(url, source, kind)
+    }
+
+    #[test]
+    fn html_rules_edit_the_pages_they_cover() {
+        let fe = cosmetic_engine("shop.test$$div[class=\"ad\"]\n");
+        assert!(fe.has_html_rules());
+        assert_eq!(fe.html_rules_count(), 1);
+        // An HTML filtering rule is not a URL, header or cookie rule, and it
+        // edits instead of blocking.
+        assert!(!fe.has_url_rules() && !fe.has_header_rules() && !fe.has_cookie_rules());
+        let url = "https://shop.test/page";
+        let plan = cuts(&fe, url, "", "document").expect("the rule covers the page");
+        let (body, applied) = plan
+            .apply(b"<div class=\"ad\">x</div><p>keep</p>")
+            .expect("the element goes");
+        assert_eq!(String::from_utf8(body).expect("utf8"), "<p>keep</p>");
+        assert_eq!(applied.join("; "), "div[class=\"ad\"]");
+        // Nothing selected, nothing written: the plan says so.
+        let plan = cuts(&fe, url, "", "document").expect("the rule covers the page");
+        assert!(plan.apply(b"<p>clean</p>").is_none());
+        // Another host is not covered, and a rule its `$@$` exception
+        // cancels is gone before a plan is built — the rule itself still
+        // loads, the exception cancels it page by page.
+        assert!(cuts(&fe, "https://other.test/", "", "document").is_none());
+        let fe = cosmetic_engine("shop.test$$div[class=\"ad\"]\nshop.test$@$div[class=\"ad\"]\n");
+        assert!(cuts(&fe, url, "", "document").is_none());
+        assert_eq!(fe.html_rules_count(), 1);
+    }
+
+    #[test]
+    fn page_exceptions_switch_html_filtering_off() {
+        // `$$` is content modification, and the knowledge base names
+        // `$content` — and only it — as the way to tell the engine not to
+        // touch a page: there the rule stops applying.
+        let url = "https://shop.test/page";
+        let fe = cosmetic_engine("shop.test$$div[class=\"ad\"]\n@@||shop.test^$content\n");
+        assert!(cuts(&fe, url, "", "document").is_none());
+        // An empty `$replace` is a promise about rewrites, not about reading
+        // the page, so HTML filtering still runs.
+        let fe = cosmetic_engine("shop.test$$div[class=\"ad\"]\n@@||shop.test^$replace\n");
+        assert!(cuts(&fe, url, "", "document").is_some());
+        // The `$elemhide` family does not switch it off either: it tolerates
+        // content modification by its own definition.
+        let fe = cosmetic_engine("shop.test$$div[class=\"ad\"]\n@@||shop.test^$elemhide\n");
+        assert!(cuts(&fe, url, "", "document").is_some());
+    }
+
+    #[test]
+    fn html_rules_answer_the_page_a_subresource_belongs_to() {
+        let fe = cosmetic_engine(
+            "shop.test##^script:has-text(await eval)\n\
+             [$path=/watch/]shop.test$$div[class=\"ad\"]\n",
+        );
+        assert!(fe.has_html_rules());
+        assert_eq!(fe.html_rules_count(), 2);
+        // A subresource asks about the document it came from.
+        let plan = cuts(&fe, "https://cdn.test/x.js", "https://shop.test/", "script")
+            .expect("the page's rules cover its subresources");
+        assert!(plan.apply(b"<script>await EVAL()</script>").is_some());
+        // The bracket pins its own rule to the page's path.
+        assert!(cuts(&fe, "https://shop.test/watch/1", "", "document")
+            .expect("the path covers the page")
+            .apply(b"<div class=\"ad\">x</div>")
+            .is_some());
+        assert!(cuts(&fe, "https://shop.test/other", "", "document")
+            .expect("the uBO rule still covers any page")
+            .apply(b"<div class=\"ad\">x</div>")
+            .is_none());
+    }
+
     /// Whether any `$replace` rule covers a request, the way the HTTPS path
     /// asks about it.
     fn rewrites(fe: &FilterEngine, url: &str, source: &str, kind: &str) -> bool {
@@ -6397,4 +6650,5 @@ mod tests {
         assert!(res.generichide);
     }
 }
+
 
