@@ -278,6 +278,13 @@ class CoreEngine {
     fun scriptText(id: String): String? =
         runCatching { git.shin.adfree.core.coreScriptText(id) }.getOrNull()
 
+    /**
+     * Writes the script bodies the core ships into the store, keeping them in
+     * step with the app; returns how many files changed.
+     */
+    fun installBuiltinScripts(): Int =
+        runCatching { git.shin.adfree.core.coreInstallBuiltinScripts().toInt() }.getOrDefault(0)
+
     /** "15/05/2025 23:04" from a file timestamp, for the list rows. */
     fun dateText(epochMs: Long): String =
         java.text.SimpleDateFormat("dd/MM/yyyy HH:mm", java.util.Locale.getDefault())

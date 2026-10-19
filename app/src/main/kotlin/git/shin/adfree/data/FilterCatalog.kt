@@ -356,10 +356,22 @@ data class CatalogUserScript(
     val name: String,
     val description: String,
     val url: String,
+    /**
+     * Body shipped with the core instead of downloaded (`coreInstallBuiltinScripts`
+     * writes it into the store); such an entry is on by default and has no URL.
+     */
+    val builtin: Boolean = false,
 )
 
 object UserScriptCatalog {
     val scripts: List<CatalogUserScript> = listOf(
+        CatalogUserScript(
+            id = "adfree-extra",
+            name = "AdFree Extra",
+            description = "Giữ các thư viện dò chặn quảng cáo (BlockAdBlock, FuckAdBlock) khỏi thấy dấu vết ẩn quảng cáo.",
+            url = "",
+            builtin = true,
+        ),
         CatalogUserScript(
             id = "adguard-extra",
             name = "AdGuard Extra",

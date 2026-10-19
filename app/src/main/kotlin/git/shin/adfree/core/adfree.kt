@@ -753,6 +753,8 @@ internal object IntegrityCheckingUniffiLib {
     ): Int
     external fun uniffi_adfree_core_checksum_func_core_generate_ca(
     ): Int
+    external fun uniffi_adfree_core_checksum_func_core_install_builtin_scripts(
+    ): Int
     external fun uniffi_adfree_core_checksum_func_core_is_running(
     ): Int
     external fun uniffi_adfree_core_checksum_func_core_log_clear(
@@ -893,6 +895,8 @@ internal object UniffiLib {
     ): Byte
     external fun uniffi_adfree_core_fn_func_core_generate_ca(uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
+    external fun uniffi_adfree_core_fn_func_core_install_builtin_scripts(uniffi_out_err: UniffiRustCallStatus, 
+    ): Int
     external fun uniffi_adfree_core_fn_func_core_is_running(uniffi_out_err: UniffiRustCallStatus, 
     ): Byte
     external fun uniffi_adfree_core_fn_func_core_log_clear(uniffi_out_err: UniffiRustCallStatus, 
@@ -1125,6 +1129,9 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if ((lib.uniffi_adfree_core_checksum_func_core_generate_ca() and 0xFFFF) != 49008) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if ((lib.uniffi_adfree_core_checksum_func_core_install_builtin_scripts() and 0xFFFF) != 36332) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if ((lib.uniffi_adfree_core_checksum_func_core_is_running() and 0xFFFF) != 16453) {
@@ -3601,6 +3608,21 @@ public object FfiConverterSequenceTypeUidApps: FfiConverterRustBuffer<List<UidAp
             return FfiConverterString.lift(
     uniffiRustCall() { _status ->
     UniffiLib.uniffi_adfree_core_fn_func_core_generate_ca(
+    
+        _status)
+}
+    )
+    }
+    
+
+        /**
+         * Writes the scripts the core ships (the "AdFree Extra" neutraliser) into the
+         * store, refreshing a body that changed with the app. Returns how many files
+         * were written; the platform's script list picks the body up like any other.
+         */ fun `coreInstallBuiltinScripts`(): kotlin.UInt {
+            return FfiConverterUInt.lift(
+    uniffiRustCall() { _status ->
+    UniffiLib.uniffi_adfree_core_fn_func_core_install_builtin_scripts(
     
         _status)
 }

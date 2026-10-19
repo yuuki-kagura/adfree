@@ -75,6 +75,10 @@ const MAX_PROCEDURAL: usize = 400;
 /// host, so the cap is only there to keep a hand-written list from filling
 /// the payload (the byte cap below is the other half).
 const MAX_JS_RULES: usize = 64;
+/// Generic style-injection rules (`#$#sel { css }` with no domain) served to
+/// one page. The corpus puts five on AdGuard Base; the cap is only there to
+/// keep a hand-written list from filling the payload.
+const MAX_GENERIC_STYLES: usize = 64;
 const MAX_SCRIPTLET_BYTES: usize = 128 * 1024;
 const MAX_GENERIC_SELECTORS: usize = 3000;
 /// How many `$path` subsets keep their side engine. A page usually matches
@@ -110,67 +114,151 @@ fn scriptlet_resources() -> &'static Vec<Resource> {
 /// Only tiny, dependency-free resources live here. Anything a list asks for
 /// that is missing simply does not redirect — the request is blocked exactly
 /// as it would have been before.
-const REDIRECT_TABLE: &[(&str, &[&str], MimeType, &str)] = &[
+/// Where a redirect resource's body comes from.
+enum RedirectBody {
+    /// Base64, the shape [`Resource::content`] stores.
+    Base64(&'static str),
+    /// Plain source, the shape a reader wants; encoded when the table is
+    /// built.
+    Source(&'static str),
+}
+
+/// The JS stubs served when a list redirects a script the page uses to tell
+/// blockers apart. The AdGuard lists only name the resources; the bodies are
+/// the engine's — small shims over the documented APIs, kept short enough to
+/// read.
+const GOOGLESYNDICATION_ADSBYGOOGLE_JS: &str =
+    include_str!("../assets/redirects/googlesyndication-adsbygoogle.js");
+const GOOGLETAGSERVICES_GPT_JS: &str =
+    include_str!("../assets/redirects/googletagservices-gpt.js");
+const AMAZON_APSTAG_JS: &str = include_str!("../assets/redirects/amazon-apstag.js");
+/// The detection-library neutraliser: served in place of BlockAdBlock /
+/// FuckAdBlock, and shipped as the built-in "AdFree Extra" userscript.
+pub const EXTRA_JS: &str = include_str!("../assets/extra.js");
+
+/// Redirect resources the lists ask for by name (`$redirect=…`).
+///
+/// A name that is missing is not an error: the rule degrades to the hard block
+/// it would have been without the option (see [`redirect_resources`]). The
+/// names here are the ones the shipped catalogs' lists use — the anti-adblock
+/// half of AdGuard Base names `googlesyndication-adsbygoogle`,
+/// `googletagservices-gpt`, `amazon-apstag` and `prevent-fab-3.2.0`, and its
+/// VAST/VMAP spellings differ from uBO's, so both live in the alias lists.
+const REDIRECT_TABLE: &[(&str, &[&str], MimeType, RedirectBody)] = &[
     // `(function(){})();`
     (
         "noopjs",
         &["noop.js", "noopjs.js"],
         MimeType::ApplicationJavascript,
-        "KGZ1bmN0aW9uKCl7fSkoKTs=",
+        RedirectBody::Source("(function(){})();"),
     ),
     // An empty body: the classic "let the request through with nothing".
-    ("nooptext", &["noop.txt"], MimeType::TextPlain, ""),
-    (
-        "noopjson",
-        &["noop.json"],
-        MimeType::ApplicationJson,
-        "e30=",
-    ),
-    ("noopcss", &["noop.css"], MimeType::TextCss, ""),
+    ("nooptext", &["noop.txt"], MimeType::TextPlain, RedirectBody::Source("")),
+    ("noopjson", &["noop.json"], MimeType::ApplicationJson, RedirectBody::Source("{}")),
+    ("noopcss", &["noop.css"], MimeType::TextCss, RedirectBody::Source("")),
     (
         "noopframe",
         &["noop.html"],
         MimeType::TextHtml,
-        "PCFET0NUWVBFIGh0bWw+PGh0bWw+PGhlYWQ+PC9oZWFkPjxib2R5PjwvYm9keT48L2h0bWw+",
+        RedirectBody::Source("<!DOCTYPE html><html><head></head><body></body></html>"),
     ),
     // A 1x1 transparent GIF.
     (
         "1x1.gif",
         &["1x1-transparent.gif", "transparent.gif"],
         MimeType::ImageGif,
-        "R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7",
+        RedirectBody::Base64("R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7"),
+    ),
+    // A 2x2 transparent PNG, the shape the `2x2-transparent.png` rule names.
+    (
+        "2x2.png",
+        &["2x2-transparent.png"],
+        MimeType::ImagePng,
+        RedirectBody::Base64(
+            "iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAYAAABytg0kAAAAC0lEQVR42mNgQAcAABIAAeRVjecAAAAASUVORK5CYII=",
+        ),
     ),
     (
         "noop-vast2.xml",
-        &[],
+        &["noopvast-2.0", "noopvast-2.0.xml"],
         MimeType::TextXml,
-        "PFZBU1QgdmVyc2lvbj0iMi4wIj48L1ZBU1Q+",
+        RedirectBody::Source("<VAST version=\"2.0\"></VAST>"),
     ),
     (
         "noop-vast3.xml",
-        &[],
+        &["noopvast-3.0", "noopvast-3.0.xml"],
         MimeType::TextXml,
-        "PFZBU1QgdmVyc2lvbj0iMy4wIj48L1ZBU1Q+",
+        RedirectBody::Source("<VAST version=\"3.0\"></VAST>"),
     ),
     (
         "noop-vast4.xml",
-        &[],
+        &["noopvast-4.0", "noopvast-4.0.xml"],
         MimeType::TextXml,
-        "PFZBU1QgdmVyc2lvbj0iNC4wIj48L1ZBU1Q+",
+        RedirectBody::Source("<VAST version=\"4.0\"></VAST>"),
+    ),
+    (
+        "noopvmap-1.0",
+        &["noop-vmap1.xml"],
+        MimeType::TextXml,
+        RedirectBody::Source(
+            "<vmap xmlns=\"http://www.iab.net/videosuite/vmap\" version=\"1.0\"></vmap>",
+        ),
+    ),
+    // The anti-detection half: the page reaches for one of these scripts to
+    // tell an ad blocker apart (AdSense's loader, GPT, APS, the FuckAdBlock /
+    // BlockAdBlock library) and gets a stub that behaves.
+    //
+    // The `.js` spellings of these names are the *scriptlet* bundle's (the
+    // engine drops a redirect whose ident is already taken, silently), so the
+    // aliases stay off: the lists ask for the extension-less AdGuard names,
+    // and `#%#//scriptlet('prevent-fab-3.2.0')` keeps resolving to the
+    // scriptlet it always did.
+    (
+        "googlesyndication-adsbygoogle",
+        &[],
+        MimeType::ApplicationJavascript,
+        RedirectBody::Source(GOOGLESYNDICATION_ADSBYGOOGLE_JS),
+    ),
+    (
+        "googletagservices-gpt",
+        &[],
+        MimeType::ApplicationJavascript,
+        RedirectBody::Source(GOOGLETAGSERVICES_GPT_JS),
+    ),
+    (
+        "amazon-apstag",
+        &[],
+        MimeType::ApplicationJavascript,
+        RedirectBody::Source(AMAZON_APSTAG_JS),
+    ),
+    (
+        "prevent-fab-3.2.0",
+        &["prevent-fab.js"],
+        MimeType::ApplicationJavascript,
+        RedirectBody::Source(EXTRA_JS),
     ),
 ];
 
 /// The redirect table as engine resources (built once, on the first rebuild).
+///
+/// Bodies are base64-encoded here: `Resource::content` is the base64 shape the
+/// engine stores, and the table writes plain source so the stubs stay
+/// readable in the file. A `$redirect` naming a resource that is not in the
+/// table degrades to a hard block, so the names — not the bodies — are what
+/// the lists bind to.
 fn redirect_resources() -> &'static Vec<Resource> {
     static RESOURCES: OnceLock<Vec<Resource>> = OnceLock::new();
     RESOURCES.get_or_init(|| {
         REDIRECT_TABLE
             .iter()
-            .map(|(name, aliases, kind, content)| Resource {
+            .map(|(name, aliases, kind, body)| Resource {
                 name: (*name).to_string(),
                 aliases: aliases.iter().map(|alias| (*alias).to_string()).collect(),
                 kind: ResourceType::Mime(kind.clone()),
-                content: (*content).to_string(),
+                content: match body {
+                    RedirectBody::Base64(content) => (*content).to_string(),
+                    RedirectBody::Source(source) => BASE64.encode(source),
+                },
                 dependencies: Vec::new(),
                 permission: Default::default(),
             })
@@ -611,6 +699,10 @@ struct Compiled {
     /// The raw JavaScript rules (`#%#script`), found by [`scan_js_rules`]
     /// in the trusted lists. `None` when none carries one.
     js_rules: Option<JsRules>,
+    /// The generic style-injection rules (`#$#sel { css }`, no domain), found
+    /// by [`scan_generic_style_rules`] in the trusted lists. `None` when none
+    /// carries one.
+    generic_styles: Option<GenericStyles>,
     /// The `$app=` rules, found by [`scan_app_rules`]. `None` when no loaded
     /// list carries one.
     app_rules: Option<AppRules>,
@@ -792,6 +884,7 @@ impl FilterEngine {
                 html_rules: None,
                 path_cosmetics: None,
                 js_rules: None,
+                generic_styles: None,
                 app_rules: None,
             })),
             cache: RwLock::new(DecisionCache::new(1 << 15)),
@@ -814,6 +907,7 @@ impl FilterEngine {
         let mut url_scan = ModifierScan::default();
         let mut path_scan = PathScan::default();
         let mut js_scan = JsScan::default();
+        let mut generic_style_scan = GenericStyleScan::default();
         let mut html_scan = HtmlScan::default();
         let mut app_scan = AppScan::default();
         // Rules the reference keeps for trusted lists, seen in a list that is
@@ -847,6 +941,13 @@ impl FilterEngine {
                                 scan_replace_rules(&text, &mut replace_scan);
                                 scan_modifier_rules(&text, &mut url_scan);
                                 scan_js_rules(&text, &mut js_scan);
+                                // Style injections are page-wide and, unlike
+                                // selectors, never validated against the page:
+                                // they come from trusted lists only, like the
+                                // `#%#` rules just above.
+                                if list.trusted {
+                                    scan_generic_style_rules(&text, &mut generic_style_scan);
+                                }
                                 scan_html_rules(&text, &mut html_scan);
                                 scan_app_rules(&text, &mut app_scan, list.id, list.category);
                                 convert_adguard_cosmetics(text, &mut path_scan)
@@ -901,6 +1002,7 @@ impl FilterEngine {
             scan_replace_rules(&joined, &mut replace_scan);
             scan_modifier_rules(&joined, &mut url_scan);
             scan_js_rules(&joined, &mut js_scan);
+            scan_generic_style_rules(&joined, &mut generic_style_scan);
             scan_html_rules(&joined, &mut html_scan);
             // User rules have no list row: id 0 is the source map's own
             // "User Custom Filter" entry.
@@ -946,6 +1048,15 @@ impl FilterEngine {
             ));
         }
         let replace = build_replace(replace_scan);
+        let generic_styles = build_generic_styles(generic_style_scan);
+        if let Some(rules) = generic_styles.as_ref() {
+            crate::logbuf::push(&format!(
+                "filter: {} generic style rules ({} exceptions, {} dropped)",
+                rules.rules.len(),
+                rules.exceptions.len(),
+                rules.dropped,
+            ));
+        }
         if let Some(replace) = replace.as_ref() {
             // The count is what the docs quote: rules the lists carry that the
             // engine on its own would have thrown away.
@@ -1027,6 +1138,7 @@ impl FilterEngine {
             html_rules,
             path_cosmetics,
             js_rules,
+            generic_styles,
             app_rules,
         });
         *self.inner.write().unwrap() = compiled;
@@ -1202,6 +1314,21 @@ impl FilterEngine {
             // rules both go (the reference's wording covers both).
             scriptlets.clear();
             jsrules.clear();
+        }
+        // Generic style injections (`#$#sel { css }` with no domain) are ours:
+        // the crate reads them as plain hides and drops the action, so AdGuard
+        // Base's anti-detection rules never reach the page (see
+        // [`scan_generic_style_rules`]). They are generic cosmetic rules, so
+        // `$elemhide` and `$generichide` take them away — the chain above has
+        // already cleared what a switch took — and `$specifichide` leaves them.
+        if !switches.elemhide && !raw.generichide {
+            if let Some(styles) = compiled.generic_styles.as_ref() {
+                for (selector, style) in styles.styles_for(url_host(url)) {
+                    if style_rules.len() < MAX_STYLE_RULES {
+                        style_rules.push((selector, style));
+                    }
+                }
+            }
         }
         if scriptlets.len() > MAX_SCRIPTLET_BYTES {
             scriptlets.clear();
@@ -2037,6 +2164,154 @@ fn scan_js_rules(text: &str, scan: &mut JsScan) {
             scan.exceptions.push(rule);
         } else {
             scan.rules.push(rule);
+        }
+    }
+}
+
+/// One generic style-injection rule (no domain position): the selector and the
+/// declarations the list wants applied to it, both as written.
+struct GenericStyleRule {
+    selector: String,
+    style: String,
+}
+
+/// A `#@$#` / `#@#sel { css }` exception: the same selector-and-declarations
+/// pair, cancelled on the domains it names (`None` for the bare spelling,
+/// which cancels it everywhere).
+struct GenericStyleException {
+    domains: Option<String>,
+    selector: String,
+    style: String,
+}
+
+/// The generic style-injection rules read out of the lists by
+/// [`scan_generic_style_rules`].
+#[derive(Default)]
+struct GenericStyleScan {
+    rules: Vec<GenericStyleRule>,
+    exceptions: Vec<GenericStyleException>,
+    dropped: u32,
+}
+
+/// The generic style-injection rules of the loaded lists, ready to answer a
+/// page.
+struct GenericStyles {
+    rules: Vec<GenericStyleRule>,
+    exceptions: Vec<GenericStyleException>,
+    dropped: u32,
+}
+
+impl GenericStyles {
+    /// The `(selector, declarations)` pairs that apply to `host`: every rule
+    /// minus the ones an exception cancels there. Matching is the reference's:
+    /// an exception names the same rule text, and its own domain position says
+    /// where it does the naming.
+    fn styles_for(&self, host: &str) -> Vec<(String, String)> {
+        self.rules
+            .iter()
+            .filter(|rule| {
+                !self.exceptions.iter().any(|exception| {
+                    exception.selector == rule.selector
+                        && exception.style == rule.style
+                        && domains_match(exception.domains.as_deref(), host)
+                })
+            })
+            .take(MAX_GENERIC_STYLES)
+            .map(|rule| (rule.selector.clone(), rule.style.clone()))
+            .collect()
+    }
+}
+
+fn build_generic_styles(scan: GenericStyleScan) -> Option<GenericStyles> {
+    if scan.rules.is_empty() && scan.exceptions.is_empty() {
+        return None;
+    }
+    Some(GenericStyles {
+        rules: scan.rules,
+        exceptions: scan.exceptions,
+        dropped: scan.dropped,
+    })
+}
+
+/// Splits `sel { declarations }` into its two halves, both trimmed.
+///
+/// The declarations are everything between the first `{` and the last `}`, and
+/// nothing may follow the closing brace: that is the shape both spellings
+/// have, and taking the last brace would trip over one inside `url(…)`.
+fn split_style_block(body: &str) -> Option<(&str, &str)> {
+    let open = body.find('{')?;
+    let close = body.rfind('}')?;
+    if close < open || !body[close + 1..].trim().is_empty() {
+        return None;
+    }
+    let selector = body[..open].trim();
+    let style = body[open + 1..close].trim();
+    if selector.is_empty() || style.is_empty() || style.contains('{') {
+        return None;
+    }
+    Some((selector, style))
+}
+
+/// Reads the style-injection rules a trusted list carries with no domain
+/// position: `#$#sel { css }` and the ABP spelling `##sel { css }`, with their
+/// `#@$#` / `#@#` exceptions (those may name domains: the exception cancels the
+/// rule there and nowhere else).
+///
+/// Domain-scoped style rules are the crate's business — it keeps the action for
+/// rules that name a hostname, and our `#$#` conversion hands it the ABP
+/// spelling it understands. A *generic* rule carrying an action is a shape the
+/// crate reads as a plain hide, action and all: `add_generic_filter` keeps only
+/// the selector, so AdGuard Base's anti-detection rules
+/// (`#$#.pub_728x90… { display: block !important }`, the Ezoic placements) have
+/// no effect at all today. They are read here instead, and served to the page
+/// with the host-bound ones.
+///
+/// Trusted lists only: a generic style is page-wide, and unlike a selector it
+/// is not something the crate validates against the page.
+fn scan_generic_style_rules(text: &str, scan: &mut GenericStyleScan) {
+    for line in text.lines() {
+        let line = line.trim();
+        if line.is_empty() || line.starts_with('!') || line.starts_with('[') {
+            continue;
+        }
+        let Some((index, marker)) = cosmetic_marker(line) else {
+            continue;
+        };
+        let body = &line[index + marker.len()..];
+        let Some((selector, style)) = split_style_block(body) else {
+            continue;
+        };
+        match marker {
+            "#@$#" | "#@#" => {
+                if scan.exceptions.len() >= MAX_GENERIC_STYLES {
+                    scan.dropped += 1;
+                    continue;
+                }
+                scan.exceptions.push(GenericStyleException {
+                    domains: match line[..index].trim() {
+                        "" => None,
+                        domains => Some(domains.to_string()),
+                    },
+                    selector: selector.to_string(),
+                    style: style.to_string(),
+                });
+            }
+            "#$#" | "##" => {
+                // A domain position makes it a hostname rule: the crate reads
+                // those, action included.
+                if index != 0 {
+                    continue;
+                }
+                if scan.rules.len() >= MAX_GENERIC_STYLES {
+                    scan.dropped += 1;
+                    continue;
+                }
+                scan.rules.push(GenericStyleRule {
+                    selector: selector.to_string(),
+                    style: style.to_string(),
+                });
+            }
+            _ => {}
         }
     }
 }
@@ -6559,8 +6834,11 @@ mod tests {
         let v = fe.check_host("plain.test");
         assert!(v.blocked && !v.redirect, "{v:?}");
         // A resource we cannot serve is not a reason to step aside.
-        let fe = cosmetic_engine("||tracker.test^$redirect=googlesyndication-adsbygoogle\n");
+        let fe = cosmetic_engine("||tracker.test^$redirect=google-ima3\n");
         assert!(!fe.check_host("tracker.test").redirect);
+        // A resource we can serve keeps the redirect the rule asked for.
+        let fe = cosmetic_engine("||tracker.test^$redirect=googlesyndication-adsbygoogle\n");
+        assert!(fe.check_host("tracker.test").redirect);
     }
 
     #[test]
@@ -6575,11 +6853,38 @@ mod tests {
                 .unwrap_or_else(|| panic!("{name} must be registered"))
         };
         let decode = |name: &str| STANDARD.decode(&named(name).content).expect("base64");
+        let text = |name: &str| String::from_utf8(decode(name)).expect("utf8");
         assert!(decode("noopjs").starts_with(b"(function"));
         assert_eq!(decode("noopjson"), b"{}");
         assert!(decode("noopframe").starts_with(b"<!DOCTYPE html>"));
         assert!(decode("1x1.gif").starts_with(b"GIF89a"));
+        assert!(decode("2x2.png").starts_with(b"\x89PNG\r\n\x1a\n"));
         assert!(decode("nooptext").is_empty());
+        assert!(decode("noop-vast2.xml").starts_with(b"<VAST version=\"2.0\">"));
+        assert!(decode("noopvmap-1.0").starts_with(b"<vmap"));
+        // Names the AdGuard lists spell differently from uBO's files.
+        let has_alias = |alias: &str| {
+            resources
+                .iter()
+                .any(|r| r.aliases.iter().any(|a| a == alias))
+        };
+        for alias in ["noopvast-2.0", "noopvast-3.0", "noopvast-4.0", "2x2-transparent.png"] {
+            assert!(has_alias(alias), "the lists ask for {alias}");
+        }
+        // The anti-detection stubs are real JavaScript, not empty bodies: the
+        // page reaches for these scripts and must find the API it looks for.
+        let adsbygoogle = text("googlesyndication-adsbygoogle");
+        assert!(adsbygoogle.contains("window.adsbygoogle"), "{adsbygoogle}");
+        assert!(adsbygoogle.contains("loaded: true"), "{adsbygoogle}");
+        let gpt = text("googletagservices-gpt");
+        assert!(gpt.contains("window.googletag"), "{gpt}");
+        assert!(gpt.contains("defineSlot"), "{gpt}");
+        let apstag = text("amazon-apstag");
+        assert!(apstag.contains("window.apstag"), "{apstag}");
+        assert!(apstag.contains("fetchBids"), "{apstag}");
+        let fab = text("prevent-fab-3.2.0");
+        assert!(fab.contains("BlockAdBlock") && fab.contains("FuckAdBlock"), "{fab}");
+        assert!(fab.contains("_checkBait"), "{fab}");
         // Every name and alias must be unique: the engine refuses duplicates,
         // and a resource that silently fails to load turns a redirect into a
         // hard block — exactly the breakage the table exists to avoid.
@@ -6589,6 +6894,68 @@ mod tests {
                 assert!(seen.insert(ident.clone()), "duplicate resource name {ident}");
             }
         }
+        // Uniqueness has to hold *across* the two registered tables too: the
+        // scriptlet bundle claims the `.js` spellings (`prevent-fab-3.2.0.js`,
+        // `nofab.js`, …), and the engine drops whichever side registers
+        // second.
+        for resource in resources {
+            for ident in std::iter::once(&resource.name).chain(resource.aliases.iter()) {
+                for scriptlet in scriptlet_resources() {
+                    assert!(
+                        scriptlet.name != *ident && !scriptlet.aliases.contains(ident),
+                        "{ident} is already a scriptlet: the engine would drop the redirect"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn the_lists_anti_detection_redirects_answer() {
+        let fe = cosmetic_engine(
+            "/fuckadblock.$script,redirect=prevent-fab-3.2.0\n\
+             ||pagead2.googlesyndication.com/pagead/js/adsbygoogle.js$xmlhttprequest,redirect=googlesyndication-adsbygoogle\n",
+        );
+        let v = fe.check_url(
+            "https://cdn.test/fuckadblock.js",
+            "https://shop.test/",
+            "script",
+            "GET",
+            &[],
+        );
+        assert!(v.blocked, "a `$redirect` rule blocks too: {v:?}");
+        let data_url = v.redirect.expect("the neutraliser is served");
+        assert!(
+            data_url.starts_with("data:application/javascript;base64,"),
+            "{data_url}"
+        );
+        // The body the browser will see is the stub's text, not base64 text:
+        // the engine decodes what the table stores and re-encodes it here.
+        let encoded = &data_url["data:application/javascript;base64,".len()..];
+        let body = String::from_utf8(
+            base64::engine::general_purpose::STANDARD
+                .decode(encoded)
+                .expect("base64"),
+        )
+        .expect("utf8");
+        assert!(body.contains("FuckAdBlock"), "{}", &body[..body.len().min(60)]);
+        assert!(body.contains("_checkBait"), "the neutraliser, not the library");
+
+        let v = fe.check_url(
+            "https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js",
+            "https://shop.test/",
+            "xmlhttprequest",
+            "GET",
+            &[],
+        );
+        let data_url = v.redirect.expect("the AdSense stub is served");
+        let body = String::from_utf8(
+            base64::engine::general_purpose::STANDARD
+                .decode(&data_url["data:application/javascript;base64,".len()..])
+                .expect("base64"),
+        )
+        .expect("utf8");
+        assert!(body.contains("window.adsbygoogle"), "{}", &body[..body.len().min(60)]);
     }
 
     #[test]
@@ -6969,6 +7336,109 @@ mod tests {
         // A rule that names no domains runs on every page.
         let other = fe.cosmetic_resources("https://other.test/");
         assert_eq!(other.jsrules, vec!["window.__everywhere = 1;".to_string()]);
+    }
+
+    #[test]
+    fn generic_style_rules_reach_the_page() {
+        let fe = cosmetic_engine(
+            "#$#.pub_728x90.text-ad { display: block !important; }\n\
+             ##.ezoic-ad { position: absolute !important; left: -3000px !important; }\n\
+             ##.plain_generic_hide\n\
+             example.com#$#.banner { margin: 0 }\n",
+        );
+        let page = fe.cosmetic_resources("https://shop.test/");
+        assert!(
+            page.style_rules.contains(&(
+                ".pub_728x90.text-ad".to_string(),
+                "display: block !important;".to_string()
+            )),
+            "the AdGuard spelling reaches every page: {:?}",
+            page.style_rules
+        );
+        assert!(
+            page.style_rules.contains(&(
+                ".ezoic-ad".to_string(),
+                "position: absolute !important; left: -3000px !important;".to_string()
+            )),
+            "the ABP spelling does too: {:?}",
+            page.style_rules
+        );
+        assert!(
+            !page.style_rules.iter().any(|(sel, _)| sel == ".banner"),
+            "a hostname rule stays the crate's: {:?}",
+            page.style_rules
+        );
+        // A generic hide without a block stays a selector the runtime looks
+        // up by class.
+        assert!(fe
+            .generic_selectors(&["plain_generic_hide".into()], &[], &[])
+            .iter()
+            .any(|s| s == ".plain_generic_hide"));
+        // The hostname rule shows up where it is bound.
+        let own = fe.cosmetic_resources("https://example.com/");
+        assert!(own.style_rules.iter().any(|(sel, _)| sel == ".banner"));
+    }
+
+    #[test]
+    fn generic_style_exceptions_cancel_on_their_domains() {
+        let fe = cosmetic_engine(
+            "#$#.pub_300x250 { display: block !important; }\n\
+             blocked.test#@$#.pub_300x250 { display: block !important; }\n",
+        );
+        let has = |host: &str| {
+            fe.cosmetic_resources(&format!("https://{host}/"))
+                .style_rules
+                .iter()
+                .any(|(sel, _)| sel == ".pub_300x250")
+        };
+        assert!(has("shop.test"), "the generic rule runs elsewhere");
+        assert!(!has("blocked.test"), "the exception names its domain");
+        assert!(!has("sub.blocked.test"), "and its subdomains");
+    }
+
+    #[test]
+    fn cosmetic_switches_take_generic_styles_too() {
+        let body = "#$#.pub_300x250 { display: block !important; }\n";
+        let has = |fe: &FilterEngine, host: &str| {
+            fe.cosmetic_resources(&format!("https://{host}/"))
+                .style_rules
+                .iter()
+                .any(|(sel, _)| sel == ".pub_300x250")
+        };
+        let fe = cosmetic_engine(&format!("{body}@@||quiet.test^$elemhide\n"));
+        assert!(!has(&fe, "quiet.test"), "`$elemhide` covers styles");
+        assert!(has(&fe, "shop.test"));
+        let fe = cosmetic_engine(&format!("{body}@@||quiet.test^$generichide\n"));
+        assert!(!has(&fe, "quiet.test"), "`$generichide` covers styles");
+        assert!(has(&fe, "shop.test"));
+        let fe = cosmetic_engine(&format!("{body}@@||quiet.test^$specifichide\n"));
+        assert!(has(&fe, "quiet.test"), "styles are generic: they stay");
+    }
+
+    #[test]
+    fn untrusted_lists_cannot_inject_generic_styles() {
+        static NEXT: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+        let name = format!(
+            "cosmetic-untrusted-{}.txt",
+            NEXT.fetch_add(1, std::sync::atomic::Ordering::SeqCst)
+        );
+        let body = "#$#body { display: none !important; }\n\
+                    shop.test##.specific { color: red }\n";
+        let mut list = temp_list(&name, body, ListFormat::Standard, 3);
+        list.trusted = false;
+        let fe = FilterEngine::new();
+        fe.rebuild(&[list], &[]);
+        let page = fe.cosmetic_resources("https://shop.test/");
+        assert!(
+            !page.style_rules.iter().any(|(sel, _)| sel == "body"),
+            "an untrusted list cannot restyle a page: {:?}",
+            page.style_rules
+        );
+        assert!(
+            page.style_rules.iter().any(|(sel, _)| sel == ".specific"),
+            "its hostname rules are still the crate's: {:?}",
+            page.style_rules
+        );
     }
 
     #[test]

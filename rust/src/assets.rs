@@ -121,6 +121,28 @@ pub fn read_text(dir: &Path, id: &str, ext: &str) -> Option<String> {
     std::fs::read_to_string(asset_path(dir, id, ext)).ok()
 }
 
+/// Scripts the core ships itself, keyed by the id the platform's catalogue
+/// uses. The body is written into the store like any downloaded one, so the
+/// script list, its enable/disable state and the push path all work
+/// unchanged; [`install_builtin`] only keeps the file in step with the body
+/// this build ships.
+pub const BUILTIN_SCRIPTS: &[(&str, &str)] = &[("adfree-extra", crate::filter::EXTRA_JS)];
+
+/// Writes the built-in scripts into `dir`, skipping the ones whose body is
+/// already the shipped one. Returns how many files were written.
+pub fn install_builtin(dir: &Path) -> usize {
+    let mut written = 0;
+    for &(id, body) in BUILTIN_SCRIPTS {
+        if read_text(dir, id, "js").as_deref() == Some(body) {
+            continue;
+        }
+        if save(dir, id, "js", body).is_ok() {
+            written += 1;
+        }
+    }
+    written
+}
+
 fn state_of(path: &Path, body: &str, with_meta: bool) -> Outcome {
     let (size, modified) = std::fs::metadata(path)
         .map(|m| (m.len(), modified_ms(&m)))
@@ -255,6 +277,21 @@ mod tests {
         assert_eq!(sanitize_id("adguard-base"), "adguard_base");
         assert_eq!(sanitize_id("a/b c.d"), "a_b_c_d");
         assert_eq!(sanitize_id(&"x".repeat(80)).len(), 64);
+    }
+
+    #[test]
+    fn builtin_scripts_are_written_once_and_kept_in_step() {
+        let dir = temp_dir("builtin");
+        // First run writes the shipped bodies.
+        assert_eq!(install_builtin(&dir), BUILTIN_SCRIPTS.len());
+        let (id, body) = BUILTIN_SCRIPTS[0];
+        assert_eq!(read_text(&dir, id, "js").as_deref(), Some(body));
+        // Second run has nothing to do.
+        assert_eq!(install_builtin(&dir), 0);
+        // A body that drifted (an app update ships a new stub) is refreshed.
+        save(&dir, id, "js", "// stale").unwrap();
+        assert_eq!(install_builtin(&dir), 1);
+        assert_eq!(read_text(&dir, id, "js").as_deref(), Some(body));
     }
 
     #[test]

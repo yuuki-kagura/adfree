@@ -851,6 +851,9 @@ class AdGuardRepository(
         scope.launch {
             val stored = prefs.scripts()
             val scripts = mutableListOf<UserScriptInfo>()
+            // The shipped scripts live in the store like downloaded ones; this
+            // refreshes the body when an app update changes it.
+            withContext(Dispatchers.IO) { engine.installBuiltinScripts() }
             for (entry in UserScriptCatalog.scripts) {
                 val state = stored.firstOrNull { it.id == entry.id }
                 val asset = withContext(Dispatchers.IO) { engine.scriptState(entry.id) }
@@ -859,9 +862,12 @@ class AdGuardRepository(
                     name = entry.name,
                     description = entry.description,
                     url = entry.url,
-                    isEnabled = state?.enabled ?: false,
+                    // Built-in scripts run unless the user turned them off;
+                    // catalogue downloads wait to be asked for.
+                    isEnabled = state?.enabled ?: entry.builtin,
                     sizeBytes = asset?.sizeBytes ?: 0,
                     lastUpdatedText = asset?.let { engine.dateText(it.modifiedMs) } ?: "Chưa tải",
+                    isBuiltin = entry.builtin,
                 )
             }
             for (state in stored.filter { s -> UserScriptCatalog.scripts.none { it.id == s.id } }) {

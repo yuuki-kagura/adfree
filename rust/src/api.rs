@@ -648,6 +648,19 @@ pub fn core_script_text(id: String) -> Option<String> {
     })
 }
 
+/// Writes the scripts the core ships (the "AdFree Extra" neutraliser) into the
+/// store, refreshing a body that changed with the app. Returns how many files
+/// were written; the platform's script list picks the body up like any other.
+#[uniffi::export]
+pub fn core_install_builtin_scripts() -> u32 {
+    guard(0, || {
+        let Some(store) = crate::core().store() else {
+            return 0;
+        };
+        crate::assets::install_builtin(&store.scripts_dir()) as u32
+    })
+}
+
 /// Loads the local CA from the store (minting and persisting the pair on
 /// first use) and returns its certificate PEM.
 #[uniffi::export]

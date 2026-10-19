@@ -153,6 +153,8 @@ data class UserScriptInfo(
     val sizeBytes: Long = 0,
     val lastUpdatedText: String = "Chưa tải",
     val isUserAdded: Boolean = false,
+    /** Shipped with the app: no URL to refresh, cannot be deleted. */
+    val isBuiltin: Boolean = false,
 )
 
 data class AppFirewallRule(

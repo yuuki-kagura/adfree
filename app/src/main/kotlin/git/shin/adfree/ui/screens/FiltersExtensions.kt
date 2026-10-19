@@ -161,10 +161,10 @@ private fun ScriptRow(
     onToggle: () -> Unit,
     onClick: () -> Unit,
 ) {
-    val meta = if (script.sizeBytes > 0) {
-        "${script.sizeBytes / 1024} KB • ${script.lastUpdatedText}"
-    } else {
-        "Chưa tải • Bật để tải về"
+    val meta = when {
+        script.isBuiltin -> "Cài sẵn trong ứng dụng • ${script.lastUpdatedText}"
+        script.sizeBytes > 0 -> "${script.sizeBytes / 1024} KB • ${script.lastUpdatedText}"
+        else -> "Chưa tải • Bật để tải về"
     }
 
     Row(
@@ -311,22 +311,32 @@ fun ScriptDetailSheet(
         ScriptInfoRow("Cập nhật", script.lastUpdatedText)
 
         Spacer(modifier = Modifier.height(6.dp))
-        Text(
-            text = script.url,
-            fontSize = 9.sp,
-            fontFamily = FontFamily.Monospace,
-            color = AdGuardTextMuted,
-            maxLines = 2,
-            overflow = TextOverflow.Ellipsis,
-        )
+        if (script.isBuiltin) {
+            Text(
+                text = "Đi kèm ứng dụng, cập nhật theo bản phát hành.",
+                fontSize = 9.sp,
+                color = AdGuardTextMuted,
+            )
+        } else {
+            Text(
+                text = script.url,
+                fontSize = 9.sp,
+                fontFamily = FontFamily.Monospace,
+                color = AdGuardTextMuted,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
 
         Spacer(modifier = Modifier.height(16.dp))
 
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            OutlinedButton(onClick = onRefresh, shape = RoundedCornerShape(10.dp)) {
-                Icon(Icons.Default.Sync, contentDescription = null, tint = AdGuardGreenLight, modifier = Modifier.size(16.dp))
-                Spacer(modifier = Modifier.width(6.dp))
-                Text("Cập nhật", fontSize = 12.sp, color = AdGuardGreenLight)
+            if (!script.isBuiltin) {
+                OutlinedButton(onClick = onRefresh, shape = RoundedCornerShape(10.dp)) {
+                    Icon(Icons.Default.Sync, contentDescription = null, tint = AdGuardGreenLight, modifier = Modifier.size(16.dp))
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text("Cập nhật", fontSize = 12.sp, color = AdGuardGreenLight)
+                }
             }
             if (script.isUserAdded) {
                 OutlinedButton(onClick = onDelete, shape = RoundedCornerShape(10.dp)) {

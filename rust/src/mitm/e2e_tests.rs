@@ -984,6 +984,52 @@ fn cosmetic_filtering_rides_the_packet_path() {
     tcp.close();
 }
 
+/// A generic style injection (`#$#sel { css }`, no domain — how the lists undo
+/// a bait hiding) rides the page payload from our own scan: the crate reads
+/// these rules as plain hides and drops the action, so nothing else would carry
+/// them. Its `#@$#` exception, naming a host, takes the rule back there.
+const STYLE_LIST: &str = "! Title: e2e generic style\n\
+                          #$#.pub_300x250.text-ad { display: block !important; }\n";
+const STYLE_EXCEPTION_LIST: &str = "! Title: e2e generic style exception\n\
+                                    #$#.pub_300x250.text-ad { display: block !important; }\n\
+                                    shop.test#@$#.pub_300x250.text-ad { display: block !important; }\n";
+
+#[test]
+fn generic_style_injections_ride_the_page_payload() {
+    let origin = start_origin(HTML);
+    let (core, ca_der) = setup_core_with_list(&origin, "generic-style", STYLE_LIST);
+
+    let mut tcp = Client::connect(core.clone(), origin.port);
+    let mut conn = handshake(&mut tcp, client_config(ca_der));
+    assert!(!conn.is_handshaking(), "the MITM handshake must complete");
+
+    let (head, body) = request(&mut tcp, &mut conn, "/");
+    assert!(head.starts_with("HTTP/1.1 200"), "{head}");
+    let page = page_text(&head, &body);
+    assert!(
+        page.contains("\".pub_300x250.text-ad\"") && page.contains("display: block !important"),
+        "the generic style rule must ride the payload: {page}"
+    );
+    tcp.close();
+
+    // The same rule, with the host named in an exception: nothing goes out.
+    let origin = start_origin(HTML);
+    let (core, ca_der) = setup_core_with_list(&origin, "generic-style-exc", STYLE_EXCEPTION_LIST);
+
+    let mut tcp = Client::connect(core.clone(), origin.port);
+    let mut conn = handshake(&mut tcp, client_config(ca_der));
+    assert!(!conn.is_handshaking(), "the MITM handshake must complete");
+
+    let (head, body) = request(&mut tcp, &mut conn, "/");
+    assert!(head.starts_with("HTTP/1.1 200"), "{head}");
+    let page = page_text(&head, &body);
+    assert!(
+        !page.contains("pub_300x250"),
+        "the exception is read on its host: {page}"
+    );
+    tcp.close();
+}
+
 /// An `@@||host^$elemhide` exception is one the engine rejects, so the app
 /// reads it out of the list itself: the page gets no hiding stylesheet, no
 /// style/procedural/generic payload and an empty lookup, while the scriptlet —
