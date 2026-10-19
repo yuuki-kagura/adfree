@@ -728,6 +728,7 @@ const LIST: &str = "! Title: e2e cosmetic\n\
                     shop.test#$#.banner { margin: 0 }\n\
                     shop.test#?#.sponsored:has-text(Sponsored)\n\
                     shop.test#%#//scriptlet('set-constant', 'adBlocked', 'true')\n\
+                    shop.test#%#window.__adfree_raw = 1;\n\
                     ##.adsbygoogle\n\
                     ###slot-1\n";
 
@@ -798,6 +799,7 @@ fn setup_core_with_list(origin: &Origin, tag: &str, list: &str) -> (Arc<Core>, V
             local_path: Some(path),
             format: ListFormat::Standard,
             category: 0,
+            trusted: true,
             rule_count: 0,
             last_error: None,
         }],
@@ -911,6 +913,10 @@ fn cosmetic_filtering_rides_the_packet_path() {
     assert!(page.contains("\".banner\""), "style rule missing: {page}");
     assert!(page.contains("setConstant"), "scriptlet missing: {page}");
     assert!(page.contains("adBlocked"), "scriptlet args missing: {page}");
+    assert!(
+        page.contains("\"jsrules\":[\"window.__adfree_raw = 1;\"]"),
+        "the raw JavaScript rule rides the payload: {page}"
+    );
     assert!(page.contains("has-text"), "procedural rule missing: {page}");
     // Generic class/id rules, matched from the HTML the proxy scanned.
     assert!(page.contains("\".adsbygoogle\""), "class rule missing: {page}");

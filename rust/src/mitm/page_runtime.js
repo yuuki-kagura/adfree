@@ -8,7 +8,7 @@
 // ```text
 // { style: [[selector, css]], generic: [selector],
 //   procedural: [{selector: [{type, arg}], action: {type, arg}|null}],
-//   scriptlets: "js source", dynamic: true }
+//   scriptlets: "js source", jsrules: ["js source", ...], dynamic: true }
 // ```
 //
 // Element hiding is not in there: the proxy writes it as a stylesheet
@@ -185,6 +185,23 @@
       el.remove();
     } catch {
       /* a scriptlet that cannot even be inserted must not break the page */
+    }
+  }
+
+  // Raw JavaScript rules (`#%#`) run for the same reason and at the same
+  // moment as the scriptlets: they install property traps the page's own
+  // scripts must meet. Each rule gets a tag of its own — one rule with a
+  // syntax error must not take the others down with it.
+  if (Array.isArray(data.jsrules)) {
+    for (const script of data.jsrules) {
+      try {
+        const el = withNonce(document.createElement('script'));
+        el.textContent = `try {\n${script}\n} catch { /* a broken rule stays inside */ }`;
+        (document.head || document.documentElement).appendChild(el);
+        el.remove();
+      } catch {
+        /* a rule that cannot even be inserted must not break the page */
+      }
     }
   }
 

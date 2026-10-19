@@ -333,6 +333,9 @@ class AdGuardRepository(
                     catalogId = entry.id,
                     defaultEnabled = entry.defaultEnabled,
                     homepage = entry.homepage,
+                    // The catalogue is the pre-approved set: trusted (KB
+                    // §Trusted filters).
+                    trusted = true,
                 )
             }
             for (stored in prefs.customFilters()) {
@@ -351,6 +354,7 @@ class AdGuardRepository(
                     format = stored.format,
                     homepage = stored.homepage,
                     isUserAdded = true,
+                    trusted = stored.trusted,
                 )
             }
             val rules = prefs.userRules() ?: starterRules
@@ -438,6 +442,29 @@ class AdGuardRepository(
             }
             saveFilterChoices()
             pushListsToEngine()
+        }
+    }
+
+    /**
+     * Marks a user-added list as trusted, or takes the mark back. Catalogue
+     * lists and the user rules are trusted by construction; a list the user
+     * typed a URL for may only run JavaScript rules, scriptlets and the
+     * `$hls`/`$removeheader`/`$removeparam`/`$replace`/`$urltransform`
+     * modifiers once they say so (KB §Trusted filters).
+     */
+    fun setFilterTrusted(listId: String, trusted: Boolean) {
+        scope.launch {
+            _filterLists.update { lists ->
+                lists.map {
+                    if (it.id == listId && it.isUserAdded) it.copy(trusted = trusted) else it
+                }
+            }
+            saveFilterChoices()
+            pushListsToEngine()
+            showTransientStatus(
+                if (trusted) "Đã tin cậy bộ lọc: scriptlet và JavaScript rule của list được phép chạy"
+                else "Đã bỏ tin cậy: rule nguy hiểm của bộ lọc bị bỏ qua",
+            )
         }
     }
 
@@ -618,6 +645,7 @@ class AdGuardRepository(
                     format = it.format,
                     enabled = it.isEnabled,
                     homepage = it.homepage,
+                    trusted = it.trusted,
                 )
             }
         )
@@ -723,6 +751,9 @@ class AdGuardRepository(
                 category = list.categoryIndex(),
                 ruleCount = list.ruleCount.toLong(),
                 lastError = "",
+                // Catalogue entries are trusted by construction; a custom list
+                // only when the user said so.
+                trusted = list.trusted || list.catalogId != null,
             )
         }
         val userRules = lists.firstOrNull { it.isCustom }?.customRules.orEmpty()

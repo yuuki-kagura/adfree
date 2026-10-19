@@ -13,6 +13,8 @@ data class StoredFilter(
     val format: String,
     val enabled: Boolean,
     val homepage: String? = null,
+    /** The trusted bit (KB §Trusted filters); a custom list starts untrusted. */
+    val trusted: Boolean = false,
 )
 
 /** Snapshot of a userscript (body lives under `files/scripts/`). */
@@ -59,6 +61,7 @@ class FilterPreferences(
             format = obj.optString("format", "standard"),
             enabled = obj.optBoolean("enabled", true),
             homepage = obj.optString("homepage").takeIf { it.isNotBlank() },
+            trusted = obj.optBoolean("trusted", false),
         )
     }
 
@@ -71,6 +74,7 @@ class FilterPreferences(
                 .put("format", f.format)
                 .put("enabled", f.enabled)
                 .put("homepage", f.homepage.orEmpty())
+                .put("trusted", f.trusted)
         }
 
     /** Null when nothing was ever saved (starter rules then apply). */

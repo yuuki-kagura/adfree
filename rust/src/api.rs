@@ -111,6 +111,11 @@ pub struct FilterListBinding {
     pub format: i32,
     /// 0 = ad, 1 = tracker, ... see `RequestCategory`.
     pub category: i32,
+    /// The reference's trusted-filter bit: only a trusted list may carry
+    /// JavaScript rules, scriptlets and the gated modifiers. The catalogue
+    /// and the user rules are trusted; a list the user added is not until
+    /// they say so.
+    pub trusted: bool,
     /// Number of rule lines in the list.
     pub rule_count: i64,
     pub last_error: String,
@@ -130,6 +135,7 @@ impl From<&FilterListInfo> for FilterListBinding {
                 .unwrap_or_default(),
             format: l.format.as_u8() as i32,
             category: l.category as i32,
+            trusted: l.trusted,
             rule_count: l.rule_count as i64,
             last_error: l.last_error.clone().unwrap_or_default(),
         }
@@ -150,6 +156,7 @@ impl From<&FilterListBinding> for FilterListInfo {
             },
             format: ListFormat::from_u8(l.format.clamp(0, 1) as u8),
             category: l.category.clamp(0, 6) as u8,
+            trusted: l.trusted,
             rule_count: l.rule_count.max(0) as u64,
             last_error: None,
         }
@@ -842,6 +849,7 @@ mod tests {
             path: "/data/user/0/x/files/filters/3.txt".into(),
             format: 1,
             category: 2,
+            trusted: true,
             rule_count: 12_345,
             last_error: String::new(),
         };

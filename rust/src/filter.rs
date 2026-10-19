@@ -71,6 +71,10 @@ pub const CAT_SOCIAL: u8 = 3;
 const MAX_HIDE_SELECTORS: usize = 6000;
 const MAX_STYLE_RULES: usize = 400;
 const MAX_PROCEDURAL: usize = 400;
+/// Raw JavaScript rules served to one page; the corpus puts one or two on a
+/// host, so the cap is only there to keep a hand-written list from filling
+/// the payload (the byte cap below is the other half).
+const MAX_JS_RULES: usize = 64;
 const MAX_SCRIPTLET_BYTES: usize = 128 * 1024;
 const MAX_GENERIC_SELECTORS: usize = 3000;
 /// How many `$path` subsets keep their side engine. A page usually matches
@@ -185,6 +189,9 @@ pub struct CosmeticResources {
     pub procedural: Vec<String>,
     /// `#%#//scriptlet(...)` invocations, assembled with their functions.
     pub scriptlets: String,
+    /// `#%#` JavaScript rules that apply to the page, each its own script so
+    /// one broken rule cannot take the others down.
+    pub jsrules: Vec<String>,
     /// A `$generichide` exception is in play: skip the class/id lookup.
     pub generichide: bool,
     /// Selectors excepted by `#@#`: pass to [`FilterEngine::generic_selectors`].
@@ -198,6 +205,7 @@ impl CosmeticResources {
             && self.style_rules.is_empty()
             && self.procedural.is_empty()
             && self.scriptlets.is_empty()
+            && self.jsrules.is_empty()
     }
 }
 /// Page-level work the lists' exception rules switch off.
@@ -407,6 +415,12 @@ pub struct FilterListInfo {
     pub name: String,
     pub url: String,
     pub enabled: bool,
+    /// The reference's trusted-filter bit (KB §Trusted filters): only a list
+    /// installed as trusted may carry JavaScript rules, scriptlets and the
+    /// `$hls`/`$removeheader`/`$removeparam`/`$replace`/`$urltransform`
+    /// modifiers. The catalogue and the user's own rules are trusted; a list
+    /// the user typed a URL for is not until they say so.
+    pub trusted: bool,
     pub local_path: Option<PathBuf>,
     pub format: ListFormat,
     pub category: u8,
@@ -591,6 +605,9 @@ struct Compiled {
     /// The cosmetic rules pinned to page paths (`[$path=…]`), found by
     /// [`convert_adguard_cosmetics`]. `None` when no loaded list carries one.
     path_cosmetics: Option<PathCosmetics>,
+    /// The raw JavaScript rules (`#%#script`), found by [`scan_js_rules`]
+    /// in the trusted lists. `None` when none carries one.
+    js_rules: Option<JsRules>,
 }
 
 /// The `$replace` rules of the loaded lists, with the engine that finds them.
@@ -646,6 +663,7 @@ impl FilterEngine {
                 modifier_rules: None,
                 cookie_rules: None,
                 path_cosmetics: None,
+                js_rules: None,
             })),
             cache: RwLock::new(DecisionCache::new(1 << 15)),
             build_ns: AtomicU64::new(0),
@@ -666,6 +684,10 @@ impl FilterEngine {
         let mut replace_scan = ReplaceScan::default();
         let mut url_scan = ModifierScan::default();
         let mut path_scan = PathScan::default();
+        let mut js_scan = JsScan::default();
+        // Rules the reference keeps for trusted lists, seen in a list that is
+        // not one (see [`scrub_untrusted`]).
+        let mut untrusted_dropped = 0u32;
 
         for list in lists.iter().filter(|l| l.enabled) {
             let Some(path) = &list.local_path else {
@@ -680,12 +702,20 @@ impl FilterEngine {
                         };
                         let text = match list.format {
                             ListFormat::Standard => {
+                                let text = if list.trusted {
+                                    text
+                                } else {
+                                    let (scrubbed, removed) = scrub_untrusted(text);
+                                    untrusted_dropped += removed;
+                                    scrubbed
+                                };
                                 // Exception rules the engine drops, read here
                                 // (conversion only rewrites cosmetic markers,
                                 // network rules pass through untouched).
                                 scan_cosmetic_exceptions(&text, &mut cosmetic_exceptions);
                                 scan_replace_rules(&text, &mut replace_scan);
                                 scan_modifier_rules(&text, &mut url_scan);
+                                scan_js_rules(&text, &mut js_scan);
                                 convert_adguard_cosmetics(text, &mut path_scan)
                             }
                             ListFormat::Hosts => text,
@@ -737,6 +767,7 @@ impl FilterEngine {
             scan_cosmetic_exceptions(&joined, &mut cosmetic_exceptions);
             scan_replace_rules(&joined, &mut replace_scan);
             scan_modifier_rules(&joined, &mut url_scan);
+            scan_js_rules(&joined, &mut js_scan);
             let record = set.add_filter_list(
                 convert_adguard_cosmetics(joined, &mut path_scan),
                 ParseOptions::default(),
@@ -763,6 +794,20 @@ impl FilterEngine {
         );
         let memory_bytes = engine.serialize().len();
         let generation = self.generation.fetch_add(1, Ordering::SeqCst) + 1;
+        if untrusted_dropped > 0 {
+            crate::logbuf::push(&format!(
+                "filter: {untrusted_dropped} rules dropped from untrusted lists"
+            ));
+        }
+        let js_rules = build_js_rules(js_scan);
+        if let Some(rules) = js_rules.as_ref() {
+            crate::logbuf::push(&format!(
+                "filter: {} JavaScript rules ({} exceptions, {} dropped)",
+                rules.rules.len(),
+                rules.exceptions.len(),
+                rules.dropped,
+            ));
+        }
         let replace = build_replace(replace_scan);
         if let Some(replace) = replace.as_ref() {
             // The count is what the docs quote: rules the lists carry that the
@@ -825,6 +870,7 @@ impl FilterEngine {
             modifier_rules,
             cookie_rules,
             path_cosmetics,
+            js_rules,
         });
         *self.inner.write().unwrap() = compiled;
         self.cache.write().unwrap().clear();
@@ -923,6 +969,14 @@ impl FilterEngine {
             }
         }
         let mut scriptlets = raw.injected_script;
+        // Raw JavaScript rules are ours (the crate has no action for them):
+        // the blocking rules whose domains match this host, minus the ones an
+        // exception names.
+        let mut jsrules = compiled
+            .js_rules
+            .as_ref()
+            .map(|rules| rules.scripts_for(url_host(url)))
+            .unwrap_or_default();
 
         // The `$path` rules pinned to this page's path, served from the side
         // engine. They ride the inline payload like procedural rules do — the
@@ -984,12 +1038,19 @@ impl FilterEngine {
             style_rules.clear();
             procedural.clear();
             scriptlets.clear();
+            jsrules.clear();
         }
         if switches.jsinject {
+            // `$jsinject`: no JavaScript at all — scriptlets and the raw
+            // rules both go (the reference's wording covers both).
             scriptlets.clear();
+            jsrules.clear();
         }
         if scriptlets.len() > MAX_SCRIPTLET_BYTES {
             scriptlets.clear();
+        }
+        if jsrules.iter().map(String::len).sum::<usize>() > MAX_SCRIPTLET_BYTES {
+            jsrules.clear();
         }
         hide_selectors.truncate(MAX_HIDE_SELECTORS);
 
@@ -998,6 +1059,7 @@ impl FilterEngine {
             style_rules,
             procedural,
             scriptlets,
+            jsrules,
             // `$elemhide` covers the generic half too: nothing left to look up.
             generichide: raw.generichide || switches.elemhide,
             exceptions: raw.exceptions.into_iter().collect(),
@@ -1556,6 +1618,62 @@ fn bracket_cosmetic_line(line: &str, path: &mut PathScan) -> Option<String> {
     }
 }
 
+/// Takes the rules a list that is not trusted may not run out of its text
+/// (KB §Trusted filters): JavaScript and scriptlet rules, and the `$hls`,
+/// `$removeheader`, `$removeparam`, `$replace` and `$urltransform` modifiers.
+///
+/// Every line is read the way the readers further down would read it — the
+/// same guards, the same splitters — and what is taken out here is never seen
+/// by them or by the crate, so a list with no business running a rule cannot
+/// half-run one. Returns the text the engine may read and the number of lines
+/// taken out.
+fn scrub_untrusted(text: String) -> (String, u32) {
+    let mut removed = 0u32;
+    let mut out = String::with_capacity(text.len());
+    for line in text.lines() {
+        let trimmed = line.trim();
+        // JavaScript rules (`#%#script`, the `#@%#` exception) and scriptlets
+        // (`#%#//scriptlet(...)`); `##+js(...)`/`#@#+js(...)` is the uBO
+        // spelling the crate reads on its own. A bracket-scoped line carrying
+        // either goes with them.
+        let js = trimmed.contains("#%#")
+            || trimmed.contains("##+js(")
+            || trimmed.contains("#@#+js(");
+        // A `#` before the `$` says the line is a cosmetic rule that mentions
+        // a modifier name by accident, not a network rule: the readers' own
+        // guard, shared here.
+        let cosmetic_look = matches!(
+            (trimmed.find('#'), trimmed.find('$')),
+            (Some(hash), Some(dollar)) if hash < dollar
+        );
+        let gated_modifier = !js
+            && !cosmetic_look
+            && !trimmed.starts_with(['!', '[', '#'])
+            && {
+                let rule = trimmed.strip_prefix("@@").unwrap_or(trimmed);
+                let family = split_modifier_rule(rule).is_some_and(|(_, tokens)| {
+                    tokens.iter().any(|token| {
+                        matches!(
+                            token.split('=').next().unwrap_or(token),
+                            "urltransform" | "removeparam" | "queryprune" | "removeheader" | "hls"
+                        )
+                    })
+                });
+                let replace = split_rule(rule)
+                    .is_some_and(|(_, tokens)| tokens.iter().any(|token| is_replace_token(token)));
+                family || replace
+            };
+        if js || gated_modifier {
+            removed += 1;
+            out.push('\n');
+            continue;
+        }
+        out.push_str(line);
+        out.push('\n');
+    }
+    (out, removed)
+}
+
 /// Rewrites AdGuard-only cosmetic syntax into the uBO/ABP forms the engine
 /// understands, line for line (so source-map line numbers stay aligned):
 ///
@@ -1617,6 +1735,164 @@ fn convert_adguard_line(line: &str, out: &mut String) {
         }
     }
     out.push_str(line);
+}
+
+/// One raw JavaScript rule (`#%#script`), with the domains it is bound to.
+struct JsRule {
+    /// The rule's domain position, exactly as the list wrote it. `None` when
+    /// it wrote none, which every host matches.
+    domains: Option<String>,
+    script: String,
+}
+
+/// The raw JavaScript rules and their exceptions, read out of the lists by
+/// [`scan_js_rules`].
+#[derive(Default)]
+struct JsScan {
+    rules: Vec<JsRule>,
+    exceptions: Vec<JsRule>,
+    dropped: u32,
+}
+
+/// The `#%#` rules of the loaded lists, ready to answer a page.
+struct JsRules {
+    rules: Vec<JsRule>,
+    exceptions: Vec<JsRule>,
+    dropped: u32,
+}
+
+impl JsRules {
+    /// The scripts that apply to `host`: every blocking rule whose domains
+    /// let it through, minus the ones an exception takes back. Exception
+    /// matching is the reference's own: an exception names the same script
+    /// text, and its own domain position says where it does the naming.
+    fn scripts_for(&self, host: &str) -> Vec<String> {
+        self.rules
+            .iter()
+            .filter(|rule| {
+                domains_match(rule.domains.as_deref(), host)
+                    && !self.exceptions.iter().any(|exception| {
+                        exception.script == rule.script
+                            && domains_match(exception.domains.as_deref(), host)
+                    })
+            })
+            .take(MAX_JS_RULES)
+            .map(|rule| rule.script.clone())
+            .collect()
+    }
+}
+
+fn build_js_rules(scan: JsScan) -> Option<JsRules> {
+    if scan.rules.is_empty() && scan.exceptions.is_empty() {
+        return None;
+    }
+    Some(JsRules {
+        rules: scan.rules,
+        exceptions: scan.exceptions,
+        dropped: scan.dropped,
+    })
+}
+
+/// Reads the raw JavaScript rules a trusted list carries: `[domains]#%#script`
+/// with its `[domains]#@%#script` exceptions.
+///
+/// The crate has no action for them — the syntax is AdGuard's own, and the
+/// reference keeps it for trusted lists — so they are read here and assembled
+/// per page ([`JsRules::scripts_for`]). The `//scriptlet(...)` spelling shares
+/// the marker and is [`convert_adguard_cosmetics`]'s business; a bracket-scoped
+/// raw rule (`[$path=…]`) is dropped instead of half-read — the path machinery
+/// has no JavaScript side — while a bracket-scoped scriptlet is left to the
+/// crate, which reads the bracket.
+fn scan_js_rules(text: &str, scan: &mut JsScan) {
+    for line in text.lines() {
+        let line = line.trim();
+        if line.is_empty() || line.starts_with('!') {
+            continue;
+        }
+        if line.starts_with('[') {
+            // The bracket condition is the crate's to honour (R11): a
+            // scriptlet under one keeps its line and its machinery. A raw
+            // rule under one has no JavaScript side to read the bracket
+            // with, so it is dropped and counted instead of half-read.
+            if let Some((_, script)) = line.split_once("#%#") {
+                if !script.trim_start().starts_with("//scriptlet(") {
+                    scan.dropped += 1;
+                }
+            }
+            continue;
+        }
+        let Some((index, marker)) = cosmetic_marker(line) else {
+            continue;
+        };
+        if marker != "#%#" && marker != "#@%#" {
+            continue;
+        }
+        let script = line[index + marker.len()..].trim();
+        if script.starts_with("//scriptlet(") {
+            continue;
+        }
+        if script.is_empty() {
+            scan.dropped += 1;
+            continue;
+        }
+        let domains = match line[..index].trim() {
+            "" => None,
+            domains => Some(domains.to_string()),
+        };
+        let rule = JsRule {
+            domains,
+            script: script.to_string(),
+        };
+        if marker == "#@%#" {
+            scan.exceptions.push(rule);
+        } else {
+            scan.rules.push(rule);
+        }
+    }
+}
+
+/// Whether a cosmetic rule's domain position lets `host` through.
+///
+/// The list's spelling, as the reference reads it: entries separated by
+/// commas, one with `~` in front is a domain that must not match, and `.*`
+/// after a domain stands for any TLD (`example.*` covers `example.com` and
+/// `sub.example.co.uk` alike — matched here by the label's place in the host,
+/// close enough to the public-suffix reading for the rules that use it). A
+/// rule with no positive entry applies everywhere.
+fn domains_match(domains: Option<&str>, host: &str) -> bool {
+    let Some(domains) = domains else {
+        return true;
+    };
+    let host = host.trim_end_matches('.').to_ascii_lowercase();
+    let mut positive = false;
+    let mut matched = false;
+    for entry in domains.split(',') {
+        let entry = entry.trim().to_ascii_lowercase();
+        let (negated, entry) = match entry.strip_prefix('~') {
+            Some(rest) => (true, rest),
+            None => (false, entry.as_str()),
+        };
+        let hit = if entry.is_empty() {
+            continue;
+        } else if entry == "*" {
+            true
+        } else if let Some(base) = entry.strip_suffix(".*") {
+            !base.is_empty()
+                && (host.starts_with(&format!("{base}.")) || host.contains(&format!(".{base}.")))
+        } else {
+            let domain = entry.strip_prefix("*.").unwrap_or(entry);
+            host == domain || host.ends_with(&format!(".{domain}"))
+        };
+        if negated {
+            if hit {
+                return false;
+            }
+        } else {
+            positive = true;
+            matched |= hit;
+        }
+    }
+    !positive || matched
 }
 
 /// Where a `$replace` rule's index rides.
@@ -4091,6 +4367,7 @@ mod tests {
             local_path: Some(path),
             format,
             category: CAT_AD,
+            trusted: true,
             rule_count: 0,
             last_error: None,
         }
@@ -5442,6 +5719,7 @@ mod tests {
             local_path: Some(PathBuf::from("/nonexistent/list.txt")),
             format: ListFormat::Standard,
             category: CAT_AD,
+            trusted: true,
             rule_count: 0,
             last_error: None,
         }];
@@ -5743,6 +6021,167 @@ mod tests {
         );
         // A host the rule does not target gets nothing.
         assert!(fe.cosmetic_resources("https://other.test/").is_empty());
+    }
+
+    #[test]
+    fn scriptlet_exceptions_cancel_the_scriptlet_they_name() {
+        let fe = cosmetic_engine(
+            "example.com#%#//scriptlet('set-constant', 'foo', 'bar')\n\
+             sub.example.com#@%#//scriptlet('set-constant', 'foo', 'bar')\n",
+        );
+        let page = fe.cosmetic_resources("https://www.example.com/");
+        assert!(
+            page.scriptlets.contains("setConstant(\"foo\", \"bar\")"),
+            "the covered host keeps the scriptlet: {}",
+            page.scriptlets
+        );
+        let sub = fe.cosmetic_resources("https://sub.example.com/");
+        assert!(
+            sub.scriptlets.is_empty(),
+            "the exception host loses it: {}",
+            sub.scriptlets
+        );
+    }
+
+    #[test]
+    fn raw_js_rules_reach_the_page_and_their_exceptions_cancel() {
+        let fe = cosmetic_engine(
+            "example.com#%#window.__one = 1;\n\
+             sub.example.com#@%#window.__one = 1;\n\
+             #%#window.__everywhere = 1;\n",
+        );
+        let page = fe.cosmetic_resources("https://example.com/");
+        assert!(
+            page.jsrules.iter().any(|s| s == "window.__one = 1;"),
+            "{:?}",
+            page.jsrules
+        );
+        assert!(
+            page.jsrules.iter().any(|s| s == "window.__everywhere = 1;"),
+            "{:?}",
+            page.jsrules
+        );
+        // The exception names the same script text and its domains say where
+        // the naming binds; the global rule is untouched by it.
+        let sub = fe.cosmetic_resources("https://sub.example.com/");
+        assert!(
+            !sub.jsrules.iter().any(|s| s == "window.__one = 1;"),
+            "{:?}",
+            sub.jsrules
+        );
+        assert!(
+            sub.jsrules.iter().any(|s| s == "window.__everywhere = 1;"),
+            "{:?}",
+            sub.jsrules
+        );
+        // A rule that names no domains runs on every page.
+        let other = fe.cosmetic_resources("https://other.test/");
+        assert_eq!(other.jsrules, vec!["window.__everywhere = 1;".to_string()]);
+    }
+
+    #[test]
+    fn js_rule_domains_read_like_cosmetic_domains() {
+        let fe = cosmetic_engine(
+            "a.test,b.test#%#window.__ab = 1;\n\
+             ~no.a.test#%#window.__not = 1;\n\
+             news.*#%#window.__tld = 1;\n",
+        );
+        let has = |host: &str, script: &str| {
+            fe.cosmetic_resources(&format!("https://{host}/"))
+                .jsrules
+                .iter()
+                .any(|s| s == script)
+        };
+        assert!(has("a.test", "window.__ab = 1;"));
+        assert!(has("x.b.test", "window.__ab = 1;"), "subdomains match");
+        assert!(!has("c.test", "window.__ab = 1;"));
+        assert!(has("c.test", "window.__not = 1;"), "a lone negation covers all");
+        assert!(!has("no.a.test", "window.__not = 1;"), "the negation bites");
+        assert!(has("no.a.test", "window.__ab = 1;"), "the positive entry stays");
+        assert!(has("news.com", "window.__tld = 1;"));
+        assert!(has("sub.news.co.uk", "window.__tld = 1;"));
+        assert!(!has("other.org", "window.__tld = 1;"));
+    }
+
+    #[test]
+    fn a_bracket_scoped_raw_rule_is_dropped_whole() {
+        let fe = cosmetic_engine(
+            "[$path=/special]#%#window.__path = 1;\n\
+             [$domain=example.com]#%#//scriptlet('set-constant', '__bracket_sc', 'yes')\n\
+             example.com#%#window.__plain = 1;\n",
+        );
+        let compiled = fe.inner.read().unwrap().clone();
+        let rules = compiled.js_rules.as_ref().expect("the plain rule stays");
+        assert_eq!(rules.rules.len(), 1);
+        assert_eq!(
+            rules.dropped, 1,
+            "the bracket raw rule alone is counted, not half-read"
+        );
+        // The bracket scriptlet is the crate's: it keeps its line, is not
+        // counted here, and still runs on the host the bracket names.
+        let page = fe.cosmetic_resources("https://example.com/special");
+        assert_eq!(page.jsrules, vec!["window.__plain = 1;".to_string()]);
+        assert!(page.scriptlets.contains("setConstant"), "{}", page.scriptlets);
+    }
+
+    #[test]
+    fn an_untrusted_list_keeps_no_gated_rules() {
+        const BODY: &str = "example.com##+js(set-constant, ok, false)\n\
+                            example.com#%#window.__nope = 1;\n\
+                            example.com#%#//scriptlet('set-constant', 'ok', 'false')\n\
+                            ||shop.test/api$removeparam=secret\n\
+                            ||shop.test/seg.m3u8$hls=/ad/\n\
+                            ||shop.test/rep$replace=/a/b/\n\
+                            ||shop.test/hdr$removeheader=link\n\
+                            ||shop.test/u$urltransform=/a/b/\n";
+        let trusted = cosmetic_engine(BODY);
+        let compiled = trusted.inner.read().unwrap().clone();
+        assert!(compiled.js_rules.is_some(), "trusted lists keep the raw rules");
+        assert!(compiled.replace.is_some(), "trusted lists keep $replace");
+        let modifiers = compiled.modifier_rules.as_ref().expect("modifier rules");
+        assert_eq!(
+            modifiers.rules.len(),
+            4,
+            "$removeparam, $hls, $removeheader and $urltransform all live here"
+        );
+        let page = trusted.cosmetic_resources("https://example.com/");
+        assert!(page.scriptlets.contains("setConstant"), "{}", page.scriptlets);
+        assert_eq!(page.jsrules.len(), 1, "{:?}", page.jsrules);
+        let rewritten = trusted.check_url(
+            "https://shop.test/api?secret=1&keep=2",
+            "https://shop.test/",
+            "xmlhttprequest",
+            "GET",
+        );
+        assert_eq!(
+            rewritten.rewritten_url.as_deref(),
+            Some("https://shop.test/api?keep=2")
+        );
+
+        // The same list, untrusted: every gated rule is taken out before any
+        // reader sees it, and nothing half-runs.
+        static NEXT: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+        let name = format!(
+            "untrusted-{}.txt",
+            NEXT.fetch_add(1, std::sync::atomic::Ordering::SeqCst)
+        );
+        let mut list = temp_list(&name, BODY, ListFormat::Standard, 4);
+        list.trusted = false;
+        let fe = FilterEngine::new();
+        fe.rebuild(&[list], &[]);
+        let compiled = fe.inner.read().unwrap().clone();
+        assert!(compiled.js_rules.is_none());
+        assert!(compiled.replace.is_none());
+        assert!(compiled.modifier_rules.is_none());
+        assert!(fe.cosmetic_resources("https://example.com/").is_empty());
+        let kept = fe.check_url(
+            "https://shop.test/api?secret=1&keep=2",
+            "https://shop.test/",
+            "xmlhttprequest",
+            "GET",
+        );
+        assert_eq!(kept.rewritten_url, None, "no removeparam for an untrusted list");
+        assert!(!kept.blocked, "{kept:?}");
     }
 
     #[test]

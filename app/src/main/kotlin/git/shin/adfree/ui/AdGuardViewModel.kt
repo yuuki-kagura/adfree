@@ -338,6 +338,7 @@ class AdGuardViewModel(
             is AdGuardIntent.RefreshSubscription -> repository.refreshSubscription(intent.id)
             is AdGuardIntent.RefreshAllSubscriptions -> repository.refreshAllSubscriptions()
             is AdGuardIntent.ToggleFilterList -> repository.toggleFilterList(intent.id, intent.enabled)
+            is AdGuardIntent.SetFilterTrusted -> repository.setFilterTrusted(intent.id, intent.trusted)
             is AdGuardIntent.RunThreatScan -> handleThreatScan(intent.domain)
             is AdGuardIntent.ResetAiLab -> _aiLabState.value = AiLabUiState.Idle
             is AdGuardIntent.UpdateStealth -> repository.updateStealthSetting(

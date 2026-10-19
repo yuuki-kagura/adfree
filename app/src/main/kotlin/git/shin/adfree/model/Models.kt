@@ -133,6 +133,14 @@ data class FilterList(
     val homepage: String? = null,
     /** Added by the user (URL or local file): deletable, not in the catalogue. */
     val isUserAdded: Boolean = false,
+    /**
+     * Trusted filter (KB §Trusted filters): only a trusted list may carry
+     * JavaScript rules, scriptlets and the `$hls`/`$removeheader`/
+     * `$removeparam`/`$replace`/`$urltransform` modifiers. Catalogue lists and
+     * the user rules are trusted; a list the user added is not until they say
+     * so.
+     */
+    val trusted: Boolean = false,
 )
 
 /** One userscript served to intercepted pages (the Extensions section). */

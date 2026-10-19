@@ -2104,6 +2104,14 @@ data class FilterListBinding (
     var `category`: kotlin.Int
     , 
     /**
+     * The reference's trusted-filter bit: only a trusted list may carry
+     * JavaScript rules, scriptlets and the gated modifiers. The catalogue
+     * and the user rules are trusted; a list the user added is not until
+     * they say so.
+     */
+    var `trusted`: kotlin.Boolean
+    , 
+    /**
      * Number of rule lines in the list.
      */
     var `ruleCount`: kotlin.Long
@@ -2132,6 +2140,7 @@ public object FfiConverterTypeFilterListBinding: FfiConverterRustBuffer<FilterLi
             FfiConverterString.read(buf),
             FfiConverterInt.read(buf),
             FfiConverterInt.read(buf),
+            FfiConverterBoolean.read(buf),
             FfiConverterLong.read(buf),
             FfiConverterString.read(buf),
         )
@@ -2145,6 +2154,7 @@ public object FfiConverterTypeFilterListBinding: FfiConverterRustBuffer<FilterLi
             FfiConverterString.allocationSize(value.`path`) +
             FfiConverterInt.allocationSize(value.`format`) +
             FfiConverterInt.allocationSize(value.`category`) +
+            FfiConverterBoolean.allocationSize(value.`trusted`) +
             FfiConverterLong.allocationSize(value.`ruleCount`) +
             FfiConverterString.allocationSize(value.`lastError`)
     )
@@ -2157,6 +2167,7 @@ public object FfiConverterTypeFilterListBinding: FfiConverterRustBuffer<FilterLi
             FfiConverterString.write(value.`path`, buf)
             FfiConverterInt.write(value.`format`, buf)
             FfiConverterInt.write(value.`category`, buf)
+            FfiConverterBoolean.write(value.`trusted`, buf)
             FfiConverterLong.write(value.`ruleCount`, buf)
             FfiConverterString.write(value.`lastError`, buf)
     }

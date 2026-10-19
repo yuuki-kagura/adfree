@@ -108,6 +108,7 @@ sealed interface AdGuardIntent {
     data class RefreshSubscription(val id: String) : AdGuardIntent
     data object RefreshAllSubscriptions : AdGuardIntent
     data class ToggleFilterList(val id: String, val enabled: Boolean) : AdGuardIntent
+    data class SetFilterTrusted(val id: String, val trusted: Boolean) : AdGuardIntent
     data class RunThreatScan(val domain: String) : AdGuardIntent
     data object ResetAiLab : AdGuardIntent
     data class UpdateStealth(

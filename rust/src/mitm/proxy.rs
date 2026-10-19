@@ -2168,6 +2168,9 @@ impl ProxySession {
         if !rules.scriptlets.is_empty() {
             obj.insert("scriptlets".into(), serde_json::json!(rules.scriptlets));
         }
+        if !rules.jsrules.is_empty() {
+            obj.insert("jsrules".into(), serde_json::json!(rules.jsrules));
+        }
         // With `$generichide` in play the dynamic lookup would answer `[]`
         // every time; say so, and only then — the runtime assumes it is on, so
         // a page whose payload never made it out still gets the lookup.
@@ -2823,6 +2826,7 @@ mod tests {
                 local_path: Some(path),
                 format: crate::filter::ListFormat::Standard,
                 category: 0,
+                trusted: true,
                 rule_count: 0,
                 last_error: None,
             }],
@@ -2851,6 +2855,7 @@ mod tests {
                 local_path: Some(path),
                 format: crate::filter::ListFormat::Standard,
                 category: 0,
+                trusted: true,
                 rule_count: 0,
                 last_error: None,
             }],
@@ -2920,6 +2925,7 @@ mod tests {
                 local_path: Some(path),
                 format: crate::filter::ListFormat::Standard,
                 category: 0,
+                trusted: true,
                 rule_count: 0,
                 last_error: None,
             }],

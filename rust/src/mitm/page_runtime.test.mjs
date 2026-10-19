@@ -360,6 +360,22 @@ test('scriptlets run while the runtime is injected', async () => {
   expect(page.errors).toEqual([]);
 });
 
+test('raw JavaScript rules each run in a tag of their own', async () => {
+  const page = await openPage({
+    payload: {
+      jsrules: [
+        'window.__adfree_rule_one = 1;',
+        'const = ;',
+        'window.__adfree_rule_three = 3;',
+      ],
+    },
+  });
+  // The middle rule is a syntax error: a tag would be dropped wholesale, so
+  // the rules around it must still have run.
+  expect(await page.page.evaluate(() => window.__adfree_rule_one)).toBe(1);
+  expect(await page.page.evaluate(() => window.__adfree_rule_three)).toBe(3);
+});
+
 test('a payload of the wrong shape does not take the page down', async () => {
   const page = await openPage({
     html: { body: '<div class="ad-slot">slot</div>' },

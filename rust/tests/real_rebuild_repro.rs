@@ -21,6 +21,7 @@ fn lists(dir: &str) -> Vec<FilterListInfo> {
             local_path: Some(PathBuf::from(format!("{dir}/{id}.txt"))),
             format: *format,
             category: *category,
+            trusted: true,
             rule_count: 0,
             last_error: None,
         })

@@ -357,6 +357,7 @@ fun FiltersScreen(
                 FilterDetailSheet(
                     list = list,
                     onToggle = { viewModel.onIntent(AdGuardIntent.ToggleFilterList(list.id, !list.isEnabled)) },
+                    onTrustChanged = { viewModel.onIntent(AdGuardIntent.SetFilterTrusted(list.id, it)) },
                     onRefresh = { viewModel.onIntent(AdGuardIntent.RefreshSubscription(list.id)) },
                     onDelete = {
                         viewModel.onIntent(AdGuardIntent.DeleteFilterList(list.id))
@@ -740,6 +741,7 @@ private fun AddFilterDialog(
 fun FilterDetailSheet(
     list: FilterList,
     onToggle: () -> Unit,
+    onTrustChanged: (Boolean) -> Unit,
     onRefresh: () -> Unit,
     onDelete: () -> Unit,
     onOpenHomepage: (String) -> Unit,
@@ -771,6 +773,27 @@ fun FilterDetailSheet(
                 onCheckedChange = { onToggle() },
                 colors = SwitchDefaults.colors(checkedTrackColor = AdGuardGreenPrimary),
             )
+        }
+
+        if (list.isUserAdded) {
+            Spacer(modifier = Modifier.height(12.dp))
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text("Bộ lọc tin cậy", fontSize = 13.sp, fontWeight = FontWeight.Bold, color = AdGuardTextPrimary)
+                    Text(
+                        text = "Cho phép list chạy JavaScript rule, scriptlet và các modifier " +
+                            "(\$removeparam, \$replace, \$urltransform, \$hls, \$removeheader) — " +
+                            "chỉ bật khi bạn tin nguồn list",
+                        fontSize = 11.sp,
+                        color = AdGuardTextMuted,
+                    )
+                }
+                Switch(
+                    checked = list.trusted,
+                    onCheckedChange = { onTrustChanged(it) },
+                    colors = SwitchDefaults.colors(checkedTrackColor = AdGuardGreenPrimary),
+                )
+            }
         }
 
         Spacer(modifier = Modifier.height(12.dp))

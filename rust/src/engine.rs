@@ -2482,6 +2482,7 @@ mod tests {
             local_path: Some(path),
             format: crate::filter::ListFormat::Standard,
             category: 0,
+            trusted: true,
             rule_count: 0,
             last_error: None,
         }];
