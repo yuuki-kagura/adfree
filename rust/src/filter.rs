@@ -1711,6 +1711,12 @@ fn scan_replace_rules(text: &str, scan: &mut ReplaceScan) {
             if name.is_empty() || matches!(name, "replace" | "content" | "_" | "__" | "___") {
                 continue;
             }
+            if name == "match-case" && match_case_without_regexp(pattern) {
+                // See [`match_case_without_regexp`]: the probe would be
+                // refused silently, so the rule is dropped and counted here.
+                faithful = false;
+                continue;
+            }
             if KEPT_OPTIONS.contains(&name) {
                 kept.push(token);
             } else {
@@ -1859,6 +1865,18 @@ fn probe_line(pattern: &str, options: &[impl AsRef<str>], redirect: Option<&str>
         return pattern.to_string();
     }
     format!("{pattern}${}", parts.join(","))
+}
+
+/// Whether the crate would refuse a rule carrying `$match-case`.
+///
+/// It accepts the option only on a complete regexp
+/// (`NetworkFilterError::MatchCaseWithoutFullRegex`), and a probe it refuses
+/// is dropped without a trace: the rule would count as loaded and never
+/// match. Drop-and-count is what happens here instead, in the two scanners
+/// that build probes, so the count tells the truth and the rule never runs
+/// case-insensitively where the list asked for case.
+fn match_case_without_regexp(pattern: &str) -> bool {
+    !(pattern.len() > 1 && pattern.starts_with('/') && pattern.ends_with('/'))
 }
 
 /// Builds the engines a list's `$replace` rules need, or `None` when the
@@ -2426,6 +2444,14 @@ fn scan_modifier_rules(text: &str, scan: &mut ModifierScan) {
                 // pattern-form value it cannot be honored (see below), and a
                 // regexp-form value carries its own case syntax.
                 value_match_case = true;
+                continue;
+            }
+            if name == "match-case" && match_case_without_regexp(pattern) {
+                // See [`match_case_without_regexp`]: a probe carrying the
+                // option is dropped by the crate without a trace, so the rule
+                // is dropped and counted here instead of running
+                // case-insensitively — wider than the list asked for.
+                faithful = false;
                 continue;
             }
             if KEPT_OPTIONS.contains(&name) {
@@ -4214,6 +4240,28 @@ mod tests {
             "GET",
         );
         assert_eq!(v.rewritten_url, None);
+    }
+
+    #[test]
+    fn match_case_on_a_probe_is_dropped_rather_than_refused_silently() {
+        // The crate accepts `$match-case` only on a complete regexp; a probe
+        // carrying it on a pattern is dropped without a trace, so the rule
+        // would count as loaded and never match. It is dropped and counted
+        // here instead.
+        let fe = cosmetic_engine("||shop.test/api$removeparam=secret,match-case\n");
+        assert_eq!(fe.url_rules_count(), 0);
+        assert!(!fe.has_url_rules());
+        // The same rule with a complete regexp carries the option the crate
+        // accepts, and runs.
+        let fe = cosmetic_engine("/shop\\.test\\/api/$removeparam=secret,match-case\n");
+        assert_eq!(fe.url_rules_count(), 1);
+        assert_eq!(
+            url_of(&fe, "https://shop.test/api?secret=1&keep=2", "document"),
+            Some("https://shop.test/api?keep=2".to_string())
+        );
+        // The `$replace` scan builds probes the same way.
+        let fe = cosmetic_engine("||shop.test/api$replace=/a/b/,match-case\n");
+        assert!(!fe.has_replace());
     }
 
     /// One request through the URL modifiers, the way the HTTPS path runs

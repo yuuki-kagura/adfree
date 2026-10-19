@@ -1796,18 +1796,25 @@ impl ProxySession {
                             "mitm {}: streamed body gave up ({e}), passing through",
                             self.captured.as_deref().unwrap_or("?")
                         ));
-                        // The chunked body is already on its way to the client.
-                        // Close it cleanly so the page it has so far survives,
-                        // then hand the rest of the connection over untouched.
+                        // Close the chunked encoding cleanly so the part of the
+                        // body the client did get stays readable, then hand the
+                        // rest of the connection over untouched. The head may
+                        // not have gone out yet — an error can strike before
+                        // the injection point is ever found — and it goes
+                        // before any body byte does.
                         if !state.finished {
+                            if !state.head_sent {
+                                let injecting = state.injected;
+                                state.ensure_head(&mut out, injecting);
+                                let prefix = std::mem::take(&mut state.prefix);
+                                let _ = self.stream_body(&mut state, &prefix, &mut out);
+                            }
                             if let Some(encoder) = state.gzip.as_mut() {
                                 let mut tail = Vec::new();
                                 if encoder.finish(&mut tail).is_ok() {
                                     http::emit_chunk(&mut out, &tail);
                                 }
                             }
-                            let injecting = state.injected;
-                            state.ensure_head(&mut out, injecting);
                             http::emit_last_chunk(&mut out);
                             state.finished = true;
                         }
@@ -2964,5 +2971,29 @@ mod tests {
         let next = b"HTTP/1.1 200 OK\r\nSet-Cookie: dropme=1\r\nContent-Length: 0\r\n\r\n";
         let (out, _) = proxy.rewrite_response(next);
         assert_eq!(out, next, "and neither is anything after it");
+    }
+
+    /// The head goes out before any body byte, even when the stream fails
+    /// before the injection point was ever found.
+    #[test]
+    fn a_stream_that_fails_before_its_head_goes_out_still_writes_the_head_first() {
+        let ca = CertificateAuthority::generate().expect("ca");
+        let mut proxy = quiet_proxy(&ca);
+        // A snippet to inject: the streaming path holds the head until it
+        // knows what the snippet is and where it goes.
+        proxy.script_src = "https://192.0.2.1/adfree.js?h=1".to_string();
+        proxy.script_body = "/* snip */".into();
+        let head = b"HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Encoding: gzip\r\nContent-Length: 40000\r\n\r\n";
+        let (out, _) = proxy.rewrite_response(head);
+        assert!(out.is_empty(), "the head waits for the injection decision");
+        // Bytes that are not gzip: the decode fails before `</head>` is found,
+        // while the head is still unsent.
+        let (out, _) = proxy.rewrite_response(b"not a gzip stream at all");
+        assert!(
+            out.starts_with(b"HTTP/1.1 200 OK\r\n"),
+            "the head goes out first: {:?}",
+            String::from_utf8_lossy(&out[..out.len().min(32)])
+        );
+        assert!(out.ends_with(b"0\r\n\r\n"), "the chunked body is closed");
     }
 }
