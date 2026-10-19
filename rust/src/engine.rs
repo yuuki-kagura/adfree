@@ -566,16 +566,20 @@ impl Core {
         self.running.store(true, Ordering::SeqCst);
         let statics: &'static Core = core();
         let mut workers = Vec::with_capacity(2);
+        // The tun worker runs the whole data path — TLS, the response rewriter
+        // and gzip bodies — in one call chain, and a 128 KiB stack overflowed
+        // it on a real response (SIGSEGV in `decode_body`, measured on the
+        // emulator 19/10/2026). One MiB matches what bionic gives a thread.
         if let Ok(worker) = std::thread::Builder::new()
             .name("adfree-tun".into())
-            .stack_size(128 * 1024)
+            .stack_size(1024 * 1024)
             .spawn(move || tun_loop(statics, tun_fd))
         {
             workers.push(worker);
         }
         if let Ok(worker) = std::thread::Builder::new()
             .name("adfree-dns".into())
-            .stack_size(128 * 1024)
+            .stack_size(1024 * 1024)
             .spawn(move || forwarder_loop(statics))
         {
             workers.push(worker);
