@@ -1157,10 +1157,15 @@ impl ProxySession {
             }
             if !verdict.blocked {
                 if let Some(rewritten_target) = rewritten_target {
-                    buffer.splice(
-                        ..head_end,
-                        rebuilt_head(&buffer[..head_end], &rewritten_target),
-                    );
+                    // The rebuilt line is as long as the target it carries, so
+                    // the head end moves with it: the cookie plan below (and
+                    // the plan's own record) reads the head that actually goes
+                    // out, and the old end would slice past its end whenever
+                    // the rewrite is shorter.
+                    let old_end = head_end;
+                    let rebuilt = rebuilt_head(&buffer[..old_end], &rewritten_target);
+                    head_end = rebuilt.len();
+                    buffer.splice(..old_end, rebuilt);
                     if let Some(edit) = transformed {
                         crate::logbuf::push(&format!(
                             "mitm {host}: URL rewritten to {} by {} rule(s)",

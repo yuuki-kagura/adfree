@@ -1336,6 +1336,56 @@ fn cookie_rules_trim_the_https_exchange() {
     tcp.close();
 }
 
+/// A `$removeparam` rule rewrites a URL the `$cookie` rules read too: the
+/// request line that goes out is shorter than the one that was matched, and
+/// the cookie plan still has to see the head that actually goes out. The stale
+/// length used to slice the buffer past its end — a panic on a real device.
+const COOKIE_REWRITE_LIST: &str = "! Title: e2e cookie+removeparam rules\n\
+                                   ||shop.test/cookies$cookie=dropme\n\
+                                   ||shop.test/cookies$removeparam=gone\n";
+
+/// One request, two rules: `$removeparam` takes the query off the line, and the
+/// `$cookie` plan trims the cookies on the head it rewrote — no panic, and the
+/// rewrite still reaches the response that request brings back.
+#[test]
+fn cookie_rules_read_the_head_a_url_rewrite_installed() {
+    let origin = start_origin(HTML);
+    let (core, ca_der) = setup_core_with_list(&origin, "cookie-rewrite", COOKIE_REWRITE_LIST);
+
+    let mut tcp = Client::connect(core.clone(), origin.port);
+    let mut conn = handshake(&mut tcp, client_config(ca_der));
+    assert!(!conn.is_handshaking(), "the MITM handshake must complete");
+
+    let (head, body) = request_with(
+        &mut tcp,
+        &mut conn,
+        "/cookies?gone=1",
+        "Sec-Fetch-Dest: document\r\nCookie: dropme=1; keepme=2\r\n\
+         Referer: https://shop.test/\r\n",
+    );
+    assert!(head.starts_with("HTTP/1.1 200"), "{head}");
+    assert_eq!(body, b"ok", "the body is none of the rules' business");
+    {
+        let seen = origin.requests.lock().expect("requests");
+        let sent = seen.last().expect("the request reached the origin");
+        assert!(
+            sent.starts_with("GET /cookies HTTP/1.1"),
+            "the rewritten target goes out: {sent:?}"
+        );
+        assert!(
+            sent.contains("Cookie: keepme=2") && !sent.contains("dropme"),
+            "the cookie plan still trims the rewritten head: {sent:?}"
+        );
+    }
+    let lower = head.to_lowercase();
+    assert!(
+        lower.contains("set-cookie: keepme=3") && !lower.contains("set-cookie: dropme"),
+        "the plan still reaches the answer: {head}"
+    );
+
+    tcp.close();
+}
+
 /// The `$jsonprune` rule: the answer's JSON loses the item it names.
 const JSONPRUNE_LIST: &str = "! Title: e2e jsonprune rules\n\
                               ||shop.test/jsonprune$jsonprune=\\$.ads\n";
