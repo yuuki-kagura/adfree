@@ -481,3 +481,183 @@ pub fn server_alpn(connection: &ServerConnection) -> Option<Vec<u8>> {
     connection.alpn_protocol().map(|p| p.to_vec())
 }
 
+/// Extension type 0xfe0d, `encrypted_client_hello` (RFC 9849, RFC 9460
+/// Table 1 for the `ech` SvcParam it is built from).
+const EXT_ENCRYPTED_CLIENT_HELLO: u16 = 0xfe0d;
+
+/// Extension type 0x0000, `server_name`.
+const EXT_SERVER_NAME: u16 = 0x0000;
+
+/// What the first flight of a connection holds.
+#[derive(Debug, PartialEq, Eq)]
+pub enum Flight {
+    /// Not enough bytes yet: TLS records fragment the hello, and a real ECH
+    /// one is large enough to span more than one.
+    Pending,
+    /// The first handshake message is not a ClientHello.
+    NotHello,
+    /// A complete ClientHello.
+    Hello {
+        /// The body length of the `encrypted_client_hello` extension, when the
+        /// hello carries one. A real ECH offer hides an encrypted ClientHello
+        /// in there (hundreds of bytes); the GREASE browsers send on ordinary
+        /// connections carries a short dummy.
+        ech_len: Option<usize>,
+        /// The name the hello exposes: the real host for an ordinary hello,
+        /// the ECH public name for a real ECH one, `None` without an SNI.
+        server_name: Option<String>,
+    },
+}
+
+/// Reads the head of a connection's first flight without feeding it to
+/// rustls.
+///
+/// The proxy has to decide *before* it terminates: browsers attach a GREASE
+/// `encrypted_client_hello` extension to ordinary connections, rustls ignores
+/// it, and the hello terminates as usual — but a real ECH hello exposes only
+/// the config's public name, and terminating it can only serve a certificate
+/// for the wrong host. Telling the two apart takes the outer name, which is
+/// why both come out of one parse; [`crate::mitm::ech`] owns which names get
+/// spliced.
+pub fn first_flight(bytes: &[u8]) -> Flight {
+    let mut handshake = Vec::new();
+    let mut off = 0usize;
+    loop {
+        let Some(header) = bytes.get(off..off + 5) else {
+            return Flight::Pending;
+        };
+        if header[0] != 0x16 {
+            // Not a handshake record: no ClientHello to read.
+            return Flight::NotHello;
+        }
+        let len = u16::from_be_bytes([header[3], header[4]]) as usize;
+        let Some(end) = off.checked_add(5 + len) else {
+            return Flight::Pending;
+        };
+        let Some(record) = bytes.get(off + 5..end) else {
+            return Flight::Pending;
+        };
+        handshake.extend_from_slice(record);
+        off = end;
+        if handshake.len() >= 4 {
+            if handshake[0] != 0x01 {
+                return Flight::NotHello;
+            }
+            let len =
+                ((handshake[1] as usize) << 16) | ((handshake[2] as usize) << 8) | handshake[3] as usize;
+            if let Some(body) = handshake.get(4..4 + len) {
+                let Some(extensions) = client_hello_extensions(body) else {
+                    return Flight::Hello {
+                        ech_len: None,
+                        server_name: None,
+                    };
+                };
+                return Flight::Hello {
+                    ech_len: extension(extensions, EXT_ENCRYPTED_CLIENT_HELLO)
+                        .map(|body| body.len()),
+                    server_name: server_name_of(extensions),
+                };
+            }
+        }
+        if off == bytes.len() {
+            return Flight::Pending;
+        }
+    }
+}
+
+/// The host name a ClientHello exposes, lowercased like every other name the
+/// core compares.
+fn server_name_of(extensions: &[u8]) -> Option<String> {
+    // server_name_list: a 2-byte length, then one type(1) + host_name
+    // (2-byte length + bytes) entry. Only host_name exists today.
+    let list = extension(extensions, EXT_SERVER_NAME)?;
+    let len = u16::from_be_bytes([*list.first()?, *list.get(1)?]) as usize;
+    let end = 2 + len;
+    if end > list.len() || *list.get(2)? != 0 {
+        return None;
+    }
+    let name_len = u16::from_be_bytes([*list.get(3)?, *list.get(4)?]) as usize;
+    let name = list.get(5..5 + name_len)?;
+    std::str::from_utf8(name).ok().map(|n| n.to_ascii_lowercase())
+}
+
+/// One extension's body out of a ClientHello extension block.
+fn extension(extensions: &[u8], wanted: u16) -> Option<&[u8]> {
+    let mut off = 0usize;
+    while off + 4 <= extensions.len() {
+        let key = u16::from_be_bytes([extensions[off], extensions[off + 1]]);
+        let len = u16::from_be_bytes([extensions[off + 2], extensions[off + 3]]) as usize;
+        let end = off.checked_add(4 + len)?;
+        if end > extensions.len() {
+            return None;
+        }
+        if key == wanted {
+            return Some(&extensions[off + 4..end]);
+        }
+        off = end;
+    }
+    None
+}
+
+/// The extension block of a ClientHello body, if the fixed fields add up.
+fn client_hello_extensions(hello: &[u8]) -> Option<&[u8]> {
+    // legacy_version(2) + random(32), then three length-prefixed lists, then
+    // the extension block: the end of the hello is the end of its extensions.
+    let mut off = 2 + 32;
+    let session = *hello.get(off)? as usize;
+    off += 1 + session;
+    let suites = u16::from_be_bytes([*hello.get(off)?, *hello.get(off + 1)?]) as usize;
+    off += 2 + suites;
+    let compression = *hello.get(off)? as usize;
+    off += 1 + compression;
+    let len = u16::from_be_bytes([*hello.get(off)?, *hello.get(off + 1)?]) as usize;
+    off += 2;
+    hello.get(off..off.checked_add(len)?)
+}
+
+/// A ClientHello record with an `encrypted_client_hello` extension appended.
+///
+/// The test build cannot ask rustls for a real ECH hello: the ECH client modes
+/// need an HPKE provider this crate does not compile in (`ring` has none), and
+/// a hand-rolled hello would break the client's own transcript. So tests take
+/// a real hello and add the extension the way a client with an ECHConfig
+/// would, which is all the proxy ever looks at.
+#[cfg(test)]
+pub(crate) fn with_fake_ech(record: &[u8]) -> Option<Vec<u8>> {
+    let handshake_len = ((*record.get(6)? as usize) << 16)
+        | ((*record.get(7)? as usize) << 8)
+        | *record.get(8)? as usize;
+    let mut body = record.get(9..9 + handshake_len)?.to_vec();
+    let extensions_len = client_hello_extensions(&body)?.len();
+    let at = body.len().checked_sub(extensions_len)?;
+    if at < 2 {
+        return None;
+    }
+    // The extension `ECHClientHelloOuter` shape: type, cipher suite, config
+    // id, `enc`, then the payload — a client's hello would carry a real HPKE
+    // encapsulation; the tests only need the keys to look right.
+    let mut extension = Vec::new();
+    extension.extend_from_slice(&EXT_ENCRYPTED_CLIENT_HELLO.to_be_bytes());
+    let mut payload = Vec::new();
+    payload.push(0x00); // outer
+    payload.extend_from_slice(&[0x00, 0x01, 0x00, 0x01]); // HKDF-SHA256 + AES-128-GCM
+    payload.push(7); // config id
+    payload.extend_from_slice(&32u16.to_be_bytes());
+    payload.extend_from_slice(&[0x5a; 32]); // enc
+    payload.extend_from_slice(&48u16.to_be_bytes());
+    payload.extend_from_slice(&[0xa5; 48]); // payload
+    extension.extend_from_slice(&(payload.len() as u16).to_be_bytes());
+    extension.extend_from_slice(&payload);
+    body.extend_from_slice(&extension);
+    // Fix the extension block length, then the handshake length, then the
+    // record length: three fields grow by the same 4 + payload amount.
+    let new_len = (extensions_len + extension.len()) as u16;
+    body[at - 2..at].copy_from_slice(&new_len.to_be_bytes());
+    let mut out = record[..9].to_vec();
+    out[6..9].copy_from_slice(&(body.len() as u32).to_be_bytes()[1..]);
+    out.extend_from_slice(&body);
+    let record_len = (out.len() - 5) as u16;
+    out[3..5].copy_from_slice(&record_len.to_be_bytes());
+    Some(out)
+}
+

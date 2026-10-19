@@ -227,6 +227,11 @@ pub struct Core {
     /// end-to-end tests point it at a loopback origin instead (binding 443
     /// needs privileges the test runner does not have).
     pub(crate) mitm_port: AtomicU16,
+    /// ECH knowledge shared by the DNS half and the TLS half: which hosts had
+    /// their ECHConfig rewritten away, and which turned out to require ECH
+    /// (see [`crate::mitm::ech`]). Public like the other state the tests and
+    /// the platform poke at.
+    pub ech_hosts: Arc<crate::mitm::ech::EchHosts>,
     /// Packets produced for the tun, collected only in tests: the end-to-end
     /// tests drive the packet loop without a device, and this is where
     /// client-bound segments would land.
@@ -308,6 +313,7 @@ impl Core {
             socket_protector: Mutex::new(None),
             upstream_config: RwLock::new(crate::mitm::tls::client_config()),
             mitm_port: AtomicU16::new(crate::mitm::relay::MITM_PORT),
+            ech_hosts: Arc::new(crate::mitm::ech::EchHosts::new()),
             #[cfg(test)]
             outbox: Mutex::new(Vec::new()),
         }
@@ -1046,6 +1052,10 @@ impl Core {
                     // platform names the app the `$app=` rules are about, and
                     // the flow keeps that name for as long as it lives.
                     proxy.set_apps(self.apps_for_packet(pkt));
+                    // ECH: which hosts had their ECHConfig rewritten away, so
+                    // a refusal from one of them can be learned as "requires
+                    // ECH" (see `mitm::ech`).
+                    proxy.set_ech_hosts(Arc::clone(&self.ech_hosts));
                     Some(proxy)
                 }
                 Err(e) => {
@@ -1477,12 +1487,58 @@ impl Core {
         // terminator, so the attempt either dies on the forged certificate (a
         // wasted round trip) or, on hosts in ECH-required mode, fails the
         // connection outright (see `dns::strip_ech`).
+        //
+        // The host that *does* require ECH is the exception, and it is learned
+        // from the refusal the terminator sees (`proxy::note_plain_refusal`):
+        // from then on its ECHConfig is left in place, the browser can use
+        // ECH, and its flows are spliced rather than terminated.
         let mitm = self.mitm_ready(&self.cfg.read().unwrap());
-        if mitm && dns::strip_ech(&mut message) {
-            let host = dns::parse_query(&message)
-                .map(|q| q.qname.as_str().to_string())
-                .unwrap_or_else(|| "?".to_string());
-            crate::logbuf::push(&format!("dns: ECH stripped for {host}"));
+        // The name and the type come from the same question: the string is
+        // taken up front because the answer is rewritten in place below.
+        let (host, https_query) = match if mitm {
+            dns::parse_query(&message)
+        } else {
+            None
+        } {
+            Some(query) => (
+                Some(query.qname.as_str().to_string()),
+                query.qtype == 65 || query.qtype == 64,
+            ),
+            None => (None, false),
+        };
+        let exempt = host
+            .as_deref()
+            .is_some_and(|host| self.ech_hosts.exempt(host));
+        if mitm && exempt {
+            if let (Some(host), true) = (host.as_deref(), https_query) {
+                crate::logbuf::push(&format!(
+                    "dns: ECH kept for {host} (the host requires it)"
+                ));
+                // The name inside the config is what a real ECH hello will
+                // expose on the wire, and the DNS half is the only place that
+                // can read it. It is learned only for the hosts whose config
+                // is actually handed out: an ECH hello can only reach one of
+                // those, and every other flow stays terminated (`mitm::ech`).
+                if let Some(name) = dns::ech_public_name(&message) {
+                    self.ech_hosts.note_public_name(&name);
+                }
+            }
+        } else if mitm && dns::strip_ech(&mut message) {
+            let text = host.as_deref().unwrap_or("?");
+            crate::logbuf::push(&format!("dns: ECH stripped for {text}"));
+            if let Some(host) = host.as_deref() {
+                self.ech_hosts.note_advertised(host);
+            }
+            // The answer is not the origin's any more, so it may not be cached
+            // as if it were: a short TTL also keeps the way back short when
+            // the host turns out to require ECH (see `mitm::ech`).
+            let clamped = dns::clamp_answer_ttl(&mut message, crate::mitm::ech::ANSWER_TTL_SECS);
+            if clamped > 0 {
+                crate::logbuf::push(&format!(
+                    "dns: ECH answer for {text} clamped to {}s",
+                    crate::mitm::ech::ANSWER_TTL_SECS
+                ));
+            }
         }
         let rewritten = client_packet.rewrite_udp(&message);
         if !self.write_raw(&rewritten) {

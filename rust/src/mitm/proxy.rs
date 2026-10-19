@@ -218,6 +218,10 @@ pub struct ProxySession {
     /// named them when the connection opened (see [`crate::uidmap`]). Empty
     /// when nothing was attributed — the `$app=` rules then apply to no app.
     apps: Vec<String>,
+    /// The engine's ECH knowledge (see [`crate::mitm::ech`]): which hosts had
+    /// their ECHConfig rewritten away, and which learned to require ECH.
+    /// `None` when no engine owns the session (tests).
+    ech_hosts: Option<Arc<crate::mitm::ech::EchHosts>>,
 }
 
 /// Where a connection's response stream stands.
@@ -475,6 +479,18 @@ fn emit_edited(out: &mut Vec<u8>, head: &[u8], body: &[u8], recompress: bool) {
     }
 }
 
+/// Whether a response head carries a `Server` header of its own.
+///
+/// Cloudflare's ECH-required refusals are recognisable by *not* carrying the
+/// one header every ordinary answer from their edge has — the 502 arrives with
+/// nothing but `Date` and `Content-Length`.
+fn head_has_server(head: &[u8]) -> bool {
+    head.split(|b| *b == b'\n').any(|line| {
+        let line = line.strip_suffix(b"\r").unwrap_or(line);
+        line.len() >= 7 && line[..7].eq_ignore_ascii_case(b"server:")
+    })
+}
+
 /// How the body of the response being collected is framed.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum Framing {
@@ -562,6 +578,7 @@ impl ProxySession {
             page_url: None,
             stats: None,
             sink: None,
+            ech_hosts: None,
             client_discard: None,
             apps: Vec::new(),
         }
@@ -605,6 +622,7 @@ impl ProxySession {
             page_url: None,
             stats: None,
             sink: None,
+            ech_hosts: None,
             client_discard: None,
             apps: Vec::new(),
         })
@@ -647,6 +665,7 @@ impl ProxySession {
             page_url: None,
             stats: None,
             sink: None,
+            ech_hosts: None,
             client_discard: None,
             apps: Vec::new(),
         })
@@ -669,6 +688,13 @@ impl ProxySession {
     /// opens; empty (the default) means nothing was attributed.
     pub fn set_apps(&mut self, apps: Vec<String>) {
         self.apps = apps;
+    }
+
+    /// Points the session at the engine's ECH knowledge: the hosts whose
+    /// ECHConfig the DNS half rewrote away, and the ones that turned out to
+    /// require ECH and must not be terminated (see [`crate::mitm::ech`]).
+    pub fn set_ech_hosts(&mut self, ech: Arc<crate::mitm::ech::EchHosts>) {
+        self.ech_hosts = Some(ech);
     }
 
     /// The SNI captured from the ClientHello, once it has arrived.
@@ -762,6 +788,34 @@ impl ProxySession {
             return Ok(self.splice_pending_verbatim());
         }
         state.raw.extend_from_slice(payload);
+        if let tls::Flight::Hello {
+            ech_len: Some(ech_len),
+            server_name,
+        } = tls::first_flight(&state.raw)
+        {
+            let name = server_name.as_deref().unwrap_or("?");
+            if self
+                .ech_hosts
+                .as_deref()
+                .is_some_and(|ech| ech.splices(name))
+            {
+                // A real ECH hello exposes only the config's public name: the
+                // host inside is encrypted, and terminating this TLS could
+                // only serve the wrong certificate for the wrong host, so the
+                // connection is handed over untouched (`mitm::ech`). The
+                // extension length is in the log because that is what tells a
+                // real offer from the GREASE one browsers attach everywhere.
+                crate::logbuf::push(&format!(
+                    "mitm {name}: client offered ECH ({ech_len} byte extension), \
+                     splicing verbatim"
+                ));
+                return Ok(self.splice_pending_verbatim());
+            }
+            // Otherwise this is a GREASE extension — browsers put one on
+            // ordinary connections — or a host not learned to require ECH:
+            // rustls ignores the extension, and the hello is terminated and
+            // filtered as usual.
+        }
         let started = Instant::now();
         let handshaking = tls::server_handshaking(&state.server);
         let fed = feed_server(&mut state.server, payload);
@@ -1480,6 +1534,42 @@ impl ProxySession {
         }
     }
 
+    /// Notes a host that answered a plain connection the way an ECH-required
+    /// origin does.
+    ///
+    /// A host that advertises ECH and still refuses a plain connection cannot
+    /// be served through a terminator at all — every request without ECH gets
+    /// the refusal instead of the page (Cloudflare's ECH-required hosts answer
+    /// a bare `502` with no `Server` header; `421 Misdirected Request` is the
+    /// same story told by the status). The host goes to [`crate::mitm::ech`],
+    /// which stops the DNS half from rewriting its ECHConfig away: the browser
+    /// can use ECH from then on, and the flows that offer it are spliced
+    /// instead of terminated. Only hosts that have already been seen
+    /// advertising ECH can be learned this way, so an ordinary `502` from
+    /// anywhere else teaches nothing.
+    fn note_plain_refusal(&self, info: &http::ResponseHead, head: &[u8]) {
+        let Some(ech) = self.ech_hosts.as_deref() else {
+            return;
+        };
+        let Some(host) = self.captured.as_deref() else {
+            return;
+        };
+        let refused = info.status == 421 || (info.status == 502 && !head_has_server(head));
+        if !refused || !ech.advertised(host) {
+            return;
+        }
+        if ech.note_refusal(host) {
+            let what = if info.status == 421 {
+                format!("{} Misdirected Request", info.status)
+            } else {
+                format!("{} Bad Gateway without a Server header", info.status)
+            };
+            crate::logbuf::push(&format!(
+                "mitm {host}: ECH-required refusal ({what}), DNS keeps its ECHConfig"
+            ));
+        }
+    }
+
     /// Decrypt → maybe inject scripts and cosmetic rules → re-encrypt.
     ///
     /// Returns the bytes to hand to the client and how many bytes the rewrite
@@ -1522,6 +1612,9 @@ impl ProxySession {
                     let head = self.resp_pending[..split].to_vec();
                     self.resp_pending.drain(..split);
                     let info = http::parse_response_head(&head);
+                    // A refusal only an ECH-required host sends is learned
+                    // here, where both the answer and the host are in hand.
+                    self.note_plain_refusal(&info, &head);
                     // Protocol switch (WebSocket): everything after this is
                     // not HTTP, and nothing may be held back.
                     if info.status == 101 {

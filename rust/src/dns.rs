@@ -378,6 +378,58 @@ pub fn strip_ech(message: &mut [u8]) -> bool {
     stripped
 }
 
+/// Lowers the TTL of every answer record in `message` to at most `max`.
+///
+/// Called on the answers whose `ech` parameter was just rewritten away: an
+/// answer the proxy changed is not the answer the origin published, so it must
+/// not be cached as if it were. It also bounds how long a host that turns out
+/// to require ECH stays broken — the browser re-reads the record, and can only
+/// then pick the ECHConfig back up, when what it holds expires. Returns how
+/// many records were lowered.
+pub fn clamp_answer_ttl(message: &mut [u8], max: u32) -> usize {
+    if message.len() < 12 {
+        return 0;
+    }
+    let qd = u16::from_be_bytes([message[4], message[5]]) as usize;
+    let an = u16::from_be_bytes([message[6], message[7]]) as usize;
+    if qd > 4 || an == 0 || an > 64 {
+        return 0;
+    }
+    let mut off = 12usize;
+    for _ in 0..qd {
+        if !skip_name(message, &mut off) {
+            return 0;
+        }
+        off += 4;
+        if off > message.len() {
+            return 0;
+        }
+    }
+    let mut clamped = 0;
+    for _ in 0..an {
+        if !skip_name(message, &mut off) || off + 10 > message.len() {
+            break;
+        }
+        let ttl = u32::from_be_bytes([
+            message[off + 4],
+            message[off + 5],
+            message[off + 6],
+            message[off + 7],
+        ]);
+        if ttl > max {
+            message[off + 4..off + 8].copy_from_slice(&max.to_be_bytes());
+            clamped += 1;
+        }
+        let rdlen = u16::from_be_bytes([message[off + 8], message[off + 9]]) as usize;
+        off += 10;
+        if off + rdlen > message.len() {
+            break;
+        }
+        off += rdlen;
+    }
+    clamped
+}
+
 /// Rewrites the `ech` key inside one record's RDATA, if it carries one.
 fn strip_ech_param(message: &mut [u8], start: usize, end: usize) -> bool {
     // SvcPriority (2 bytes), then the target name (never compressed in
@@ -400,6 +452,125 @@ fn strip_ech_param(message: &mut [u8], start: usize, end: usize) -> bool {
         off += 4 + len;
     }
     stripped
+}
+
+/// The `public_name` of the first ECHConfig in the first `ech` SvcParam of
+/// `message`, when the answer carries a readable one.
+///
+/// The ECHConfigList is public data — it is what the resolver hands every
+/// client — and its `public_name` is the name a real ECH connection exposes on
+/// the wire (RFC 9849 §4). It is also the only way to tell such a connection
+/// from the GREASE extension browsers attach to ordinary ones: a GREASE hello
+/// still carries the real host as its SNI, while a real ECH hello carries the
+/// public name. The transport half splices the former and terminates the
+/// latter, so it has to know the names (`mitm::ech`). Lowercased, like every
+/// other name the core compares.
+pub fn ech_public_name(message: &[u8]) -> Option<String> {
+    if message.len() < 12 {
+        return None;
+    }
+    let qd = u16::from_be_bytes([message[4], message[5]]) as usize;
+    let an = u16::from_be_bytes([message[6], message[7]]) as usize;
+    if qd > 4 || an == 0 || an > 64 {
+        return None;
+    }
+    let mut off = 12usize;
+    for _ in 0..qd {
+        if !skip_name(message, &mut off) {
+            return None;
+        }
+        off += 4;
+        if off > message.len() {
+            return None;
+        }
+    }
+    for _ in 0..an {
+        if !skip_name(message, &mut off) || off + 10 > message.len() {
+            return None;
+        }
+        let rtype = u16::from_be_bytes([message[off], message[off + 1]]);
+        let rdlen = u16::from_be_bytes([message[off + 8], message[off + 9]]) as usize;
+        off += 10;
+        if off + rdlen > message.len() {
+            return None;
+        }
+        if rtype == TYPE_SVCB || rtype == TYPE_HTTPS {
+            if let Some(name) = ech_param_public_name(message, off, off + rdlen) {
+                return Some(name);
+            }
+        }
+        off += rdlen;
+    }
+    None
+}
+
+/// The `public_name` inside the `ech` SvcParam of one SVCB/HTTPS record.
+fn ech_param_public_name(message: &[u8], start: usize, end: usize) -> Option<String> {
+    let mut off = start + 2;
+    if off > end || !skip_name(message, &mut off) {
+        return None;
+    }
+    while off + 4 <= end {
+        let key = u16::from_be_bytes([message[off], message[off + 1]]);
+        let len = u16::from_be_bytes([message[off + 2], message[off + 3]]) as usize;
+        let value_end = off.checked_add(4 + len)?;
+        if value_end > end {
+            return None;
+        }
+        if key == SVC_PARAM_KEY_ECH {
+            return ech_config_public_name(&message[off + 4..value_end]);
+        }
+        off = value_end;
+    }
+    None
+}
+
+/// The `public_name` of the first 0xfe0d ECHConfig in an ECHConfigList.
+///
+/// ```text
+/// ECHConfigList: uint16 length, then ECHConfig { uint16 version,
+///   uint16 length, ECHConfigContents { HpkeKeyConfig key_config,
+///   uint8 maximum_name_length, opaque public_name<1..255>,
+///   ECHConfigExtension extensions<0..2^16-1> } }
+/// HpkeKeyConfig: uint8 config_id, uint16 kem_id,
+///   opaque public_key<0..2^16-1>,
+///   HpkeSymmetricCipherSuite cipher_suites<4..2^16-4>
+/// ```
+fn ech_config_public_name(list: &[u8]) -> Option<String> {
+    let list_len = u16::from_be_bytes([*list.first()?, *list.get(1)?]) as usize;
+    let list_end = (2 + list_len).min(list.len());
+    let mut off = 2usize;
+    while off + 4 <= list_end {
+        let version = u16::from_be_bytes([list[off], list[off + 1]]);
+        let len = u16::from_be_bytes([list[off + 2], list[off + 3]]) as usize;
+        let body_end = off.checked_add(4 + len)?;
+        if body_end > list_end {
+            return None;
+        }
+        if version == 0xfe0d {
+            return ech_config_contents_public_name(&list[off + 4..body_end]);
+        }
+        off = body_end;
+    }
+    None
+}
+
+/// The `public_name` field of one `ECHConfigContents`.
+fn ech_config_contents_public_name(contents: &[u8]) -> Option<String> {
+    // config_id, kem_id, then the HPKE public key (a 2-byte length plus key).
+    let key_len = u16::from_be_bytes([*contents.get(3)?, *contents.get(4)?]) as usize;
+    let mut off = 1 + 4 + key_len;
+    // cipher_suites: a 2-byte length, then 4-byte suites.
+    let suites_len = u16::from_be_bytes([*contents.get(off)?, *contents.get(off + 1)?]) as usize;
+    off += 2 + suites_len;
+    // maximum_name_length, then public_name (a 1-byte length plus name).
+    let name_len = *contents.get(off + 1)? as usize;
+    let name = contents.get(off + 2..off + 2 + name_len)?;
+    let name = std::str::from_utf8(name).ok()?;
+    if name.is_empty() {
+        return None;
+    }
+    Some(name.to_ascii_lowercase())
 }
 
 /// Length of the name field at `off`, following compression pointers only to
@@ -721,5 +892,52 @@ mod tests {
         let before = msg.clone();
         assert!(!strip_ech(&mut msg));
         assert_eq!(msg, before);
+    }
+
+    #[test]
+    fn a_rewritten_answer_is_not_cached_as_published() {
+        let mut msg = response_skeleton(2);
+        add_answer(&mut msg, TYPE_HTTPS, &svcb_rdata(&[(5, &[0xab; 6])]));
+        add_answer(&mut msg, TYPE_A, &[1, 2, 3, 4]);
+        assert_eq!(clamp_answer_ttl(&mut msg, 60), 2, "both records carried 300");
+        // Header (12) + question (17) + name pointer (2) + type/class (4):
+        // the first record's TTL.
+        assert_eq!(u32::from_be_bytes([msg[35], msg[36], msg[37], msg[38]]), 60);
+        assert_eq!(parse_answers(&msg).len(), 1);
+        // Nothing to lower once every record fits.
+        assert_eq!(clamp_answer_ttl(&mut msg, 60), 0);
+    }
+
+    /// The ECHConfigList `crypto.cloudflare.com` served on 19/10/2026 (from
+    /// `dig +short HTTPS crypto.cloudflare.com`, base64 `AEX+DQBBPwAgACCY…`):
+    /// a real 0xfe0d config, public name `cloudflare-ech.com`, no extensions.
+    const CF_ECH_CONFIG: &[u8] = &[
+        0x00, 0x45, 0xfe, 0x0d, 0x00, 0x41, 0x3f, 0x00, 0x20, 0x00, 0x20, 0x98, 0x25, 0xe1, 0xdb,
+        0x0b, 0xf9, 0x5a, 0x81, 0x67, 0x61, 0x6c, 0x83, 0x39, 0x10, 0x9a, 0x22, 0xfd, 0x35, 0x47,
+        0x20, 0xa6, 0x37, 0xd2, 0x66, 0x16, 0xa6, 0xa3, 0xc2, 0xaf, 0x8d, 0x88, 0x29, 0x00, 0x04,
+        0x00, 0x01, 0x00, 0x01, 0x00, 0x12, 0x63, 0x6c, 0x6f, 0x75, 0x64, 0x66, 0x6c, 0x61, 0x72,
+        0x65, 0x2d, 0x65, 0x63, 0x68, 0x2e, 0x63, 0x6f, 0x6d, 0x00, 0x00,
+    ];
+
+    #[test]
+    fn the_public_name_comes_out_of_a_real_ech_config() {
+        let mut msg = response_skeleton(1);
+        add_answer(&mut msg, TYPE_HTTPS, &svcb_rdata(&[(5, CF_ECH_CONFIG)]));
+        assert_eq!(
+            ech_public_name(&msg),
+            Some("cloudflare-ech.com".to_string())
+        );
+        // A record without ech carries no name.
+        let mut plain = response_skeleton(1);
+        add_answer(
+            &mut plain,
+            TYPE_HTTPS,
+            &svcb_rdata(&[(1, &[0x02, b'h', b'2'])]),
+        );
+        assert_eq!(ech_public_name(&plain), None);
+        // A value that is not an ECHConfigList is ignored, not guessed at.
+        let mut junk = response_skeleton(1);
+        add_answer(&mut junk, TYPE_HTTPS, &svcb_rdata(&[(5, &[0xab; 6])]));
+        assert_eq!(ech_public_name(&junk), None);
     }
 }

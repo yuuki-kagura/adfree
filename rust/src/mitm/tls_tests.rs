@@ -189,6 +189,96 @@ fn the_flow_resolver_captures_the_clients_sni() {
     );
 }
 
+/// A client's first flight: the bytes the proxy sniffs for a ClientHello.
+fn client_flight(host: &str) -> Vec<u8> {
+    let mut config = ClientConfig::builder()
+        .with_root_certificates(rustls::RootCertStore::empty())
+        .with_no_client_auth();
+    config.alpn_protocols = vec![ALPN_H1.to_vec()];
+    let name = rustls::pki_types::ServerName::try_from(host.to_string()).expect("server name");
+    let mut client = ClientConnection::new(Arc::new(config), name).expect("client conn");
+    take_client_outbound(&mut client)
+}
+
+/// Re-frames one handshake flight as two TLS records, the way a ClientHello
+/// large enough to carry ECH arrives.
+fn split_into_records(flight: &[u8], at: usize) -> Vec<u8> {
+    let mut out = Vec::new();
+    for chunk in [&flight[5..5 + at], &flight[5 + at..]] {
+        out.push(0x16);
+        out.extend_from_slice(&flight[1..3]);
+        out.extend_from_slice(&(chunk.len() as u16).to_be_bytes());
+        out.extend_from_slice(chunk);
+    }
+    out
+}
+
+#[test]
+fn a_hello_without_ech_is_read_as_such() {
+    let flight = client_flight("shop.test");
+    assert_eq!(
+        first_flight(&flight),
+        Flight::Hello {
+            ech_len: None,
+            server_name: Some("shop.test".to_string()),
+        }
+    );
+    // A partial record says nothing yet.
+    assert_eq!(first_flight(&flight[..flight.len() - 4]), Flight::Pending);
+    assert_eq!(first_flight(&flight[..3]), Flight::Pending);
+    // Something that is not a handshake record is not a hello either.
+    assert_eq!(
+        first_flight(&[0x17, 0x03, 0x03, 0x00, 0x01, 0x00]),
+        Flight::NotHello
+    );
+}
+
+#[test]
+fn a_hello_that_offers_ech_keeps_its_outer_name() {
+    let flight = client_flight("shop.test");
+    let patched = with_fake_ech(&flight).expect("the hello must be patchable");
+    assert!(
+        patched.len() > flight.len(),
+        "the extension has to be in there"
+    );
+    assert_eq!(
+        first_flight(&patched),
+        Flight::Hello {
+            // type(1) + cipher_suite(4) + config_id(1) + enc(2 + 32)
+            // + payload(2 + 48), the shape `with_fake_ech` writes.
+            ech_len: Some(90),
+            server_name: Some("shop.test".to_string()),
+        },
+        "a GREASE hello still names the real host"
+    );
+    // A real ECH hello is large enough that it normally spans several records:
+    // the parser has to put the fragments back together.
+    let split = split_into_records(&patched, 700.min(patched.len() - 6));
+    assert_eq!(
+        first_flight(&split),
+        Flight::Hello {
+            ech_len: Some(90),
+            server_name: Some("shop.test".to_string()),
+        }
+    );
+}
+
+#[test]
+fn a_client_hello_can_be_told_from_garbage() {
+    // A record that promises a hello but carries junk: nothing readable, and
+    // no panic.
+    let mut junk = vec![0x16, 0x03, 0x01, 0x00, 0x08, 0x01, 0x00, 0x00, 0x04, 0, 0, 0, 0];
+    assert_eq!(
+        first_flight(&junk),
+        Flight::Hello {
+            ech_len: None,
+            server_name: None,
+        }
+    );
+    junk[5] = 0x02; // a ServerHello, not a ClientHello
+    assert_eq!(first_flight(&junk), Flight::NotHello);
+}
+
 /// Reads new plaintext from a client connection without draining old data.
 fn feed_client_read_only(
     connection: &mut ClientConnection,

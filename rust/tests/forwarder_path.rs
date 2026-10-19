@@ -243,8 +243,13 @@ fn https_answer(query: &dns::Query<'_>, ech: &[u8]) -> Vec<u8> {
     reply
 }
 
-/// Sends one HTTPS query in and returns the SvcParam keys of the answer.
-fn ask_https(core: &adfree_core::engine::Core, tun_r: RawFd, host: &str, txid: u16) -> Vec<u16> {
+/// Sends one HTTPS query in and returns the answer message.
+fn ask_https_message(
+    core: &adfree_core::engine::Core,
+    tun_r: RawFd,
+    host: &str,
+    txid: u16,
+) -> Vec<u8> {
     let packet = query_packet_of_type(host, txid, 0x0041);
     assert!(
         core.handle_packet(&packet).is_empty(),
@@ -259,12 +264,33 @@ fn ask_https(core: &adfree_core::engine::Core, tun_r: RawFd, host: &str, txid: u
                 let parsed = Packet::parse(&buf[..n]).expect("valid packet");
                 let answer = dns::parse_query(parsed.l4_payload()).expect("valid DNS answer");
                 assert_eq!(answer.id, txid, "the client's transaction id must survive");
-                return https_param_keys(parsed.l4_payload());
+                return parsed.l4_payload().to_vec();
             }
         }
         std::thread::sleep(std::time::Duration::from_millis(20));
     }
     panic!("the client never received an answer");
+}
+
+/// Sends one HTTPS query in and returns the SvcParam keys of the answer.
+fn ask_https(core: &adfree_core::engine::Core, tun_r: RawFd, host: &str, txid: u16) -> Vec<u16> {
+    https_param_keys(&ask_https_message(core, tun_r, host, txid))
+}
+
+/// The TTL of the first answer record in a DNS message.
+fn first_answer_ttl(message: &[u8]) -> u32 {
+    let qd = u16::from_be_bytes([message[4], message[5]]) as usize;
+    let mut off = 12usize;
+    for _ in 0..qd {
+        off = name_at(message, off) + 4;
+    }
+    let ttl_at = name_at(message, off) + 4;
+    u32::from_be_bytes([
+        message[ttl_at],
+        message[ttl_at + 1],
+        message[ttl_at + 2],
+        message[ttl_at + 3],
+    ])
 }
 
 /// An ECHConfig is only useful while nothing terminates TLS. Once HTTPS
@@ -333,6 +359,111 @@ fn ech_configs_are_stripped_only_while_https_filtering_is_on() {
     );
     let learned = core.snapshot();
     assert!(learned.dns_replies >= 2, "both answers must have gone out");
+
+    core.set_config(Config::default());
+    unsafe { libc::close(tun_w) };
+    unsafe { libc::close(tun_r) };
+    resolver_thread.join().expect("resolver thread");
+}
+
+/// A host that requires ECH cannot be filtered at all: the terminator sees
+/// only the refusal. Once that refusal is learned (`mitm::ech`), the DNS half
+/// leaves the host's ECHConfig in place so the browser can use ECH — and the
+/// answers it *did* rewrite carry a TTL short enough that the client picks the
+/// config back up quickly instead of caching a lie for five minutes.
+#[test]
+fn a_host_that_requires_ech_keeps_its_config() {
+    let _guard = LOCK.lock().unwrap_or_else(|e| e.into_inner());
+
+    // The ECHConfigList `crypto.cloudflare.com` served on 19/10/2026: a real
+    // 0xfe0d config whose public name is `cloudflare-ech.com`.
+    const CF_ECH_CONFIG: &[u8] = &[
+        0x00, 0x45, 0xfe, 0x0d, 0x00, 0x41, 0x3f, 0x00, 0x20, 0x00, 0x20, 0x98, 0x25, 0xe1, 0xdb,
+        0x0b, 0xf9, 0x5a, 0x81, 0x67, 0x61, 0x6c, 0x83, 0x39, 0x10, 0x9a, 0x22, 0xfd, 0x35, 0x47,
+        0x20, 0xa6, 0x37, 0xd2, 0x66, 0x16, 0xa6, 0xa3, 0xc2, 0xaf, 0x8d, 0x88, 0x29, 0x00, 0x04,
+        0x00, 0x01, 0x00, 0x01, 0x00, 0x12, 0x63, 0x6c, 0x6f, 0x75, 0x64, 0x66, 0x6c, 0x61, 0x72,
+        0x65, 0x2d, 0x65, 0x63, 0x68, 0x2e, 0x63, 0x6f, 0x6d, 0x00, 0x00,
+    ];
+
+    let resolver = UdpSocket::bind(SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 0)))
+        .expect("bind resolver");
+    let resolver_addr = resolver.local_addr().expect("resolver addr");
+    resolver
+        .set_read_timeout(Some(std::time::Duration::from_secs(2)))
+        .expect("resolver timeout");
+    let resolver_thread = std::thread::spawn(move || {
+        let mut buf = [0u8; 2048];
+        for _ in 0..2 {
+            let (n, peer) = resolver.recv_from(&mut buf).expect("recv query");
+            let q = dns::parse_query(&buf[..n]).expect("a valid DNS query must arrive");
+            let reply = https_answer(&q, CF_ECH_CONFIG);
+            resolver.send_to(&reply, peer).expect("answer");
+        }
+    });
+
+    let sockets: Vec<UdpSocket> = (0..4)
+        .map(|_| {
+            UdpSocket::bind(SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 0)))
+                .expect("bind socket")
+        })
+        .collect();
+    let fds: Vec<i32> = sockets.iter().map(|s| s.as_raw_fd()).collect();
+    let (tun_w, tun_r) = fake_tun();
+
+    let core = core();
+    core.set_config(Config {
+        mitm_enabled: true,
+        ..Config::default()
+    });
+    core.set_socket_fds(&fds);
+    core.set_resolver(resolver_addr);
+    core.set_tun_fd_for_test(tun_w);
+    core.set_mitm_ca(std::sync::Arc::new(
+        adfree_core::mitm::ca::CertificateAuthority::generate().expect("generate a CA"),
+    ));
+
+    // 1. Stripped — and short-lived: an answer the proxy rewrote is not the
+    //    answer the origin published.
+    let answer = ask_https_message(core, tun_r, "required-ech.test", 0x6101);
+    assert!(
+        !https_param_keys(&answer).contains(&5),
+        "with HTTPS filtering the ECHConfig must be stripped"
+    );
+    assert_eq!(
+        first_answer_ttl(&answer),
+        60,
+        "a rewritten answer must not be cached as if it came from the origin"
+    );
+    // The public name is only learned from an answer the client is allowed to
+    // see: while the config is stripped, no ECH hello can expose it.
+    assert!(
+        !core.ech_hosts.splices("cloudflare-ech.com"),
+        "a stripped answer teaches no public name"
+    );
+    assert!(
+        !core.ech_hosts.splices("required-ech.test"),
+        "the host itself is not spliced until it refuses"
+    );
+
+    // 2. The host answered a plain connection with the refusal, so it is known
+    //    to require ECH. Its config now reaches the client, untouched.
+    assert!(core.ech_hosts.note_refusal("required-ech.test"));
+    let answer = ask_https_message(core, tun_r, "required-ech.test", 0x6102);
+    assert!(
+        https_param_keys(&answer).contains(&5),
+        "a host that requires ECH must keep its config: {:?}",
+        https_param_keys(&answer)
+    );
+    assert_eq!(
+        first_answer_ttl(&answer),
+        300,
+        "an answer left alone keeps the origin's TTL"
+    );
+    assert!(
+        core.ech_hosts.splices("cloudflare-ech.com"),
+        "the kept answer is where the public name is learned"
+    );
+    assert!(core.ech_hosts.splices("required-ech.test"));
 
     core.set_config(Config::default());
     unsafe { libc::close(tun_w) };

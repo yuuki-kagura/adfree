@@ -362,6 +362,25 @@ fn start_origin_mode(html: &'static str, mode: OriginBody) -> Origin {
                     body.len()
                 )
                 .into_bytes()
+            } else if line.starts_with("GET /ech-required ") {
+                // What an ECH-required origin sends to a plain connection:
+                // a bare 502 with no `Server` header at all (measured on
+                // Cloudflare's own ECH-required host).
+                b"HTTP/1.1 502 Bad Gateway\r\nContent-Length: 0\r\n\
+                  Connection: keep-alive\r\n\r\n"
+                    .to_vec()
+            } else if line.starts_with("GET /unlucky ") {
+                // An ordinary 502, the kind any proxy or downed origin sends:
+                // it names itself, so there is nothing to learn from it.
+                b"HTTP/1.1 502 Bad Gateway\r\nServer: nginx\r\nContent-Length: 0\r\n\
+                  Connection: keep-alive\r\n\r\n"
+                    .to_vec()
+            } else if line.starts_with("GET /misdirected ") {
+                // The same story told by the status: `421 Misdirected
+                // Request` is what a server that cannot serve this name says.
+                b"HTTP/1.1 421 Misdirected Request\r\nContent-Length: 0\r\n\
+                  Connection: keep-alive\r\n\r\n"
+                    .to_vec()
             } else if line.starts_with("GET /missing ") {
                 // A page that never arrived: a status apart from 200 is not
                 // one HTML filtering reads.
@@ -2750,5 +2769,215 @@ fn the_platform_is_not_asked_when_no_app_rule_is_loaded() {
         lookup.calls.load(Ordering::SeqCst),
         0,
         "no `$app=` rule is loaded, so nothing is asked of the platform"
+    );
+}
+
+/// A client's first flight: the bytes the proxy sniffs a ClientHello out of.
+fn client_first_flight(host: &str) -> Vec<u8> {
+    let mut config = ClientConfig::builder()
+        .with_root_certificates(RootCertStore::empty())
+        .with_no_client_auth();
+    config.alpn_protocols = vec![tls::ALPN_H1.to_vec()];
+    let name = ServerName::try_from(host.to_string()).expect("server name");
+    let mut client = ClientConnection::new(Arc::new(config), name).expect("client connection");
+    tls::take_client_outbound(&mut client)
+}
+
+/// A listener that records the first bytes a connection brings it.
+fn recording_listener() -> (u16, std::sync::mpsc::Receiver<Vec<u8>>) {
+    let listener = TcpListener::bind(("127.0.0.1", 0)).expect("bind listener");
+    let port = listener.local_addr().expect("listener addr").port();
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        if let Ok((mut stream, _)) = listener.accept() {
+            let mut buf = vec![0u8; 16 * 1024];
+            let n = stream.read(&mut buf).unwrap_or(0);
+            let _ = tx.send(buf[..n].to_vec());
+        }
+    });
+    (port, rx)
+}
+
+/// An `Origin` stand-in whose side of the setup is a bare listener: nothing
+/// TLS answers there, and the only thing that matters is which bytes arrive.
+fn raw_origin(port: u16) -> Origin {
+    Origin {
+        port,
+        ca_der: CertificateAuthority::generate()
+            .expect("origin ca")
+            .cert_der(),
+        requests: Arc::new(std::sync::Mutex::new(Vec::new())),
+    }
+}
+
+/// Pumps the engine until the listener reports the bytes it received.
+fn await_listener(tcp: &mut Client, seen: &std::sync::mpsc::Receiver<Vec<u8>>) -> Vec<u8> {
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        tcp.pump(20);
+        match seen.try_recv() {
+            Ok(bytes) => return bytes,
+            Err(std::sync::mpsc::TryRecvError::Empty) => {
+                assert!(Instant::now() < deadline, "the origin must be reached");
+            }
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                panic!("the listener thread is gone")
+            }
+        }
+    }
+}
+
+/// A client that offers ECH is handed to the origin untouched: the host it is
+/// reaching for is inside the encrypted half of the hello, so no certificate
+/// the proxy could forge would be for the right name. What lands on the origin
+/// is the client's own hello — the parser here says so on the raw bytes.
+/// A GREASE `encrypted_client_hello` — what browsers put on ordinary
+/// connections — is not an ECH connection: the proxy terminates it as before.
+/// That is the difference between filtering the web and not filtering it.
+#[test]
+fn a_grease_hello_is_still_terminated() {
+    let (port, seen) = recording_listener();
+    let origin = raw_origin(port);
+    let (core, _) = setup_core_named(&origin, "e2e-ech-grease");
+
+    let mut tcp = Client::connect(core.clone(), port);
+    let hello = tls::with_fake_ech(&client_first_flight("shop.test")).expect("patchable hello");
+    tcp.send(&hello);
+
+    // The proxy answers with a handshake record of its own: the connection is
+    // being terminated, not relayed.
+    let answer = tcp.read_some(Duration::from_secs(10));
+    assert!(!answer.is_empty(), "the proxy must answer the hello");
+    assert_eq!(answer[0], 0x16, "a TLS handshake record");
+    // And the client's hello is never spliced: the origin has nothing yet.
+    assert!(
+        seen.try_recv().is_err(),
+        "a GREASE hello must not reach the origin byte for byte"
+    );
+}
+
+/// A host learned to require ECH keeps its config: the browser comes back with
+/// a real ECH hello, and that one has to go through untouched — the proxy
+/// cannot serve a certificate for a host it cannot see.
+#[test]
+fn a_learned_host_is_spliced_verbatim() {
+    let (port, seen) = recording_listener();
+    let origin = raw_origin(port);
+    let (core, _) = setup_core_named(&origin, "e2e-ech-splice");
+    core.ech_hosts.note_refusal("shop.test");
+
+    let mut tcp = Client::connect(core.clone(), port);
+    let hello = tls::with_fake_ech(&client_first_flight("shop.test")).expect("patchable hello");
+    tcp.send(&hello);
+
+    let forwarded = await_listener(&mut tcp, &seen);
+    assert_eq!(
+        forwarded, hello,
+        "a learned host's hello must reach the origin byte for byte"
+    );
+}
+
+/// A real ECH hello names the ECHConfig's public name, not the host it is
+/// reaching for: that is the signal read out of the DNS answer, and the one the
+/// splice is decided on.
+#[test]
+fn an_ech_public_name_is_spliced_verbatim() {
+    let (port, seen) = recording_listener();
+    let origin = raw_origin(port);
+    let (core, _) = setup_core_named(&origin, "e2e-ech-public-name");
+    core.ech_hosts.note_public_name("cloudflare-ech.test");
+
+    let mut tcp = Client::connect(core.clone(), port);
+    let hello =
+        tls::with_fake_ech(&client_first_flight("cloudflare-ech.test")).expect("patchable hello");
+    tcp.send(&hello);
+
+    let forwarded = await_listener(&mut tcp, &seen);
+    assert_eq!(
+        forwarded, hello,
+        "an ECH public name must be spliced byte for byte"
+    );
+}
+
+/// The same flow without ECH is terminated exactly as before: the origin sees
+/// the proxy's own hello, which never offers ECH.
+#[test]
+fn a_client_without_ech_is_still_terminated() {
+    let (port, seen) = recording_listener();
+    let origin = raw_origin(port);
+    let (core, ca_der) = setup_core_named(&origin, "e2e-ech-terminated");
+
+    let mut tcp = Client::connect(core.clone(), port);
+    // The client talks TLS to the proxy, which then dials the origin itself —
+    // the hello that lands there is the proxy's.
+    let _conn = handshake(&mut tcp, client_config(ca_der));
+
+    let forwarded = await_listener(&mut tcp, &seen);
+    assert_eq!(
+        tls::first_flight(&forwarded),
+        tls::Flight::Hello {
+            ech_len: None,
+            server_name: Some("shop.test".to_string()),
+        },
+        "the proxy's own hello must name the host and not offer ECH"
+    );
+}
+
+/// A host that advertises ECH and refuses a plain connection with the answer
+/// only an ECH-required origin sends is learned from that answer alone; an
+/// ordinary 502 — one that names its server — teaches nothing.
+#[test]
+fn an_ech_required_refusal_is_learned_from_the_answer_alone() {
+    let origin = start_origin(HTML);
+    let (core, ca_der) = setup_core_named(&origin, "e2e-ech-refusal");
+    // The DNS half has already told this client the host advertises ECH.
+    core.ech_hosts.note_advertised("shop.test");
+
+    let mut tcp = Client::connect(core.clone(), origin.port);
+    let mut conn = handshake(&mut tcp, client_config(ca_der));
+
+    let (head, _) = request(&mut tcp, &mut conn, "/unlucky");
+    assert!(head.starts_with("HTTP/1.1 502"), "{head}");
+    assert!(
+        !core.ech_hosts.exempt("shop.test"),
+        "a 502 that names its server is an ordinary failure"
+    );
+
+    let (head, _) = request(&mut tcp, &mut conn, "/ech-required");
+    assert!(head.starts_with("HTTP/1.1 502"), "{head}");
+    assert!(
+        core.ech_hosts.exempt("shop.test"),
+        "the bare refusal must be learned"
+    );
+}
+
+/// `421 Misdirected Request` is the same refusal told by the status.
+#[test]
+fn a_misdirected_request_is_a_refusal_too() {
+    let origin = start_origin(HTML);
+    let (core, ca_der) = setup_core_named(&origin, "e2e-ech-misdirected");
+    core.ech_hosts.note_advertised("shop.test");
+
+    let mut tcp = Client::connect(core.clone(), origin.port);
+    let mut conn = handshake(&mut tcp, client_config(ca_der));
+    let (head, _) = request(&mut tcp, &mut conn, "/misdirected");
+    assert!(head.starts_with("HTTP/1.1 421"), "{head}");
+    assert!(core.ech_hosts.exempt("shop.test"));
+}
+
+/// Only a host whose ECHConfig was rewritten away can be learned from: a bare
+/// 502 from anywhere else teaches nothing.
+#[test]
+fn a_bare_502_from_a_host_without_ech_teaches_nothing() {
+    let origin = start_origin(HTML);
+    let (core, ca_der) = setup_core_named(&origin, "e2e-ech-nolearn");
+
+    let mut tcp = Client::connect(core.clone(), origin.port);
+    let mut conn = handshake(&mut tcp, client_config(ca_der));
+    let (head, _) = request(&mut tcp, &mut conn, "/ech-required");
+    assert!(head.starts_with("HTTP/1.1 502"), "{head}");
+    assert!(
+        !core.ech_hosts.exempt("shop.test"),
+        "a host that never advertised ECH must not be exempted"
     );
 }

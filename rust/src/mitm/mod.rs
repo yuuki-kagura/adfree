@@ -9,6 +9,7 @@
 //! payload across the userspace TCP relay into the splice.
 
 pub mod ca;
+pub mod ech;
 pub mod http;
 pub mod proxy;
 pub mod relay;
