@@ -1205,6 +1205,77 @@ fn path_rules_apply_to_their_page_only() {
     tcp.close();
 }
 
+/// A page-scoped `#@#` exception: the host stylesheet cannot know which page
+/// it is answering for, so the page that carries the exception must receive
+/// the remaining hiding selectors inline instead.
+const SCOPED_HIDE_EXCEPTION_LIST: &str = "! Title: e2e scoped hide exception\n\
+                                         shop.test##.ad-box\n\
+                                         shop.test##.adsbygoogle\n\
+                                         [$path=/pathpage]shop.test#@#.ad-box\n";
+
+#[test]
+fn a_path_scoped_hide_exception_rides_the_page_payload() {
+    let origin = start_origin(HTML);
+    let (core, ca_der) = setup_core_with_list(&origin, "scoped-hide", SCOPED_HIDE_EXCEPTION_LIST);
+
+    let mut tcp = Client::connect(core.clone(), origin.port);
+    let mut conn = handshake(&mut tcp, client_config(ca_der));
+    assert!(!conn.is_handshaking(), "the MITM handshake must complete");
+
+    // The page the exception names: no host stylesheet, and only the
+    // selectors that survive the exception in the inline payload.
+    let (head, body) = request(&mut tcp, &mut conn, "/pathpage");
+    assert!(head.starts_with("HTTP/1.1 200"), "{head}");
+    let page = page_text(&head, &body);
+    assert!(
+        !page.contains("/adfree-hide.css"),
+        "the per-host stylesheet cannot express a page-scoped exception: {page}"
+    );
+    let payload = page
+        .split("window.__adfree_page=")
+        .nth(1)
+        .expect("the cosmetic payload must stay inline")
+        .split(";</script>")
+        .next()
+        .unwrap();
+    assert!(
+        payload.contains("\"hide\":"),
+        "the surviving hides must travel inline: {payload}"
+    );
+    assert!(
+        payload.contains("\".adsbygoogle\""),
+        "the non-excepted hide must stay: {payload}"
+    );
+    assert!(
+        !payload.contains("\"hide\":[\".ad-box\""),
+        "the excepted hide must not come back inline: {payload}"
+    );
+    assert!(
+        payload.contains("\"exceptions\":"),
+        "the runtime needs the page exceptions for later generic tokens: {payload}"
+    );
+    assert!(
+        payload.contains("\".ad-box\""),
+        "the exception itself must reach the runtime: {payload}"
+    );
+
+    // Every other page keeps the cacheable stylesheet.
+    let (head, body) = request(&mut tcp, &mut conn, "/");
+    assert!(head.starts_with("HTTP/1.1 200"), "{head}");
+    let other = page_text(&head, &body);
+    assert!(
+        other.contains("/adfree-hide.css"),
+        "a page without the exception keeps the stylesheet: {other}"
+    );
+    let href = hide_href(&other);
+    let (_, css_body) = request(&mut tcp, &mut conn, &href);
+    let css = String::from_utf8_lossy(&css_body).to_string();
+    assert!(css.contains(".ad-box"), "{css}");
+    assert!(css.contains(".adsbygoogle"), "{css}");
+
+    tcp.close();
+}
+
 /// The network rules that need a URL: path-scoped blocks, `$redirect` and
 /// `$removeparam`. The DNS layer only ever sees a hostname, so these can only
 /// fire on the HTTPS path — and the removal names the request kind, because

@@ -179,6 +179,18 @@ test('the payload hides what it names and is not left behind', async () => {
   expect(page.errors).toEqual([]);
 });
 
+test('the page-local hide list replaces the host stylesheet', async () => {
+  const page = await openPage({
+    html: { body: '<div class="banner">banner</div><div class="ad-slot">slot</div>' },
+    payload: { hide: ['.banner'], generic: ['.ad-slot'] },
+  });
+
+  await expect.poll(() => page.display('.banner')).toBe('none');
+  await expect.poll(() => page.display('.ad-slot')).toBe('none');
+  expect(page.hides).toEqual([]);
+  expect(page.errors).toEqual([]);
+});
+
 test('the rules go into a constructable stylesheet, with no node to remove', async () => {
   const page = await openPage({
     payload: { generic: ['.banner'], style: [['.ad-slot', 'visibility:hidden']] },
@@ -325,6 +337,27 @@ test('tokens the page adds later are looked up once, and the answer hides them',
   });
   await page.page.waitForTimeout(700);
   expect(page.lookups.length).toBe(1);
+  expect(page.errors).toEqual([]);
+});
+
+test('a page-scoped exception filters the dynamic generic answer', async () => {
+  const page = await openPage({
+    payload: { exceptions: ['.scope-excepted'] },
+    answer: ['.scope-excepted', '.scope-hidden'],
+  });
+
+  await page.page.evaluate(() => {
+    for (const className of ['scope-excepted', 'scope-hidden']) {
+      const el = document.createElement('div');
+      el.className = className;
+      el.textContent = className;
+      document.body.appendChild(el);
+    }
+  });
+
+  await expect.poll(() => page.lookups.length).toBe(1);
+  await expect.poll(() => page.display('.scope-hidden')).toBe('none');
+  expect(await page.display('.scope-excepted')).not.toBe('none');
   expect(page.errors).toEqual([]);
 });
 

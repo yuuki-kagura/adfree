@@ -2381,22 +2381,27 @@ impl ProxySession {
                     // data: the same 11 KB of all-site selectors applies to every
                     // page of a site, and this way the browser fetches it once and
                     // keeps it. It is fetched from the app's own origin, where the
-                    // page's service worker cannot answer in our place.
-                    if let Some((href, _)) = hide_stylesheet(filter, host) {
-                        out.extend_from_slice(
-                            http::style_link_tag(&local_asset(&href), "adfree-hide", nonce)
-                                .as_bytes(),
-                        );
+                    // page's service worker cannot answer in our place. A
+                    // page-scoped `#@#` exception is the one case the host
+                    // stylesheet cannot express: the caller below then carries
+                    // the filtered selectors inline for this page only.
+                    let payload = self.cosmetic_payload(
+                        filter,
+                        host,
+                        body,
+                        self.page_url.as_deref(),
+                        &self.apps,
+                    );
+                    let inline_hides = payload.as_ref().is_some_and(|page| page.inline_hides);
+                    if !inline_hides {
+                        if let Some((href, _)) = hide_stylesheet(filter, host) {
+                            out.extend_from_slice(
+                                http::style_link_tag(&local_asset(&href), "adfree-hide", nonce)
+                                    .as_bytes(),
+                            );
+                        }
                     }
-                    if let Some(data) =
-                        self.cosmetic_payload(
-                            filter,
-                            host,
-                            body,
-                            self.page_url.as_deref(),
-                            &self.apps,
-                        )
-                    {
+                    if let Some(data) = payload.and_then(|page| page.json) {
                         out.extend_from_slice(
                             format!("<script{}>window.__adfree_page=", http::nonce_attr(nonce))
                                 .as_bytes(),
@@ -2445,11 +2450,12 @@ impl ProxySession {
         body: &[u8],
         page_url: Option<&str>,
         apps: &[String],
-    ) -> Option<String> {
+    ) -> Option<CosmeticPayload> {
         let rules = match page_url {
             Some(url) => filter.cosmetic_resources_with_apps(url, apps),
             None => filter.cosmetic_resources_for_host_with_apps(host, apps),
         };
+        let inline_hides = rules.inline_hides;
 
         // Generic class/id rules: the page's own tokens decide which apply.
         // The initial HTML is scanned here so the first paint is covered; the
@@ -2463,6 +2469,15 @@ impl ProxySession {
         }
 
         let mut obj = serde_json::Map::new();
+        if inline_hides && !rules.hide_selectors.is_empty() {
+            obj.insert("hide".into(), serde_json::json!(rules.hide_selectors));
+        }
+        if inline_hides && !rules.generichide {
+            // The generic lookup endpoint is host-only and cannot see the
+            // page scope. Carry the page's exceptions so the runtime can
+            // drop a dynamic answer the exception already cancelled.
+            obj.insert("exceptions".into(), serde_json::json!(rules.exceptions));
+        }
         if !rules.style_rules.is_empty() {
             obj.insert("style".into(), serde_json::json!(rules.style_rules));
         }
@@ -2484,11 +2499,30 @@ impl ProxySession {
         if rules.generichide {
             obj.insert("dynamic".into(), serde_json::json!(false));
         }
-        if obj.is_empty() {
+        let json = if obj.is_empty() {
+            None
+        } else {
+            Some(escape_for_script(
+                &serde_json::Value::Object(obj).to_string(),
+            ))
+        };
+        // An inline-hides page must suppress the host stylesheet even when
+        // every selector was excepted and there is no JSON left to carry.
+        if json.is_none() && !inline_hides {
             return None;
         }
-        Some(escape_for_script(&serde_json::Value::Object(obj).to_string()))
+        Some(CosmeticPayload {
+            json,
+            inline_hides,
+        })
     }
+}
+
+/// What one page needs inline, and whether its `<link rel=stylesheet>` must
+/// be left out because a location/app-scoped exception changed the answer.
+struct CosmeticPayload {
+    json: Option<String>,
+    inline_hides: bool,
 }
 
 /// Answers a request for one of our local endpoints without touching the peer.

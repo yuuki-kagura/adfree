@@ -384,6 +384,11 @@ pub struct CosmeticResources {
     pub generichide: bool,
     /// Selectors excepted by `#@#`: pass to [`FilterEngine::generic_selectors`].
     pub exceptions: Vec<String>,
+    /// A page-scoped `#@#` exception applies. `hide_selectors` is already
+    /// filtered for this page, and because the per-host stylesheet cannot
+    /// know the page it was written for, the caller must carry those
+    /// selectors inline instead of linking the host stylesheet.
+    pub inline_hides: bool,
 }
 
 impl CosmeticResources {
@@ -1325,6 +1330,12 @@ impl FilterEngine {
         let compiled = self.inner.read().unwrap().clone();
         let switches = switches_for(&compiled, url_host(url));
         let raw = compiled.engine.url_cosmetic_resources(url);
+        // The main engine sees the plain exceptions the lists carry, but the
+        // location- and app-scoped ones were taken out of its text (they
+        // cannot be scoped there). The side engine below sees both, so its
+        // answer adds the ones this page is entitled to cancel.
+        let mut exceptions: HashSet<String> = raw.exceptions.into_iter().collect();
+        let mut inline_hides = false;
 
         let mut hide_selectors: Vec<String> = raw.hide_selectors.into_iter().collect();
         let mut style_rules = Vec::new();
@@ -1367,9 +1378,13 @@ impl FilterEngine {
         if let Some(path_rules) = compiled.path_cosmetics.as_ref() {
             let subset = path_rules.subset(url, apps, with_paths);
             if !subset.is_empty() {
+                inline_hides = path_rules.has_hide_exception(&subset);
                 let extra = path_rules
                     .engine_for(&subset, url_host(url))
                     .url_cosmetic_resources(url);
+                // The same page-scoped exceptions, now in a form that can
+                // cancel the classic rules the main engine already returned.
+                exceptions.extend(extra.exceptions.iter().cloned());
                 for selector in extra.hide_selectors {
                     if style_rules.len() < MAX_STYLE_RULES {
                         style_rules.push((selector, "display: none !important".to_string()));
@@ -1410,12 +1425,10 @@ impl FilterEngine {
             // procedural and scriptlet rules are always hostname-bound, so
             // they simply go.
             let generic = compiled.engine.url_cosmetic_resources(GENERIC_ONLY_URL);
-            let excepted: std::collections::HashSet<&str> =
-                raw.exceptions.iter().map(String::as_str).collect();
             hide_selectors = generic
                 .hide_selectors
                 .into_iter()
-                .filter(|selector| !excepted.contains(selector.as_str()))
+                .filter(|selector| !exceptions.contains(selector))
                 .collect();
             style_rules.clear();
             procedural.clear();
@@ -1449,6 +1462,12 @@ impl FilterEngine {
         if jsrules.iter().map(String::len).sum::<usize>() > MAX_SCRIPTLET_BYTES {
             jsrules.clear();
         }
+        // A page-scoped exception cancels only the selectors it names; the
+        // main engine could not apply it, so subtract its answer here. Plain
+        // exceptions were already applied by the main engine.
+        if inline_hides {
+            hide_selectors.retain(|selector| !exceptions.contains(selector));
+        }
         hide_selectors.truncate(MAX_HIDE_SELECTORS);
 
         CosmeticResources {
@@ -1459,7 +1478,8 @@ impl FilterEngine {
             jsrules,
             // `$elemhide` covers the generic half too: nothing left to look up.
             generichide: raw.generichide || switches.elemhide,
-            exceptions: raw.exceptions.into_iter().collect(),
+            exceptions: exceptions.into_iter().collect(),
+            inline_hides,
         }
     }
 
@@ -1907,6 +1927,11 @@ struct PathRule {
     /// parsed: the crate drops a generic scriptlet (`##+js(…)` with no
     /// domain), and the location mask is what scopes the rule anyway.
     generic: bool,
+    /// A plain `#@#` exception. Such a rule can cancel a selector the main
+    /// engine already returned, but the main engine could not apply its
+    /// location/app scope; when this rule reaches the page, the main hiding
+    /// selectors have to travel inline instead of in the per-host stylesheet.
+    hide_exception: bool,
 }
 
 impl PathCosmetics {
@@ -1926,6 +1951,13 @@ impl PathCosmetics {
             })
             .map(|(index, _)| index)
             .collect()
+    }
+
+    /// Whether one of the matched rules is a page-scoped `#@#` exception.
+    fn has_hide_exception(&self, subset: &[usize]) -> bool {
+        subset
+            .iter()
+            .any(|&index| self.rules[index].hide_exception)
     }
 
     /// The engine for one matched subset on one host, built on first use.
@@ -2127,6 +2159,7 @@ fn path_in_domain_parts(
                 }),
                 app: app.clone(),
                 generic: true,
+                hide_exception: marker == "#@#",
             });
             continue;
         }
@@ -2144,6 +2177,7 @@ fn path_in_domain_parts(
                     }),
                     app: app.clone(),
                     generic: domains.is_empty(),
+                    hide_exception: marker == "#@#",
                 });
             }
             None => {
@@ -2155,6 +2189,7 @@ fn path_in_domain_parts(
                         location: None,
                         app: app.clone(),
                         generic: domains.is_empty(),
+                        hide_exception: marker == "#@#",
                     });
                 } else {
                     plain.push(domains);
@@ -2277,6 +2312,7 @@ fn bracket_cosmetic_line(line: &str, path: &mut PathScan) -> Option<String> {
                 location,
                 app,
                 generic,
+                hide_exception: marker == "#@#",
             });
             Some(String::new())
         }
@@ -9006,4 +9042,85 @@ mod tests {
         );
     }
 
+    #[test]
+    fn scoped_exceptions_cancel_classic_element_hiding() {
+        let fe = cosmetic_engine(
+            "shop.test##.banner\n\
+             shop.test##.url-only\n\
+             shop.test##.app-only\n\
+             ##.generic\n\
+             [$path=/tv]shop.test#@#.banner\n\
+             [$url=*shop.test/tv*]#@#.url-only\n\
+             [$app=org.example.app]shop.test#@#.app-only\n\
+             shop.test/tv#@#.generic\n",
+        );
+        let app = vec!["org.example.app".to_string()];
+        let tv = fe.cosmetic_resources_with_apps("https://shop.test/tv", &app);
+        for selector in [".banner", ".url-only", ".app-only"] {
+            assert!(
+                !tv.hide_selectors.iter().any(|s| s == selector),
+                "{selector} should be excepted on /tv: {:?}",
+                tv.hide_selectors
+            );
+            assert!(
+                tv.exceptions.iter().any(|s| s == selector),
+                "{selector} should be reported to generic lookup: {:?}",
+                tv.exceptions
+            );
+        }
+        assert!(tv.inline_hides);
+        assert!(tv.exceptions.iter().any(|s| s == ".generic"));
+        assert!(fe
+            .generic_selectors(&["generic".to_string()], &[], &tv.exceptions)
+            .is_empty());
+        let host_app = fe.cosmetic_resources_for_host_with_apps("shop.test", &app);
+        assert!(host_app.inline_hides);
+        assert!(!host_app
+            .hide_selectors
+            .iter()
+            .any(|s| s == ".app-only"));
+        let host = fe.cosmetic_resources_for_host("shop.test");
+        assert!(!host.inline_hides);
+        assert!(host.hide_selectors.iter().any(|s| s == ".banner"));
+        let other = fe.cosmetic_resources("https://shop.test/other");
+        for selector in [".banner", ".url-only", ".app-only"] {
+            assert!(
+                other.hide_selectors.iter().any(|s| s == selector),
+                "{selector} should stay hidden on /other: {:?}",
+                other.hide_selectors
+            );
+        }
+        assert!(!other.inline_hides);
+        assert!(!other.exceptions.iter().any(|s| s == ".generic"));
+        assert!(!fe
+            .generic_selectors(&["generic".to_string()], &[], &other.exceptions)
+            .is_empty());
+    }
+
+    #[test]
+    fn a_scoped_exception_filters_the_specifichide_generic_half() {
+        let fe = cosmetic_engine(
+            "@@||shop.test^$specifichide\n\
+             ##div[data-ad]\n\
+             shop.test##.specific\n\
+             [$path=/tv]shop.test#@#div[data-ad]\n",
+        );
+        let tv = fe.cosmetic_resources("https://shop.test/tv");
+        assert!(tv.inline_hides);
+        assert!(tv.hide_selectors.is_empty(), "{:?}", tv.hide_selectors);
+        let other = fe.cosmetic_resources("https://shop.test/other");
+        assert!(!other.inline_hides);
+        assert!(other.hide_selectors.iter().any(|s| s == "div[data-ad]"));
+        assert!(!other.hide_selectors.iter().any(|s| s == ".specific"));
+    }
+
+    #[test]
+    fn a_scoped_style_exception_does_not_cancel_element_hiding() {
+        let fe = cosmetic_engine(
+            "shop.test##.ad\n\
+             [$path=/tv]shop.test#@$#.ad { color: red }\n",
+        );
+        let tv = fe.cosmetic_resources("https://shop.test/tv");
+        assert!(tv.hide_selectors.iter().any(|s| s == ".ad"), "{:?}", tv);
+    }
 }

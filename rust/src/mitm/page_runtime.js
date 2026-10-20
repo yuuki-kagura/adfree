@@ -6,14 +6,17 @@
 // The rules arrive inline as `window.__adfree_page` (written by the proxy):
 //
 // ```text
-// { style: [[selector, css]], generic: [selector],
+// { hide: [selector], exceptions: [selector], style: [[selector, css]],
+//   generic: [selector],
 //   procedural: [{selector: [{type, arg}], action: {type, arg}|null}],
 //   scriptlets: "js source", jsrules: ["js source", ...], dynamic: true }
 // ```
 //
-// Element hiding is not in there: the proxy writes it as a stylesheet
-// (`<link rel="stylesheet" id="adfree-hide">`) served from that same origin,
-// which the browser fetches once per site and keeps until the rules change.
+// Element hiding normally travels as a stylesheet (`<link rel="stylesheet"
+// id="adfree-hide">`) served from that same origin, which the browser fetches
+// once per site and keeps until the rules change. `hide` is the page-local
+// form: the proxy uses it only when a `[$path=…]` / `[$app=…]` exception makes
+// the per-host stylesheet unable to answer for this page alone.
 //
 // Modern syntax throughout (`const`/`let`, arrow functions, template literals,
 // `Set`, `async`/`await`, optional chaining): AdGuard's content script is
@@ -65,6 +68,8 @@
   // The payload is JSON the engine wrote, but a runtime that dies on a shape
   // it did not expect would take the page's own scripts down with it (this
   // one runs first), so every list is checked before it is walked.
+  const hideSelectors = Array.isArray(data.hide) ? data.hide : [];
+  const exceptions = new Set(Array.isArray(data.exceptions) ? data.exceptions : []);
   const generic = Array.isArray(data.generic) ? data.generic : [];
   const stylePairs = Array.isArray(data.style) ? data.style : [];
   const procedural = Array.isArray(data.procedural) ? data.procedural : [];
@@ -85,6 +90,9 @@
 
   const cssText = () => {
     const rules = [];
+    if (hideSelectors.length) {
+      rules.push(`${hideSelectors.join(',')}{display:none!important}`);
+    }
     if (generic.length) {
       rules.push(`${generic.join(',')}{display:none!important}`);
     }
@@ -460,8 +468,13 @@
       `&i=${encodeURIComponent(ids.join(' '))}`;
     try {
       const response = await fetch(url);
-      const selectors = response.ok ? await response.json() : [];
-      if (!selectors?.length) {
+      const answer = response.ok ? await response.json() : [];
+      // The endpoint answers for the host alone. A page-scoped `#@#`
+      // exception is in the payload; drop the selectors it names here.
+      const selectors = Array.isArray(answer)
+        ? answer.filter((selector) => !exceptions.has(selector))
+        : [];
+      if (!selectors.length) {
         return;
       }
       dynamicCss += `${dynamicCss ? '\n' : ''}${selectors.join(',')}{display:none!important}`;
@@ -526,7 +539,10 @@
 
   // --- observers ------------------------------------------------------------
 
-  if ((procedural.length || dynamic || hideLink) && document.documentElement) {
+  if (
+    (procedural.length || dynamic || hideLink || hideSelectors.length) &&
+    document.documentElement
+  ) {
     let pendingRun = false;
     try {
       const observer = new MutationObserver((records) => {
