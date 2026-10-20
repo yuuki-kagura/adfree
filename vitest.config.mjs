@@ -2,9 +2,9 @@ import { defineConfig } from 'vitest/config';
 
 export default defineConfig({
   test: {
-    // Only the JavaScript the app injects into pages is tested from here;
-    // `rust/src/mitm/page_runtime.js` is the one such file.
-    include: ['rust/src/mitm/*.test.mjs'],
+    // The JavaScript served to pages: the injected runtime and the redirect
+    // stubs embedded into the Rust engine.
+    include: ['rust/src/mitm/*.test.mjs', 'rust/assets/redirects/*.test.mjs'],
     testTimeout: 30_000,
     hookTimeout: 60_000,
   },

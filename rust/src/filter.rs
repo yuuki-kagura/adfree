@@ -29,7 +29,7 @@ use adblock::request::Request;
 use adblock::resources::{MimeType, Resource, ResourceType};
 use base64::engine::general_purpose::STANDARD as BASE64;
 use base64::Engine as _;
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, OnceLock, RwLock};
@@ -122,6 +122,9 @@ enum RedirectBody {
     /// Plain source, the shape a reader wants; encoded when the table is
     /// built.
     Source(&'static str),
+    /// A checked-in binary asset (the silent media stubs); encoded when the
+    /// table is built.
+    Binary(&'static [u8]),
 }
 
 /// The JS stubs served when a list redirects a script the page uses to tell
@@ -133,6 +136,7 @@ const GOOGLESYNDICATION_ADSBYGOOGLE_JS: &str =
 const GOOGLETAGSERVICES_GPT_JS: &str =
     include_str!("../assets/redirects/googletagservices-gpt.js");
 const AMAZON_APSTAG_JS: &str = include_str!("../assets/redirects/amazon-apstag.js");
+const GOOGLE_IMA3_JS: &str = include_str!("../assets/redirects/google-ima3.js");
 /// The detection-library neutraliser: served in place of BlockAdBlock /
 /// FuckAdBlock, and shipped as the built-in "AdFree Extra" userscript.
 pub const EXTRA_JS: &str = include_str!("../assets/extra.js");
@@ -179,6 +183,22 @@ const REDIRECT_TABLE: &[(&str, &[&str], MimeType, RedirectBody)] = &[
             "iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAYAAABytg0kAAAAC0lEQVR42mNgQAcAABIAAeRVjecAAAAASUVORK5CYII=",
         ),
     ),
+    // A one-second silent black MP4 and a 0.1-second silent MP3, the media
+    // stubs the lists ask for when a video or audio request has to be
+    // neutralised. They are real files (not empty bodies) so a media element
+    // gets a valid track and can continue instead of firing `error`.
+    (
+        "noopmp4-1s",
+        &["noopmp4-1s.mp4", "noop.mp4"],
+        MimeType::VideoMp4,
+        RedirectBody::Binary(include_bytes!("../assets/redirects/noopmp4-1s.mp4")),
+    ),
+    (
+        "noopmp3-0.1s",
+        &["noopmp3-0.1s.mp3", "noop.mp3"],
+        MimeType::AudioMp3,
+        RedirectBody::Binary(include_bytes!("../assets/redirects/noopmp3-0.1s.mp3")),
+    ),
     (
         "noop-vast2.xml",
         &["noopvast-2.0", "noopvast-2.0.xml"],
@@ -221,6 +241,12 @@ const REDIRECT_TABLE: &[(&str, &[&str], MimeType, RedirectBody)] = &[
         RedirectBody::Source(GOOGLESYNDICATION_ADSBYGOOGLE_JS),
     ),
     (
+        "google-ima3",
+        &[],
+        MimeType::ApplicationJavascript,
+        RedirectBody::Source(GOOGLE_IMA3_JS),
+    ),
+    (
         "googletagservices-gpt",
         &[],
         MimeType::ApplicationJavascript,
@@ -259,12 +285,85 @@ fn redirect_resources() -> &'static Vec<Resource> {
                 content: match body {
                     RedirectBody::Base64(content) => (*content).to_string(),
                     RedirectBody::Source(source) => BASE64.encode(source),
+                    RedirectBody::Binary(bytes) => BASE64.encode(bytes),
                 },
                 dependencies: Vec::new(),
                 permission: Default::default(),
             })
             .collect()
     })
+}
+
+/// The names and aliases the table can actually serve. Used by the build-time
+/// audit: a name a list asks for that is absent here degrades to a hard block,
+/// and the log says so instead of leaving the list author to guess.
+fn known_redirect_names() -> &'static HashSet<String> {
+    static NAMES: OnceLock<HashSet<String>> = OnceLock::new();
+    NAMES.get_or_init(|| {
+        redirect_resources()
+            .iter()
+            .flat_map(|resource| {
+                std::iter::once(resource.name.clone()).chain(resource.aliases.iter().cloned())
+            })
+            .collect()
+    })
+}
+
+/// Collects the `$redirect=` / `$redirect-rule=` names in loaded list text and
+/// remembers the ones this build cannot serve. This is diagnostics only: the
+/// engine still gets the original text and decides the rule as before.
+#[derive(Default)]
+struct RedirectScan {
+    missing: BTreeSet<String>,
+}
+
+impl RedirectScan {
+    fn scan(&mut self, text: &str) {
+        let known = known_redirect_names();
+        for line in text.lines() {
+            let line = line.trim();
+            if line.is_empty() || line.starts_with(['!', '[', '#']) {
+                continue;
+            }
+            for (at, _) in line.match_indices("$redirect") {
+                let rest = &line[at + 1..];
+                let Some(value) = rest
+                    .strip_prefix("redirect=")
+                    .or_else(|| rest.strip_prefix("redirect-rule="))
+                else {
+                    continue;
+                };
+                let name = value
+                    .split([',', ' ', '\t'])
+                    .next()
+                    .unwrap_or("")
+                    .trim();
+                if !name.is_empty() && !known.contains(name) {
+                    self.missing.insert(name.to_string());
+                }
+            }
+        }
+    }
+
+    fn log(&self) {
+        let resources = redirect_resources().len();
+        if self.missing.is_empty() {
+            crate::logbuf::push(&format!(
+                "filter: {resources} redirect resources, 0 live names missing"
+            ));
+            return;
+        }
+        let names = self
+            .missing
+            .iter()
+            .map(String::as_str)
+            .collect::<Vec<_>>()
+            .join(", ");
+        crate::logbuf::push(&format!(
+            "filter: {resources} redirect resources, {} live names missing: {names}",
+            self.missing.len()
+        ));
+    }
 }
 
 /// Cosmetic filtering payload for one page, ready for the content script.
@@ -883,6 +982,7 @@ impl FilterEngine {
         let mut cosmetic_exceptions = CosmeticExceptionScan::default();
         let mut replace_scan = ReplaceScan::default();
         let mut url_scan = ModifierScan::default();
+        let mut redirect_scan = RedirectScan::default();
         let mut path_scan = PathScan::default();
         let mut js_scan = JsScan::default();
         let mut generic_style_scan = GenericStyleScan::default();
@@ -912,6 +1012,10 @@ impl FilterEngine {
                                     untrusted_dropped += removed;
                                     scrubbed
                                 };
+                                // Redirect names the table cannot serve are
+                                // reported at the end of the build; the engine
+                                // still sees the rule and blocks as before.
+                                redirect_scan.scan(&text);
                                 // Exception rules the engine drops, read here
                                 // (conversion only rewrites cosmetic markers,
                                 // network rules pass through untouched).
@@ -976,6 +1080,7 @@ impl FilterEngine {
                 .cloned()
                 .collect::<Vec<_>>()
                 .join("\n");
+            redirect_scan.scan(&joined);
             scan_cosmetic_exceptions(&joined, &mut cosmetic_exceptions);
             scan_replace_rules(&joined, &mut replace_scan);
             scan_modifier_rules(&joined, &mut url_scan);
@@ -1103,6 +1208,7 @@ impl FilterEngine {
                 rules.dropped,
             ));
         }
+        redirect_scan.log();
         let compiled = Arc::new(Compiled {
             engine,
             generation,
@@ -7141,8 +7247,22 @@ mod tests {
         );
         assert!(v.blocked && v.redirect.is_some(), "{v:?}");
 
+        // The media stubs are valid tracks, not empty bodies: a media element
+        // should get a playable file and the page should not lose its player.
+        let fe = cosmetic_engine("||shop.test/fake.mp4$redirect=noopmp4-1s\n");
+        let v = fe.check_url(
+            "https://shop.test/fake.mp4",
+            "https://shop.test/",
+            "media",
+            "GET",
+            &[],
+        );
+        assert!(v.blocked, "{v:?}");
+        let body = v.redirect.expect("the MP4 resource is registered");
+        assert!(body.starts_with("data:video/mp4;base64,"), "{body}");
+
         // A resource this app does not carry degrades to a plain block.
-        let fe = cosmetic_engine("||shop.test/fake.js$redirect=noopmp4-1s\n");
+        let fe = cosmetic_engine("||shop.test/fake.js$redirect=google-analytics\n");
         let v = fe.check_url(
             "https://shop.test/fake.js",
             "https://shop.test/",
@@ -7162,10 +7282,12 @@ mod tests {
         let v = fe.check_host("plain.test");
         assert!(v.blocked && !v.redirect, "{v:?}");
         // A resource we cannot serve is not a reason to step aside.
-        let fe = cosmetic_engine("||tracker.test^$redirect=google-ima3\n");
+        let fe = cosmetic_engine("||tracker.test^$redirect=google-analytics\n");
         assert!(!fe.check_host("tracker.test").redirect);
         // A resource we can serve keeps the redirect the rule asked for.
         let fe = cosmetic_engine("||tracker.test^$redirect=googlesyndication-adsbygoogle\n");
+        assert!(fe.check_host("tracker.test").redirect);
+        let fe = cosmetic_engine("||tracker.test^$redirect=google-ima3\n");
         assert!(fe.check_host("tracker.test").redirect);
     }
 
@@ -7187,6 +7309,10 @@ mod tests {
         assert!(decode("noopframe").starts_with(b"<!DOCTYPE html>"));
         assert!(decode("1x1.gif").starts_with(b"GIF89a"));
         assert!(decode("2x2.png").starts_with(b"\x89PNG\r\n\x1a\n"));
+        let mp4 = decode("noopmp4-1s");
+        assert_eq!(&mp4[4..8], b"ftyp");
+        let mp3 = decode("noopmp3-0.1s");
+        assert!(mp3.starts_with(b"ID3"), "{:?}", &mp3[..mp3.len().min(8)]);
         assert!(decode("nooptext").is_empty());
         assert!(decode("noop-vast2.xml").starts_with(b"<VAST version=\"2.0\">"));
         assert!(decode("noopvmap-1.0").starts_with(b"<vmap"));
@@ -7196,7 +7322,14 @@ mod tests {
                 .iter()
                 .any(|r| r.aliases.iter().any(|a| a == alias))
         };
-        for alias in ["noopvast-2.0", "noopvast-3.0", "noopvast-4.0", "2x2-transparent.png"] {
+        for alias in [
+            "noopvast-2.0",
+            "noopvast-3.0",
+            "noopvast-4.0",
+            "2x2-transparent.png",
+            "noopmp4-1s.mp4",
+            "noopmp3-0.1s.mp3",
+        ] {
             assert!(has_alias(alias), "the lists ask for {alias}");
         }
         // The anti-detection stubs are real JavaScript, not empty bodies: the
@@ -7210,6 +7343,10 @@ mod tests {
         let apstag = text("amazon-apstag");
         assert!(apstag.contains("window.apstag"), "{apstag}");
         assert!(apstag.contains("fetchBids"), "{apstag}");
+        let ima = text("google-ima3");
+        assert!(ima.contains("window.google"), "{ima}");
+        assert!(ima.contains("AdsManagerLoadedEvent"), "{ima}");
+        assert!(ima.contains("CONTENT_RESUME_REQUESTED"), "{ima}");
         let fab = text("prevent-fab-3.2.0");
         assert!(fab.contains("BlockAdBlock") && fab.contains("FuckAdBlock"), "{fab}");
         assert!(fab.contains("_checkBait"), "{fab}");
@@ -7284,6 +7421,64 @@ mod tests {
         )
         .expect("utf8");
         assert!(body.contains("window.adsbygoogle"), "{}", &body[..body.len().min(60)]);
+    }
+
+    #[test]
+    fn the_redirect_audit_names_only_the_missing_resources() {
+        let mut scan = RedirectScan::default();
+        scan.scan(
+            "||a.test^$redirect=noopjs\n\
+             ||b.test^$redirect=not-a-resource,script\n\
+             ||c.test^$redirect-rule=noopmp4-1s\n\
+             ||d.test^$redirect=unknown-two\n",
+        );
+        let missing: Vec<&str> = scan.missing.iter().map(String::as_str).collect();
+        assert_eq!(missing, ["not-a-resource", "unknown-two"]);
+    }
+
+    #[test]
+    fn the_live_media_and_ima_redirects_are_answered() {
+        use base64::Engine as _;
+        let fe = cosmetic_engine(
+            "||ark.tubi.video/*.mp4$redirect=noopmp4-1s\n\
+             ||imasdk.googleapis.com/js/sdkloader/ima3.js$redirect=google-ima3,domain=onefootball.com\n",
+        );
+        let media = fe.check_url(
+            "https://ark.tubi.video/trailer.mp4",
+            "https://tubi.tv/",
+            "media",
+            "GET",
+            &[],
+        );
+        assert!(media.blocked, "{media:?}");
+        let body = media.redirect.expect("the media stub is registered");
+        assert!(body.starts_with("data:video/mp4;base64,"), "{body}");
+        let bytes = base64::engine::general_purpose::STANDARD
+            .decode(body.trim_start_matches("data:video/mp4;base64,"))
+            .expect("base64");
+        assert_eq!(&bytes[4..8], b"ftyp", "a playable MP4, not an empty body");
+
+        let ima = fe.check_url(
+            "https://imasdk.googleapis.com/js/sdkloader/ima3.js",
+            "https://onefootball.com/",
+            "script",
+            "GET",
+            &[],
+        );
+        assert!(ima.blocked, "{ima:?}");
+        let body = ima.redirect.expect("the IMA stub is registered");
+        assert!(
+            body.starts_with("data:application/javascript;base64,"),
+            "{body}"
+        );
+        let text = String::from_utf8(
+            base64::engine::general_purpose::STANDARD
+                .decode(body.trim_start_matches("data:application/javascript;base64,"))
+                .expect("base64"),
+        )
+        .expect("utf8");
+        assert!(text.contains("window.google"), "{text}");
+        assert!(text.contains("AdsManagerLoadedEvent"), "{text}");
     }
 
     #[test]

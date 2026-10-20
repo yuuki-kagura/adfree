@@ -2740,7 +2740,7 @@ mod tests {
         let path = dir.join("dns-list.txt");
         std::fs::write(
             &path,
-            "||ads.test^\n||redir.test^$redirect=nooptext\n||missing.test^$redirect=noopmp4-1s\n",
+            "||ads.test^\n||redir.test^$redirect=nooptext\n||media.test^$redirect=noopmp4-1s\n||missing.test^$redirect=google-analytics\n",
         )
         .expect("write list");
         let lists = vec![FilterListInfo {
@@ -2776,6 +2776,7 @@ mod tests {
             crate::mitm::ca::CertificateAuthority::generate().expect("ca"),
         ));
         assert_ne!(dns_reply_rcode(&core, "redir.test"), Some(NXDOMAIN));
+        assert_ne!(dns_reply_rcode(&core, "media.test"), Some(NXDOMAIN));
         // A resource this app does not carry is no reason to let a host
         // through: nothing could serve it.
         assert_eq!(dns_reply_rcode(&core, "missing.test"), Some(NXDOMAIN));
