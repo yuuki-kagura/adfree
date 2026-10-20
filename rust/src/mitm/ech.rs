@@ -3,9 +3,13 @@
 //! ECH exists to keep this proxy out of the connection; the user asked for it
 //! to be in. The halves split the problem:
 //!
-//! * The DNS half always rewrites the `ech` SvcParam away (see
-//!   `dns::strip_ech`), so no client can wrap a hello in a config the proxy
-//!   cannot read, and keeps the raw ECHConfigList for the upstream half.
+//! * The DNS half rewrites the `ech` SvcParam away (see `dns::strip_ech`), so
+//!   no client can wrap a hello in a config the proxy cannot read, and keeps
+//!   the raw ECHConfigList for the upstream half. The user can opt out of that
+//!   rewrite (`Config::full_ech`): the config then reaches the client, which
+//!   may run ECH end to end and hide its inner name — and that host is
+//!   spliced, not filtered. Every set below still applies; only the DNS
+//!   rewrite is skipped.
 //! * The TLS half offers that config itself when it terminates the connection:
 //!   with the config the origin published, the origin accepts the handshake
 //!   even when it requires ECH, and the plaintext stays filterable. A server

@@ -2451,6 +2451,12 @@ data class EngineConfig (
      */
     var `mitmEnabled`: kotlin.Boolean
     , 
+    /**
+     * Leave ECHConfigs in DNS answers (default off): clients then run ECH end
+     * to end, and the hosts that use it are spliced instead of filtered.
+     */
+    var `fullEch`: kotlin.Boolean
+    , 
     var `blockQuic`: kotlin.Boolean
     , 
     var `blockDoh`: kotlin.Boolean
@@ -2485,6 +2491,7 @@ public object FfiConverterTypeEngineConfig: FfiConverterRustBuffer<EngineConfig>
             FfiConverterBoolean.read(buf),
             FfiConverterBoolean.read(buf),
             FfiConverterBoolean.read(buf),
+            FfiConverterBoolean.read(buf),
             FfiConverterInt.read(buf),
             FfiConverterBoolean.read(buf),
             FfiConverterBoolean.read(buf),
@@ -2493,6 +2500,7 @@ public object FfiConverterTypeEngineConfig: FfiConverterRustBuffer<EngineConfig>
 
     override fun allocationSize(value: EngineConfig) = (
             FfiConverterBoolean.allocationSize(value.`mitmEnabled`) +
+            FfiConverterBoolean.allocationSize(value.`fullEch`) +
             FfiConverterBoolean.allocationSize(value.`blockQuic`) +
             FfiConverterBoolean.allocationSize(value.`blockDoh`) +
             FfiConverterBoolean.allocationSize(value.`blockDot`) +
@@ -2503,6 +2511,7 @@ public object FfiConverterTypeEngineConfig: FfiConverterRustBuffer<EngineConfig>
 
     override fun write(value: EngineConfig, buf: ByteBuffer) {
             FfiConverterBoolean.write(value.`mitmEnabled`, buf)
+            FfiConverterBoolean.write(value.`fullEch`, buf)
             FfiConverterBoolean.write(value.`blockQuic`, buf)
             FfiConverterBoolean.write(value.`blockDoh`, buf)
             FfiConverterBoolean.write(value.`blockDot`, buf)

@@ -105,6 +105,14 @@ fn default_doh_cidrs() -> CidrSet {
 pub struct Config {
     /// Terminate TLS for intercepted connections and inject user scripts.
     pub mitm_enabled: bool,
+    /// Leave ECHConfigs in DNS answers so clients can run ECH end to end.
+    ///
+    /// Off by default: ECH hides the inner name from the proxy, so an ECH
+    /// hello can only be spliced, and the host behind it goes unfiltered.
+    /// Turned on, the user chooses that trade for every host that offers ECH;
+    /// clients that do not use ECH (GREASE, older stacks) are still terminated
+    /// and filtered as usual. See `mitm::ech`.
+    pub full_ech: bool,
     pub block_quic: bool,
     pub block_doh: bool,
     pub block_dot: bool,
@@ -119,6 +127,7 @@ impl Default for Config {
     fn default() -> Self {
         Config {
             mitm_enabled: false,
+            full_ech: false,
             block_quic: true,
             block_doh: true,
             block_dot: true,
@@ -1495,7 +1504,10 @@ impl Core {
         // does the host become the exception — learned from the refusal the
         // terminator sees (`proxy::note_plain_refusal`) — after which its
         // ECHConfig is left in place and its flows are spliced instead.
-        let mitm = self.mitm_ready(&self.cfg.read().unwrap());
+        let (mitm, full_ech) = {
+            let cfg = self.cfg.read().unwrap();
+            (self.mitm_ready(&cfg), cfg.full_ech)
+        };
         // The name and the type come from the same question: the string is
         // taken up front because the answer is rewritten in place below.
         let (host, https_query) = match if mitm {
@@ -1512,6 +1524,15 @@ impl Core {
         let exempt = host
             .as_deref()
             .is_some_and(|host| self.ech_hosts.exempt(host));
+        // Read before the strip below rewrites the parameter away: the raw
+        // config is what the upstream half offers, and the public name is what
+        // a real ECH hello will expose on the wire. Only an HTTPS query can
+        // carry either.
+        let (config, public_name) = if mitm && https_query {
+            (dns::ech_config_list(&message), dns::ech_public_name(&message))
+        } else {
+            (None, None)
+        };
         if mitm && exempt {
             if let (Some(host), true) = (host.as_deref(), https_query) {
                 crate::logbuf::push(&format!(
@@ -1522,9 +1543,30 @@ impl Core {
                 // can read it. It is learned only for the hosts whose config
                 // is actually handed out: an ECH hello can only reach one of
                 // those, and every other flow stays terminated (`mitm::ech`).
-                if let Some(name) = dns::ech_public_name(&message) {
+                if let Some(name) = public_name {
                     self.ech_hosts.note_public_name(&name);
                 }
+            }
+        } else if mitm && full_ech {
+            // Full ECH, the opt-in trade: the client keeps the origin's
+            // config and may hide its inner name. Its hello can then only be
+            // spliced (`mitm::ech`), so that host goes unfiltered — exactly
+            // what the switch asks for. The config is still remembered for
+            // the upstream half, because clients that do *not* use ECH
+            // (GREASE, older stacks) are terminated and filtered as usual,
+            // even against an origin that requires ECH.
+            if let (Some(host), Some(list)) = (host.as_deref(), config) {
+                crate::logbuf::push(&format!("dns: ECH kept for {host} (full ECH is on)"));
+                self.ech_hosts
+                    .note_config(host, list, crate::util::now_ms());
+                // The refusal fallback still applies: if the origin turns down
+                // the proxy's own offer too, a client that does not use ECH
+                // must not be left with the bare 502. Marking the host exempt
+                // splices it, which is a trade this mode already accepts.
+                self.ech_hosts.note_advertised(host);
+            }
+            if let Some(name) = public_name {
+                self.ech_hosts.note_public_name(&name);
             }
         } else if mitm {
             // The client half must not see the parameter ([`dns::strip_ech`]),
@@ -1533,16 +1575,6 @@ impl Core {
             // filterable (see `mitm::ech`). Answers that carried one are
             // clamped to a minute, so the copy kept upstream cannot get far
             // out of date.
-            let config = if https_query {
-                dns::ech_config_list(&message)
-            } else {
-                None
-            };
-            let public_name = if https_query {
-                dns::ech_public_name(&message)
-            } else {
-                None
-            };
             if dns::strip_ech(&mut message) {
                 let text = host.as_deref().unwrap_or("?");
                 crate::logbuf::push(&format!("dns: ECH stripped for {text}"));

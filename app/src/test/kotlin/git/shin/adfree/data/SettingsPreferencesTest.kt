@@ -63,6 +63,7 @@ class SettingsPreferencesTest {
             isTrackingProtectionEnabled = false,
             isDnsProtectionEnabled = false,
             isHttpsFilteringEnabled = true,
+            isFullEchEnabled = true,
             isFirewallEnabled = false,
             isEcoBatteryModeEnabled = false,
             isStealthModeEnabled = false,
@@ -93,6 +94,11 @@ class SettingsPreferencesTest {
         assertEquals(defaults.blockMode, loaded.blockMode)
         assertEquals(defaults.selectedDnsProviderId, loaded.selectedDnsProviderId)
         assertEquals(defaults.isStealthModeEnabled, loaded.isStealthModeEnabled)
+        assertEquals(
+            "full ECH is opt-in, an old blob must not turn it on",
+            false,
+            loaded.isFullEchEnabled,
+        )
     }
 
     @Test

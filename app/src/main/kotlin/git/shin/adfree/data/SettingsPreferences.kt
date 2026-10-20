@@ -63,6 +63,8 @@ class SettingsPreferences(
                 json.optBoolean("dns", defaults.isDnsProtectionEnabled),
             isHttpsFilteringEnabled =
                 json.optBoolean("https", defaults.isHttpsFilteringEnabled),
+            isFullEchEnabled =
+                json.optBoolean("fullEch", defaults.isFullEchEnabled),
             isFirewallEnabled =
                 json.optBoolean("firewall", defaults.isFirewallEnabled),
             isEcoBatteryModeEnabled =
@@ -95,6 +97,7 @@ class SettingsPreferences(
         .put("tracking", settings.isTrackingProtectionEnabled)
         .put("dns", settings.isDnsProtectionEnabled)
         .put("https", settings.isHttpsFilteringEnabled)
+        .put("fullEch", settings.isFullEchEnabled)
         .put("firewall", settings.isFirewallEnabled)
         .put("eco", settings.isEcoBatteryModeEnabled)
         .put("stealth", settings.isStealthModeEnabled)

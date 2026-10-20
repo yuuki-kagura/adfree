@@ -254,6 +254,9 @@ class AdGuardRepository(
     fun toggleHttpsFiltering(enabled: Boolean) =
         _settings.update { it.copy(isHttpsFilteringEnabled = enabled) }
 
+    fun toggleFullEch(enabled: Boolean) =
+        _settings.update { it.copy(isFullEchEnabled = enabled) }
+
     fun toggleFirewall(enabled: Boolean) = _settings.update { it.copy(isFirewallEnabled = enabled) }
     fun toggleEcoBatteryMode(enabled: Boolean) =
         _settings.update { it.copy(isEcoBatteryModeEnabled = enabled) }

@@ -428,6 +428,17 @@ class AdGuardViewModel(
         onDone(coreEngine.mitmStatus())
     }
 
+    /**
+     * Full ECH: hand clients the origin's ECHConfigs so they can wrap their
+     * hello end to end. The hosts that use it are then spliced, not filtered —
+     * the trade this switch exists for. The engine reads the flag per DNS
+     * answer, so this takes effect with the next lookup.
+     */
+    fun setFullEch(enabled: Boolean) {
+        repository.toggleFullEch(enabled)
+        syncConfig()
+    }
+
     /** Creates (or recreates) the local CA and returns the new status. */
     fun createCa(onDone: (git.shin.adfree.core.MitmStatus?) -> Unit) {
         // Drop the persisted pair first, otherwise ensureCa() only restores.

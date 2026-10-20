@@ -123,6 +123,7 @@ class CoreEngine {
 
     fun configure(
         mitmEnabled: Boolean,
+        fullEch: Boolean,
         blockQuic: Boolean,
         blockDoh: Boolean,
         blockMode: DnsBlockMode,
@@ -131,6 +132,7 @@ class CoreEngine {
     ) {
         val config = git.shin.adfree.core.EngineConfig(
             mitmEnabled = mitmEnabled,
+            fullEch = fullEch,
             blockQuic = blockQuic,
             blockDoh = blockDoh,
             blockDot = true,

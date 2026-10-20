@@ -56,6 +56,7 @@ class AdGuardAppContainer(private val context: Context) {
         val settings = repository.settings.value
         coreEngine.configure(
             mitmEnabled = settings.isHttpsFilteringEnabled,
+            fullEch = settings.isFullEchEnabled,
             blockQuic = settings.blockQuic,
             blockDoh = settings.blockDoh,
             blockMode = settings.blockMode,

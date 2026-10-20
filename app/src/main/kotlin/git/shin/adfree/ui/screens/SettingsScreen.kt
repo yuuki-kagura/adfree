@@ -172,7 +172,10 @@ fun SettingsScreen(
 
             Spacer(modifier = Modifier.height(24.dp))
 
-            HttpsFilterSection(viewModel)
+            HttpsFilterSection(
+                viewModel = viewModel,
+                fullEchEnabled = state.settings.isFullEchEnabled,
+            )
 
             Spacer(modifier = Modifier.height(24.dp))
 
@@ -290,7 +293,7 @@ private fun SettingsLink(
  * button, and opens the script editor.
  */
 @Composable
-private fun HttpsFilterSection(viewModel: AdGuardViewModel) {
+private fun HttpsFilterSection(viewModel: AdGuardViewModel, fullEchEnabled: Boolean) {
     var status by remember { mutableStateOf<MitmStatus?>(null) }
     var showCert by remember { mutableStateOf(false) }
     var showCertGate by remember { mutableStateOf(false) }
@@ -359,6 +362,23 @@ private fun HttpsFilterSection(viewModel: AdGuardViewModel) {
                     viewModel.setHttpsFiltering(enabled) { status = it }
                 }
             }
+        )
+
+        Spacer(modifier = Modifier.height(10.dp))
+
+        // The opt-in trade: ECH hides the inner name from the proxy, so a host
+        // that uses it has to be spliced — unfiltered. Off by default; nothing
+        // changes for clients that do not use ECH. Read straight from the
+        // collected settings, not a remembered snapshot: the saved switches
+        // arrive after the first composition, and a snapshot would keep
+        // showing the default until the next tap.
+        SettingsSwitch(
+            icon = Icons.Default.Visibility,
+            title = "ECH đầy đủ",
+            subtitle = "Cho trình duyệt tự mã hoá ECH end-to-end. Host dùng ECH sẽ " +
+                "được nối thẳng, không lọc được.",
+            checked = fullEchEnabled,
+            onCheckedChange = { enabled -> viewModel.setFullEch(enabled) }
         )
 
         Spacer(modifier = Modifier.height(10.dp))

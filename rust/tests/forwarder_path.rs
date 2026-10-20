@@ -481,3 +481,93 @@ fn a_host_that_requires_ech_keeps_its_config() {
     unsafe { libc::close(tun_r) };
     resolver_thread.join().expect("resolver thread");
 }
+
+/// Full ECH, the opt-in trade: the client keeps the origin's config and may
+/// hide its inner name, so its flows are spliced rather than filtered. The
+/// config is still remembered for the clients that do not use ECH — those are
+/// terminated as usual, and the upstream half can still offer it.
+#[test]
+fn full_ech_keeps_the_config_for_the_client() {
+    let _guard = LOCK.lock().unwrap_or_else(|e| e.into_inner());
+
+    // The same real ECHConfigList the test above uses.
+    const CF_ECH_CONFIG: &[u8] = &[
+        0x00, 0x45, 0xfe, 0x0d, 0x00, 0x41, 0x3f, 0x00, 0x20, 0x00, 0x20, 0x98, 0x25, 0xe1, 0xdb,
+        0x0b, 0xf9, 0x5a, 0x81, 0x67, 0x61, 0x6c, 0x83, 0x39, 0x10, 0x9a, 0x22, 0xfd, 0x35, 0x47,
+        0x20, 0xa6, 0x37, 0xd2, 0x66, 0x16, 0xa6, 0xa3, 0xc2, 0xaf, 0x8d, 0x88, 0x29, 0x00, 0x04,
+        0x00, 0x01, 0x00, 0x01, 0x00, 0x12, 0x63, 0x6c, 0x6f, 0x75, 0x64, 0x66, 0x6c, 0x61, 0x72,
+        0x65, 0x2d, 0x65, 0x63, 0x68, 0x2e, 0x63, 0x6f, 0x6d, 0x00, 0x00,
+    ];
+
+    let resolver = UdpSocket::bind(SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 0)))
+        .expect("bind resolver");
+    let resolver_addr = resolver.local_addr().expect("resolver addr");
+    resolver
+        .set_read_timeout(Some(std::time::Duration::from_secs(2)))
+        .expect("resolver timeout");
+    let resolver_thread = std::thread::spawn(move || {
+        let mut buf = [0u8; 2048];
+        let (n, peer) = resolver.recv_from(&mut buf).expect("recv query");
+        let q = dns::parse_query(&buf[..n]).expect("a valid DNS query must arrive");
+        resolver
+            .send_to(&https_answer(&q, CF_ECH_CONFIG), peer)
+            .expect("answer");
+    });
+
+    let sockets: Vec<UdpSocket> = (0..4)
+        .map(|_| {
+            UdpSocket::bind(SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 0)))
+                .expect("bind socket")
+        })
+        .collect();
+    let fds: Vec<i32> = sockets.iter().map(|s| s.as_raw_fd()).collect();
+    let (tun_w, tun_r) = fake_tun();
+
+    let core = core();
+    core.set_config(Config {
+        mitm_enabled: true,
+        full_ech: true,
+        ..Config::default()
+    });
+    core.set_socket_fds(&fds);
+    core.set_resolver(resolver_addr);
+    core.set_tun_fd_for_test(tun_w);
+    core.set_mitm_ca(std::sync::Arc::new(
+        adfree_core::mitm::ca::CertificateAuthority::generate().expect("generate a CA"),
+    ));
+
+    let answer = ask_https_message(core, tun_r, "full-ech.test", 0x6201);
+    assert!(
+        https_param_keys(&answer).contains(&5),
+        "full ECH hands the origin's config to the client: {:?}",
+        https_param_keys(&answer)
+    );
+    assert_eq!(
+        first_answer_ttl(&answer),
+        300,
+        "the answer is the origin's and keeps its TTL"
+    );
+    assert!(
+        core.ech_hosts.advertised("full-ech.test"),
+        "the refusal fallback stays armed for clients that do not use ECH"
+    );
+    assert!(
+        core.ech_hosts.splices("cloudflare-ech.com"),
+        "the public name is learned so a real ECH hello is spliced"
+    );
+    assert!(
+        !core.ech_hosts.splices("full-ech.test"),
+        "the host itself is only spliced if its hello uses ECH"
+    );
+    assert_eq!(
+        core.ech_hosts
+            .upstream_ech("full-ech.test", adfree_core::util::now_ms()),
+        Some(CF_ECH_CONFIG.to_vec()),
+        "a kept answer still teaches the upstream config"
+    );
+
+    core.set_config(Config::default());
+    unsafe { libc::close(tun_w) };
+    unsafe { libc::close(tun_r) };
+    resolver_thread.join().expect("resolver thread");
+}

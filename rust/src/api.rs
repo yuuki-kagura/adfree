@@ -241,6 +241,9 @@ impl From<&crate::store::LogRow> for LogEvent {
 pub struct EngineConfig {
     /// Terminate TLS for intercepted connections and inject scripts.
     pub mitm_enabled: bool,
+    /// Leave ECHConfigs in DNS answers (default off): clients then run ECH end
+    /// to end, and the hosts that use it are spliced instead of filtered.
+    pub full_ech: bool,
     pub block_quic: bool,
     pub block_doh: bool,
     pub block_dot: bool,
@@ -254,6 +257,7 @@ impl From<EngineConfig> for Config {
     fn from(c: EngineConfig) -> Self {
         Config {
             mitm_enabled: c.mitm_enabled,
+            full_ech: c.full_ech,
             block_quic: c.block_quic,
             block_doh: c.block_doh,
             block_dot: c.block_dot,
@@ -895,6 +899,7 @@ mod tests {
     fn config_round_trips() {
         let cfg = EngineConfig {
             mitm_enabled: false,
+            full_ech: true,
             block_quic: true,
             block_doh: false,
             block_dot: true,
@@ -904,6 +909,7 @@ mod tests {
         };
         let native: Config = cfg.into();
         assert!(!native.mitm_enabled, "MITM must stay off until asked");
+        assert!(native.full_ech, "the full-ECH switch must survive the trip");
         assert!(native.block_quic);
         assert!(!native.block_doh);
         assert!(matches!(native.block_mode, crate::dns::BlockMode::ZeroIp));
