@@ -56,7 +56,7 @@
 //!   tests as `^(?=.{m,n}$).*/s`, which this scanner recognizes and answers
 //!   natively.
 
-use crate::pathmask::{self, BracketParse, PathMask};
+use crate::pathmask::{self, BracketParse, Location};
 use regex::bytes::Regex;
 use std::collections::{HashMap, HashSet};
 
@@ -151,9 +151,9 @@ pub struct Rule {
     /// The domain position: what stands before the marker, or the bracket's
     /// `$domain=`. `None` applies to every host.
     domains: Option<String>,
-    /// The bracket's `$path=` mask, matched against the page's path and
-    /// query. `None` when the bracket spelled none.
-    mask: Option<PathMask>,
+    /// The bracket's `$path=` / `$url=` location, matched against the page.
+    /// `None` when the bracket spelled neither.
+    location: Option<Location>,
     /// The compound chain: `chain.last()` is the element itself, the ones
     /// before it its ancestors under `>`.
     chain: Vec<Compound>,
@@ -297,7 +297,7 @@ fn attr_matches(value: Option<&Option<String>>, matcher: &AttrMatch) -> bool {
 /// Reads one line: the rule it is, HTML filtering the scanner cannot honour,
 /// or neither.
 pub fn parse_line(line: &str) -> Parsed {
-    // A `[$…]` bracket names the rule's path (and may name the domain
+    // A `[$…]` bracket names the rule's location (and may name the domain
     // position); the cosmetic scanner refuses the same shapes, and so does
     // this one.
     match pathmask::parse_bracket(line) {
@@ -309,14 +309,20 @@ pub fn parse_line(line: &str) -> Parsed {
                 Parsed::NotHtml
             }
         }
-        BracketParse::Parsed(bracket) => rule_line(bracket.domain, bracket.path, &bracket.rest),
+        BracketParse::Parsed(bracket) => {
+            let location = (!(bracket.path.is_none() && bracket.url.is_none())).then_some(Location {
+                path: bracket.path,
+                url: bracket.url,
+            });
+            rule_line(bracket.domain, location, &bracket.rest)
+        }
     }
 }
 
 /// Finishes a rule once the marker is out of the way.
 fn rule_line(
     bracket_domain: Option<String>,
-    mask: Option<PathMask>,
+    location: Option<Location>,
     rest: &str,
 ) -> Parsed {
     let Some((index, marker)) = marker(rest) else {
@@ -357,7 +363,7 @@ fn rule_line(
     let canonical = canonical(&chain, syntax);
     let rule = Rule {
         domains,
-        mask,
+        location,
         chain,
         syntax,
         text: selector.to_string(),
@@ -1055,15 +1061,15 @@ impl Plan {
     /// Resolves the rules that apply to a page: the blocking rules whose
     /// domains (and bracket) cover it, minus the ones an exception's selector
     /// cancels.
-    pub fn build(rules: &[Rule], exceptions: &[Rule], host: &str, subject: &str) -> Option<Plan> {
+    pub fn build(rules: &[Rule], exceptions: &[Rule], host: &str, url: &str) -> Option<Plan> {
         let cancelled: HashSet<&str> = exceptions
             .iter()
-            .filter(|rule| rule.applies(host, subject))
+            .filter(|rule| rule.applies(host, url))
             .map(|rule| rule.canonical.as_str())
             .collect();
         let mut kept = Vec::new();
         for rule in rules {
-            if !rule.applies(host, subject) || cancelled.contains(rule.canonical.as_str()) {
+            if !rule.applies(host, url) || cancelled.contains(rule.canonical.as_str()) {
                 continue;
             }
             kept.push(rule.clone());
@@ -1333,14 +1339,14 @@ impl Plan {
 
 impl Rule {
     /// Whether the rule's domain position (and bracket) covers one page.
-    fn applies(&self, host: &str, subject: &str) -> bool {
+    fn applies(&self, host: &str, url: &str) -> bool {
         if let Some(domains) = &self.domains {
             if !crate::filter::domains_match(Some(domains), host) {
                 return false;
             }
         }
-        if let Some(mask) = &self.mask {
-            if !mask.matches(subject) {
+        if let Some(location) = &self.location {
+            if !location.matches(url) {
                 return false;
             }
         }
@@ -1664,11 +1670,6 @@ mod tests {
         // A content predicate on the left of a combinator.
         assert!(matches!(
             parse_line("shop.test$$div:contains(ad) > p"),
-            Parsed::Unsupported
-        ));
-        // A `$url` bracket is the cosmetic scanner's "cannot honour" too.
-        assert!(matches!(
-            parse_line("[$url=/^https:\\/\\/x/]$$script:contains(y)"),
             Parsed::Unsupported
         ));
         assert!(matches!(parse_line("shop.test$$"), Parsed::Unsupported));
@@ -2010,6 +2011,28 @@ mod tests {
         };
         assert!(Plan::build(std::slice::from_ref(&rule), &[], "shop.test", "/video/x").is_some());
         assert!(Plan::build(std::slice::from_ref(&rule), &[], "shop.test", "/other").is_none());
+
+        // `[$url=…]` matches the whole page URL.
+        let rule = match parse_line(
+            "[$url=/^https:\\/\\/shop\\.test\\/video/]$$div[class=\"ad\"]",
+        ) {
+            Parsed::Rule(rule) => rule,
+            _ => panic!("a rule"),
+        };
+        assert!(Plan::build(
+            std::slice::from_ref(&rule),
+            &[],
+            "shop.test",
+            "https://shop.test/video/x"
+        )
+        .is_some());
+        assert!(Plan::build(
+            std::slice::from_ref(&rule),
+            &[],
+            "shop.test",
+            "https://shop.test/other"
+        )
+        .is_none());
     }
 
     #[test]

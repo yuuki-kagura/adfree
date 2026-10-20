@@ -1,24 +1,25 @@
-//! `$path` — the bracket modifier AdGuard lists pin a cosmetic rule to a page
-//! path with.
+//! `$path` / `$url` — the bracket modifiers AdGuard lists pin a non-basic
+//! rule to a page location with.
 //!
-//! The knowledge base writes these rules `[$path=…]rest` (create-own-filters,
-//! modifiers for non-basic type of rules): the bracket carries the modifiers,
-//! and `rest` is the rule itself. CoreLibs applies such a rule only on pages
-//! whose path (query string included) matches the modifier's mask; `$path`
-//! with no value means the site's main page, a value is either a basic-rule
-//! pattern — case-insensitive, `*` for any run of characters, `^` for a
-//! separator, a leading or trailing `|` anchoring the two ends, `||`
-//! meaningless for a path and so not accepted — or, enclosed in `/…/`, a
-//! regular expression, `\/` and `\:` unescaped first.
+//! The knowledge base writes these rules `[$path=…]rest` or `[$url=…]rest`
+//! (create-own-filters, modifiers for non-basic type of rules): the bracket
+//! carries the modifiers, and `rest` is the rule itself. CoreLibs applies
+//! such a rule only on the pages the mask covers. `$path` matches the page's
+//! path and query; `$path` with no value means the site's main page. `$url`
+//! matches the whole page URL. A value is either a basic-rule pattern —
+//! case-insensitive, `*` for any run of characters, `^` for a separator, a
+//! leading or trailing `|` anchoring the two ends, `||` meaningful only for
+//! a `$url` — or, enclosed in `/…/`, a regular expression, `\/` and `\:`
+//! unescaped first.
 //!
-//! This module parses the bracket and compiles the mask; where the rules go
+//! This module parses the bracket and compiles the masks; where the rules go
 //! and how they are served is [`crate::filter`]'s half. The bracket's other
 //! modifiers are read too, but only `$domain` is honored — moved onto the
 //! rule's ordinary domain position — and only where that cannot change what
 //! the rule means: a regexp domain cannot be spelled on a cosmetic rule (the
-//! crate discards the rule), `$app` and `$url` cannot be honored at all, and
-//! mixing the two ways of spelling domains is invalid per the knowledge base,
-//! so the rule is dropped rather than applied wider than the list asked.
+//! crate discards the rule), `$app` cannot be honored at all, and mixing the
+//! two ways of spelling domains is invalid per the knowledge base, so the
+//! rule is dropped rather than applied wider than the list asked.
 //!
 //! The pattern-to-regexp translation mirrors the crate's own
 //! (`regex_manager::compile_regex`), so a mask matches exactly what a network
@@ -94,6 +95,129 @@ impl PathMask {
     }
 }
 
+/// A compiled `$url` value: the page's whole URL.
+#[derive(Debug, Clone)]
+pub enum UrlMask {
+    /// A pattern or a `/regexp/`; the subject is the full URL.
+    Regex(BytesRegex),
+}
+
+impl UrlMask {
+    /// Compiles a `$url` value the way AdGuard reads it: `/…/` is a regular
+    /// expression, anything else is a basic-rule pattern. `None` when the
+    /// value cannot be a mask — the rule it sits on is dropped rather than
+    /// applied everywhere.
+    pub fn parse(value: &str) -> Option<UrlMask> {
+        if value.is_empty() {
+            return None;
+        }
+        if value.len() >= 2 && value.starts_with('/') && value.ends_with('/') {
+            let body = value[1..value.len() - 1]
+                .replace("\\/", "/")
+                .replace("\\:", ":");
+            return BytesRegexBuilder::new(&body)
+                .unicode(false)
+                .build()
+                .ok()
+                .map(UrlMask::Regex);
+        }
+        let mut pattern = String::new();
+        if let Some(rest) = value.strip_prefix("||") {
+            // A hostname anchor, the one meaning a path could not have: the
+            // scheme, any subdomain, then the host. `||example.com` names the
+            // host itself, never a host that merely starts with it, so a
+            // value with no tail also requires a hostname boundary.
+            let (rest, right_anchor) = match rest.strip_suffix('|') {
+                Some(rest) => (rest, true),
+                None => (rest, false),
+            };
+            let (host, tail) = split_url_host(rest);
+            if host.is_empty() {
+                return None;
+            }
+            pattern.push_str("^(?:https?|wss?)://(?:[^/]+\\.)?");
+            pattern.push_str(&pattern_to_regex(host));
+            if tail.is_empty() {
+                if right_anchor {
+                    pattern.push('$');
+                } else {
+                    pattern.push_str("(?:[^\\w\\d\\._%-]|$)");
+                }
+            } else {
+                pattern.push_str(&pattern_to_regex(tail));
+                if right_anchor {
+                    pattern.push('$');
+                }
+            }
+        } else {
+            let body = value.strip_prefix('|').unwrap_or(value);
+            let (body, right_anchor) = match body.strip_suffix('|') {
+                Some(body) => (body, true),
+                None => (body, false),
+            };
+            if value.starts_with('|') {
+                pattern.push('^');
+            }
+            pattern.push_str(&pattern_to_regex(body));
+            if right_anchor {
+                pattern.push('$');
+            }
+        }
+        BytesRegexBuilder::new(&pattern)
+            .unicode(false)
+            .case_insensitive(true)
+            .build()
+            .ok()
+            .map(UrlMask::Regex)
+    }
+
+    /// Whether the mask covers `url` — the page's whole URL.
+    pub fn matches(&self, url: &str) -> bool {
+        match self {
+            UrlMask::Regex(regexp) => regexp.is_match(url.as_bytes()),
+        }
+    }
+}
+
+/// The host part of a `||` value and the rest of the pattern.
+///
+/// The host ends at the first character that cannot be one: a path, a
+/// separator, a query, a fragment or a port. A `*` stays in the host part so
+/// a wildcard host keeps its basic-rule meaning.
+fn split_url_host(rest: &str) -> (&str, &str) {
+    let end = rest
+        .find(['/', '^', '?', '#', ':'])
+        .unwrap_or(rest.len());
+    (&rest[..end], &rest[end..])
+}
+
+/// The location one bracket puts a rule on: a path, a URL, or both (the
+/// bracket may spell both, and then both must match).
+#[derive(Debug, Clone)]
+pub struct Location {
+    /// `path` / `path=value`.
+    pub path: Option<PathMask>,
+    /// `url=value`.
+    pub url: Option<UrlMask>,
+}
+
+impl Location {
+    /// Whether the location covers the page at `url`.
+    pub fn matches(&self, url: &str) -> bool {
+        if let Some(path) = &self.path {
+            if !path.matches(path_and_query(url)) {
+                return false;
+            }
+        }
+        if let Some(mask) = &self.url {
+            if !mask.matches(url) {
+                return false;
+            }
+        }
+        true
+    }
+}
+
 /// The path and query of a full URL, the `$path` subject. A URL that carries
 /// neither (a bare origin) reads as the main page.
 pub fn path_and_query(url: &str) -> &str {
@@ -124,6 +248,8 @@ pub enum BracketParse {
 pub struct Bracket {
     /// `path` or `path=value`, compiled. `None` when the bracket spells none.
     pub path: Option<PathMask>,
+    /// `url=value`, compiled. `None` when the bracket spells none.
+    pub url: Option<UrlMask>,
     /// `domain=…`, negations and `|` separators kept, pipe separators turned
     /// into the commas a cosmetic rule's domain position takes.
     pub domain: Option<String>,
@@ -131,16 +257,34 @@ pub struct Bracket {
     pub rest: String,
 }
 
+impl Bracket {
+    /// The location the bracket pins the rule to; `None` when it only names
+    /// a domain.
+    pub fn location(self) -> Option<Location> {
+        (!(self.path.is_none() && self.url.is_none())).then_some(Location {
+            path: self.path,
+            url: self.url,
+        })
+    }
+}
+
 /// Parses a `[$…]` bracket and the rule text that follows it.
 ///
 /// `\[`, `\]`, `\,` and `\\` are the escapes the syntax defines; they are
-/// undone in the values, and an escaped `]` does not close the bracket.
+/// undone in the values, and an escaped `]` does not close the bracket. An
+/// unescaped `[` opens a nested class (a `/regexp/` value's `[0-9a-z]`),
+/// whose `]` does not close the bracket either.
 pub fn parse_bracket(line: &str) -> BracketParse {
     let Some(body) = line.strip_prefix("[$") else {
         return BracketParse::NotBracket;
     };
+    // A `]` inside a regular expression's character class (`[0-9a-z]`) is
+    // part of the value, not the end of the bracket. Lists write those
+    // classes without the syntax's `\]` escape, so the scanner counts
+    // nesting: an unescaped `[` opens a class and its `]` closes it.
     let mut end = None;
     let mut escaped = false;
+    let mut depth = 0usize;
     for (index, ch) in body.char_indices() {
         if escaped {
             escaped = false;
@@ -148,10 +292,12 @@ pub fn parse_bracket(line: &str) -> BracketParse {
         }
         match ch {
             '\\' => escaped = true,
-            ']' => {
+            '[' => depth += 1,
+            ']' if depth == 0 => {
                 end = Some(index);
                 break;
             }
+            ']' => depth -= 1,
             _ => {}
         }
     }
@@ -162,19 +308,22 @@ pub fn parse_bracket(line: &str) -> BracketParse {
     };
     let rest = body[end + 1..].to_string();
 
-    // Split the modifiers on unescaped commas, undoing the escapes as the
-    // characters arrive.
+    // Split the modifiers on unescaped commas. Only `[`, `]`, `,` and `\`
+    // are the syntax's own escapes (KB §non-basic-rules-modifiers-syntax);
+    // any other backslash belongs to the value — a `$url` regexp is full of
+    // them — and stays exactly where the list wrote it.
     let mut parts: Vec<String> = Vec::new();
     let mut current = String::new();
-    let mut escaped = false;
-    for ch in body[..end].chars() {
-        if escaped {
-            current.push(ch);
-            escaped = false;
-            continue;
-        }
+    let mut chars = body[..end].chars().peekable();
+    while let Some(ch) = chars.next() {
         match ch {
-            '\\' => escaped = true,
+            '\\' => match chars.peek() {
+                Some(&next) if matches!(next, '[' | ']' | ',' | '\\') => {
+                    current.push(next);
+                    chars.next();
+                }
+                _ => current.push('\\'),
+            },
             ',' => parts.push(std::mem::take(&mut current)),
             _ => current.push(ch),
         }
@@ -183,6 +332,8 @@ pub fn parse_bracket(line: &str) -> BracketParse {
 
     let mut path: Option<PathMask> = None;
     let mut path_seen = false;
+    let mut url: Option<UrlMask> = None;
+    let mut url_seen = false;
     let mut domain: Option<String> = None;
     for part in &parts {
         let (name, value) = match part.split_once('=') {
@@ -207,6 +358,20 @@ pub fn parse_bracket(line: &str) -> BracketParse {
                     None => return BracketParse::Unsupported { rest },
                 }
             }
+            ("url", Some(value)) => {
+                if url_seen {
+                    return BracketParse::Unsupported { rest };
+                }
+                url_seen = true;
+                match UrlMask::parse(value) {
+                    Some(mask) => url = Some(mask),
+                    None => return BracketParse::Unsupported { rest },
+                }
+            }
+            ("url", None) => {
+                // `$url` has no valueless spelling.
+                return BracketParse::Unsupported { rest };
+            }
             ("domain", Some(value)) => {
                 // A negated value is spelled `~domain`; its bare form is what
                 // the regexp check has to see through.
@@ -216,13 +381,18 @@ pub fn parse_bracket(line: &str) -> BracketParse {
                 }
                 domain = Some(value.replace('|', ","));
             }
-            // `$app`, `$url`, a `domain` without a value, an empty modifier:
-            // nothing this engine can honor.
+            // `$app`, a `domain` without a value, an empty modifier: nothing
+            // this engine can honor.
             _ => return BracketParse::Unsupported { rest },
         }
     }
 
-    BracketParse::Parsed(Bracket { path, domain, rest })
+    BracketParse::Parsed(Bracket {
+        path,
+        url,
+        domain,
+        rest,
+    })
 }
 
 /// Translates a basic-rule pattern into the regexp body that matches it,
@@ -315,6 +485,86 @@ mod tests {
     }
 
     #[test]
+    fn url_patterns_anchor_on_the_whole_url() {
+        let m = UrlMask::parse("||example.com/content/*").expect("mask");
+        assert!(m.matches("https://example.com/content/a"));
+        assert!(m.matches("https://sub.example.com/content/a"));
+        assert!(m.matches("http://example.com/content/a"));
+        assert!(!m.matches("https://evilexample.com/content/a"));
+
+        // A bare host anchor names that host and its subdomains, never a
+        // hostname that merely starts with the same letters.
+        let m = UrlMask::parse("||example.com^").expect("mask");
+        assert!(m.matches("https://example.com/"));
+        assert!(m.matches("https://example.com:8443/x"));
+        assert!(m.matches("https://sub.example.com/x"));
+        assert!(!m.matches("https://example.com.evil/"));
+
+        let m = UrlMask::parse("||example.com").expect("mask");
+        assert!(m.matches("https://example.com/"));
+        assert!(!m.matches("https://example.com.evil/"));
+
+        // A trailing `|` anchors the end of the whole URL.
+        let m = UrlMask::parse("||example.com/path|").expect("mask");
+        assert!(m.matches("https://example.com/path"));
+        assert!(!m.matches("https://example.com/path?q=1"));
+    }
+
+    #[test]
+    fn url_regexp_values_keep_their_escapes() {
+        let m = UrlMask::parse(r"/^https:\/\/shop\.test\/video\?ref=/").expect("mask");
+        assert!(m.matches("https://shop.test/video?ref=x"));
+        assert!(!m.matches("https://shop.test/video"));
+        assert!(!m.matches("https://other.test/video?ref=x"));
+    }
+
+    #[test]
+    fn bracket_keeps_regexp_character_classes_together() {
+        // The live lines spell their classes without `\]`; the scanner must
+        // not stop at the first one.
+        let line = r"[$url=/^https:\/\/[0-9a-z]{5}[0-9a-z]?\.[a-z]{2}[a-z]?\/[0-9a-z-]+\/[0-9A-Za-z]{12}[0-9A-Za-z]*\?ref(erer)?=/]$$script";
+        let BracketParse::Parsed(bracket) = parse_bracket(line) else {
+            panic!("bracket should parse");
+        };
+        assert_eq!(bracket.rest, "$$script");
+        let Some(UrlMask::Regex(mask)) = bracket.url else {
+            panic!("url should compile");
+        };
+        assert!(mask.is_match(b"https://abcde.com/foo/abcdefghijkl?referer=x"));
+    }
+
+    #[test]
+    fn the_live_url_regexp_matches() {
+        let m = UrlMask::parse(
+            r"/^https:\/\/[0-9a-z]{5}[0-9a-z]?[0-9a-z]?[0-9a-z]?\.[a-z]{2}[a-z]?[a-z]?[a-z]?\/[0-9a-z-]+\/[0-9A-Za-z]{12}[0-9A-Za-z]*\?ref(erer)?=/",
+        )
+        .expect("mask");
+        assert!(m.matches("https://abcde.com/foo/abcdefghijkl?referer=x"));
+    }
+
+    #[test]
+    fn unusable_url_values_do_not_compile() {
+        assert!(UrlMask::parse("").is_none());
+        assert!(UrlMask::parse("||").is_none());
+        assert!(UrlMask::parse("||/path").is_none());
+        assert!(UrlMask::parse("/(/").is_none());
+    }
+
+    #[test]
+    fn bracket_carries_url_and_leaves_the_regexp_escapes_alone() {
+        let BracketParse::Parsed(bracket) =
+            parse_bracket(r"[$url=/^https:\/\/shop\.test\/video\?ref=/]##.x")
+        else {
+            panic!("bracket should parse");
+        };
+        let Some(UrlMask::Regex(mask)) = bracket.url else {
+            panic!("url should compile");
+        };
+        assert!(mask.is_match(b"https://shop.test/video?ref=x"));
+        assert_eq!(bracket.rest, "##.x");
+    }
+
+    #[test]
     fn bracket_carries_path_and_the_rest_of_the_rule() {
         let BracketParse::Parsed(bracket) = parse_bracket("[$path=/tv]yandex.*##.promo") else {
             panic!("bracket should parse");
@@ -358,7 +608,7 @@ mod tests {
     fn unsupported_brackets_report_their_rule_text() {
         for line in [
             "[$app=org.example.app]##.textad",
-            "[$url=/x]##.textad",
+            "[$url]##.textad",
             "[$path=/a,path=/b]##.textad",
             "[$path=||example.com]##.textad",
             "[$domain=/re/]##.textad",

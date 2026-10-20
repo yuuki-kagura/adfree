@@ -1133,8 +1133,8 @@ impl ProxySession {
         };
         let url = request_url(&facts, &host);
         // The page URL the cosmetics of the response will be matched against.
-        // Only `[$path=…]` rules read it, so it is only carried when the
-        // loaded lists hold any.
+        // Only `[$path=…]` / `[$url=…]` rules read it, so it is only carried
+        // when the loaded lists hold any.
         let page_url = filter.has_path_rules().then(|| url.clone());
         // A `Content-Length` the proxy cannot read is a body it cannot count:
         // the bytes after the head can never be told from the next request, so
