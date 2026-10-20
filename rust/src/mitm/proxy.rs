@@ -2456,7 +2456,10 @@ impl ProxySession {
             }
         }
         if !self.script_src.is_empty() {
-            out.extend_from_slice(http::script_tag(&self.script_tag_src, true, nonce).as_bytes());
+            // Not deferred: `@run-at document-start` only means anything if
+            // the tag is fetched and executed while the parser is still in the
+            // head. End/idle scripts wait inside their own wrapper.
+            out.extend_from_slice(http::script_tag(&self.script_tag_src, false, nonce).as_bytes());
         }
         out
     }

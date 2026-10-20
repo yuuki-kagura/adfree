@@ -10,6 +10,7 @@ import git.shin.adfree.model.ProtectionSettings
 import git.shin.adfree.model.ProtectionStats
 import git.shin.adfree.model.ThreatAnalysisResult
 import git.shin.adfree.model.UserScriptInfo
+import git.shin.adfree.model.UserScriptStoreState
 
 /** Consolidated MVI state. */
 data class AdGuardUiState(
@@ -43,6 +44,8 @@ data class AdGuardUiState(
     val scriptsMasterEnabled: Boolean = false,
     val inspectedScriptId: String? = null,
     val showAddScriptDialog: Boolean = false,
+    val showScriptStore: Boolean = false,
+    val scriptStore: UserScriptStoreState = UserScriptStoreState(),
 )
 
 /** MVI intents. */
@@ -99,6 +102,13 @@ sealed interface AdGuardIntent {
     data object RestoreDefaultFilters : AdGuardIntent
     data class ShowAddScriptDialog(val show: Boolean) : AdGuardIntent
     data class AddScript(val name: String, val url: String) : AdGuardIntent
+    data class ShowScriptStore(val show: Boolean) : AdGuardIntent
+    data class SearchScriptStore(val query: String) : AdGuardIntent
+    data class InstallStoreScript(
+        val name: String,
+        val url: String,
+        val description: String,
+    ) : AdGuardIntent
     data class ToggleScript(val id: String, val enabled: Boolean) : AdGuardIntent
     data class ToggleScriptsMaster(val enabled: Boolean) : AdGuardIntent
     data class RefreshScript(val id: String) : AdGuardIntent

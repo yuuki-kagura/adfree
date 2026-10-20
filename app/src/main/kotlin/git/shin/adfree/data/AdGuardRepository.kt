@@ -16,20 +16,38 @@ import git.shin.adfree.model.DnsProvider
 import git.shin.adfree.model.FilterList
 import git.shin.adfree.model.FilterStatus
 import git.shin.adfree.model.UserScriptInfo
+import git.shin.adfree.model.UserScriptStoreItem
+import git.shin.adfree.model.UserScriptStoreState
 import git.shin.adfree.model.NetworkRequestLog
 import git.shin.adfree.model.ProtectionStats
 import git.shin.adfree.model.ProtectionSettings
 import git.shin.adfree.model.ProtocolType
+import java.io.IOException
+import java.net.URLEncoder
+import java.util.concurrent.TimeUnit
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.drop
 import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.flow.updateAndGet
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import okhttp3.OkHttpClient
+import okhttp3.Request
+import org.json.JSONArray
+import org.json.JSONObject
+
+/** Greasy Fork's public JSON search endpoint; blank query returns the top list. */
+private const val GREASY_FORK_API = "https://api.greasyfork.org/en/scripts.json"
+
+/** Keep the sheet light: 50 results is already a lot of rows to scan. */
+private const val GREASY_FORK_LIMIT = 50
 
 /**
  * Single source of truth.
@@ -109,6 +127,17 @@ class AdGuardRepository(
 
     private val _scriptsMasterEnabled = MutableStateFlow(false)
     val scriptsMasterEnabled: StateFlow<Boolean> = _scriptsMasterEnabled.asStateFlow()
+
+    private val _scriptStore = MutableStateFlow(UserScriptStoreState())
+    val scriptStore: StateFlow<UserScriptStoreState> = _scriptStore.asStateFlow()
+    private var scriptStoreJob: Job? = null
+
+    private val scriptStoreClient by lazy {
+        OkHttpClient.Builder()
+            .connectTimeout(15, TimeUnit.SECONDS)
+            .readTimeout(20, TimeUnit.SECONDS)
+            .build()
+    }
 
     init {
         startStatsPoller()
@@ -916,23 +945,103 @@ class AdGuardRepository(
         }
     }
 
+    /** Loads the first page of the store when the sheet opens. */
+    fun openScriptStore() {
+        if (_scriptStore.value.items.isEmpty() && !_scriptStore.value.loading) {
+            searchScriptStore(_scriptStore.value.query)
+        }
+    }
+
+    /**
+     * Searches Greasy Fork with a small debounce. The query is trimmed and
+     * capped so a paste cannot turn into an unbounded request URL.
+     */
+    fun searchScriptStore(query: String) {
+        val trimmed = query.trim().take(80)
+        _scriptStore.update { it.copy(query = trimmed, loading = true, error = null) }
+        scriptStoreJob?.cancel()
+        scriptStoreJob = scope.launch {
+            try {
+                if (trimmed.isNotEmpty()) delay(350)
+                val items = withContext(Dispatchers.IO) { fetchGreasyFork(trimmed) }
+                _scriptStore.update { it.copy(items = items, loading = false) }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                _scriptStore.update {
+                    it.copy(
+                        loading = false,
+                        error = e.message?.take(160) ?: "Không tải được kho tiện ích",
+                    )
+                }
+            }
+        }
+    }
+
+    private fun fetchGreasyFork(query: String): List<UserScriptStoreItem> {
+        val encoded = URLEncoder.encode(query, "UTF-8")
+        val url = if (encoded.isEmpty()) GREASY_FORK_API else "$GREASY_FORK_API?q=$encoded"
+        val request = Request.Builder()
+            .url(url)
+            .header("Accept", "application/json")
+            .header("User-Agent", "AdFree/1.0 (Android)")
+            .build()
+        scriptStoreClient.newCall(request).execute().use { response ->
+            if (!response.isSuccessful) {
+                throw IOException("Greasy Fork HTTP ${response.code}")
+            }
+            val body = response.body?.string().orEmpty()
+            if (body.isBlank()) return emptyList()
+            return parseGreasyForkScripts(body)
+        }
+    }
+
     /** Adds a userscript by URL and fetches its body right away. */
-    fun addScript(name: String, url: String) {
+    fun addScript(
+        name: String,
+        url: String,
+        description: String = "Tiện ích tùy chỉnh của bạn",
+    ) {
         scope.launch {
             val trimmed = url.trim()
             if (trimmed.isEmpty()) return@launch
+            val existing = _userscripts.value.firstOrNull { it.url == trimmed }
+            if (existing != null) {
+                // A second tap on a store row must not create a duplicate; it
+                // only needs to make the script active again (or retry a body
+                // that never downloaded).
+                if (!existing.isEnabled || existing.sizeBytes == 0L) {
+                    toggleScript(existing.id, true)
+                } else {
+                    showTransientStatus("${existing.name} đã có trong danh sách")
+                }
+                return@launch
+            }
             val id = "script_${System.currentTimeMillis()}"
             val script = UserScriptInfo(
                 id = id,
                 name = name.ifBlank {
                     trimmed.substringAfterLast('/').take(40).ifBlank { "Tiện ích" }
                 },
-                description = "Tiện ích tùy chỉnh của bạn",
+                description = description.trim().take(300).ifEmpty { "Tiện ích tùy chỉnh của bạn" },
                 url = trimmed,
                 isEnabled = true,
                 isUserAdded = true,
             )
-            _userscripts.update { it + script }
+            // Another tap can pass the check above before this coroutine runs;
+            // merge on the flow so the list still gains exactly one row.
+            val updated = _userscripts.updateAndGet { list ->
+                if (list.any { it.url == trimmed }) list else list + script
+            }
+            if (updated.none { it.id == id }) {
+                val winner = updated.firstOrNull { it.url == trimmed }
+                if (winner != null && (!winner.isEnabled || winner.sizeBytes == 0L)) {
+                    toggleScript(winner.id, true)
+                } else {
+                    showTransientStatus("${script.name} đã có trong danh sách")
+                }
+                return@launch
+            }
             _loadingMessage.value = "Đang tải ${script.name}…"
             showTransientStatus(downloadScriptBody(script))
             saveScripts()
@@ -1092,3 +1201,39 @@ class AdGuardRepository(
         )
     }
 }
+
+/**
+ * Parse Greasy Fork's JSON list. Kept top-level and free of Android state so a
+ * JVM test can feed it a fixture without a network call.
+ */
+internal fun parseGreasyForkScripts(json: String): List<UserScriptStoreItem> {
+    val array = JSONArray(json)
+    val count = minOf(array.length(), GREASY_FORK_LIMIT)
+    val items = ArrayList<UserScriptStoreItem>(count)
+    for (i in 0 until count) {
+        val obj = array.optJSONObject(i) ?: continue
+        val codeUrl = obj.cleanString("code_url")
+        if (codeUrl.isEmpty()) continue
+        if (!codeUrl.startsWith("https://") && !codeUrl.startsWith("http://")) continue
+        val pageUrl = obj.cleanString("url")
+            .takeIf { it.startsWith("https://") || it.startsWith("http://") }
+            .orEmpty()
+        items += UserScriptStoreItem(
+            id = obj.optLong("id"),
+            name = obj.cleanString("name").ifEmpty { "Tiện ích Greasy Fork" },
+            description = obj.cleanString("description").take(300),
+            url = codeUrl,
+            pageUrl = pageUrl,
+            version = obj.cleanString("version"),
+            dailyInstalls = obj.optInt("daily_installs"),
+            totalInstalls = obj.optInt("total_installs"),
+            license = obj.cleanString("license"),
+            codeSizeBytes = obj.optLong("code_size"),
+        )
+    }
+    return items
+}
+
+/** `optString` returns the literal "null" for JSON null; hide that from the UI. */
+private fun JSONObject.cleanString(key: String): String =
+    optString(key).trim().let { if (it == "null") "" else it }

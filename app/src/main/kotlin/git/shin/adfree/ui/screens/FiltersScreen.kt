@@ -292,6 +292,7 @@ fun FiltersScreen(
                         },
                         onOpenScript = { viewModel.onIntent(AdGuardIntent.InspectScript(it.id)) },
                         onAddScript = { viewModel.onIntent(AdGuardIntent.ShowAddScriptDialog(true)) },
+                        onOpenStore = { viewModel.onIntent(AdGuardIntent.ShowScriptStore(true)) },
                     )
                 }
 
@@ -325,6 +326,41 @@ fun FiltersScreen(
             onDismiss = { viewModel.onIntent(AdGuardIntent.ShowAddScriptDialog(false)) },
             onAdd = { name, url -> viewModel.onIntent(AdGuardIntent.AddScript(name, url)) },
         )
+    }
+
+    if (state.showScriptStore) {
+        val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+        val installedByUrl = state.userscripts
+            .filter { it.url.isNotBlank() }
+            .associateBy { it.url }
+        ModalBottomSheet(
+            onDismissRequest = { viewModel.onIntent(AdGuardIntent.ShowScriptStore(false)) },
+            sheetState = sheetState,
+            containerColor = AdGuardDarkSurface,
+            contentColor = AdGuardTextPrimary,
+        ) {
+            UserScriptStoreSheet(
+                state = state.scriptStore,
+                installedByUrl = installedByUrl,
+                onQueryChange = { viewModel.onIntent(AdGuardIntent.SearchScriptStore(it)) },
+                onInstall = { item ->
+                    viewModel.onIntent(
+                        AdGuardIntent.InstallStoreScript(item.name, item.url, item.description),
+                    )
+                },
+                onEnable = { script -> viewModel.onIntent(AdGuardIntent.ToggleScript(script.id, true)) },
+                onOpenPage = { url ->
+                    if (url.startsWith("https://") || url.startsWith("http://")) {
+                        runCatching {
+                            context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)))
+                        }
+                    }
+                },
+                onRetry = {
+                    viewModel.onIntent(AdGuardIntent.SearchScriptStore(state.scriptStore.query))
+                },
+            )
+        }
     }
 
     if (state.showCustomRuleEditor) {

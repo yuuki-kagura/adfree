@@ -13,6 +13,7 @@ import git.shin.adfree.model.ProtectionSettings
 import git.shin.adfree.model.ProtectionStats
 import git.shin.adfree.model.ThreatAnalysisResult
 import git.shin.adfree.model.UserScriptInfo
+import git.shin.adfree.model.UserScriptStoreState
 import git.shin.adfree.security.ThreatAnalyzer
 import git.shin.adfree.vpn.VpnController
 import kotlinx.coroutines.channels.BufferOverflow
@@ -63,6 +64,7 @@ class AdGuardViewModel(
     private val _showAddFilterDialog = MutableStateFlow(false)
     private val _inspectedScript = MutableStateFlow<String?>(null)
     private val _showAddScriptDialog = MutableStateFlow(false)
+    private val _showScriptStore = MutableStateFlow(false)
     private val _inspectedApp = MutableStateFlow<AppFirewallRule?>(null)
     private val _appSearchQuery = MutableStateFlow("")
     private val _appCategoryFilter = MutableStateFlow<String?>(null)
@@ -112,8 +114,9 @@ class AdGuardViewModel(
             _showAddFilterDialog,
             _inspectedScript,
             _showAddScriptDialog,
-        ) { filter, addFilter, script, addScript ->
-            UiPartC2(filter, addFilter, script, addScript)
+            _showScriptStore,
+        ) { filter, addFilter, script, addScript, store ->
+            UiPartC2(filter, addFilter, script, addScript, store)
         },
         combine(
             combine(
@@ -127,7 +130,10 @@ class AdGuardViewModel(
                 repository.loadingMessage,
                 repository.userscripts,
                 repository.scriptsMasterEnabled,
-            ) { prompt, loading, scripts, master -> UiExtras(prompt, loading, scripts, master) },
+                repository.scriptStore,
+            ) { prompt, loading, scripts, master, store ->
+                UiExtras(prompt, loading, scripts, master, store)
+            },
         ) { d, extras -> d.plusExtras(extras) },
     ) { a, b, c, c2, d ->
         val logs = a.logs.filter { log ->
@@ -177,8 +183,10 @@ class AdGuardViewModel(
             showAddFilterDialog = c2.showAddFilter,
             inspectedScriptId = c2.inspectedScript,
             showAddScriptDialog = c2.showAddScript,
+            showScriptStore = c2.showScriptStore,
             userscripts = d.userscripts,
             scriptsMasterEnabled = d.scriptsMasterEnabled,
+            scriptStore = d.scriptStore,
             appSearchQuery = d.appSearch,
             appCategoryFilter = d.appCategoryFilter,
             selectedAppFilter = d.selectedApp,
@@ -326,6 +334,16 @@ class AdGuardViewModel(
             is AdGuardIntent.AddScript -> {
                 repository.addScript(intent.name, intent.url)
                 _showAddScriptDialog.value = false
+            }
+
+            is AdGuardIntent.ShowScriptStore -> {
+                _showScriptStore.value = intent.show
+                if (intent.show) repository.openScriptStore()
+            }
+            is AdGuardIntent.SearchScriptStore -> repository.searchScriptStore(intent.query)
+            is AdGuardIntent.InstallStoreScript -> {
+                repository.addScript(intent.name, intent.url, intent.description)
+                emit(AdGuardEffect.ShowSnackbar("Đang cài ${intent.name}…"))
             }
 
             is AdGuardIntent.ToggleScript -> repository.toggleScript(intent.id, intent.enabled)
@@ -501,6 +519,7 @@ class AdGuardViewModel(
         val showAddFilter: Boolean,
         val inspectedScript: String?,
         val showAddScript: Boolean,
+        val showScriptStore: Boolean,
     )
 
     private data class UiPartD(
@@ -513,12 +532,14 @@ class AdGuardViewModel(
         var loadingMessage: String? = null
         var userscripts: List<UserScriptInfo> = emptyList()
         var scriptsMasterEnabled: Boolean = false
+        var scriptStore: UserScriptStoreState = UserScriptStoreState()
 
         fun plusExtras(extras: UiExtras): UiPartD = apply {
             showVpnPermission = extras.showVpnPermission
             loadingMessage = extras.loadingMessage
             userscripts = extras.userscripts
             scriptsMasterEnabled = extras.scriptsMasterEnabled
+            scriptStore = extras.scriptStore
         }
     }
 
@@ -527,5 +548,6 @@ class AdGuardViewModel(
         val loadingMessage: String?,
         val userscripts: List<UserScriptInfo>,
         val scriptsMasterEnabled: Boolean,
+        val scriptStore: UserScriptStoreState,
     )
 }

@@ -157,6 +157,30 @@ data class UserScriptInfo(
     val isBuiltin: Boolean = false,
 )
 
+/** One userscript result from the Greasy Fork store. */
+data class UserScriptStoreItem(
+    val id: Long,
+    val name: String,
+    val description: String,
+    /** Direct `.user.js` URL; this is what the core downloads. */
+    val url: String,
+    /** Human-facing Greasy Fork page, for the source link. */
+    val pageUrl: String,
+    val version: String,
+    val dailyInstalls: Int,
+    val totalInstalls: Int,
+    val license: String,
+    val codeSizeBytes: Long,
+)
+
+/** Search state for the store sheet. */
+data class UserScriptStoreState(
+    val query: String = "",
+    val items: List<UserScriptStoreItem> = emptyList(),
+    val loading: Boolean = false,
+    val error: String? = null,
+)
+
 data class AppFirewallRule(
     val packageName: String,
     val appName: String,

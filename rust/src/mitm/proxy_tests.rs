@@ -37,7 +37,9 @@ fn user_tag_src() -> String {
 
 /// The tag the injector emits for the user script, for a given nonce.
 fn expected_tag(nonce: &str) -> String {
-    crate::mitm::http::script_tag(&user_tag_src(), true, nonce)
+    // The user script must execute during parsing: `@run-at document-start`
+    // is otherwise just a label on a deferred script.
+    crate::mitm::http::script_tag(&user_tag_src(), false, nonce)
 }
 
 /// The nonce an injected tag carries, read out of the response itself.
