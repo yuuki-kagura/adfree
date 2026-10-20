@@ -444,15 +444,19 @@ fn a_host_that_requires_ech_keeps_its_config() {
     );
     // And the public name is learned even from a stripped answer: a client that
     // cached the config before the proxy started still opens a real ECH hello,
-    // whose outer SNI is this name, and that flow must be spliced — not
-    // terminated with a certificate for the wrong host. The host itself is
-    // still terminated: a GREASE hello keeps the real name as its SNI.
+    // whose outer SNI is this name. With full ECH off the hello is terminated
+    // so the browser retries in the clear and the page stays filterable; only
+    // the full-ECH opt-in hands it through untouched.
     assert!(
-        core.ech_hosts.splices("cloudflare-ech.com"),
-        "the public name is learned from the stripped answer too"
+        !core.ech_hosts.splices("cloudflare-ech.com", false),
+        "a cached public name is not spliced while full ECH is off"
     );
     assert!(
-        !core.ech_hosts.splices("required-ech.test"),
+        core.ech_hosts.splices("cloudflare-ech.com", true),
+        "the public name is still learned for the full-ECH path"
+    );
+    assert!(
+        !core.ech_hosts.splices("required-ech.test", false),
         "the host itself is not spliced until it refuses"
     );
 
@@ -471,10 +475,10 @@ fn a_host_that_requires_ech_keeps_its_config() {
         "an answer left alone keeps the origin's TTL"
     );
     assert!(
-        core.ech_hosts.splices("cloudflare-ech.com"),
-        "a kept answer still teaches the public name"
+        !core.ech_hosts.splices("cloudflare-ech.com", false),
+        "full ECH is still off: the public name is not spliced"
     );
-    assert!(core.ech_hosts.splices("required-ech.test"));
+    assert!(core.ech_hosts.splices("required-ech.test", false));
 
     core.set_config(Config::default());
     unsafe { libc::close(tun_w) };
@@ -552,11 +556,11 @@ fn full_ech_keeps_the_config_for_the_client() {
         "the refusal fallback stays armed for clients that do not use ECH"
     );
     assert!(
-        core.ech_hosts.splices("cloudflare-ech.com"),
+        core.ech_hosts.splices("cloudflare-ech.com", true),
         "the public name is learned so a real ECH hello is spliced"
     );
     assert!(
-        !core.ech_hosts.splices("full-ech.test"),
+        !core.ech_hosts.splices("full-ech.test", true),
         "the host itself is only spliced if its hello uses ECH"
     );
     assert_eq!(

@@ -32,9 +32,11 @@
 //!   read out of the HTTPS answers. Browsers attach a GREASE
 //!   `encrypted_client_hello` extension to ordinary connections too — Chrome
 //!   149 offered one on *every* host measured on 19/10/2026 — so "the hello
-//!   offers ECH" cannot be the splice condition by itself: only a hello whose
-//!   SNI is a public name, or whose host is exempt, is one that cannot be
-//!   terminated at all.
+//!   offers ECH" cannot be the splice condition by itself. A hello whose SNI
+//!   is a public name is only spliced when the user opted into full ECH:
+//!   otherwise terminating it makes the browser retry in the clear, which
+//!   keeps the page filterable. An exempt host is still spliced without that
+//!   switch, because the origin has already refused every plain handshake.
 //! * `configs` — the raw ECHConfigList per host, refreshed by every HTTPS
 //!   answer. Answers whose parameter was stripped are clamped to
 //!   [`ANSWER_TTL_SECS`], so the copy cannot get far out of date.
@@ -155,13 +157,19 @@ impl EchHosts {
 
     /// Should a first flight whose SNI is `name` be spliced?
     ///
-    /// True for an ECH public name — a real ECH hello exposes one, and its
-    /// inner host cannot be recovered — and for an exempt host, whose flow the
-    /// proxy is past filtering anyway. A GREASE hello keeps the real host as
-    /// its SNI and is terminated as usual.
-    pub fn splices(&self, name: &str) -> bool {
-        self.exempt.lock().unwrap().contains(name)
-            || self.public_names.lock().unwrap().iter().any(|n| n == name)
+    /// An exempt host is always spliced: the origin refused the proxy's own
+    /// plaintext handshake, so terminating it would only fail again. A public
+    /// name is spliced only when `full_ech` is on. With the switch off, a
+    /// browser that cached an ECHConfig elsewhere gets a failed handshake and
+    /// retries in the clear; the retry is terminated and filtered. Splicing it
+    /// instead would silently drop filtering for a host the lists still name.
+    pub fn splices(&self, name: &str, full_ech: bool) -> bool {
+        self.exempt(name) || (full_ech && self.public_name(name))
+    }
+
+    /// Was `name` read as an ECHConfig public name in an HTTPS answer?
+    pub fn public_name(&self, name: &str) -> bool {
+        self.public_names.lock().unwrap().iter().any(|n| n == name)
     }
 
     /// The HTTPS answer for `host` carried this ECHConfigList: remember it for
@@ -262,12 +270,25 @@ mod tests {
     #[test]
     fn a_grease_hello_is_terminated_but_a_public_name_is_not() {
         let ech = EchHosts::new();
-        assert!(!ech.splices("shop.test"), "a normal host stays terminated");
+        assert!(
+            !ech.splices("shop.test", false),
+            "a normal host stays terminated"
+        );
         ech.note_public_name("cloudflare-ech.test");
-        assert!(ech.splices("cloudflare-ech.test"));
-        assert!(!ech.splices("shop.test"));
+        assert!(
+            !ech.splices("cloudflare-ech.test", false),
+            "a public name is not spliced with full ECH off"
+        );
+        assert!(
+            ech.splices("cloudflare-ech.test", true),
+            "full ECH is the opt-in that splices a public name"
+        );
+        assert!(!ech.splices("shop.test", true));
         ech.note_refusal("crypto.test");
-        assert!(ech.splices("crypto.test"));
+        assert!(
+            ech.splices("crypto.test", false),
+            "an exempt host is spliced even without full ECH"
+        );
     }
 
     #[test]
@@ -276,8 +297,8 @@ mod tests {
         for i in 0..(PUBLIC_NAME_CAP + 4) {
             ech.note_public_name(&format!("ech{i}.test"));
         }
-        assert!(!ech.splices("ech0.test"), "the window must slide");
-        assert!(ech.splices(&format!("ech{}.test", PUBLIC_NAME_CAP + 3)));
+        assert!(!ech.splices("ech0.test", true), "the window must slide");
+        assert!(ech.splices(&format!("ech{}.test", PUBLIC_NAME_CAP + 3), true));
     }
 
     #[test]

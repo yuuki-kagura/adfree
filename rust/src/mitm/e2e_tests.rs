@@ -2969,13 +2969,40 @@ fn a_learned_host_is_spliced_verbatim() {
 }
 
 /// A real ECH hello names the ECHConfig's public name, not the host it is
-/// reaching for: that is the signal read out of the DNS answer, and the one the
-/// splice is decided on.
+/// reaching for. Without full ECH the client's cached config is not followed
+/// through to a splice: the hello is terminated (and fails once), so the
+/// browser retries in the clear and the page stays filterable.
 #[test]
-fn an_ech_public_name_is_spliced_verbatim() {
+fn an_ech_public_name_is_terminated_without_full_ech() {
     let (port, seen) = recording_listener();
     let origin = raw_origin(port);
-    let (core, _) = setup_core_named(&origin, "e2e-ech-public-name");
+    let (core, _) = setup_core_named(&origin, "e2e-ech-public-name-off");
+    core.ech_hosts.note_public_name("cloudflare-ech.test");
+
+    let mut tcp = Client::connect(core.clone(), port);
+    let hello =
+        tls::with_fake_ech(&client_first_flight("cloudflare-ech.test")).expect("patchable hello");
+    tcp.send(&hello);
+
+    let answer = tcp.read_some(Duration::from_secs(10));
+    assert!(!answer.is_empty(), "the proxy must answer the hello");
+    assert_eq!(answer[0], 0x16, "a TLS handshake record, not a splice");
+    assert!(
+        seen.try_recv().is_err(),
+        "without full ECH the origin must not receive the wrapped hello"
+    );
+}
+
+/// The same hello with full ECH on is the user's opt-in to lose filtering for
+/// ECH: it goes to the origin byte for byte.
+#[test]
+fn full_ech_splices_an_ech_public_name_verbatim() {
+    let (port, seen) = recording_listener();
+    let origin = raw_origin(port);
+    let (core, _) = setup_core_named(&origin, "e2e-ech-public-name-on");
+    let mut cfg = core.config();
+    cfg.full_ech = true;
+    core.set_config(cfg);
     core.ech_hosts.note_public_name("cloudflare-ech.test");
 
     let mut tcp = Client::connect(core.clone(), port);
@@ -2986,7 +3013,7 @@ fn an_ech_public_name_is_spliced_verbatim() {
     let forwarded = await_listener(&mut tcp, &seen);
     assert_eq!(
         forwarded, hello,
-        "an ECH public name must be spliced byte for byte"
+        "full ECH must splice the public name byte for byte"
     );
 }
 

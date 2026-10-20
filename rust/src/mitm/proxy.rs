@@ -228,6 +228,11 @@ pub struct ProxySession {
     /// their ECHConfig rewritten away, and which learned to require ECH.
     /// `None` when no engine owns the session (tests).
     ech_hosts: Option<Arc<crate::mitm::ech::EchHosts>>,
+    /// The engine's full-ECH switch at the time the flow opened. With it off,
+    /// a cached ECHConfig is not followed through to a splice: terminating
+    /// the hello makes the browser retry in the clear, where filtering still
+    /// applies. With it on, an ECH public name is handed over untouched.
+    full_ech: bool,
     /// The upstream settings, kept only while the active half was armed with
     /// ECH: a server that rejects the offer gets one retry from these. `None`
     /// means the upstream is plain (or already retried once).
@@ -589,6 +594,7 @@ impl ProxySession {
             stats: None,
             sink: None,
             ech_hosts: None,
+            full_ech: false,
             upstream_plain: None,
             client_discard: None,
             apps: Vec::new(),
@@ -634,6 +640,7 @@ impl ProxySession {
             stats: None,
             sink: None,
             ech_hosts: None,
+            full_ech: false,
             upstream_plain: None,
             client_discard: None,
             apps: Vec::new(),
@@ -678,6 +685,7 @@ impl ProxySession {
             stats: None,
             sink: None,
             ech_hosts: None,
+            full_ech: false,
             upstream_plain: None,
             client_discard: None,
             apps: Vec::new(),
@@ -706,8 +714,11 @@ impl ProxySession {
     /// Points the session at the engine's ECH knowledge: the hosts whose
     /// ECHConfig the DNS half rewrote away, and the ones that turned out to
     /// require ECH and must not be terminated (see [`crate::mitm::ech`]).
-    pub fn set_ech_hosts(&mut self, ech: Arc<crate::mitm::ech::EchHosts>) {
+    /// `full_ech` is the switch that allows a cached ECH public name to be
+    /// spliced; without it the hello is terminated so filtering survives.
+    pub fn set_ech_hosts(&mut self, ech: Arc<crate::mitm::ech::EchHosts>, full_ech: bool) {
         self.ech_hosts = Some(ech);
+        self.full_ech = full_ech;
     }
 
     /// The SNI captured from the ClientHello, once it has arrived.
@@ -807,10 +818,14 @@ impl ProxySession {
         } = tls::first_flight(&state.raw)
         {
             let name = server_name.as_deref().unwrap_or("?");
+            let public_ech = self
+                .ech_hosts
+                .as_deref()
+                .is_some_and(|ech| ech.public_name(name));
             if self
                 .ech_hosts
                 .as_deref()
-                .is_some_and(|ech| ech.splices(name))
+                .is_some_and(|ech| ech.splices(name, self.full_ech))
             {
                 // A real ECH hello exposes only the config's public name: the
                 // host inside is encrypted, and terminating this TLS could
@@ -823,6 +838,16 @@ impl ProxySession {
                      splicing verbatim"
                 ));
                 return Ok(self.splice_pending_verbatim());
+            }
+            if public_ech {
+                // The client cached this ECHConfig outside the DNS half, and
+                // full ECH is off. Refusing the wrapped hello costs one failed
+                // handshake; the retry is in the clear and stays filterable.
+                // Splicing instead would quietly drop filtering for the page.
+                crate::logbuf::push(&format!(
+                    "mitm {name}: client offered ECH ({ech_len} byte extension), \
+                     full ECH is off, terminating for filtering"
+                ));
             }
             // Otherwise this is a GREASE extension — browsers put one on
             // ordinary connections — or a host not learned to require ECH:

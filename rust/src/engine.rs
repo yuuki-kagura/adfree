@@ -1065,7 +1065,7 @@ impl Core {
                     // ECH: which hosts had their ECHConfig rewritten away, so
                     // a refusal from one of them can be learned as "requires
                     // ECH" (see `mitm::ech`).
-                    proxy.set_ech_hosts(Arc::clone(&self.ech_hosts));
+                    proxy.set_ech_hosts(Arc::clone(&self.ech_hosts), cfg.full_ech);
                     Some(proxy)
                 }
                 Err(e) => {
