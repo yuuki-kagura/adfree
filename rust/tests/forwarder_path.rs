@@ -434,11 +434,22 @@ fn a_host_that_requires_ech_keeps_its_config() {
         60,
         "a rewritten answer must not be cached as if it came from the origin"
     );
-    // The public name is only learned from an answer the client is allowed to
-    // see: while the config is stripped, no ECH hello can expose it.
+    // The config still reaches the proxy's own upstream half: offering it is
+    // what keeps a host that requires ECH filterable (R18).
+    assert_eq!(
+        core.ech_hosts
+            .upstream_ech("required-ech.test", adfree_core::util::now_ms()),
+        Some(CF_ECH_CONFIG.to_vec()),
+        "a stripped answer still teaches the upstream config"
+    );
+    // And the public name is learned even from a stripped answer: a client that
+    // cached the config before the proxy started still opens a real ECH hello,
+    // whose outer SNI is this name, and that flow must be spliced — not
+    // terminated with a certificate for the wrong host. The host itself is
+    // still terminated: a GREASE hello keeps the real name as its SNI.
     assert!(
-        !core.ech_hosts.splices("cloudflare-ech.com"),
-        "a stripped answer teaches no public name"
+        core.ech_hosts.splices("cloudflare-ech.com"),
+        "the public name is learned from the stripped answer too"
     );
     assert!(
         !core.ech_hosts.splices("required-ech.test"),
@@ -461,7 +472,7 @@ fn a_host_that_requires_ech_keeps_its_config() {
     );
     assert!(
         core.ech_hosts.splices("cloudflare-ech.com"),
-        "the kept answer is where the public name is learned"
+        "a kept answer still teaches the public name"
     );
     assert!(core.ech_hosts.splices("required-ech.test"));
 

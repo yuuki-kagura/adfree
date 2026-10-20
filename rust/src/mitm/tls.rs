@@ -23,6 +23,7 @@
 //! arrives, which is the only moment the SNI is known — that avoids parsing the
 //! handshake by hand.
 
+use std::collections::HashMap;
 use std::io::{Read, Write};
 use std::sync::{Arc, Mutex};
 
@@ -228,6 +229,94 @@ pub fn client_config_with(roots: rustls::RootCertStore) -> Arc<ClientConfig> {
     Arc::new(config)
 }
 
+/// The upstream TLS settings of one engine: the plain client config, the root
+/// store it was built from, and the per-host ECH configs built from it.
+///
+/// rustls only accepts ECH through the builder (`with_ech` sits on the versions
+/// stage), so a config carrying one host's ECHConfigList has to be built next
+/// to the plain one. Keeping the roots here is what makes that possible without
+/// re-reading the device store per connection.
+pub struct UpstreamTls {
+    roots: rustls::RootCertStore,
+    plain: Arc<ClientConfig>,
+    ech: Mutex<HashMap<Vec<u8>, Arc<ClientConfig>>>,
+}
+
+/// How many per-host ECH configs to keep built: one per distinct ECHConfigList,
+/// a handful in practice (`defo.ie` alone offers three configs in one list).
+const ECH_CONFIG_CAP: usize = 16;
+
+impl UpstreamTls {
+    /// The device trust store, loaded once.
+    pub fn system() -> Arc<UpstreamTls> {
+        static CONFIG: std::sync::OnceLock<Arc<UpstreamTls>> = std::sync::OnceLock::new();
+        CONFIG
+            .get_or_init(|| UpstreamTls::with_roots(system_root_store()))
+            .clone()
+    }
+
+    /// The same, with an explicit root set: tests stand in their own server.
+    pub fn with_roots(roots: rustls::RootCertStore) -> Arc<UpstreamTls> {
+        let plain = client_config_with(roots.clone());
+        Arc::new(UpstreamTls {
+            roots,
+            plain,
+            ech: Mutex::new(HashMap::new()),
+        })
+    }
+
+    /// The client config for a host with no ECHConfig on offer.
+    pub fn plain(&self) -> Arc<ClientConfig> {
+        Arc::clone(&self.plain)
+    }
+
+    /// A client config that offers `list` — the raw ECHConfigList from the
+    /// host's HTTPS record, 2-byte length included — in its ClientHello.
+    ///
+    /// `None` when no config in the list names a suite this build speaks (see
+    /// [`crate::mitm::hpke`]): the caller then falls back to [`Self::plain`].
+    pub fn with_ech(&self, list: &[u8]) -> Option<Arc<ClientConfig>> {
+        if let Some(cached) = self.ech.lock().unwrap().get(list) {
+            return Some(Arc::clone(cached));
+        }
+        let config = self.build_ech_config(list)?;
+        let mut cache = self.ech.lock().unwrap();
+        if cache.len() >= ECH_CONFIG_CAP {
+            cache.clear();
+        }
+        cache.insert(list.to_vec(), Arc::clone(&config));
+        Some(config)
+    }
+
+    fn build_ech_config(&self, list: &[u8]) -> Option<Arc<ClientConfig>> {
+        let ech = rustls::client::EchConfig::new(list.into(), crate::mitm::hpke::SUITES).ok()?;
+        let mut config = ClientConfig::builder_with_provider(Arc::new(
+            rustls::crypto::ring::default_provider(),
+        ))
+        .with_ech(rustls::client::EchMode::Enable(ech))
+        .ok()?
+        .with_root_certificates(self.roots.clone())
+        .with_no_client_auth();
+        config.alpn_protocols = vec![ALPN_H1.to_vec()];
+        Some(Arc::new(config))
+    }
+}
+
+/// Did this upstream handshake fail because the server rejected the ECH offer?
+///
+/// rustls' typed error (`PeerIncompatible::ServerRejectedEncryptedClientHello`)
+/// is formatted into the flow's error string at the TLS boundary, and the
+/// variant name survives that. One retry without ECH is the recovery RFC 9849
+/// describes — on a fresh connection, since the rejected one cannot continue.
+pub fn ech_rejected(error: &str) -> bool {
+    error.contains("ServerRejectedEncryptedClientHello")
+}
+
+/// What the upstream handshake did with ECH, for the engine's log.
+pub fn client_ech_status(connection: &ClientConnection) -> rustls::client::EchStatus {
+    connection.ech_status()
+}
+
 /// Server config that asks [`SniCertResolver`] for the leaf per connection.
 pub fn server_config(resolver: Arc<SniCertResolver>) -> Arc<ServerConfig> {
     server_config_dyn(resolver)
@@ -267,18 +356,18 @@ pub fn new_client(
 
 /// Opens both halves for a flow towards `real_server`.
 pub fn open_session(resolver: &Arc<SniCertResolver>, real_server: &str) -> Result<TlsSession, String> {
-    open_session_with(resolver, real_server, client_config())
+    open_session_with(resolver, real_server, UpstreamTls::system())
 }
 
 /// Like [`open_session`], but the upstream half verifies against the caller's
-/// own client config instead of the device trust store.
+/// own upstream settings instead of the device trust store.
 pub fn open_session_with(
     resolver: &Arc<SniCertResolver>,
     real_server: &str,
-    upstream_config: Arc<ClientConfig>,
+    upstream: Arc<UpstreamTls>,
 ) -> Result<TlsSession, String> {
     let server = new_server(server_config(Arc::clone(resolver)))?;
-    let client = new_client(upstream_config, real_server)?;
+    let client = new_client(upstream.plain(), real_server)?;
 
     Ok(TlsSession { server, client })
 }

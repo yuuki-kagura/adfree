@@ -468,7 +468,7 @@ fn a_request_and_its_response_cross_the_splice() {
     origin_roots
         .add(rustls::pki_types::CertificateDer::from(origin_ca.cert_der()))
         .expect("origin root");
-    let upstream_config = tls::client_config_with(origin_roots);
+    let upstream_config = tls::UpstreamTls::with_roots(origin_roots);
 
     // The CA the fake browser trusts: the one we present to it.
     let mitm_ca = CertificateAuthority::generate().expect("mitm ca");
@@ -569,7 +569,7 @@ fn a_pending_session_opens_from_the_client_hello() {
     origin_roots
         .add(rustls::pki_types::CertificateDer::from(origin_ca.cert_der()))
         .expect("origin root");
-    let upstream_config = tls::client_config_with(origin_roots);
+    let upstream_config = tls::UpstreamTls::with_roots(origin_roots);
 
     let mitm_ca = CertificateAuthority::generate().expect("mitm ca");
     let resolver = Arc::new(SniCertResolver::new(Arc::new(
@@ -675,7 +675,7 @@ fn a_large_script_body_reaches_the_client() {
     origin_roots
         .add(rustls::pki_types::CertificateDer::from(origin_ca.cert_der()))
         .expect("origin root");
-    let upstream_config = tls::client_config_with(origin_roots);
+    let upstream_config = tls::UpstreamTls::with_roots(origin_roots);
 
     let mitm_ca = CertificateAuthority::generate().expect("mitm ca");
     let resolver = Arc::new(SniCertResolver::new(Arc::new(
@@ -764,7 +764,12 @@ fn a_pending_session_splices_non_tls_streams_untouched() {
         CertificateAuthority::from_pem(&ca.cert_pem(), &ca.key_pem()).expect("restore"),
     )));
     let mut proxy =
-        ProxySession::new_pending(resolver, tls::client_config(), String::new(), Arc::from(""))
+        ProxySession::new_pending(
+            resolver,
+            tls::UpstreamTls::system(),
+            String::new(),
+            Arc::from(""),
+        )
             .expect("pending session");
 
     let request = b"GET / HTTP/1.1\r\nHost: plain.example.com\r\n\r\n";
@@ -792,7 +797,12 @@ fn a_fragmented_client_hello_still_opens_the_session() {
         CertificateAuthority::from_pem(&mitm_ca.cert_pem(), &mitm_ca.key_pem()).expect("restore"),
     )));
     let mut proxy =
-        ProxySession::new_pending(resolver, tls::client_config(), String::new(), Arc::from(""))
+        ProxySession::new_pending(
+            resolver,
+            tls::UpstreamTls::system(),
+            String::new(),
+            Arc::from(""),
+        )
             .expect("pending session");
 
     let mut browser_roots = rustls::RootCertStore::empty();

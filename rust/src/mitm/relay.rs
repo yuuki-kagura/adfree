@@ -274,25 +274,28 @@ impl Relay {
 
     /// Data arrived from the real server.
     ///
-    /// Returns `(to_peer, to_client)`: the peer direction carries wire bytes
-    /// the upstream half produced while processing server data (its protocol
-    /// handshake finishing, plus a request that waited for it). Dropping those
-    /// silently deadlocks the flow: the real server never sees the client's
-    /// Finished and never answers.
-    pub fn on_peer_data(&mut self, bytes: &[u8]) -> Result<(Vec<u8>, Vec<u8>), String> {
+    /// Returns `(to_peer, to_client, restart_peer)`: the peer direction carries
+    /// wire bytes the upstream half produced while processing server data (its
+    /// protocol handshake finishing, plus a request that waited for it).
+    /// Dropping those silently deadlocks the flow: the real server never sees
+    /// the client's Finished and never answers. `restart_peer` asks the caller
+    /// to reopen the peer socket first — the upstream half rebuilt itself
+    /// after an ECH rejection, and its new hello belongs on a fresh
+    /// connection.
+    pub fn on_peer_data(&mut self, bytes: &[u8]) -> Result<(Vec<u8>, Vec<u8>, bool), String> {
         if bytes.is_empty() {
-            return Ok((Vec::new(), Vec::new()));
+            return Ok((Vec::new(), Vec::new(), false));
         }
         self.last_ms = now_ms();
         let Some(session) = self.session.as_mut() else {
             // Plain splice: forward the bytes untouched.
-            return Ok((Vec::new(), bytes.to_vec()));
+            return Ok((Vec::new(), bytes.to_vec(), false));
         };
         let out = session.on_peer_payload(bytes)?;
         if out.closed {
             self.closed = true;
         }
-        Ok((out.to_peer, out.to_client))
+        Ok((out.to_peer, out.to_client, out.restart_peer))
     }
 
     /// The client sent a FIN. Shut our write side to the peer down and
@@ -549,7 +552,7 @@ mod tests {
         assert_eq!(r.flow.acked_seq, 1001 + 18);
         assert_eq!(r.flow.down_bytes, 18);
         let back = r.on_peer_data(b"HTTP/1.1 200 OK\r\n\r\n").expect("peer step");
-        assert_eq!(back, (Vec::new(), b"HTTP/1.1 200 OK\r\n\r\n".to_vec()));
+        assert_eq!(back, (Vec::new(), b"HTTP/1.1 200 OK\r\n\r\n".to_vec(), false));
     }
 
     #[test]
@@ -617,9 +620,10 @@ mod tests {
         let out = r.on_peer_data(&[0x00, 0x03, 0x01, 0x00, 0x02, 0x00, 0x00]);
         match out {
             Err(_) => {}
-            Ok((to_peer, to_client)) => {
+            Ok((to_peer, to_client, restart)) => {
                 assert!(to_peer.is_empty(), "junk must not reach the peer");
                 assert!(to_client.is_empty(), "junk must not become plaintext");
+                assert!(!restart, "junk does not ask for a new peer socket");
             }
         }
     }
@@ -731,7 +735,10 @@ mod tests {
     fn empty_payloads_are_no_ops() {
         let mut r = relay();
         assert_eq!(r.on_client_segment(1001, &[]).unwrap(), (Vec::new(), Vec::new()));
-        assert_eq!(r.on_peer_data(&[]).unwrap(), (Vec::new(), Vec::new()));
+        assert_eq!(
+            r.on_peer_data(&[]).unwrap(),
+            (Vec::new(), Vec::new(), false)
+        );
     }
 
     /// The engine's own path: a browser, a `Relay`, and an origin, with the
@@ -765,7 +772,7 @@ mod tests {
         let session = crate::mitm::tls::open_session_with(
             &resolver,
             "origin.example.com",
-            crate::mitm::tls::client_config_with(origin_roots),
+            crate::mitm::tls::UpstreamTls::with_roots(origin_roots),
         )
         .expect("session");
         let proxy = ProxySession::new(session, String::new(), Arc::from(""));
@@ -829,7 +836,8 @@ mod tests {
             // origin -> relay -> browser
             let wire = crate::mitm::tls::take_server_outbound(&mut origin);
             if !wire.is_empty() {
-                let (to_peer, to_client) = relay.on_peer_data(&wire).expect("peer step");
+                let (to_peer, to_client, _restart) =
+                    relay.on_peer_data(&wire).expect("peer step");
                 to_origin.extend_from_slice(&to_peer);
                 feed_browser(&mut browser, &to_client, &mut browser_plain);
             }

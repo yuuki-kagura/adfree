@@ -220,9 +220,10 @@ pub struct Core {
     workers: Mutex<Vec<std::thread::JoinHandle<()>>>,
     /// App callback that routes engine-created sockets around the VPN.
     socket_protector: Mutex<Option<Arc<dyn crate::api::SocketProtector>>>,
-    /// TLS config for the upstream half of an intercepted connection.
+    /// TLS settings for the upstream half of an intercepted connection: the
+    /// plain client config plus the per-host ECH configs built from it.
     /// Replaceable so the engine's own tests can trust a loopback origin.
-    upstream_config: RwLock<Arc<rustls::ClientConfig>>,
+    upstream_config: RwLock<Arc<crate::mitm::tls::UpstreamTls>>,
     /// Port whose flows are TLS-terminated. Always 443 in production; the
     /// end-to-end tests point it at a loopback origin instead (binding 443
     /// needs privileges the test runner does not have).
@@ -311,7 +312,7 @@ impl Core {
             udp_nat: Mutex::new(UdpNat::new()),
             workers: Mutex::new(Vec::new()),
             socket_protector: Mutex::new(None),
-            upstream_config: RwLock::new(crate::mitm::tls::client_config()),
+            upstream_config: RwLock::new(crate::mitm::tls::UpstreamTls::system()),
             mitm_port: AtomicU16::new(crate::mitm::relay::MITM_PORT),
             ech_hosts: Arc::new(crate::mitm::ech::EchHosts::new()),
             #[cfg(test)]
@@ -1488,10 +1489,12 @@ impl Core {
         // wasted round trip) or, on hosts in ECH-required mode, fails the
         // connection outright (see `dns::strip_ech`).
         //
-        // The host that *does* require ECH is the exception, and it is learned
-        // from the refusal the terminator sees (`proxy::note_plain_refusal`):
-        // from then on its ECHConfig is left in place, the browser can use
-        // ECH, and its flows are spliced rather than terminated.
+        // The parameter is not thrown away, though: the TLS half offers the
+        // host's own config on the proxy's own connection, so even a host that
+        // requires ECH stays filterable. Only if the origin refuses that too
+        // does the host become the exception — learned from the refusal the
+        // terminator sees (`proxy::note_plain_refusal`) — after which its
+        // ECHConfig is left in place and its flows are spliced instead.
         let mitm = self.mitm_ready(&self.cfg.read().unwrap());
         // The name and the type come from the same question: the string is
         // taken up front because the answer is rewritten in place below.
@@ -1523,21 +1526,50 @@ impl Core {
                     self.ech_hosts.note_public_name(&name);
                 }
             }
-        } else if mitm && dns::strip_ech(&mut message) {
-            let text = host.as_deref().unwrap_or("?");
-            crate::logbuf::push(&format!("dns: ECH stripped for {text}"));
-            if let Some(host) = host.as_deref() {
-                self.ech_hosts.note_advertised(host);
-            }
-            // The answer is not the origin's any more, so it may not be cached
-            // as if it were: a short TTL also keeps the way back short when
-            // the host turns out to require ECH (see `mitm::ech`).
-            let clamped = dns::clamp_answer_ttl(&mut message, crate::mitm::ech::ANSWER_TTL_SECS);
-            if clamped > 0 {
-                crate::logbuf::push(&format!(
-                    "dns: ECH answer for {text} clamped to {}s",
-                    crate::mitm::ech::ANSWER_TTL_SECS
-                ));
+        } else if mitm {
+            // The client half must not see the parameter ([`dns::strip_ech`]),
+            // but the proxy's own upstream half can use it: offering the
+            // host's own ECHConfig is what keeps a host that requires ECH
+            // filterable (see `mitm::ech`). Answers that carried one are
+            // clamped to a minute, so the copy kept upstream cannot get far
+            // out of date.
+            let config = if https_query {
+                dns::ech_config_list(&message)
+            } else {
+                None
+            };
+            let public_name = if https_query {
+                dns::ech_public_name(&message)
+            } else {
+                None
+            };
+            if dns::strip_ech(&mut message) {
+                let text = host.as_deref().unwrap_or("?");
+                crate::logbuf::push(&format!("dns: ECH stripped for {text}"));
+                if let Some(host) = host.as_deref() {
+                    self.ech_hosts.note_advertised(host);
+                    if let Some(list) = config {
+                        self.ech_hosts
+                            .note_config(host, list, crate::util::now_ms());
+                    }
+                }
+                if let Some(name) = public_name {
+                    // A client that cached the config before the proxy was
+                    // running still opens a real ECH hello, whose outer SNI is
+                    // this name; those flows are spliced, never terminated.
+                    self.ech_hosts.note_public_name(&name);
+                }
+                // The answer is not the origin's any more, so it may not be
+                // cached as if it were: a short TTL also keeps the way back
+                // short when the host turns out to require ECH.
+                let clamped =
+                    dns::clamp_answer_ttl(&mut message, crate::mitm::ech::ANSWER_TTL_SECS);
+                if clamped > 0 {
+                    crate::logbuf::push(&format!(
+                        "dns: ECH answer for {text} clamped to {}s",
+                        crate::mitm::ech::ANSWER_TTL_SECS
+                    ));
+                }
             }
         }
         let rewritten = client_packet.rewrite_udp(&message);
@@ -1820,7 +1852,7 @@ impl Core {
     }
 
     /// TLS config for the upstream half of an intercepted connection.
-    pub fn upstream_tls_config(&self) -> Arc<rustls::ClientConfig> {
+    pub fn upstream_tls_config(&self) -> Arc<crate::mitm::tls::UpstreamTls> {
         self.upstream_config.read().unwrap().clone()
     }
 
@@ -1836,7 +1868,7 @@ impl Core {
     /// Overrides the upstream trust anchors. The engine's end-to-end tests use
     /// this to talk to a loopback origin the system store cannot know about.
     #[doc(hidden)]
-    pub fn set_upstream_tls_config(&self, config: Arc<rustls::ClientConfig>) {
+    pub fn set_upstream_tls_config(&self, config: Arc<crate::mitm::tls::UpstreamTls>) {
         *self.upstream_config.write().unwrap() = config;
     }
 
@@ -2255,6 +2287,63 @@ impl Core {
         true
     }
 
+    /// Reopens the peer socket for a flow whose upstream half rebuilt itself
+    /// after the server rejected its ECH offer.
+    ///
+    /// The rejected TLS connection cannot continue (RFC 9849 §6.1.6), so the
+    /// plain retry needs a fresh TCP connection to the same origin. Everything
+    /// queued for the old socket belonged to the old handshake — the HTTP
+    /// request itself was never written, it waits in the session — so the
+    /// queue is dropped with it, and the new ClientHello follows on the new
+    /// socket. The client-facing half is untouched.
+    fn restart_peer_socket(&self, client_port: u16) -> bool {
+        let (dst, dport, old_fd) = {
+            let mut guard = self.relays.lock().unwrap();
+            let Some(relay) = guard.get_mut(client_port) else {
+                return false;
+            };
+            if relay.closed {
+                return false;
+            }
+            let Some(pkt) = Packet::parse(&relay.syn_packet) else {
+                return false;
+            };
+            let Some(dst) = pkt.dst_ip() else {
+                return false;
+            };
+            (dst, pkt.dst_port, relay.peer_fd)
+        };
+        let Some(new_fd) = self.open_peer_socket(dst, libc::SOCK_STREAM) else {
+            return false;
+        };
+        let connect = connect_fd(new_fd, dst, dport);
+        if connect == Connect::Failed {
+            unsafe { libc::close(new_fd) };
+            return false;
+        }
+        let swapped = {
+            let mut guard = self.relays.lock().unwrap();
+            match guard.get_mut(client_port) {
+                Some(relay) if !relay.closed => {
+                    relay.pending_to_peer.clear();
+                    relay.peer_fd = new_fd;
+                    relay.connecting = connect == Connect::InProgress;
+                    true
+                }
+                _ => false,
+            }
+        };
+        if !swapped {
+            unsafe { libc::close(new_fd) };
+            return false;
+        }
+        unsafe { libc::close(old_fd) };
+        if connect == Connect::Connected {
+            self.flush_peer(client_port);
+        }
+        true
+    }
+
     /// The peer side finished (EOF or error): tell the client and retire the
     /// relay so the table entry and the descriptor stop leaking.
     fn close_relay_from_peer(&self, client_port: u16, reset: bool) {
@@ -2278,7 +2367,7 @@ impl Core {
 
     /// Moves server bytes through the splice and writes them back to the client.
     fn relay_peer_bytes(&self, client_port: u16, bytes: &[u8]) {
-        let (segments, to_peer) = {
+        let (segments, to_peer, restart) = {
             let mut guard = self.relays.lock().unwrap();
             let Some(relay) = guard.get_mut(client_port) else {
                 return;
@@ -2287,13 +2376,13 @@ impl Core {
                 // The upstream half may want bytes on its own socket (its
                 // protocol handshake finishing, a buffered request): those
                 // must reach the peer or the flow deadlocks.
-                Ok((to_peer, outbound)) => {
+                Ok((to_peer, outbound, restart)) => {
                     let segments = if outbound.is_empty() {
                         Vec::new()
                     } else {
                         relay.segments_for_client(&outbound)
                     };
-                    (segments, to_peer)
+                    (segments, to_peer, restart)
                 }
                 Err(e) => {
                     crate::logbuf::push(&format!("relay peer step: {e}"));
@@ -2301,6 +2390,10 @@ impl Core {
                 }
             }
         };
+        if restart && !self.restart_peer_socket(client_port) {
+            crate::logbuf::push("relay: no fresh peer socket for the plain ECH retry");
+            return;
+        }
         for segment in segments {
             self.write_raw(&segment);
         }
@@ -2769,5 +2862,63 @@ mod tests {
         // Only one retry: a second failure is left to the client's own retry.
         core.relays.lock().unwrap().get_mut(40000).unwrap().connecting = true;
         assert!(!core.retry_peer_connect(40000));
+    }
+
+    /// The plain retry after an ECH rejection needs a *fresh* peer socket: the
+    /// rejected TLS connection cannot carry the new hello. Whatever was queued
+    /// for the old handshake must go with it.
+    #[test]
+    fn an_ech_retry_reopens_the_peer_socket_and_drops_its_queue() {
+        use std::os::fd::IntoRawFd;
+        let core = Core::new();
+        core.set_socket_protector(Arc::new(AllowAll));
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("listener");
+        let port = listener.local_addr().expect("addr").port();
+        let old_fd = std::net::TcpStream::connect(("127.0.0.1", port))
+            .expect("first connection")
+            .into_raw_fd();
+        let flow = crate::mitm::tcp::Flow::new(
+            crate::packet::IpKey::V4(u32::from_be_bytes([10, 0, 2, 15])),
+            40001,
+            port,
+            7,
+            7001,
+        );
+        let mut relay = crate::mitm::relay::Relay::new_plain(
+            flow,
+            old_fd,
+            tcp_syn(40001, [127, 0, 0, 1], port),
+            crate::mitm::relay::DEFAULT_MSS,
+            false,
+        );
+        // Bytes queued for the rejected handshake never belonged on the retry.
+        relay.pending_to_peer.extend_from_slice(b"stale");
+        core.relays.lock().unwrap().insert(relay);
+
+        assert!(core.restart_peer_socket(40001));
+        {
+            let guard = core.relays.lock().unwrap();
+            let relay = guard.get(40001).expect("relay");
+            assert_ne!(relay.peer_fd, old_fd, "a fresh descriptor was installed");
+            assert!(
+                relay.pending_to_peer.is_empty(),
+                "the old handshake's queue must be dropped"
+            );
+        }
+        listener.set_nonblocking(true).expect("nonblocking");
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+        let mut accepted = 0;
+        while accepted < 2 && std::time::Instant::now() < deadline {
+            if listener.accept().is_ok() {
+                accepted += 1;
+            } else {
+                std::thread::sleep(std::time::Duration::from_millis(5));
+            }
+        }
+        assert_eq!(accepted, 2, "the retry opened a real second connection");
+
+        // A relay that already finished is not resurrected.
+        core.relays.lock().unwrap().get_mut(40001).unwrap().closed = true;
+        assert!(!core.restart_peer_socket(40001));
     }
 }

@@ -18,7 +18,7 @@ use crate::mitm::tls::{
 use crate::stats::Stats;
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use base64::Engine as _;
-use rustls::{ClientConfig, ServerConnection};
+use rustls::ServerConnection;
 use std::collections::VecDeque;
 use std::sync::Arc;
 use std::time::Instant;
@@ -97,11 +97,16 @@ pub struct Outcome {
     pub closed: bool,
     /// Bytes we rewrote on the way through (HTML injection).
     pub injected: usize,
+    /// The upstream half rebuilt itself: `to_peer` is a fresh ClientHello and
+    /// must reach a *new* peer socket, not the one the old handshake used.
+    /// Set on the one plain retry after a server rejects the ECH offer (the
+    /// rejected TLS connection cannot continue, RFC 9849 §6.1.6).
+    pub restart_peer: bool,
 }
 
 impl Outcome {
     pub fn is_empty(&self) -> bool {
-        self.to_client.is_empty() && self.to_peer.is_empty() && !self.closed
+        self.to_client.is_empty() && self.to_peer.is_empty() && !self.closed && !self.restart_peer
     }
 
     /// Folds another step's result in (a flush produced by the pending state
@@ -111,6 +116,7 @@ impl Outcome {
         self.to_peer.extend(other.to_peer);
         self.closed |= other.closed;
         self.injected += other.injected;
+        self.restart_peer |= other.restart_peer;
     }
 }
 
@@ -153,7 +159,7 @@ enum ProxyState {
 struct PendingState {
     server: ServerConnection,
     resolver: Arc<FlowResolver>,
-    upstream: Arc<ClientConfig>,
+    upstream: Arc<tls::UpstreamTls>,
     raw: Vec<u8>,
 }
 
@@ -222,6 +228,10 @@ pub struct ProxySession {
     /// their ECHConfig rewritten away, and which learned to require ECH.
     /// `None` when no engine owns the session (tests).
     ech_hosts: Option<Arc<crate::mitm::ech::EchHosts>>,
+    /// The upstream settings, kept only while the active half was armed with
+    /// ECH: a server that rejects the offer gets one retry from these. `None`
+    /// means the upstream is plain (or already retried once).
+    upstream_plain: Option<Arc<tls::UpstreamTls>>,
 }
 
 /// Where a connection's response stream stands.
@@ -579,6 +589,7 @@ impl ProxySession {
             stats: None,
             sink: None,
             ech_hosts: None,
+            upstream_plain: None,
             client_discard: None,
             apps: Vec::new(),
         }
@@ -592,7 +603,7 @@ impl ProxySession {
     /// skip those. The SNI in the hello is the authoritative hostname.
     pub fn new_pending(
         resolver: Arc<tls::SniCertResolver>,
-        upstream_config: Arc<ClientConfig>,
+        upstream: Arc<tls::UpstreamTls>,
         script_src: String,
         script_body: Arc<str>,
     ) -> Result<Self, String> {
@@ -606,7 +617,7 @@ impl ProxySession {
             state: ProxyState::Pending(Box::new(PendingState {
                 server,
                 resolver,
-                upstream: upstream_config,
+                upstream,
                 raw: Vec::new(),
             })),
             captured: None,
@@ -623,6 +634,7 @@ impl ProxySession {
             stats: None,
             sink: None,
             ech_hosts: None,
+            upstream_plain: None,
             client_discard: None,
             apps: Vec::new(),
         })
@@ -666,6 +678,7 @@ impl ProxySession {
             stats: None,
             sink: None,
             ech_hosts: None,
+            upstream_plain: None,
             client_discard: None,
             apps: Vec::new(),
         })
@@ -864,7 +877,23 @@ impl ProxySession {
                             return Ok(Outcome::default());
                         }
                     };
-                let client = match tls::new_client(upstream, &name) {
+                // Offer the host's own ECHConfig upstream when the DNS half
+                // learned one: the origin then accepts a terminator even in
+                // its ECH-required mode, and the page stays filterable. The
+                // plain settings are kept only while ECH is armed — they are
+                // what the one retry in `on_peer_payload` rebuilds from.
+                let ech_list = self
+                    .ech_hosts
+                    .as_deref()
+                    .and_then(|ech| ech.upstream_ech(&name, crate::util::now_ms()));
+                let (upstream_config, armed_ech) = match ech_list
+                    .as_deref()
+                    .and_then(|list| upstream.with_ech(list))
+                {
+                    Some(config) => (config, true),
+                    None => (upstream.plain(), false),
+                };
+                let client = match tls::new_client(upstream_config, &name) {
                     Ok(client) => client,
                     Err(_) => {
                         // Unusable name: keep the connection alive as a splice.
@@ -879,6 +908,9 @@ impl ProxySession {
                 };
                 self.state = ProxyState::Active(Box::new(TlsSession { server, client }));
                 self.captured = Some(name);
+                if armed_ech {
+                    self.upstream_plain = Some(upstream);
+                }
                 let mut outcome = self.after_client_feed(plain)?;
                 // Peer bytes that raced in while pending are processed now
                 // that the upstream half exists.
@@ -1460,8 +1492,53 @@ impl ProxySession {
             ProxyState::Active(session) => {
                 let started = Instant::now();
                 let handshaking = tls::client_handshaking(&session.client);
-                let plain = feed_client_wire(&mut session.client, payload)?;
+                let plain = match feed_client_wire(&mut session.client, payload) {
+                    Ok(plain) => plain,
+                    Err(e) => {
+                        // The server rejected the ECH offer. RFC 9849's
+                        // recovery is a fresh handshake without ECH: the
+                        // rejected one cannot continue, but the client half
+                        // never noticed (it is past its own handshake), and
+                        // the buffered request is still waiting. One retry,
+                        // then the host sits ECH out for a while, so the next
+                        // connection starts plain directly.
+                        let host = self.captured.clone();
+                        let upstream = if tls::ech_rejected(&e) {
+                            self.upstream_plain.take()
+                        } else {
+                            None
+                        };
+                        let (Some(host), Some(upstream)) = (host, upstream) else {
+                            return Err(e);
+                        };
+                        if let Some(ech) = self.ech_hosts.as_deref() {
+                            ech.note_ech_rejected(&host, crate::util::now_ms());
+                        }
+                        let mut client = tls::new_client(upstream.plain(), &host)?;
+                        let hello = tls::take_client_outbound(&mut client);
+                        session.client = client;
+                        crate::logbuf::push(&format!(
+                            "mitm {host}: upstream rejected ECH, retrying without it"
+                        ));
+                        return Ok(Outcome {
+                            to_peer: hello,
+                            restart_peer: true,
+                            ..Outcome::default()
+                        });
+                    }
+                };
                 record_tls(self.stats.as_deref(), started, handshaking);
+                if handshaking && !tls::client_handshaking(&session.client) {
+                    // The upstream handshake just finished: record what the
+                    // ECH offer became. `Accepted` is the proof that a host in
+                    // ECH-required mode is being filtered rather than spliced.
+                    let status = tls::client_ech_status(&session.client);
+                    if !matches!(status, rustls::client::EchStatus::NotOffered) {
+                        if let Some(host) = self.captured.as_deref() {
+                            crate::logbuf::push(&format!("mitm {host}: upstream ECH {status:?}"));
+                        }
+                    }
+                }
                 self.after_peer_wire(plain)
             }
             // No upstream socket exists for the local origin, so nothing can
@@ -1547,6 +1624,13 @@ impl ProxySession {
     /// instead of terminated. Only hosts that have already been seen
     /// advertising ECH can be learned this way, so an ordinary `502` from
     /// anywhere else teaches nothing.
+    ///
+    /// The refusal only proves anything about a *plain* connection: once the
+    /// upstream half offered the host's own ECHConfig and the origin accepted
+    /// it, the origin already has ECH, and a bare `502` is its own failure —
+    /// `crypto.cloudflare.com` answered exactly that way while ECH was in use
+    /// (its outage of 20/10/2026), and learning "requires ECH" from it would
+    /// throw away the filtering R18 just gained.
     fn note_plain_refusal(&self, info: &http::ResponseHead, head: &[u8]) {
         let Some(ech) = self.ech_hosts.as_deref() else {
             return;
@@ -1556,6 +1640,14 @@ impl ProxySession {
         };
         let refused = info.status == 421 || (info.status == 502 && !head_has_server(head));
         if !refused || !ech.advertised(host) {
+            return;
+        }
+        let ech_accepted = matches!(
+            &self.state,
+            ProxyState::Active(session)
+                if tls::client_ech_status(&session.client) == rustls::client::EchStatus::Accepted
+        );
+        if ech_accepted {
             return;
         }
         if ech.note_refusal(host) {

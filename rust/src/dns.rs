@@ -504,8 +504,59 @@ pub fn ech_public_name(message: &[u8]) -> Option<String> {
     None
 }
 
-/// The `public_name` inside the `ech` SvcParam of one SVCB/HTTPS record.
-fn ech_param_public_name(message: &[u8], start: usize, end: usize) -> Option<String> {
+/// The raw ECHConfigList of the first `ech` SvcParam of `message`, with its
+/// 2-byte length prefix, when the answer carries a usable one.
+///
+/// This is exactly the value `rustls::client::EchConfig::new` expects. The
+/// client half never sees it — [`strip_ech`] rewrites the parameter away — but
+/// the proxy's own upstream connection can offer it, which is what lets a host
+/// that requires ECH still be filtered (see `mitm::ech`). Only lists that name
+/// a readable `public_name` are kept: rustls needs that name for the outer
+/// hello, and a config it cannot use would only cost a rejected handshake.
+pub fn ech_config_list(message: &[u8]) -> Option<Vec<u8>> {
+    if message.len() < 12 {
+        return None;
+    }
+    let qd = u16::from_be_bytes([message[4], message[5]]) as usize;
+    let an = u16::from_be_bytes([message[6], message[7]]) as usize;
+    if qd > 4 || an == 0 || an > 64 {
+        return None;
+    }
+    let mut off = 12usize;
+    for _ in 0..qd {
+        if !skip_name(message, &mut off) {
+            return None;
+        }
+        off += 4;
+        if off > message.len() {
+            return None;
+        }
+    }
+    for _ in 0..an {
+        if !skip_name(message, &mut off) || off + 10 > message.len() {
+            return None;
+        }
+        let rtype = u16::from_be_bytes([message[off], message[off + 1]]);
+        let rdlen = u16::from_be_bytes([message[off + 8], message[off + 9]]) as usize;
+        off += 10;
+        if off + rdlen > message.len() {
+            return None;
+        }
+        if rtype == TYPE_SVCB || rtype == TYPE_HTTPS {
+            if let Some(value) = ech_param_value(message, off, off + rdlen) {
+                if ech_config_public_name(value).is_some() {
+                    return Some(value.to_vec());
+                }
+            }
+        }
+        off += rdlen;
+    }
+    None
+}
+
+/// The value of the `ech` SvcParam of one SVCB/HTTPS record, still prefixed by
+/// its 2-byte length.
+fn ech_param_value(message: &[u8], start: usize, end: usize) -> Option<&[u8]> {
     let mut off = start + 2;
     if off > end || !skip_name(message, &mut off) {
         return None;
@@ -518,11 +569,16 @@ fn ech_param_public_name(message: &[u8], start: usize, end: usize) -> Option<Str
             return None;
         }
         if key == SVC_PARAM_KEY_ECH {
-            return ech_config_public_name(&message[off + 4..value_end]);
+            return Some(&message[off + 4..value_end]);
         }
         off = value_end;
     }
     None
+}
+
+/// The `public_name` inside the `ech` SvcParam of one SVCB/HTTPS record.
+fn ech_param_public_name(message: &[u8], start: usize, end: usize) -> Option<String> {
+    ech_config_public_name(ech_param_value(message, start, end)?)
 }
 
 /// The `public_name` of the first 0xfe0d ECHConfig in an ECHConfigList.
@@ -939,5 +995,28 @@ mod tests {
         let mut junk = response_skeleton(1);
         add_answer(&mut junk, TYPE_HTTPS, &svcb_rdata(&[(5, &[0xab; 6])]));
         assert_eq!(ech_public_name(&junk), None);
+    }
+
+    /// `ech_config_list` hands the upstream half exactly the bytes `dig` shows:
+    /// the SvcParam value, length prefix included.
+    #[test]
+    fn the_raw_ech_config_list_survives_the_round_trip() {
+        let mut msg = response_skeleton(1);
+        add_answer(&mut msg, TYPE_HTTPS, &svcb_rdata(&[(5, CF_ECH_CONFIG)]));
+        assert_eq!(ech_config_list(&msg), Some(CF_ECH_CONFIG.to_vec()));
+        // Stripping rewrites the key, so the list must be taken before it.
+        assert!(strip_ech(&mut msg));
+        assert_eq!(ech_config_list(&msg), None);
+        // A record without ech, and an unreadable value, carry no list.
+        let mut plain = response_skeleton(1);
+        add_answer(
+            &mut plain,
+            TYPE_HTTPS,
+            &svcb_rdata(&[(1, &[0x02, b'h', b'2'])]),
+        );
+        assert_eq!(ech_config_list(&plain), None);
+        let mut junk = response_skeleton(1);
+        add_answer(&mut junk, TYPE_HTTPS, &svcb_rdata(&[(5, &[0xab; 6])]));
+        assert_eq!(ech_config_list(&junk), None);
     }
 }

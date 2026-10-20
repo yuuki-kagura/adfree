@@ -813,7 +813,7 @@ fn setup_core_with_list(origin: &Origin, tag: &str, list: &str) -> (Arc<Core>, V
     roots
         .add(CertificateDer::from(origin.ca_der.clone()))
         .expect("origin ca");
-    core.set_upstream_tls_config(tls::client_config_with(roots));
+    core.set_upstream_tls_config(tls::UpstreamTls::with_roots(roots));
 
     // Filter list from disk, exactly like the app ships them.
     let dir = std::env::temp_dir().join("adfree-e2e");
