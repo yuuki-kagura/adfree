@@ -56,6 +56,7 @@
 //!   tests as `^(?=.{m,n}$).*/s`, which this scanner recognizes and answers
 //!   natively.
 
+use crate::appmask::AppMask;
 use crate::pathmask::{self, BracketParse, Location};
 use regex::bytes::Regex;
 use std::collections::{HashMap, HashSet};
@@ -151,9 +152,13 @@ pub struct Rule {
     /// The domain position: what stands before the marker, or the bracket's
     /// `$domain=`. `None` applies to every host.
     domains: Option<String>,
-    /// The bracket's `$path=` / `$url=` location, matched against the page.
-    /// `None` when the bracket spelled neither.
+    /// The rule's location, matched against the page: the bracket's
+    /// `$path=` / `$url=` or a path-in-domain target. `None` when the rule
+    /// is not pinned to a page location.
     location: Option<Location>,
+    /// `[$app=…]`: the applications the rule is narrowed to. `None` when the
+    /// bracket spelled none.
+    app: Option<AppMask>,
     /// The compound chain: `chain.last()` is the element itself, the ones
     /// before it its ancestors under `>`.
     chain: Vec<Compound>,
@@ -172,6 +177,12 @@ pub enum Parsed {
     Rule(Rule),
     /// An exception rule (`$@$` / `#@^`).
     Exception(Rule),
+    /// Several rules from one line: a path-in-domain domain position names
+    /// one rule per target, each with its own domain and location.
+    Many {
+        blocking: Vec<Rule>,
+        exceptions: Vec<Rule>,
+    },
     /// HTML filtering the scanner cannot honour: dropped and counted.
     Unsupported,
     /// Not an HTML filtering rule.
@@ -298,10 +309,10 @@ fn attr_matches(value: Option<&Option<String>>, matcher: &AttrMatch) -> bool {
 /// or neither.
 pub fn parse_line(line: &str) -> Parsed {
     // A `[$…]` bracket names the rule's location (and may name the domain
-    // position); the cosmetic scanner refuses the same shapes, and so does
-    // this one.
+    // position or the applications); the cosmetic scanner refuses the same
+    // shapes, and so does this one.
     match pathmask::parse_bracket(line) {
-        BracketParse::NotBracket => rule_line(None, None, line),
+        BracketParse::NotBracket => rule_line(None, None, None, line),
         BracketParse::Unsupported { rest } => {
             if marker(&rest).is_some() {
                 Parsed::Unsupported
@@ -310,11 +321,9 @@ pub fn parse_line(line: &str) -> Parsed {
             }
         }
         BracketParse::Parsed(bracket) => {
-            let location = (!(bracket.path.is_none() && bracket.url.is_none())).then_some(Location {
-                path: bracket.path,
-                url: bracket.url,
-            });
-            rule_line(bracket.domain, location, &bracket.rest)
+            let location = bracket.location();
+            let app = bracket.app;
+            rule_line(bracket.domain, location, app, &bracket.rest)
         }
     }
 }
@@ -323,6 +332,7 @@ pub fn parse_line(line: &str) -> Parsed {
 fn rule_line(
     bracket_domain: Option<String>,
     location: Option<Location>,
+    app: Option<AppMask>,
     rest: &str,
 ) -> Parsed {
     let Some((index, marker)) = marker(rest) else {
@@ -340,10 +350,91 @@ fn rule_line(
     if bracket_domain.is_some() && !prefix.is_empty() {
         return Parsed::Unsupported;
     }
+    // `$url` is not compatible with a domain-specific rule (KB §`$url`
+    // limitations); a rule's own domain position beside the URL mask is
+    // refused, like the cosmetic scanner refuses it.
+    if location.as_ref().is_some_and(|location| location.url.is_some()) && !prefix.is_empty() {
+        return Parsed::Unsupported;
+    }
+    // A path-in-domain target and a bracket `$path` are two path scopes on
+    // one rule; the reference does not define the pair, and honouring one
+    // would apply the rule too wide.
+    if location.is_some() && prefix.contains('/') && path_in_domain_candidate(prefix) {
+        return Parsed::Unsupported;
+    }
+    let selector = rest[index + marker.len()..].trim();
+    if selector.is_empty() {
+        return Parsed::Unsupported;
+    }
+    if bracket_domain.is_none() && path_in_domain_candidate(prefix) && prefix.contains('/') {
+        let targets = match pathmask::parse_targets(prefix) {
+            pathmask::TargetsParse::NotTargets => None,
+            pathmask::TargetsParse::Unsupported => return Parsed::Unsupported,
+            pathmask::TargetsParse::Targets(targets) => Some(targets),
+        };
+        if let Some(targets) = targets {
+            let Ok(chain) = parse_chain(selector, syntax) else {
+                return Parsed::Unsupported;
+            };
+            let canonical = canonical(&chain, syntax);
+            let mut blocking = Vec::new();
+            let mut exceptions = Vec::new();
+            for target in targets {
+                let domains = target.domain;
+                let location = match (target.path, target.authority) {
+                    (None, Some(authority)) => Some(Location {
+                        path: None,
+                        url: None,
+                        authority: Some(authority),
+                    }),
+                    (path, None) => path.map(|path| Location {
+                        path: Some(path),
+                        url: None,
+                        authority: None,
+                    }),
+                    (Some(_), Some(_)) => None,
+                };
+                // uBO writes a hostname on every blocking HTML filter; a
+                // path-in-domain target is that hostname.
+                if syntax == Syntax::Ubo
+                    && !exception
+                    && domains.is_none()
+                    && location.is_none()
+                {
+                    return Parsed::Unsupported;
+                }
+                let rule = Rule {
+                    domains,
+                    location,
+                    app: app.clone(),
+                    chain: chain.clone(),
+                    syntax,
+                    text: selector.to_string(),
+                    canonical: canonical.clone(),
+                };
+                if exception {
+                    exceptions.push(rule);
+                } else {
+                    blocking.push(rule);
+                }
+            }
+            // One target is the ordinary parse result; several targets can
+            // only travel as a list.
+            if exceptions.is_empty() && blocking.len() == 1 {
+                return Parsed::Rule(blocking.pop().expect("one rule"));
+            }
+            if blocking.is_empty() && exceptions.len() == 1 {
+                return Parsed::Exception(exceptions.pop().expect("one rule"));
+            }
+            return Parsed::Many {
+                blocking,
+                exceptions,
+            };
+        }
+    }
     if !domain_position_ok(prefix) {
         return Parsed::NotHtml;
     }
-    let selector = rest[index + marker.len()..].trim();
     let domains = if !prefix.is_empty() {
         Some(prefix.to_string())
     } else {
@@ -354,9 +445,6 @@ fn rule_line(
     if syntax == Syntax::Ubo && !exception && domains.is_none() {
         return Parsed::Unsupported;
     }
-    if selector.is_empty() {
-        return Parsed::Unsupported;
-    }
     let Ok(chain) = parse_chain(selector, syntax) else {
         return Parsed::Unsupported;
     };
@@ -364,6 +452,7 @@ fn rule_line(
     let rule = Rule {
         domains,
         location,
+        app,
         chain,
         syntax,
         text: selector.to_string(),
@@ -383,6 +472,29 @@ fn marker(text: &str) -> Option<(usize, &'static str)> {
         .iter()
         .filter_map(|marker| text.find(marker).map(|index| (index, *marker)))
         .min_by_key(|(index, _)| *index)
+}
+
+/// Whether a text before a marker can be a path-in-domain domain position.
+/// A whole-target regexp starts and ends with `/`; a plain target has a
+/// domain-like part before its first `/`, while the path and query after it
+/// may hold any URL text. Anything else (`#%#`, a selector fragment, a
+/// modifier) is not a target, and the caller falls back to the ordinary
+/// domain-position check.
+fn path_in_domain_candidate(prefix: &str) -> bool {
+    if prefix.starts_with('/') {
+        return prefix.ends_with('/') && prefix.len() >= 2;
+    }
+    // Only the target domains (before the first `/`) have to be domain-like;
+    // the path and query may hold `?`, `=`, `&`, `%`, `$`, … and must not make
+    // the rule look like a selector or a network pattern.
+    let Some(slash) = prefix.find('/') else {
+        return false;
+    };
+    let domains = &prefix[..slash];
+    !domains.is_empty()
+        && domains.chars().all(|c| {
+            c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-' | '~' | '*' | ',' | ' ')
+        })
 }
 
 /// Whether a text before a marker can be a domain position.
@@ -1060,16 +1172,28 @@ pub struct Plan {
 impl Plan {
     /// Resolves the rules that apply to a page: the blocking rules whose
     /// domains (and bracket) cover it, minus the ones an exception's selector
-    /// cancels.
+    /// cancels. The caller has no app attribution: `$app`-narrowed rules stay
+    /// out.
     pub fn build(rules: &[Rule], exceptions: &[Rule], host: &str, url: &str) -> Option<Plan> {
+        Self::build_for_apps(rules, exceptions, host, url, &[])
+    }
+
+    /// [`Self::build`] for a flow attributed to `apps`.
+    pub fn build_for_apps(
+        rules: &[Rule],
+        exceptions: &[Rule],
+        host: &str,
+        url: &str,
+        apps: &[String],
+    ) -> Option<Plan> {
         let cancelled: HashSet<&str> = exceptions
             .iter()
-            .filter(|rule| rule.applies(host, url))
+            .filter(|rule| rule.applies(host, url, apps))
             .map(|rule| rule.canonical.as_str())
             .collect();
         let mut kept = Vec::new();
         for rule in rules {
-            if !rule.applies(host, url) || cancelled.contains(rule.canonical.as_str()) {
+            if !rule.applies(host, url, apps) || cancelled.contains(rule.canonical.as_str()) {
                 continue;
             }
             kept.push(rule.clone());
@@ -1338,8 +1462,9 @@ impl Plan {
 }
 
 impl Rule {
-    /// Whether the rule's domain position (and bracket) covers one page.
-    fn applies(&self, host: &str, url: &str) -> bool {
+    /// Whether the rule's domain position, location and applications cover
+    /// one page.
+    fn applies(&self, host: &str, url: &str, apps: &[String]) -> bool {
         if let Some(domains) = &self.domains {
             if !crate::filter::domains_match(Some(domains), host) {
                 return false;
@@ -1347,6 +1472,11 @@ impl Rule {
         }
         if let Some(location) = &self.location {
             if !location.matches(url) {
+                return false;
+            }
+        }
+        if let Some(app) = &self.app {
+            if !app.matches(apps) {
                 return false;
             }
         }
@@ -2031,6 +2161,249 @@ mod tests {
             &[],
             "shop.test",
             "https://shop.test/other"
+        )
+        .is_none());
+    }
+
+    #[test]
+    fn path_in_domain_scopes_html_rules() {
+        let rule = match parse_line("shop.test/video$$div[class=\"ad\"]") {
+            Parsed::Rule(rule) => rule,
+            _ => panic!("a rule"),
+        };
+        assert!(Plan::build(
+            std::slice::from_ref(&rule),
+            &[],
+            "shop.test",
+            "https://shop.test/video/x"
+        )
+        .is_some());
+        assert!(Plan::build(
+            std::slice::from_ref(&rule),
+            &[],
+            "shop.test",
+            "https://shop.test/other"
+        )
+        .is_none());
+
+        // One target may carry a path while the others do not; the line
+        // becomes one rule per target.
+        let Parsed::Many { blocking, .. } =
+            parse_line("alpha.test,beta.test/checkout$$div[class=\"ad\"]")
+        else {
+            panic!("a target list");
+        };
+        assert_eq!(blocking.len(), 2);
+        assert!(Plan::build(
+            &blocking,
+            &[],
+            "alpha.test",
+            "https://alpha.test/other"
+        )
+        .is_some());
+        assert!(Plan::build(
+            &blocking,
+            &[],
+            "beta.test",
+            "https://beta.test/other"
+        )
+        .is_none());
+        assert!(Plan::build(
+            &blocking,
+            &[],
+            "beta.test",
+            "https://beta.test/checkout"
+        )
+        .is_some());
+
+        // A whole-target regexp sees the host and the path together.
+        let rule = match parse_line(r#"/shop\.test\/video[0-9]+/$$div[class="ad"]"#) {
+            Parsed::Rule(rule) => rule,
+            _ => panic!("a regexp rule"),
+        };
+        assert!(Plan::build(
+            std::slice::from_ref(&rule),
+            &[],
+            "shop.test",
+            "https://shop.test/video12"
+        )
+        .is_some());
+        assert!(Plan::build(
+            std::slice::from_ref(&rule),
+            &[],
+            "shop.test",
+            "https://shop.test/other"
+        )
+        .is_none());
+    }
+
+    #[test]
+    fn a_url_bracket_refuses_a_domain_position() {
+        assert!(matches!(
+            parse_line("[$url=/shop/]shop.test$$div[class=\"ad\"]"),
+            Parsed::Unsupported
+        ));
+        assert!(matches!(
+            parse_line("[$url=/shop/,path=/video]$$div[class=\"ad\"]"),
+            Parsed::Unsupported
+        ));
+        assert!(matches!(
+            parse_line("[$url=/shop/]$$div[class=\"ad\"]"),
+            Parsed::Rule(_)
+        ));
+        // A bracket `$path` and a path-in-domain target are two path scopes
+        // on one rule; the pair is refused rather than picking one.
+        assert!(matches!(
+            parse_line("[$path=/shop/]shop.test/video$$div[class=\"ad\"]"),
+            Parsed::Unsupported
+        ));
+        assert!(matches!(
+            parse_line("[$path=/shop/]shop.test$$div[class=\"ad\"]"),
+            Parsed::Rule(_)
+        ));
+    }
+
+    #[test]
+    fn a_bracket_app_narrows_html_rules() {
+        let rule = match parse_line("[$app=org.example.app]shop.test$$div[class=\"ad\"]") {
+            Parsed::Rule(rule) => rule,
+            _ => panic!("a rule"),
+        };
+        assert!(Plan::build(std::slice::from_ref(&rule), &[], "shop.test", "/").is_none());
+        let apps = vec!["org.example.app".to_string()];
+        assert!(Plan::build_for_apps(
+            std::slice::from_ref(&rule),
+            &[],
+            "shop.test",
+            "/",
+            &apps
+        )
+        .is_some());
+        let other = vec!["com.example.app".to_string()];
+        assert!(Plan::build_for_apps(
+            std::slice::from_ref(&rule),
+            &[],
+            "shop.test",
+            "/",
+            &other
+        )
+        .is_none());
+    }
+
+    #[test]
+    fn an_app_bracket_exception_only_cancels_for_its_app() {
+        let rule = match parse_line("shop.test$$div[class=\"ad\"]") {
+            Parsed::Rule(rule) => rule,
+            _ => panic!("a rule"),
+        };
+        let exception = match parse_line("[$app=org.example.app]shop.test$@$div[class=\"ad\"]") {
+            Parsed::Exception(rule) => rule,
+            _ => panic!("an exception"),
+        };
+        assert!(Plan::build(
+            std::slice::from_ref(&rule),
+            std::slice::from_ref(&exception),
+            "shop.test",
+            "/"
+        )
+        .is_some());
+        let app = vec!["org.example.app".to_string()];
+        assert!(Plan::build_for_apps(
+            std::slice::from_ref(&rule),
+            std::slice::from_ref(&exception),
+            "shop.test",
+            "/",
+            &app
+        )
+        .is_none());
+        let other = vec!["com.example.app".to_string()];
+        assert!(Plan::build_for_apps(
+            std::slice::from_ref(&rule),
+            std::slice::from_ref(&exception),
+            "shop.test",
+            "/",
+            &other
+        )
+        .is_some());
+    }
+
+    #[test]
+    fn path_in_domain_html_keeps_its_query_text() {
+        let rule = match parse_line("shop.test/search?q=1$$div[class=\"ad\"]") {
+            Parsed::Rule(rule) => rule,
+            _ => panic!("a rule"),
+        };
+        assert!(Plan::build(
+            std::slice::from_ref(&rule),
+            &[],
+            "shop.test",
+            "https://shop.test/search?q=1"
+        )
+        .is_some());
+        assert!(Plan::build(
+            std::slice::from_ref(&rule),
+            &[],
+            "shop.test",
+            "https://shop.test/search?q=2"
+        )
+        .is_none());
+    }
+
+    #[test]
+    fn path_in_domain_html_exceptions_cancel_only_on_their_path() {
+        let rule = match parse_line("shop.test$$div[class=\"ad\"]") {
+            Parsed::Rule(rule) => rule,
+            _ => panic!("a rule"),
+        };
+        let exception = match parse_line("shop.test/video$@$div[class=\"ad\"]") {
+            Parsed::Exception(rule) => rule,
+            _ => panic!("an exception"),
+        };
+        assert!(Plan::build(
+            std::slice::from_ref(&rule),
+            std::slice::from_ref(&exception),
+            "shop.test",
+            "https://shop.test/video"
+        )
+        .is_none());
+        assert!(Plan::build(
+            std::slice::from_ref(&rule),
+            std::slice::from_ref(&exception),
+            "shop.test",
+            "https://shop.test/other"
+        )
+        .is_some());
+    }
+
+    #[test]
+    fn an_app_bracket_narrows_path_in_domain_html_rules() {
+        let rule = match parse_line("[$app=org.example.app]shop.test/video$$div[class=\"ad\"]") {
+            Parsed::Rule(rule) => rule,
+            _ => panic!("a rule"),
+        };
+        let app = vec!["org.example.app".to_string()];
+        assert!(Plan::build_for_apps(
+            std::slice::from_ref(&rule),
+            &[],
+            "shop.test",
+            "https://shop.test/video",
+            &app
+        )
+        .is_some());
+        assert!(Plan::build_for_apps(
+            std::slice::from_ref(&rule),
+            &[],
+            "shop.test",
+            "https://shop.test/other",
+            &app
+        )
+        .is_none());
+        assert!(Plan::build_for_apps(
+            std::slice::from_ref(&rule),
+            &[],
+            "shop.test",
+            "https://shop.test/video",
+            &["com.other.app".to_string()]
         )
         .is_none());
     }

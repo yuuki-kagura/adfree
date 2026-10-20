@@ -17,6 +17,7 @@
 uniffi::setup_scaffolding!("adfree");
 
 pub mod api;
+mod appmask;
 pub mod assets;
 pub mod conntrack;
 pub mod dns;

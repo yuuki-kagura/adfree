@@ -18,6 +18,7 @@
 //! The engine is compiled *without* the `single-thread` feature so it is
 //! `Send + Sync`.
 
+use crate::appmask::{parse_app_entries, AppEntry, AppMask};
 use crate::fxhash::hash_str;
 use crate::jsonprune::{JsonPrune, JsonpruneRule};
 use crate::pathmask;
@@ -708,29 +709,6 @@ struct Compiled {
     app_rules: Option<AppRules>,
 }
 
-/// One entry of an `$app=` value list (KB §`$app`): a plain name, a name with
-/// a trailing `*`, or a `/…/` regexp.
-enum AppEntry {
-    /// A plain application name, matched lexicographically.
-    Name(String),
-    /// A wildcard entry: every application whose name starts with the prefix.
-    Prefix(String),
-    /// A regexp entry. It matches the way a basic URL regexp pattern does — a
-    /// search, not an anchored match; the KB's own examples anchor with
-    /// `^…$` where anchoring is meant.
-    Regex(regex::Regex),
-}
-
-impl AppEntry {
-    fn matches(&self, app: &str) -> bool {
-        match self {
-            AppEntry::Name(name) => name == app,
-            AppEntry::Prefix(prefix) => app.starts_with(prefix.as_str()),
-            AppEntry::Regex(regex) => regex.is_match(app),
-        }
-    }
-}
-
 /// One `$app=` rule, read out of a list by [`scan_app_rules`].
 struct AppRuleDef {
     /// The line as the list wrote it, `$app=…` included — what the log shows.
@@ -1193,20 +1171,49 @@ impl FilterEngine {
     /// rule: cosmetic matching is hostname-based, exactly like AdGuard's own
     /// engine. What the lists' exceptions switch off is already applied.
     pub fn cosmetic_resources(&self, url: &str) -> CosmeticResources {
-        self.cosmetic_resources_impl(url, true)
+        self.cosmetic_resources_impl(url, true, &[])
     }
 
-    /// The cosmetic rules bound to `host` itself, `$path` rules left out.
+    /// Cosmetic rules that apply to `url` for a flow attributed to `apps`:
+    /// the same answer as [`Self::cosmetic_resources`], plus the rules a
+    /// `[$app=…]` bracket narrows to those applications.
+    pub fn cosmetic_resources_with_apps(
+        &self,
+        url: &str,
+        apps: &[String],
+    ) -> CosmeticResources {
+        self.cosmetic_resources_impl(url, true, apps)
+    }
+
+    /// The cosmetic rules bound to `host` itself, `$path` / path-in-domain
+    /// rules left out.
     ///
     /// For callers that ask about a hostname rather than a page — the hiding
     /// stylesheet, the generic class/id lookup: the `/` of the URL synthesized
     /// for them is nobody's real path, and evaluating a main-page `$path` rule
     /// against it would apply the rule on pages the list never asked about.
     pub fn cosmetic_resources_for_host(&self, host: &str) -> CosmeticResources {
-        self.cosmetic_resources_impl(&format!("https://{host}/"), false)
+        self.cosmetic_resources_impl(&format!("https://{host}/"), false, &[])
     }
 
-    fn cosmetic_resources_impl(&self, url: &str, with_paths: bool) -> CosmeticResources {
+    /// The rules bound to `host` for a flow attributed to `apps`, with the
+    /// location-pinned rules left out. Used when the page URL is not carried:
+    /// `$app`-only rules still apply, `$path` / `$url` / path-in-domain ones
+    /// must not.
+    pub fn cosmetic_resources_for_host_with_apps(
+        &self,
+        host: &str,
+        apps: &[String],
+    ) -> CosmeticResources {
+        self.cosmetic_resources_impl(&format!("https://{host}/"), false, apps)
+    }
+
+    fn cosmetic_resources_impl(
+        &self,
+        url: &str,
+        with_paths: bool,
+        apps: &[String],
+    ) -> CosmeticResources {
         // Clone the Arc out of the lock: a rebuild can then swap engines
         // without this call holding the read guard.
         let compiled = self.inner.read().unwrap().clone();
@@ -1244,45 +1251,43 @@ impl FilterEngine {
         let mut jsrules = compiled
             .js_rules
             .as_ref()
-            .map(|rules| rules.scripts_for(url_host(url)))
+            .map(|rules| rules.scripts_for(url_host(url), with_paths.then_some(url), apps))
             .unwrap_or_default();
 
         // The `$path` / `$url` rules pinned to this page's location, served
         // from the side engine. They ride the inline payload like procedural
         // rules do — the per-host hiding stylesheet cannot know the location,
         // and the browser keeps it cached across the site.
-        if with_paths {
-            if let Some(path_rules) = compiled.path_cosmetics.as_ref() {
-                let subset = path_rules.subset(url);
-                if !subset.is_empty() {
-                    let extra = path_rules
-                        .engine_for(&subset, url_host(url))
-                        .url_cosmetic_resources(url);
-                    for selector in extra.hide_selectors {
-                        if style_rules.len() < MAX_STYLE_RULES {
-                            style_rules.push((selector, "display: none !important".to_string()));
-                        }
+        if let Some(path_rules) = compiled.path_cosmetics.as_ref() {
+            let subset = path_rules.subset(url, apps, with_paths);
+            if !subset.is_empty() {
+                let extra = path_rules
+                    .engine_for(&subset, url_host(url))
+                    .url_cosmetic_resources(url);
+                for selector in extra.hide_selectors {
+                    if style_rules.len() < MAX_STYLE_RULES {
+                        style_rules.push((selector, "display: none !important".to_string()));
                     }
-                    for entry in extra.procedural_actions {
-                        let Ok(parsed) = serde_json::from_str::<ProceduralOrActionFilter>(&entry)
-                        else {
-                            continue;
-                        };
-                        match parsed.as_css() {
-                            Some((selector, style)) => {
-                                if style_rules.len() < MAX_STYLE_RULES {
-                                    style_rules.push((selector, style));
-                                }
-                            }
-                            None => {
-                                if procedural.len() < MAX_PROCEDURAL {
-                                    procedural.push(entry);
-                                }
-                            }
-                        }
-                    }
-                    scriptlets.push_str(&extra.injected_script);
                 }
+                for entry in extra.procedural_actions {
+                    let Ok(parsed) = serde_json::from_str::<ProceduralOrActionFilter>(&entry)
+                    else {
+                        continue;
+                    };
+                    match parsed.as_css() {
+                        Some((selector, style)) => {
+                            if style_rules.len() < MAX_STYLE_RULES {
+                                style_rules.push((selector, style));
+                            }
+                        }
+                        None => {
+                            if procedural.len() < MAX_PROCEDURAL {
+                                procedural.push(entry);
+                            }
+                        }
+                    }
+                }
+                scriptlets.push_str(&extra.injected_script);
             }
         }
 
@@ -1748,26 +1753,28 @@ fn switches_for(compiled: &Compiled, host: &str) -> CosmeticSwitches {
 }
 
 /// A cosmetic rule AdGuard pins to a page location (`[$path=…]` /
-/// `[$url=…]`), with the side engine that serves it.
+/// `[$url=…]`, a path-in-domain target) or to applications (`[$app=…]`),
+/// with the side engine that serves it.
 ///
 /// The main engine has no notion of the bracket — it drops such a rule whole
 /// — and its cosmetic matching is hostname-based: a page asks for its
 /// cosmetics for a URL, and the rules pinned to some other path of the site
 /// must not be part of the answer. So those rules stay out of the main engine
-/// and a page whose location matches a rule's mask gets a small engine of its
-/// own — just the rules that match, plus the lists' cosmetic exceptions, which
-/// cancel a location rule exactly as they would cancel any other — asked for
-/// the URL like any other engine would be.
+/// and a page whose location and applications match a rule gets a small
+/// engine of its own — just the rules that match, plus the lists' cosmetic
+/// exceptions, which cancel a location rule exactly as they would cancel any
+/// other — asked for the URL like any other engine would be.
 struct PathCosmetics {
-    /// The location-pinned rules, in list order.
+    /// The location- or app-pinned rules, in list order.
     rules: Vec<PathRule>,
     /// The `#@#`-family lines of every loaded list, converted, newline-
     /// separated: what the side engine needs to cancel a location rule the
-    /// lists except elsewhere. Lines with a `[$…]` bracket of their own are
-    /// not here — they cancel only the rules sharing their location, and are
-    /// carried by the side list itself.
+    /// lists except elsewhere. A bracket `$domain` exception is converted to
+    /// this plain form too; bracket `$path`/`$url`/`$app` exceptions are
+    /// carried by the side list itself, because they cancel only the rules
+    /// sharing their subset.
     exceptions: String,
-    /// How many bracket rules could not be honored (see [`PathScan`]).
+    /// How many path/bracket rules could not be honored (see [`PathScan`]).
     dropped: u32,
     /// One engine per (matched subset, page host) of
     /// [`PathCosmetics::rules`]. A page usually matches none, and the ones
@@ -1780,11 +1787,15 @@ struct PathCosmetics {
 /// the generic rules are pinned to.
 type PathEngineCache = HashMap<(Vec<usize>, String), Arc<Engine>>;
 
-/// One location-pinned cosmetic rule: the converted text the side engine
-/// parses, and the location that decides the pages it applies to.
+/// One location- or app-pinned cosmetic rule: the converted text the side
+/// engine parses, and the conditions that decide the pages it applies to.
 struct PathRule {
     text: String,
-    location: pathmask::Location,
+    /// `None` when only `$app` pins the rule; it then applies to every page
+    /// of the apps that match.
+    location: Option<pathmask::Location>,
+    /// `None` when the rule is not narrowed to applications.
+    app: Option<AppMask>,
     /// The rule has no domain position. The side engine is asked for one page
     /// at a time, so the page's host is put in front before the rule is
     /// parsed: the crate drops a generic scriptlet (`##+js(…)` with no
@@ -1793,12 +1804,20 @@ struct PathRule {
 }
 
 impl PathCosmetics {
-    /// The indices of the rules whose location covers `url`.
-    fn subset(&self, url: &str) -> Vec<usize> {
+    /// The indices of the rules that cover this page and these applications.
+    /// A rule with a location only joins a page that carried its URL
+    /// (`with_locations`): a hostname-only ask must not stand in for a page
+    /// nobody named.
+    fn subset(&self, url: &str, apps: &[String], with_locations: bool) -> Vec<usize> {
         self.rules
             .iter()
             .enumerate()
-            .filter(|(_, rule)| rule.location.matches(url))
+            .filter(|(_, rule)| {
+                rule.location
+                    .as_ref()
+                    .is_none_or(|location| with_locations && location.matches(url))
+                    && rule.app.as_ref().is_none_or(|app| app.matches(apps))
+            })
             .map(|(index, _)| index)
             .collect()
     }
@@ -1854,10 +1873,12 @@ struct PathScan {
     rules: Vec<PathRule>,
     /// Raw `#@#`-family lines; converted in [`PathScan::resolve`].
     exceptions: Vec<String>,
-    /// Bracket rules that could not be honored: `$app`, a regexp `$domain`
-    /// (a cosmetic rule cannot spell one), a `$path` or `$url` that does not
-    /// compile, or domains spelled in both styles (invalid per the knowledge
-    /// base). Dropped rather than applied to pages the list did not ask for.
+    /// Bracket rules that could not be honored: a regexp `$domain` (a
+    /// cosmetic rule cannot spell one), a `$path` or `$url` that does not
+    /// compile, `$url` beside a domain position or `$path` (the knowledge
+    /// base refuses that pair), a path-in-domain shape that does not parse,
+    /// or domains spelled in both styles. Dropped rather than applied to
+    /// pages the list did not ask for.
     dropped: u32,
 }
 
@@ -1885,23 +1906,170 @@ impl PathScan {
 }
 
 /// A cosmetic marker and its position: the earliest of the markers the
-/// conversion and the bracket scan know. No marker is a substring of another
-/// at the same position, so the earliest one is also the right one.
+/// conversion and the bracket scan know. At one position the longer marker
+/// wins (`##^` over `##`), so the earliest marker is also the right one.
 fn cosmetic_marker(line: &str) -> Option<(usize, &'static str)> {
     COSMETIC_MARKERS
         .iter()
         .filter_map(|marker| line.find(marker).map(|index| (index, *marker)))
-        .min_by_key(|(index, _)| *index)
+        .min_by_key(|(index, marker)| (*index, std::cmp::Reverse(marker.len())))
 }
 
 /// Every cosmetic marker a rule can carry, [`convert_adguard_line`]'s table
 /// included.
 const COSMETIC_MARKERS: &[&str] = &[
-    "#@$?#", "#@?#", "#@$#", "#@%#", "#@#", "#$?#", "#?#", "#$#", "#%#", "##",
+    "#@$?#", "#@?#", "#@$#", "#@%#", "#@#", "#@^", "#$?#", "#?#", "#$#", "#%#", "##^", "##",
 ];
 
 /// The markers whose lines cancel a rule ([`PathCosmetics::exceptions`]).
 const EXCEPTION_MARKERS: &[&str] = &["#@$?#", "#@?#", "#@$#", "#@%#", "#@#"];
+
+/// Rewrites one cosmetic line whose domain position carries a path
+/// (`example.org/checkout##…`, KB §path-in-domain-syntax).
+///
+/// A pathless target stays in the main text; each target with a path (or the
+/// whole-target `/…/` regexp) becomes a [`PathRule`] whose location is the
+/// path. The line-level split keeps the main text aligned: a page matching
+/// the path is served the side rule from the payload, every other page only
+/// what the pathless targets named.
+///
+/// `None` leaves the line alone: no cosmetic marker, no `/` in the domain
+/// position, or a shape that is a network rule rather than a cosmetic one.
+fn path_in_domain_line(line: &str, scan: &mut PathScan) -> Option<String> {
+    // A path-in-domain rule needs a `/` before its marker; checking the whole
+    // line first keeps the marker scan off ordinary cosmetic rules.
+    if !line.contains('/') {
+        return None;
+    }
+    let (marker_at, marker) = cosmetic_marker(line)?;
+    path_in_domain_parts(
+        line[..marker_at].trim(),
+        &line[marker_at..],
+        marker,
+        None,
+        scan,
+    )
+}
+
+/// The shared half of [`path_in_domain_line`] and a bracket whose `$app`
+/// narrows a path-in-domain rule: expand one domain position into its targets,
+/// pin the path-bearing ones to the side engine, and return the main text for
+/// the pathless ones that no app narrows.
+///
+/// A plain target under an `$app` cannot stay in the app-agnostic main text:
+/// it becomes a location-less [`PathRule`], which the side engine serves only
+/// for the matching applications.
+fn path_in_domain_parts(
+    prefix: &str,
+    tail: &str,
+    marker: &str,
+    app: Option<AppMask>,
+    scan: &mut PathScan,
+) -> Option<String> {
+    if !prefix.contains('/') {
+        return None;
+    }
+    // A network rule can hold `##` in a value too. Its pattern position is
+    // not a domain position: `$`/`^` modifiers, a `|`/`@` anchor, or a
+    // leading scheme rule it out. A `/…/` target is a regexp and may contain
+    // those characters inside its body.
+    // Look only before the first `/`: a `$`, `^` or `=` in a path or query is
+    // ordinary text (`example.com/page?x=1##…`), while one in the domain part
+    // is a network-rule modifier or separator.
+    let domain_part = prefix.split('/').next().unwrap_or(prefix);
+    if !prefix.starts_with('/')
+        && (prefix.starts_with(['|', '@']) || domain_part.contains(['$', '^', '=']))
+    {
+        return None;
+    }
+    // A whole-target regexp closes before the cosmetic marker. A line whose
+    // marker sits inside a network regexp (`/foo##bar/$script`) is a network
+    // rule, not a path-in-domain one; leave it to the engine.
+    if prefix.starts_with('/') && !prefix.ends_with('/') {
+        return None;
+    }
+    // HTML filtering (`$$`, `##^`) and raw JavaScript (`#%#`) have their own
+    // readers on the original text; a path-in-domain copy in the side engine
+    // would be a second, weaker copy of the same rule. A scriptlet shares the
+    // `#%#` marker but is the side engine's business, so it stays.
+    let scriptlet = matches!(marker, "#%#" | "#@%#")
+        && tail[marker.len()..].trim_start().starts_with("//scriptlet(");
+    if matches!(marker, "$$" | "$@$" | "##^" | "#@^")
+        || (matches!(marker, "#%#" | "#@%#") && !scriptlet)
+    {
+        return Some(String::new());
+    }
+    let targets = match pathmask::parse_targets(prefix) {
+        pathmask::TargetsParse::NotTargets => return None,
+        pathmask::TargetsParse::Unsupported => {
+            scan.dropped += 1;
+            return Some(String::new());
+        }
+        pathmask::TargetsParse::Targets(targets) => targets,
+    };
+    let mut plain: Vec<String> = Vec::new();
+    for target in targets {
+        if let Some(authority) = target.authority {
+            let mut rewritten = String::new();
+            convert_adguard_line(tail, &mut rewritten);
+            scan.rules.push(PathRule {
+                text: rewritten,
+                location: Some(pathmask::Location {
+                    path: None,
+                    url: None,
+                    authority: Some(authority),
+                }),
+                app: app.clone(),
+                generic: true,
+            });
+            continue;
+        }
+        let domains = target.domain.unwrap_or_default();
+        match target.path {
+            Some(path) => {
+                let mut rewritten = String::new();
+                convert_adguard_line(&format!("{domains}{tail}"), &mut rewritten);
+                scan.rules.push(PathRule {
+                    text: rewritten,
+                    location: Some(pathmask::Location {
+                        path: Some(path),
+                        url: None,
+                        authority: None,
+                    }),
+                    app: app.clone(),
+                    generic: domains.is_empty(),
+                });
+            }
+            None => {
+                if app.is_some() {
+                    let mut rewritten = String::new();
+                    convert_adguard_line(&format!("{domains}{tail}"), &mut rewritten);
+                    scan.rules.push(PathRule {
+                        text: rewritten,
+                        location: None,
+                        app: app.clone(),
+                        generic: domains.is_empty(),
+                    });
+                } else {
+                    plain.push(domains);
+                }
+            }
+        }
+    }
+    if plain.is_empty() {
+        return Some(String::new());
+    }
+    let source = format!("{}{}", plain.join(","), tail);
+    let mut rewritten = String::new();
+    convert_adguard_line(&source, &mut rewritten);
+    // The pathless half of an exception is a global cancellation for the side
+    // engine too: the path half cancels only within its subset, and is
+    // already a [`PathRule`] above.
+    if EXCEPTION_MARKERS.contains(&marker) {
+        scan.exceptions.push(source);
+    }
+    Some(rewritten)
+}
 
 /// Rewrites one `[$…]`-bracketed cosmetic line.
 ///
@@ -1923,33 +2091,89 @@ fn bracket_cosmetic_line(line: &str, path: &mut PathScan) -> Option<String> {
         }
         pathmask::BracketParse::Parsed(bracket) => bracket,
     };
-    let (marker, _) = cosmetic_marker(&bracket.rest)?;
+    let (marker_at, marker) = cosmetic_marker(&bracket.rest)?;
+    // HTML filtering is [`scan_html_rules`]'s business, on the original text.
+    // The bracket variants (`[$path=…]…$$…`, `[$app=…]…##^…`) must not leave a
+    // second copy for the main engine, and their malformed combinations are
+    // counted by the HTML scan, not here.
+    if matches!(marker, "$$" | "$@$" | "##^" | "#@^") {
+        return Some(String::new());
+    }
     // The domain part of the rule text, before the marker. Mixed styles —
     // `$domain` in the bracket *and* domains on the rule — are invalid per
     // the knowledge base: the rule is ignored.
-    let before = bracket.rest[..marker].trim();
+    let before = bracket.rest[..marker_at].trim();
     if bracket.domain.is_some() && !before.is_empty() {
+        path.dropped += 1;
+        return Some(String::new());
+    }
+    // `$url` is incompatible with a domain-specific rule (KB §`$url`
+    // limitations): the URL mask and the rule's own domain would be two
+    // scopes the reference refuses together.
+    if bracket.url.is_some() && !before.is_empty() {
         path.dropped += 1;
         return Some(String::new());
     }
     let domains = bracket.domain.as_deref().unwrap_or(before);
     let generic = domains.is_empty();
+    let location = bracket.location();
+    let app = bracket.app;
+    // Two path scopes on one rule (a bracket `$path`/`$url` and a
+    // path-in-domain target beside it) are over-specified; the reference does
+    // not define the pair, and picking one would apply the rule too wide.
+    if location.is_some() && before.contains('/') {
+        path.dropped += 1;
+        return Some(String::new());
+    }
+    // Raw JavaScript is [`scan_js_rules`]'s business, not the crate's: the
+    // line leaves the main text here and is served, bracket and all, only on
+    // the pages it names. The scriptlet spelling stays in the side engine.
+    if matches!(marker, "#%#" | "#@%#") {
+        let script = bracket.rest[marker_at + marker.len()..].trim_start();
+        if !script.starts_with("//scriptlet(") {
+            return Some(String::new());
+        }
+    }
+    // A bracket `$app` can narrow a path-in-domain rule in its rest; the
+    // shared expander keeps the app on every piece.
+    if bracket.domain.is_none() && location.is_none() {
+        if let Some(rewritten) = path_in_domain_parts(
+            before,
+            &bracket.rest[marker_at..],
+            marker,
+            app.clone(),
+            path,
+        ) {
+            return Some(rewritten);
+        }
+    }
     let mut rewritten = String::new();
-    convert_adguard_line(&format!("{domains}{}", &bracket.rest[marker..]), &mut rewritten);
-    match bracket.location() {
-        // A location-pinned rule: out of the main text — a blank line keeps
-        // the source map aligned — and into the side list.
-        Some(location) => {
+    convert_adguard_line(
+        &format!("{domains}{}", &bracket.rest[marker_at..]),
+        &mut rewritten,
+    );
+    match (location, app) {
+        // `$domain` alone: the rule goes back into the main text without its
+        // bracket, in the domain position the bracket was standing in for. An
+        // exception also has to reach the side engine: it cancels the same
+        // selector wherever a path rule names it.
+        (None, None) => {
+            if EXCEPTION_MARKERS.contains(&marker) {
+                path.exceptions.push(rewritten.clone());
+            }
+            Some(rewritten)
+        }
+        // A location- or app-pinned rule: out of the main text — a blank line
+        // keeps the source map aligned — and into the side list.
+        (location, app) => {
             path.rules.push(PathRule {
                 text: rewritten,
                 location,
+                app,
                 generic,
             });
             Some(String::new())
         }
-        // `$domain` alone: the rule goes back into the main text without its
-        // bracket, in the domain position the bracket was standing in for.
-        None => Some(rewritten),
     }
 }
 
@@ -2016,20 +2240,25 @@ fn scrub_untrusted(text: String) -> (String, u32) {
 /// * `#$#sel { css }` / `#@$#sel { css }` → `##sel { css }` / `#@#sel { css }`
 /// * `#$?#` / `#@$?#` (extended style) → `#?#` / `#@?#`
 ///
-/// Anything else (`#%#` raw JS, `##^`, `$$`) is left untouched: the engine
-/// drops what it cannot parse, and a wrong rewrite would be worse than a
-/// dropped rule.
+/// Before that, a `[$…]` bracket is turned into a location/app condition and
+/// a path-in-domain target is split into its page-scoped pieces (see
+/// [`bracket_cosmetic_line`] and [`path_in_domain_line`]). Anything else
+/// (`#%#` raw JS, `##^`, `$$`) is left untouched: the engine drops what it
+/// cannot parse, and a wrong rewrite would be worse than a dropped rule.
 fn convert_adguard_cosmetics(text: String, path: &mut PathScan) -> String {
     if !text.contains("[$")
         && !text.contains("#%#")
         && !text.contains("#$#")
         && !text.contains("#@")
+        && !text.contains('/')
     {
         return text;
     }
     let mut out = String::with_capacity(text.len() + 64);
     for line in text.lines() {
-        match bracket_cosmetic_line(line, path) {
+        match bracket_cosmetic_line(line, path)
+            .or_else(|| path_in_domain_line(line, path))
+        {
             Some(rewritten) => out.push_str(&rewritten),
             None => {
                 // `#@#`-family lines are the cancellations the path side
@@ -2072,11 +2301,17 @@ fn convert_adguard_line(line: &str, out: &mut String) {
     out.push_str(line);
 }
 
-/// One raw JavaScript rule (`#%#script`), with the domains it is bound to.
+/// One raw JavaScript rule (`#%#script`), with the pages and applications it
+/// is bound to.
 struct JsRule {
     /// The rule's domain position, exactly as the list wrote it. `None` when
     /// it wrote none, which every host matches.
     domains: Option<String>,
+    /// `[$path=…]`, `[$url=…]`, or a path-in-domain target. `None` when the
+    /// rule applies to every page of its domains.
+    location: Option<pathmask::Location>,
+    /// `[$app=…]`; `None` when not narrowed.
+    app: Option<AppMask>,
     script: String,
 }
 
@@ -2097,19 +2332,29 @@ struct JsRules {
 }
 
 impl JsRules {
-    /// The scripts that apply to `host`: every blocking rule whose domains
-    /// let it through, minus the ones an exception takes back. Exception
-    /// matching is the reference's own: an exception names the same script
-    /// text, and its own domain position says where it does the naming.
-    fn scripts_for(&self, host: &str) -> Vec<String> {
+    /// The scripts that apply to `host` on `page` for a flow attributed to
+    /// `apps`: every blocking rule whose conditions let it through, minus the
+    /// ones an exception takes back. Exception matching is the reference's
+    /// own: an exception names the same script text, and its own domain and
+    /// location say where it does the naming. `page` is `None` for a
+    /// hostname-only ask; a rule with a location then stays out.
+    fn scripts_for(&self, host: &str, page: Option<&str>, apps: &[String]) -> Vec<String> {
+        let covers = |rule: &JsRule| {
+            domains_match(rule.domains.as_deref(), host)
+                && rule.app.as_ref().is_none_or(|app| app.matches(apps))
+                && rule
+                    .location
+                    .as_ref()
+                    .is_none_or(|location| page.is_some_and(|page| location.matches(page)))
+        };
         self.rules
             .iter()
             .filter(|rule| {
-                domains_match(rule.domains.as_deref(), host)
-                    && !self.exceptions.iter().any(|exception| {
-                        exception.script == rule.script
-                            && domains_match(exception.domains.as_deref(), host)
-                    })
+                covers(rule)
+                    && !self
+                        .exceptions
+                        .iter()
+                        .any(|exception| exception.script == rule.script && covers(exception))
             })
             .take(MAX_JS_RULES)
             .map(|rule| rule.script.clone())
@@ -2135,9 +2380,9 @@ fn build_js_rules(scan: JsScan) -> Option<JsRules> {
 /// reference keeps it for trusted lists — so they are read here and assembled
 /// per page ([`JsRules::scripts_for`]). The `//scriptlet(...)` spelling shares
 /// the marker and is [`convert_adguard_cosmetics`]'s business; a bracket-scoped
-/// raw rule (`[$path=…]`) is dropped instead of half-read — the path machinery
-/// has no JavaScript side — while a bracket-scoped scriptlet is left to the
-/// crate, which reads the bracket.
+/// raw rule (`[$path=…]`, `[$url=…]`, `[$app=…]`, or a path-in-domain target)
+/// is read with its location and applications, while a bracket-scoped
+/// scriptlet is left to the crate, which reads the bracket.
 fn scan_js_rules(text: &str, scan: &mut JsScan) {
     for line in text.lines() {
         let line = line.trim();
@@ -2145,14 +2390,99 @@ fn scan_js_rules(text: &str, scan: &mut JsScan) {
             continue;
         }
         if line.starts_with('[') {
-            // The bracket condition is the crate's to honour (R11): a
-            // scriptlet under one keeps its line and its machinery. A raw
-            // rule under one has no JavaScript side to read the bracket
-            // with, so it is dropped and counted instead of half-read.
-            if let Some((_, script)) = line.split_once("#%#") {
-                if !script.trim_start().starts_with("//scriptlet(") {
-                    scan.dropped += 1;
+            // The bracket condition is read here for a raw rule: the
+            // scriptlet spelling stays with the crate and its side engine.
+            let bracket = match pathmask::parse_bracket(line) {
+                pathmask::BracketParse::Parsed(bracket) => bracket,
+                pathmask::BracketParse::NotBracket
+                | pathmask::BracketParse::Unsupported { .. } => continue,
+            };
+            let Some((index, marker)) = cosmetic_marker(&bracket.rest) else {
+                continue;
+            };
+            if marker != "#%#" && marker != "#@%#" {
+                continue;
+            }
+            let script = bracket.rest[index + marker.len()..].trim();
+            if script.starts_with("//scriptlet(") {
+                continue;
+            }
+            let before = bracket.rest[..index].trim();
+            // Mixed domain styles, or `$url` beside a domain position, are
+            // invalid; the path scan counts the dropped line, so this reader
+            // must not half-run it.
+            if (bracket.domain.is_some() && !before.is_empty())
+                || (bracket.url.is_some() && !before.is_empty())
+            {
+                continue;
+            }
+            if script.is_empty() {
+                scan.dropped += 1;
+                continue;
+            }
+            // The cosmetic scanner drops two path scopes on one rule and
+            // counts it; this reader only stays out of the way.
+            if bracket.location().is_some() && before.contains('/') {
+                continue;
+            }
+            // A bracket `$app` can narrow a path-in-domain rule in its rest.
+            // The same expansion as the cosmetic scanner, but the script is
+            // served here; a bracket location beside it is over-specified and
+            // left to the ordinary (no-match) path below.
+            if bracket.domain.is_none()
+                && bracket.location().is_none()
+                && before.contains('/')
+            {
+                match pathmask::parse_targets(before) {
+                    pathmask::TargetsParse::Targets(targets) => {
+                        let app = bracket.app;
+                        for target in targets {
+                            let location = match (target.path, target.authority) {
+                                (None, Some(authority)) => Some(pathmask::Location {
+                                    path: None,
+                                    url: None,
+                                    authority: Some(authority),
+                                }),
+                                (path, None) => path.map(|path| pathmask::Location {
+                                    path: Some(path),
+                                    url: None,
+                                    authority: None,
+                                }),
+                                (Some(_), Some(_)) => None,
+                            };
+                            push_js_rule(
+                                scan,
+                                target.domain,
+                                location,
+                                script,
+                                marker,
+                                app.clone(),
+                            );
+                        }
+                        continue;
+                    }
+                    pathmask::TargetsParse::Unsupported => {
+                        scan.dropped += 1;
+                        continue;
+                    }
+                    pathmask::TargetsParse::NotTargets => {}
                 }
+            }
+            let location = bracket.location();
+            let app = bracket.app;
+            let domains = bracket
+                .domain
+                .or_else(|| (!before.is_empty()).then(|| before.to_string()));
+            let rule = JsRule {
+                domains,
+                location,
+                app,
+                script: script.to_string(),
+            };
+            if marker == "#@%#" {
+                scan.exceptions.push(rule);
+            } else {
+                scan.rules.push(rule);
             }
             continue;
         }
@@ -2170,19 +2500,71 @@ fn scan_js_rules(text: &str, scan: &mut JsScan) {
             scan.dropped += 1;
             continue;
         }
-        let domains = match line[..index].trim() {
-            "" => None,
-            domains => Some(domains.to_string()),
+        let prefix = line[..index].trim();
+        let targets = match pathmask::parse_targets(prefix) {
+            pathmask::TargetsParse::NotTargets => {
+                push_js_rule(
+                    scan,
+                    match prefix {
+                        "" => None,
+                        domains => Some(domains.to_string()),
+                    },
+                    None,
+                    script,
+                    marker,
+                    None,
+                );
+                continue;
+            }
+            // The cosmetic scanner counts the drop; this reader only stays
+            // out of the way.
+            pathmask::TargetsParse::Unsupported => continue,
+            pathmask::TargetsParse::Targets(targets) => targets,
         };
-        let rule = JsRule {
-            domains,
-            script: script.to_string(),
-        };
-        if marker == "#@%#" {
-            scan.exceptions.push(rule);
-        } else {
-            scan.rules.push(rule);
+        for target in targets {
+            push_js_rule(
+                scan,
+                target.domain,
+                match (target.path, target.authority) {
+                    (None, Some(authority)) => Some(pathmask::Location {
+                        path: None,
+                        url: None,
+                        authority: Some(authority),
+                    }),
+                    (path, None) => path.map(|path| pathmask::Location {
+                        path: Some(path),
+                        url: None,
+                        authority: None,
+                    }),
+                    (Some(_), Some(_)) => None,
+                },
+                script,
+                marker,
+                None,
+            );
         }
+    }
+}
+
+/// Adds one raw rule to the blocking or exception side.
+fn push_js_rule(
+    scan: &mut JsScan,
+    domains: Option<String>,
+    location: Option<pathmask::Location>,
+    script: &str,
+    marker: &str,
+    app: Option<AppMask>,
+) {
+    let rule = JsRule {
+        domains,
+        location,
+        app,
+        script: script.to_string(),
+    };
+    if marker == "#@%#" {
+        scan.exceptions.push(rule);
+    } else {
+        scan.rules.push(rule);
     }
 }
 
@@ -2381,6 +2763,13 @@ fn scan_html_rules(text: &str, scan: &mut HtmlScan) {
         match crate::htmlfilter::parse_line(line) {
             crate::htmlfilter::Parsed::Rule(rule) => scan.rules.push(rule),
             crate::htmlfilter::Parsed::Exception(rule) => scan.exceptions.push(rule),
+            crate::htmlfilter::Parsed::Many {
+                blocking,
+                exceptions,
+            } => {
+                scan.rules.extend(blocking);
+                scan.exceptions.extend(exceptions);
+            }
             crate::htmlfilter::Parsed::Unsupported => scan.dropped += 1,
             crate::htmlfilter::Parsed::NotHtml => {}
         }
@@ -4242,108 +4631,6 @@ fn split_app_rule(text: &str) -> Option<(&str, Vec<&str>)> {
     None
 }
 
-/// Splits the value of one `app=` token into entries: `|` separates them and a
-/// backslash escapes it (as well as every character the entry parsers treat
-/// specially inside a regexp).
-fn split_app_value(value: &str) -> Vec<&str> {
-    let bytes = value.as_bytes();
-    let mut out = Vec::new();
-    let mut start = 0usize;
-    let mut index = 0usize;
-    while index < bytes.len() {
-        if bytes[index] == b'\\' && index + 1 < bytes.len() {
-            index += 2;
-            continue;
-        }
-        if bytes[index] == b'|' {
-            out.push(&value[start..index]);
-            start = index + 1;
-        }
-        index += 1;
-    }
-    out.push(&value[start..]);
-    out
-}
-
-/// Parses the values of every `app=` token of one rule into entries, or `None`
-/// when the rule cannot be run faithfully: an entry that names nothing, an
-/// entry form the KB does not have, a regexp the regexp crate cannot run, or a
-/// mix of negated and plain entries — the KB forbids one.
-fn parse_app_entries(values: &[String]) -> Option<(Vec<AppEntry>, bool)> {
-    let mut entries = Vec::new();
-    let mut negated = None::<bool>;
-    for value in values {
-        for raw in split_app_value(value) {
-            let raw = raw.trim();
-            let (is_negated, body) = match raw.strip_prefix('~') {
-                Some(body) => (true, body.trim()),
-                None => (false, raw),
-            };
-            if body.is_empty() {
-                return None;
-            }
-            if let Some(seen) = negated {
-                if seen != is_negated {
-                    return None;
-                }
-            } else {
-                negated = Some(is_negated);
-            }
-            entries.push(parse_app_entry(body)?);
-        }
-    }
-    (!entries.is_empty()).then(|| (entries, negated.unwrap_or(false)))
-}
-
-/// One entry of an `app=` value: a `/…/` regexp, a trailing-`*` wildcard, or a
-/// plain name. `None` for anything else — an entry this engine cannot name is
-/// a rule it must not half-run.
-fn parse_app_entry(body: &str) -> Option<AppEntry> {
-    if body.starts_with('/') {
-        let rest = body.strip_suffix('/')?;
-        if rest.len() < 2 {
-            return None;
-        }
-        let source = app_regex_unescape(&rest[1..]);
-        return regex::Regex::new(&source).ok().map(AppEntry::Regex);
-    }
-    if let Some(prefix) = body.strip_suffix('*') {
-        // The wildcard is the last character and the only one; a bare `*`
-        // names no application.
-        if prefix.is_empty() || prefix.contains('*') {
-            return None;
-        }
-        return Some(AppEntry::Prefix(prefix.to_string()));
-    }
-    if body.contains(['*', '|', '\\']) {
-        return None;
-    }
-    Some(AppEntry::Name(body.to_string()))
-}
-
-/// Removes the rule-syntax escapes from a regexp entry (`/`, `$`, `,` and `|`
-/// are escaped for the line parser, KB §`$app`); the regexp crate sees the
-/// bare characters — `\$` is the end anchor there, not a literal dollar.
-fn app_regex_unescape(source: &str) -> String {
-    let mut out = String::with_capacity(source.len());
-    let mut chars = source.chars();
-    while let Some(ch) = chars.next() {
-        if ch != '\\' {
-            out.push(ch);
-            continue;
-        }
-        match chars.next() {
-            Some(next) if matches!(next, '/' | '$' | ',' | '|') => out.push(next),
-            Some(next) => {
-                out.push('\\');
-                out.push(next);
-            }
-            None => out.push('\\'),
-        }
-    }
-    out
-}
-
 /// The `$app=` rules the loaded lists carry, or `None` when they carry none.
 fn build_app_rules(scan: AppScan) -> Option<AppRules> {
     let mut rules = Vec::with_capacity(scan.pending.len());
@@ -4756,13 +5043,23 @@ impl FilterEngine {
         self.compiled().cookie_rules.is_some()
     }
 
-    /// Whether the loaded lists carry cosmetic rules pinned to a page
-    /// location (`[$path=…]` / `[$url=…]`).
+    /// Whether the loaded lists carry cosmetic or raw-JavaScript rules pinned
+    /// to a page location (`[$path=…]`, `[$url=…]`, path-in-domain). The
+    /// packet path carries the page URL through the exchange only when this is
+    /// true.
     pub fn has_path_rules(&self) -> bool {
-        self.compiled()
-            .path_cosmetics
-            .as_ref()
-            .is_some_and(|path| !path.rules.is_empty())
+        let compiled = self.compiled();
+        compiled.path_cosmetics.as_ref().is_some_and(|path| {
+            path.rules
+                .iter()
+                .any(|rule| rule.location.is_some())
+        }) || compiled.js_rules.as_ref().is_some_and(|rules| {
+                rules
+                    .rules
+                    .iter()
+                    .chain(&rules.exceptions)
+                    .any(|rule| rule.location.is_some())
+            })
     }
 
     /// Whether the loaded lists carry `$jsonprune` rules.
@@ -5146,6 +5443,18 @@ impl FilterEngine {
     /// A `$content` exception switches the family off for its pages (see
     /// [`content_vetoed`]); the plan is `None` when no rule applies at all.
     pub fn html_plan(&self, url: &str, source: &str, request_type: &str) -> Option<HtmlPlan> {
+        self.html_plan_for_apps(url, source, request_type, &[])
+    }
+
+    /// [`Self::html_plan`] for a flow attributed to `apps`: the
+    /// `[$app=…]`-narrowed HTML rules are answered with it.
+    pub fn html_plan_for_apps(
+        &self,
+        url: &str,
+        source: &str,
+        request_type: &str,
+        apps: &[String],
+    ) -> Option<HtmlPlan> {
         let compiled = self.compiled();
         let rules = compiled.html_rules.as_ref()?;
         if content_vetoed(&compiled, url, source, request_type) {
@@ -5156,7 +5465,13 @@ impl FilterEngine {
         } else {
             source
         };
-        crate::htmlfilter::Plan::build(&rules.rules, &rules.exceptions, url_host(page), page)
+        crate::htmlfilter::Plan::build_for_apps(
+            &rules.rules,
+            &rules.exceptions,
+            url_host(page),
+            page,
+            apps,
+        )
         .map(|plan| HtmlPlan { plan })
     }
 
@@ -7192,14 +7507,31 @@ mod tests {
         let fe = cosmetic_engine(
             "! Title: urls\n\
              shop.test##.always\n\
-             [$url=/^https:\\/\\/shop\\.test\\/tv/]shop.test##.only-tv\n\
-             [$url=/^https:\\/\\/shop\\.test\\/js/]shop.test#%#//scriptlet('set-constant', 'adblock', 'false')\n",
+             [$url=/^https:\\/\\/shop\\.test\\/tv/]##.only-tv\n\
+             [$url=/^https:\\/\\/shop\\.test\\/tv/]shop.test##.only-invalid\n\
+             [$url=/^https:\\/\\/shop\\.test\\/js/]#%#//scriptlet('set-constant', 'adblock', 'false')\n",
         );
         assert!(fe.has_path_rules());
+        // `$url` is incompatible with a domain-specific rule: the line is
+        // dropped, not applied to every page the URL mask names.
+        let compiled = fe.compiled();
+        assert_eq!(
+            compiled
+                .path_cosmetics
+                .as_ref()
+                .expect("path scan")
+                .dropped,
+            1
+        );
 
         let tv = fe.cosmetic_resources("https://shop.test/tv?video=1");
         assert!(
             tv.style_rules.iter().any(|(s, _)| s == ".only-tv"),
+            "{:?}",
+            tv.style_rules
+        );
+        assert!(
+            !tv.style_rules.iter().any(|(s, _)| s == ".only-invalid"),
             "{:?}",
             tv.style_rules
         );
@@ -7256,12 +7588,229 @@ mod tests {
     fn path_rule_exceptions_apply_inside_the_path_engine() {
         let fe = cosmetic_engine(
             "shop.test#@#.only-tv\n\
+             [$domain=shop.test]#@#.stays\n\
              [$path=/tv]shop.test##.only-tv\n\
-             [$path=/tv]shop.test##.stays\n",
+             [$path=/tv]shop.test##.stays\n\
+             [$path=/tv]shop.test##.survives\n",
         );
         let tv = fe.cosmetic_resources("https://shop.test/tv");
         assert!(!tv.style_rules.iter().any(|(s, _)| s == ".only-tv"));
-        assert!(tv.style_rules.iter().any(|(s, _)| s == ".stays"));
+        assert!(!tv.style_rules.iter().any(|(s, _)| s == ".stays"));
+        assert!(tv.style_rules.iter().any(|(s, _)| s == ".survives"));
+    }
+
+    #[test]
+    fn an_app_bracket_can_narrow_a_path_in_domain_rule() {
+        let fe = cosmetic_engine(
+            "[$app=org.example.app]shop.test/tv##.app-tv\n\
+             [$app=org.example.app]shop.test,other.test/tv##.app-mixed\n\
+             [$app=org.example.app]shop.test##.app-all\n\
+             [$app=org.example.app]shop.test/tv#@#.app-all\n",
+        );
+        let app = vec!["org.example.app".to_string()];
+        let other_app = vec!["com.other.app".to_string()];
+
+        let tv = fe.cosmetic_resources_with_apps("https://shop.test/tv", &app);
+        assert!(tv.style_rules.iter().any(|(s, _)| s == ".app-tv"));
+        assert!(tv.style_rules.iter().any(|(s, _)| s == ".app-mixed"));
+        assert!(
+            !tv.style_rules.iter().any(|(s, _)| s == ".app-all"),
+            "the path exception cancels inside its subset only: {:?}",
+            tv.style_rules
+        );
+        let shop_other = fe.cosmetic_resources_with_apps("https://shop.test/other", &app);
+        assert!(!shop_other.style_rules.iter().any(|(s, _)| s == ".app-tv"));
+        // The pathless target of the second line is app-scoped too, but not
+        // path-scoped; the path exception does not reach this page.
+        assert!(shop_other
+            .style_rules
+            .iter()
+            .any(|(s, _)| s == ".app-mixed"));
+        assert!(shop_other
+            .style_rules
+            .iter()
+            .any(|(s, _)| s == ".app-all"));
+        let other_tv = fe.cosmetic_resources_with_apps("https://other.test/tv", &app);
+        assert!(other_tv.style_rules.iter().any(|(s, _)| s == ".app-mixed"));
+        let other_other = fe.cosmetic_resources_with_apps("https://other.test/other", &app);
+        assert!(!other_other
+            .style_rules
+            .iter()
+            .any(|(s, _)| s == ".app-mixed"));
+
+        let wrong = fe.cosmetic_resources_with_apps("https://shop.test/tv", &other_app);
+        assert!(!wrong.style_rules.iter().any(|(s, _)| s == ".app-tv"));
+        assert!(!wrong.style_rules.iter().any(|(s, _)| s == ".app-mixed"));
+    }
+
+    #[test]
+    fn a_bracket_domain_exception_reaches_main_and_side() {
+        let fe = cosmetic_engine(
+            "shop.test##.banner\n\
+             other.test##.banner\n\
+             shop.test/tv##.banner\n\
+             [$domain=shop.test]#@#.banner\n",
+        );
+        let shop_tv = fe.cosmetic_resources("https://shop.test/tv");
+        assert!(!shop_tv.hide_selectors.iter().any(|s| s == ".banner"));
+        assert!(!shop_tv.style_rules.iter().any(|(s, _)| s == ".banner"));
+        let shop_other = fe.cosmetic_resources("https://shop.test/other");
+        assert!(!shop_other.hide_selectors.iter().any(|s| s == ".banner"));
+        let other = fe.cosmetic_resources("https://other.test/");
+        assert!(other.hide_selectors.iter().any(|s| s == ".banner"));
+    }
+
+    #[test]
+    fn a_bracket_exception_is_scoped_to_its_path() {
+        let fe = cosmetic_engine(
+            "[$path=/tv]shop.test##.only-tv\n\
+             [$path=/other]shop.test##.only-tv\n\
+             [$path=/tv]shop.test#@#.only-tv\n",
+        );
+        let tv = fe.cosmetic_resources("https://shop.test/tv");
+        assert!(!tv.style_rules.iter().any(|(s, _)| s == ".only-tv"));
+        let other = fe.cosmetic_resources("https://shop.test/other");
+        assert!(other.style_rules.iter().any(|(s, _)| s == ".only-tv"));
+    }
+
+    #[test]
+    fn two_path_scopes_on_one_rule_are_dropped() {
+        for line in [
+            "[$path=/shop/]shop.test/video##.textad",
+            "[$path=/shop/]shop.test/video#%#window.__bad = 1;",
+        ] {
+            let fe = cosmetic_engine(line);
+            let compiled = fe.inner.read().unwrap().clone();
+            let path = compiled.path_cosmetics.as_ref().expect("the drop is logged");
+            assert_eq!(path.dropped, 1, "{line}");
+            assert!(path.rules.is_empty(), "{line}");
+        }
+    }
+
+    #[test]
+    fn a_network_regexp_is_not_a_path_in_domain_line() {
+        // `##` inside a network regexp is pattern text, not a cosmetic
+        // marker; the line must stay with the engine and not be counted as a
+        // dropped cosmetic rule.
+        let fe = cosmetic_engine(r"/ads##\d+/$script");
+        assert!(!fe.has_path_rules());
+    }
+
+    #[test]
+    fn path_in_domain_pins_one_target_to_its_path() {
+        let fe = cosmetic_engine(
+            "shop.test/tv##.only-tv\n\
+             other.test##.everywhere\n\
+             alpha.test,beta.test/checkout##.checkout\n",
+        );
+        let tv = fe.cosmetic_resources("https://shop.test/tv");
+        assert!(
+            tv.style_rules.iter().any(|(s, _)| s == ".only-tv"),
+            "{:?}",
+            tv.style_rules
+        );
+        let other = fe.cosmetic_resources("https://shop.test/other");
+        assert!(!other.style_rules.iter().any(|(s, _)| s == ".only-tv"));
+
+        // A pathless target of the same line keeps applying everywhere.
+        let alpha = fe.cosmetic_resources("https://alpha.test/anything");
+        assert!(alpha.hide_selectors.iter().any(|s| s == ".checkout"));
+        let beta_tv = fe.cosmetic_resources("https://beta.test/checkout");
+        assert!(
+            beta_tv.style_rules.iter().any(|(s, _)| s == ".checkout"),
+            "{:?}",
+            beta_tv.style_rules
+        );
+        let beta_other = fe.cosmetic_resources("https://beta.test/other");
+        assert!(!beta_other.style_rules.iter().any(|(s, _)| s == ".checkout"));
+
+        let everywhere = fe.cosmetic_resources("https://other.test/anything");
+        assert!(everywhere.hide_selectors.iter().any(|s| s == ".everywhere"));
+        // A hostname-only ask has no page for the path rule to match.
+        let host = fe.cosmetic_resources_for_host("shop.test");
+        assert!(!host.style_rules.iter().any(|(s, _)| s == ".only-tv"));
+    }
+
+    #[test]
+    fn path_in_domain_exceptions_only_cancel_on_their_path() {
+        let fe = cosmetic_engine(
+            "shop.test#@#.banner\n\
+             shop.test/tv#@#.tv\n\
+             shop.test/tv##.tv\n\
+             shop.test/tv##.banner\n",
+        );
+        let tv = fe.cosmetic_resources("https://shop.test/tv");
+        assert!(!tv.style_rules.iter().any(|(s, _)| s == ".tv"));
+        // The plain exception is global for the side engine.
+        assert!(!tv.style_rules.iter().any(|(s, _)| s == ".banner"));
+        let other = fe.cosmetic_resources("https://shop.test/other");
+        assert!(!other.style_rules.iter().any(|(s, _)| s == ".tv"));
+    }
+
+    #[test]
+    fn a_path_in_domain_path_keeps_its_query_text() {
+        let fe = cosmetic_engine("shop.test/search?q=1##.search-ad\n");
+        let hit = fe.cosmetic_resources("https://shop.test/search?q=1");
+        assert!(
+            hit.style_rules.iter().any(|(s, _)| s == ".search-ad"),
+            "{:?}",
+            hit.style_rules
+        );
+        let miss = fe.cosmetic_resources("https://shop.test/search?q=2");
+        assert!(!miss.style_rules.iter().any(|(s, _)| s == ".search-ad"));
+    }
+
+    #[test]
+    fn a_path_in_domain_regexp_matches_host_and_path_together() {
+        let fe = cosmetic_engine(r"/shop\.test\/video[0-9]+/##.video");
+        let hit = fe.cosmetic_resources("https://shop.test/video12");
+        assert!(
+            hit.style_rules.iter().any(|(s, _)| s == ".video"),
+            "{:?}",
+            hit.style_rules
+        );
+        let miss = fe.cosmetic_resources("https://shop.test/other");
+        assert!(!miss.style_rules.iter().any(|(s, _)| s == ".video"));
+        let other_host = fe.cosmetic_resources("https://other.test/video12");
+        assert!(!other_host.style_rules.iter().any(|(s, _)| s == ".video"));
+    }
+
+    #[test]
+    fn path_in_domain_raw_javascript_waits_for_its_page() {
+        let fe = cosmetic_engine(
+            "shop.test/tv#%#window.__tv = 1;\n\
+             shop.test#%#window.__all = 1;\n\
+             shop.test/tv#@%#window.__all = 1;\n",
+        );
+        let tv = fe.cosmetic_resources("https://shop.test/tv");
+        assert_eq!(tv.jsrules, vec!["window.__tv = 1;".to_string()]);
+        let other = fe.cosmetic_resources("https://shop.test/other");
+        assert_eq!(other.jsrules, vec!["window.__all = 1;".to_string()]);
+        let host = fe.cosmetic_resources_for_host("shop.test");
+        assert_eq!(host.jsrules, vec!["window.__all = 1;".to_string()]);
+    }
+
+    #[test]
+    fn path_in_domain_html_and_raw_javascript_keep_one_reader() {
+        let fe = cosmetic_engine(
+            "shop.test/tv$$div[class=\"ad\"]\n\
+             shop.test/tv##^div[class=\"ad\"]\n\
+             shop.test/tv#%#window.__tv = 1;\n",
+        );
+        let compiled = fe.compiled();
+        assert_eq!(
+            compiled
+                .path_cosmetics
+                .as_ref()
+                .map_or(0, |path| path.rules.len()),
+            0,
+            "HTML and raw JS have their own readers"
+        );
+        // The raw JS location is still visible to the proxy through JsRules,
+        // even though no path/cosmetic side rule exists.
+        assert!(fe.has_path_rules());
+        let tv = fe.cosmetic_resources("https://shop.test/tv");
+        assert_eq!(tv.jsrules, vec!["window.__tv = 1;".to_string()]);
     }
 
     #[test]
@@ -7310,20 +7859,65 @@ mod tests {
     #[test]
     fn path_brackets_that_cannot_be_honored_are_dropped() {
         let fe = cosmetic_engine(
-            "[$app=org.example.app]##.a\n\
-             [$domain=/re/]##.c\n\
+            "[$domain=/re/]##.c\n\
              [$domain=x.com,path=/y]y.com##.d\n\
              [$path=/x,path=/y]##.e\n\
              [$path=||x.com]##.f\n",
         );
-        assert!(!fe.has_path_rules());
         let compiled = fe.compiled();
         let path = compiled.path_cosmetics.as_ref().expect("scan");
-        assert_eq!(path.dropped, 5);
+        assert_eq!(path.dropped, 4);
         assert!(path.rules.is_empty());
         // None of them may fall back to the engine as plain rules.
         let res = fe.cosmetic_resources("https://y.com/y");
         assert!(res.hide_selectors.is_empty(), "{:?}", res.hide_selectors);
+    }
+
+    #[test]
+    fn path_in_domain_scriptlets_are_served_on_their_path() {
+        let fe = cosmetic_engine(
+            "shop.test/tv#%#//scriptlet('set-constant', '__path_sc', 'yes')\n",
+        );
+        let tv = fe.cosmetic_resources("https://shop.test/tv");
+        assert!(tv.scriptlets.contains("setConstant"), "{}", tv.scriptlets);
+        let other = fe.cosmetic_resources("https://shop.test/other");
+        assert!(!other.scriptlets.contains("setConstant"), "{}", other.scriptlets);
+    }
+
+    #[test]
+    fn a_bracket_app_limits_the_rule_to_those_apps() {
+        let fe = cosmetic_engine(
+            "[$app=org.example.app]##.app-only\n\
+             [$app=org.example.app]shop.test#%#//scriptlet('set-constant', '__app_sc', 'yes')\n",
+        );
+        // App-only rules need the app list, not a page URL.
+        assert!(!fe.has_path_rules());
+
+        let has_style = |res: &CosmeticResources| {
+            res.style_rules
+                .iter()
+                .any(|(selector, css)| selector == ".app-only" && css.contains("display"))
+        };
+        let browser = vec!["com.browser".to_string()];
+        let app = vec!["org.example.app".to_string()];
+        let none = fe.cosmetic_resources_with_apps("https://shop.test/", &[]);
+        assert!(!has_style(&none), "{:?}", none.style_rules);
+        assert!(!none.scriptlets.contains("setConstant"), "{}", none.scriptlets);
+        let other = fe.cosmetic_resources_with_apps("https://shop.test/", &browser);
+        assert!(!has_style(&other), "{:?}", other.style_rules);
+        assert!(!other.scriptlets.contains("setConstant"), "{}", other.scriptlets);
+        let matching = fe.cosmetic_resources_with_apps("https://shop.test/", &app);
+        assert!(has_style(&matching), "{:?}", matching.style_rules);
+        assert!(
+            matching.scriptlets.contains("setConstant"),
+            "{}",
+            matching.scriptlets
+        );
+        // A hostname-only ask still gets an app-only rule: no path stands in
+        // for a page nobody named, but this rule has none.
+        let host = fe.cosmetic_resources_for_host_with_apps("shop.test", &app);
+        assert!(has_style(&host), "{:?}", host.style_rules);
+        assert!(host.scriptlets.contains("setConstant"), "{}", host.scriptlets);
     }
 
     #[test]
@@ -7560,24 +8154,89 @@ mod tests {
     }
 
     #[test]
-    fn a_bracket_scoped_raw_rule_is_dropped_whole() {
+    fn a_bracket_scoped_raw_rule_runs_on_its_page_only() {
         let fe = cosmetic_engine(
             "[$path=/special]#%#window.__path = 1;\n\
              [$domain=example.com]#%#//scriptlet('set-constant', '__bracket_sc', 'yes')\n\
              example.com#%#window.__plain = 1;\n",
         );
         let compiled = fe.inner.read().unwrap().clone();
-        let rules = compiled.js_rules.as_ref().expect("the plain rule stays");
-        assert_eq!(rules.rules.len(), 1);
-        assert_eq!(
-            rules.dropped, 1,
-            "the bracket raw rule alone is counted, not half-read"
-        );
-        // The bracket scriptlet is the crate's: it keeps its line, is not
-        // counted here, and still runs on the host the bracket names.
+        let rules = compiled.js_rules.as_ref().expect("the raw rules stay");
+        assert_eq!(rules.rules.len(), 2);
+        assert_eq!(rules.dropped, 0);
+        assert!(fe.has_path_rules(), "the page URL must be carried");
+
         let page = fe.cosmetic_resources("https://example.com/special");
-        assert_eq!(page.jsrules, vec!["window.__plain = 1;".to_string()]);
+        assert_eq!(
+            page.jsrules,
+            vec![
+                "window.__path = 1;".to_string(),
+                "window.__plain = 1;".to_string()
+            ]
+        );
+        let other = fe.cosmetic_resources("https://example.com/other");
+        assert_eq!(other.jsrules, vec!["window.__plain = 1;".to_string()]);
+        // A hostname-only ask has no page for the path rule to match.
+        let host = fe.cosmetic_resources_for_host("example.com");
+        assert_eq!(host.jsrules, vec!["window.__plain = 1;".to_string()]);
+
+        // The bracket scriptlet is the crate's: it keeps its line and still
+        // runs on the host the bracket names.
         assert!(page.scriptlets.contains("setConstant"), "{}", page.scriptlets);
+    }
+
+    #[test]
+    fn raw_javascript_honors_app_and_url_brackets() {
+        let body = "[$app=org.example.app]shop.test#%#window.__app = 1;\n\
+             [$url=/^https:\\/\\/shop\\.test\\/tv/]#%#window.__tv = 1;\n\
+             [$url=/^https:\\/\\/shop\\.test\\/tv/]shop.test#%#window.__invalid = 1;\n";
+        let fe = cosmetic_engine(body);
+        let compiled = fe.inner.read().unwrap().clone();
+        // `$url` is incompatible with a domain-specific rule, and the path
+        // scanner is the one that counts the dropped line.
+        let path = compiled.path_cosmetics.as_ref().expect("path scan");
+        assert_eq!(path.dropped, 1, "the domain beside $url is dropped");
+        let rules = compiled.js_rules.as_ref().expect("the raw rules stay");
+        assert_eq!(rules.rules.len(), 2);
+        assert_eq!(rules.dropped, 0);
+        assert!(fe.has_path_rules(), "the page URL must be carried");
+
+        let plain = fe.cosmetic_resources("https://shop.test/tv");
+        assert!(!plain.jsrules.iter().any(|script| script.contains("__app")));
+        assert!(plain.jsrules.iter().any(|script| script.contains("__tv")));
+        assert!(!plain
+            .jsrules
+            .iter()
+            .any(|script| script.contains("__invalid")));
+
+        let app = vec!["org.example.app".to_string()];
+        let matching = fe.cosmetic_resources_with_apps("https://shop.test/", &app);
+        assert!(matching
+            .jsrules
+            .iter()
+            .any(|script| script.contains("__app")));
+        // The URL-pinned rule needs a page, not just a host.
+        let host = fe.cosmetic_resources_for_host_with_apps("shop.test", &app);
+        assert!(host.jsrules.iter().any(|script| script.contains("__app")));
+        assert!(!host.jsrules.iter().any(|script| script.contains("__tv")));
+    }
+
+    #[test]
+    fn raw_javascript_app_and_path_in_domain_combine() {
+        let fe = cosmetic_engine(
+            "[$app=org.example.app]shop.test/tv#%#window.__both = 1;\n",
+        );
+        assert!(fe.has_path_rules());
+        let app = vec!["org.example.app".to_string()];
+        let tv = fe.cosmetic_resources_with_apps("https://shop.test/tv", &app);
+        assert_eq!(tv.jsrules, vec!["window.__both = 1;".to_string()]);
+        let other = fe.cosmetic_resources_with_apps("https://shop.test/other", &app);
+        assert!(other.jsrules.is_empty());
+        let wrong_app = fe.cosmetic_resources_with_apps(
+            "https://shop.test/tv",
+            &["com.other.app".to_string()],
+        );
+        assert!(wrong_app.jsrules.is_empty());
     }
 
     #[test]
@@ -8151,6 +8810,5 @@ mod tests {
             .blocked
         );
     }
+
 }
-
-

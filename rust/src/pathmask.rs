@@ -12,19 +12,23 @@
 //! a `$url` — or, enclosed in `/…/`, a regular expression, `\/` and `\:`
 //! unescaped first.
 //!
-//! This module parses the bracket and compiles the masks; where the rules go
-//! and how they are served is [`crate::filter`]'s half. The bracket's other
-//! modifiers are read too, but only `$domain` is honored — moved onto the
-//! rule's ordinary domain position — and only where that cannot change what
-//! the rule means: a regexp domain cannot be spelled on a cosmetic rule (the
-//! crate discards the rule), `$app` cannot be honored at all, and mixing the
-//! two ways of spelling domains is invalid per the knowledge base, so the
-//! rule is dropped rather than applied wider than the list asked.
+//! This module also reads the simplified *path-in-domain* spelling
+//! (`example.org/checkout##…`, KB §path-in-domain-syntax) into the same
+//! location masks, and the bracket's `$app=` value into an [`AppMask`].
+//!
+//! Where the rules go and how they are served is [`crate::filter`]'s half.
+//! The bracket's other modifiers are read too, but only `$domain` is honored
+//! — moved onto the rule's ordinary domain position — and only where that
+//! cannot change what the rule means: a regexp domain cannot be spelled on a
+//! cosmetic rule (the crate discards the rule), and mixing the two ways of
+//! spelling domains is invalid per the knowledge base, so the rule is dropped
+//! rather than applied wider than the list asked.
 //!
 //! The pattern-to-regexp translation mirrors the crate's own
 //! (`regex_manager::compile_regex`), so a mask matches exactly what a network
 //! rule pattern matches.
 
+use crate::appmask::AppMask;
 use regex::bytes::{Regex as BytesRegex, RegexBuilder as BytesRegexBuilder};
 use std::sync::OnceLock;
 
@@ -191,14 +195,19 @@ fn split_url_host(rest: &str) -> (&str, &str) {
     (&rest[..end], &rest[end..])
 }
 
-/// The location one bracket puts a rule on: a path, a URL, or both (the
-/// bracket may spell both, and then both must match).
+/// The location one rule is pinned to: a path, a URL, both (the bracket may
+/// spell both, and then both must match), or a path-in-domain regexp over the
+/// URL without its scheme.
 #[derive(Debug, Clone)]
 pub struct Location {
     /// `path` / `path=value`.
     pub path: Option<PathMask>,
     /// `url=value`.
     pub url: Option<UrlMask>,
+    /// A path-in-domain regexp target (`/example\.org\/article\d+/`). The
+    /// syntax names the host and the path together, so the subject is the URL
+    /// after `://`.
+    pub authority: Option<UrlMask>,
 }
 
 impl Location {
@@ -214,7 +223,18 @@ impl Location {
                 return false;
             }
         }
+        if let Some(mask) = &self.authority {
+            let subject = url.split_once("://").map_or(url, |(_, rest)| rest);
+            if !mask.matches(subject) {
+                return false;
+            }
+        }
         true
+    }
+
+    /// Whether the masks name any location at all.
+    pub fn any(&self) -> bool {
+        self.path.is_some() || self.url.is_some() || self.authority.is_some()
     }
 }
 
@@ -229,6 +249,171 @@ pub fn path_and_query(url: &str) -> &str {
         Some(index) => &rest[index..],
         None => "/",
     }
+}
+
+/// One target of the simplified path-in-domain spelling: a domain with an
+/// optional path, or a `/…/` regexp over the URL without its scheme.
+#[derive(Debug, Clone)]
+pub struct Target {
+    /// The domain position for a plain target; `None` for a regexp target,
+    /// which the page's own host stands in for.
+    pub domain: Option<String>,
+    /// The `$path` value the target spelled, if any.
+    pub path: Option<PathMask>,
+    /// The path-in-domain regexp target (`/example\.org\/article\d+/`).
+    pub authority: Option<UrlMask>,
+}
+
+/// What a domain position turned out to be.
+pub enum TargetsParse {
+    /// No `/` in the domain position: an ordinary domain list.
+    NotTargets,
+    /// One or more targets, at least one carrying a path or regexp.
+    Targets(Vec<Target>),
+    /// A path-in-domain spelling this engine cannot honor: the rule is
+    /// dropped rather than applied wider than the list asked.
+    Unsupported,
+}
+
+/// Reads the path-in-domain spelling (KB §path-in-domain-syntax) out of a
+/// cosmetic rule's domain position.
+///
+/// `targets = target0, target1, …` and `target = domain [path]`. A target
+/// that starts with `/` is a regexp over the URL without its scheme; the
+/// knowledge base's example is `/example\.org\/article\d+/`. A comma inside
+/// a path is only a separator when unescaped, as everywhere in the syntax.
+pub fn parse_targets(prefix: &str) -> TargetsParse {
+    if !prefix.contains('/') {
+        return TargetsParse::NotTargets;
+    }
+    let Some(parts) = split_targets(prefix) else {
+        return TargetsParse::Unsupported;
+    };
+    let mut targets = Vec::with_capacity(parts.len());
+    let mut any_location = false;
+    for part in parts {
+        let part = part.trim();
+        if part.is_empty() {
+            return TargetsParse::Unsupported;
+        }
+        if part.starts_with('/') {
+            // A leading `/` names a whole-target regexp; the knowledge base's
+            // spelling closes it. An unterminated one is a path-only target
+            // the syntax does not have, not a pattern to apply everywhere.
+            if part.len() < 2 || !part.ends_with('/') {
+                return TargetsParse::Unsupported;
+            }
+            let value = unescape_syntax(part);
+            let Some(mask) = UrlMask::parse(&value) else {
+                return TargetsParse::Unsupported;
+            };
+            targets.push(Target {
+                domain: None,
+                path: None,
+                authority: Some(mask),
+            });
+            any_location = true;
+            continue;
+        }
+        let Some(slash) = part.find('/') else {
+            if !domain_ok(part) {
+                return TargetsParse::Unsupported;
+            }
+            targets.push(Target {
+                domain: Some(part.to_string()),
+                path: None,
+                authority: None,
+            });
+            continue;
+        };
+        let domain = part[..slash].trim();
+        if !domain_ok(domain) {
+            return TargetsParse::Unsupported;
+        }
+        let value = unescape_syntax(&part[slash..]);
+        let Some(mask) = PathMask::parse(&value) else {
+            return TargetsParse::Unsupported;
+        };
+        targets.push(Target {
+            domain: Some(domain.to_string()),
+            path: Some(mask),
+            authority: None,
+        });
+        any_location = true;
+    }
+    if any_location {
+        TargetsParse::Targets(targets)
+    } else {
+        TargetsParse::NotTargets
+    }
+}
+
+/// Splits a domain position at commas, keeping a whole-target `/…/` regexp
+/// together (its commas are regexp text, not separators). A backslash escapes
+/// the next character.
+fn split_targets(prefix: &str) -> Option<Vec<&str>> {
+    let bytes = prefix.as_bytes();
+    let mut out = Vec::new();
+    let mut start = 0usize;
+    let mut index = 0usize;
+    let mut in_regexp = false;
+    while index < bytes.len() {
+        match bytes[index] {
+            b'\\' => index += 2,
+            b'/' if prefix[start..index].trim().is_empty() => {
+                in_regexp = true;
+                index += 1;
+            }
+            b'/' if in_regexp => {
+                in_regexp = false;
+                index += 1;
+            }
+            b',' if !in_regexp => {
+                out.push(&prefix[start..index]);
+                start = index + 1;
+                index += 1;
+            }
+            _ => index += 1,
+        }
+    }
+    if in_regexp {
+        return None;
+    }
+    out.push(&prefix[start..]);
+    Some(out)
+}
+
+/// Whether a target's domain can be a cosmetic domain position. `~` negates,
+/// `*` is a wildcard; a regexp domain is handled by the `/…/` branch.
+fn domain_ok(domain: &str) -> bool {
+    let body = domain.strip_prefix('~').unwrap_or(domain);
+    !body.is_empty()
+        && body.chars().all(|c| {
+            c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-' | '~' | '*')
+        })
+}
+
+/// Undoes the syntax's own escapes (`\[`, `\]`, `\,`, `\\`) in a value, the
+/// same set the bracket parser undoes. Other backslashes belong to the value
+/// and are kept for the regexp engine.
+fn unescape_syntax(value: &str) -> String {
+    let mut out = String::with_capacity(value.len());
+    let mut chars = value.chars();
+    while let Some(ch) = chars.next() {
+        if ch != '\\' {
+            out.push(ch);
+            continue;
+        }
+        match chars.next() {
+            Some(next) if matches!(next, '[' | ']' | ',' | '\\') => out.push(next),
+            Some(next) => {
+                out.push('\\');
+                out.push(next);
+            }
+            None => out.push('\\'),
+        }
+    }
+    out
 }
 
 /// What a line beginning `[$…]` turned out to be.
@@ -253,17 +438,21 @@ pub struct Bracket {
     /// `domain=…`, negations and `|` separators kept, pipe separators turned
     /// into the commas a cosmetic rule's domain position takes.
     pub domain: Option<String>,
+    /// `app=…`: the applications the rule is narrowed to. `None` when the
+    /// bracket spells none.
+    pub app: Option<AppMask>,
     /// The rule text after the closing bracket.
     pub rest: String,
 }
 
 impl Bracket {
-    /// The location the bracket pins the rule to; `None` when it only names
-    /// a domain.
-    pub fn location(self) -> Option<Location> {
-        (!(self.path.is_none() && self.url.is_none())).then_some(Location {
-            path: self.path,
-            url: self.url,
+    /// The location the bracket pins the rule to; `None` when it only names a
+    /// domain (or an app).
+    pub fn location(&self) -> Option<Location> {
+        (!(self.path.is_none() && self.url.is_none())).then(|| Location {
+            path: self.path.clone(),
+            url: self.url.clone(),
+            authority: None,
         })
     }
 }
@@ -335,6 +524,7 @@ pub fn parse_bracket(line: &str) -> BracketParse {
     let mut url: Option<UrlMask> = None;
     let mut url_seen = false;
     let mut domain: Option<String> = None;
+    let mut app: Option<AppMask> = None;
     for part in &parts {
         let (name, value) = match part.split_once('=') {
             Some((name, value)) => (name, Some(value)),
@@ -376,21 +566,41 @@ pub fn parse_bracket(line: &str) -> BracketParse {
                 // A negated value is spelled `~domain`; its bare form is what
                 // the regexp check has to see through.
                 let bare = value.strip_prefix('~').unwrap_or(value);
-                if domain.is_some() || bare.is_empty() || bare.starts_with('/') {
+                // `$domain` names domains only; a `/` makes it a regexp or a
+                // path-in-domain spelling, neither of which this bracket has.
+                if domain.is_some() || bare.is_empty() || bare.contains('/') {
                     return BracketParse::Unsupported { rest };
                 }
                 domain = Some(value.replace('|', ","));
             }
-            // `$app`, a `domain` without a value, an empty modifier: nothing
-            // this engine can honor.
+            ("app", Some(value)) => {
+                if app.is_some() {
+                    return BracketParse::Unsupported { rest };
+                }
+                match AppMask::parse(value) {
+                    Some(mask) => app = Some(mask),
+                    None => return BracketParse::Unsupported { rest },
+                }
+            }
+            // A valueless `$app`, a `domain` without a value, an empty
+            // modifier: nothing this engine can honor.
             _ => return BracketParse::Unsupported { rest },
         }
+    }
+
+    // The knowledge base limits `$url`: it is not compatible with
+    // domain-specific rules or the other non-basic location modifiers
+    // (`$domain`, `$path`). Such a combination is dropped rather than applied
+    // wider than the list asked.
+    if url.is_some() && (path.is_some() || domain.is_some()) {
+        return BracketParse::Unsupported { rest };
     }
 
     BracketParse::Parsed(Bracket {
         path,
         url,
         domain,
+        app,
         rest,
     })
 }
@@ -607,12 +817,14 @@ mod tests {
     #[test]
     fn unsupported_brackets_report_their_rule_text() {
         for line in [
-            "[$app=org.example.app]##.textad",
             "[$url]##.textad",
+            "[$url=/x,path=/y]##.textad",
+            "[$domain=x.com,url=/y]##.textad",
             "[$path=/a,path=/b]##.textad",
             "[$path=||example.com]##.textad",
             "[$domain=/re/]##.textad",
             "[$domain=~/re/]##.textad",
+            "[$domain=x.com/path]##.textad",
             "[$domain=]##.textad",
             "[$]##.textad",
         ] {
@@ -624,6 +836,62 @@ mod tests {
                 _ => panic!("{line} should be unsupported"),
             }
         }
+    }
+
+    #[test]
+    fn bracket_app_narrows_the_rule() {
+        let BracketParse::Parsed(bracket) = parse_bracket("[$app=org.example.app]##.textad") else {
+            panic!("app bracket should parse");
+        };
+        let app = bracket.app.expect("app mask");
+        assert!(app.matches(&["org.example.app".to_string()]));
+        assert!(!app.matches(&["com.example.app".to_string()]));
+        assert!(!app.matches(&[]));
+    }
+
+    #[test]
+    fn path_in_domain_targets_split_domains_and_paths() {
+        let TargetsParse::Targets(targets) = parse_targets("a.com,b.com/checkout") else {
+            panic!("targets should parse");
+        };
+        assert_eq!(targets.len(), 2);
+        assert_eq!(targets[0].domain.as_deref(), Some("a.com"));
+        assert!(targets[0].path.is_none());
+        assert_eq!(targets[1].domain.as_deref(), Some("b.com"));
+        assert!(targets[1]
+            .path
+            .as_ref()
+            .expect("path")
+            .matches("/checkout/step"));
+        assert!(!targets[1]
+            .path
+            .as_ref()
+            .expect("path")
+            .matches("/other"));
+    }
+
+    #[test]
+    fn path_in_domain_regexp_targets_take_the_authority() {
+        let TargetsParse::Targets(targets) =
+            parse_targets(r"/example\.org\/article[0-9]+/")
+        else {
+            panic!("a regexp target should parse");
+        };
+        assert_eq!(targets.len(), 1);
+        let authority = targets[0].authority.as_ref().expect("authority");
+        assert!(authority.matches("example.org/article12"));
+        assert!(!authority.matches("example.org/other"));
+        assert!(!authority.matches("other.org/article12"));
+    }
+
+    #[test]
+    fn an_unusable_path_in_domain_target_drops_the_whole_position() {
+        assert!(matches!(parse_targets("example.com"), TargetsParse::NotTargets));
+        assert!(matches!(parse_targets("/unterminated"), TargetsParse::Unsupported));
+        assert!(matches!(
+            parse_targets("example.com/path,,other.com"),
+            TargetsParse::Unsupported
+        ));
     }
 
     #[test]

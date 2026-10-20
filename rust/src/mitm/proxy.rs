@@ -1133,8 +1133,8 @@ impl ProxySession {
         };
         let url = request_url(&facts, &host);
         // The page URL the cosmetics of the response will be matched against.
-        // Only `[$path=…]` / `[$url=…]` rules read it, so it is only carried
-        // when the loaded lists hold any.
+        // Only location rules (`[$path=…]`, `[$url=…]`, path-in-domain) read
+        // it, so it is only carried when the loaded lists hold any.
         let page_url = filter.has_path_rules().then(|| url.clone());
         // A `Content-Length` the proxy cannot read is a body it cannot count:
         // the bytes after the head can never be told from the next request, so
@@ -1236,7 +1236,7 @@ impl ProxySession {
         // the body comes back; the body pipeline runs it after `$jsonprune`
         // and before `$replace`.
         if filter.has_html_rules() {
-            if let Some(rules) = filter.html_plan(&url, &source, request_type) {
+            if let Some(rules) = filter.html_plan_for_apps(&url, &source, request_type, apps) {
                 plan.html = Some(Arc::new(rules));
             }
         }
@@ -2389,7 +2389,13 @@ impl ProxySession {
                         );
                     }
                     if let Some(data) =
-                        self.cosmetic_payload(filter, host, body, self.page_url.as_deref())
+                        self.cosmetic_payload(
+                            filter,
+                            host,
+                            body,
+                            self.page_url.as_deref(),
+                            &self.apps,
+                        )
                     {
                         out.extend_from_slice(
                             format!("<script{}>window.__adfree_page=", http::nonce_attr(nonce))
@@ -2429,18 +2435,20 @@ impl ProxySession {
     /// nothing left to carry inline (element hiding travels as a stylesheet).
     ///
     /// `page_url` is the page's own URL when the request carried one — that is
-    /// what `[$path=…]` rules are matched against. Without it the answer is
-    /// the host's alone: no `/`-path may stand in for a page nobody named.
+    /// what `[$path=…]` / `[$url=…]` / path-in-domain rules are matched
+    /// against. Without it the answer is the host's alone: no `/`-path may
+    /// stand in for a page nobody named.
     fn cosmetic_payload(
         &self,
         filter: &FilterEngine,
         host: &str,
         body: &[u8],
         page_url: Option<&str>,
+        apps: &[String],
     ) -> Option<String> {
         let rules = match page_url {
-            Some(url) => filter.cosmetic_resources(url),
-            None => filter.cosmetic_resources_for_host(host),
+            Some(url) => filter.cosmetic_resources_with_apps(url, apps),
+            None => filter.cosmetic_resources_for_host_with_apps(host, apps),
         };
 
         // Generic class/id rules: the page's own tokens decide which apply.
