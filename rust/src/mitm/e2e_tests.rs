@@ -1211,7 +1211,11 @@ fn path_rules_apply_to_their_page_only() {
 const SCOPED_HIDE_EXCEPTION_LIST: &str = "! Title: e2e scoped hide exception\n\
                                          shop.test##.ad-box\n\
                                          shop.test##.adsbygoogle\n\
-                                         [$path=/pathpage]shop.test#@#.ad-box\n";
+                                         shop.test#$#.ad-box { color: red }\n\
+                                         shop.test#%#//scriptlet('set-constant', 'adblock', 'false')\n\
+                                         [$path=/pathpage]shop.test#@#.ad-box\n\
+                                         [$path=/pathpage]shop.test#@$#.ad-box { color: red }\n\
+                                         [$path=/pathpage]shop.test#@%#//scriptlet('set-constant', 'adblock', 'false')\n";
 
 #[test]
 fn a_path_scoped_hide_exception_rides_the_page_payload() {
@@ -1251,6 +1255,14 @@ fn a_path_scoped_hide_exception_rides_the_page_payload() {
         "the excepted hide must not come back inline: {payload}"
     );
     assert!(
+        !payload.contains("\"style\":"),
+        "the excepted style rule must not come back: {payload}"
+    );
+    assert!(
+        !payload.contains("\"scriptlets\":"),
+        "the excepted scriptlet must not come back: {payload}"
+    );
+    assert!(
         payload.contains("\"exceptions\":"),
         "the runtime needs the page exceptions for later generic tokens: {payload}"
     );
@@ -1272,6 +1284,14 @@ fn a_path_scoped_hide_exception_rides_the_page_payload() {
     let css = String::from_utf8_lossy(&css_body).to_string();
     assert!(css.contains(".ad-box"), "{css}");
     assert!(css.contains(".adsbygoogle"), "{css}");
+    assert!(
+        other.contains("\"style\":"),
+        "another page keeps the host style rule: {other}"
+    );
+    assert!(
+        other.contains("adblock"),
+        "another page keeps the host scriptlet: {other}"
+    );
 
     tcp.close();
 }

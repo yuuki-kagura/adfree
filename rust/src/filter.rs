@@ -24,9 +24,12 @@ use crate::jsonprune::{JsonPrune, JsonpruneRule};
 use crate::pathmask;
 use adblock::cosmetic_filter_cache::ProceduralOrActionFilter;
 use adblock::engine::Engine;
+use adblock::filters::cosmetic::{CosmeticFilter, CosmeticFilterMask, CosmeticFilterOperator};
 use adblock::lists::{FilterFormat, FilterSet, ParseOptions, RuleTypes};
 use adblock::request::Request;
-use adblock::resources::{MimeType, Resource, ResourceType};
+use adblock::resources::{
+    InMemoryResourceStorage, MimeType, PermissionMask, Resource, ResourceStorage, ResourceType,
+};
 use base64::engine::general_purpose::STANDARD as BASE64;
 use base64::Engine as _;
 use std::collections::{BTreeSet, HashMap, HashSet};
@@ -100,6 +103,36 @@ fn scriptlet_resources() -> &'static Vec<Resource> {
             Vec::new()
         })
     })
+}
+
+/// The scriptlet resource table as the crate's assembler sees it.
+///
+/// The engine builds its own copy while parsing the lists. A page-scoped
+/// `#@%#` exception cancels a scriptlet the main engine already assembled, so
+/// we need the same assembler to reproduce the one invocation to take back
+/// out of the concatenated script. Only pages carrying such an exception
+/// touch this table.
+fn scriptlet_storage() -> &'static ResourceStorage {
+    static STORAGE: OnceLock<ResourceStorage> = OnceLock::new();
+    STORAGE.get_or_init(|| {
+        ResourceStorage::from_backend(InMemoryResourceStorage::from_resources(
+            scriptlet_resources().iter().cloned(),
+        ))
+    })
+}
+
+/// The `try { … } catch` block the engine emits for one `+js(…)` invocation.
+///
+/// `get_scriptlet_resources` prefixes the block with the implementations the
+/// scriptlet depends on; the final `try` block is the invocation itself. The
+/// block is removed from the page's assembled scriptlets when a scoped
+/// `#@%#` exception names the same script.
+fn scriptlet_invocation(args: &str, permission: PermissionMask) -> Option<String> {
+    let assembled = scriptlet_storage().get_scriptlet_resources([(args, permission)]);
+    let catch = "\n} catch ( e ) { }\n";
+    let catch_start = assembled.rfind(catch)?;
+    let start = assembled[..catch_start].rfind("try {\n")?;
+    Some(assembled[start..catch_start + catch.len()].to_string())
 }
 
 /// Redirect resources (`$redirect=noopjs` and friends) the engine can serve in
@@ -384,10 +417,11 @@ pub struct CosmeticResources {
     pub generichide: bool,
     /// Selectors excepted by `#@#`: pass to [`FilterEngine::generic_selectors`].
     pub exceptions: Vec<String>,
-    /// A page-scoped `#@#` exception applies. `hide_selectors` is already
-    /// filtered for this page, and because the per-host stylesheet cannot
-    /// know the page it was written for, the caller must carry those
-    /// selectors inline instead of linking the host stylesheet.
+    /// A page-scoped plain `#@#`/`#@?#` exception applies. `hide_selectors`
+    /// is already filtered for this page, and because the per-host stylesheet
+    /// cannot know the page it was written for, the caller must carry those
+    /// selectors inline instead of linking the host stylesheet. Style,
+    /// procedural and scriptlet exceptions leave the host sheet valid.
     pub inline_hides: bool,
 }
 
@@ -1337,7 +1371,18 @@ impl FilterEngine {
         let mut exceptions: HashSet<String> = raw.exceptions.into_iter().collect();
         let mut inline_hides = false;
 
+        let default_style = "display: none !important";
         let mut hide_selectors: Vec<String> = raw.hide_selectors.into_iter().collect();
+        // Default style actions are element hiding in a different hat: keep
+        // them apart from plain `##` hides until the exceptions are applied.
+        // A `#@$#… { display: none !important }` must not cancel a plain
+        // `##` hide with the same selector, and a plain `#@#` must not cancel
+        // the style action.
+        let mut style_default_hides: Vec<String> = Vec::new();
+        // Path-scoped plain hides arrive from the side engine already
+        // filtered by its own exceptions, but are not style actions: keep
+        // them out of the style-exception subtraction.
+        let mut path_hide_selectors: Vec<String> = Vec::new();
         let mut style_rules = Vec::new();
         let mut procedural = Vec::new();
         for entry in raw.procedural_actions {
@@ -1346,8 +1391,8 @@ impl FilterEngine {
             };
             match parsed.as_css() {
                 // `as_css` folds the default hide action back to plain CSS.
-                Some((selector, style)) if style == "display: none !important" => {
-                    hide_selectors.push(selector)
+                Some((selector, style)) if style == default_style => {
+                    style_default_hides.push(selector)
                 }
                 Some((selector, style)) => {
                     if style_rules.len() < MAX_STYLE_RULES {
@@ -1375,21 +1420,55 @@ impl FilterEngine {
         // from the side engine. They ride the inline payload like procedural
         // rules do — the per-host hiding stylesheet cannot know the location,
         // and the browser keeps it cached across the site.
+        let mut cancelled_styles: HashSet<(String, String)> = HashSet::new();
+        let mut cancelled_procedural: HashSet<String> = HashSet::new();
+        let mut cancelled_scriptlets: Vec<(String, PermissionMask)> = Vec::new();
         if let Some(path_rules) = compiled.path_cosmetics.as_ref() {
             let subset = path_rules.subset(url, apps, with_paths);
             if !subset.is_empty() {
-                inline_hides = path_rules.has_hide_exception(&subset);
+                let host = url_host(url);
+                let page_exceptions = path_rules.exception_filters(&subset, host);
+                // `#@#` and the selector-only extended exception remove a
+                // main hiding selector. A style/scriptlet exception leaves
+                // `hide_selectors` alone, so its page can keep the host sheet.
+                inline_hides = page_exceptions.iter().any(is_plain_hide_exception);
+                for filter in &page_exceptions {
+                    if filter.mask.contains(CosmeticFilterMask::SCRIPT_INJECT) {
+                        if let Some(args) = filter.plain_css_selector() {
+                            cancelled_scriptlets.push((args.to_string(), filter.permission));
+                        }
+                        continue;
+                    }
+                    let action_filter = ProceduralOrActionFilter {
+                        selector: filter
+                            .plain_css_selector()
+                            .map(|selector| {
+                                vec![CosmeticFilterOperator::CssSelector(selector.to_string())]
+                            })
+                            .unwrap_or_else(|| filter.selector.clone()),
+                        action: filter.action.clone(),
+                    };
+                    if filter.action.is_some() {
+                        if let Some(pair) = action_filter.as_css() {
+                            cancelled_styles.insert(pair);
+                        }
+                    }
+                    // A selector-only exception is an unhide, not a
+                    // procedural action; the crate only stores the latter
+                    // when there is an action or a procedural selector.
+                    if filter.action.is_some() || filter.plain_css_selector().is_none() {
+                        if let Ok(json) = serde_json::to_string(&action_filter) {
+                            cancelled_procedural.insert(json);
+                        }
+                    }
+                }
                 let extra = path_rules
-                    .engine_for(&subset, url_host(url))
+                    .engine_for(&subset, host)
                     .url_cosmetic_resources(url);
                 // The same page-scoped exceptions, now in a form that can
                 // cancel the classic rules the main engine already returned.
                 exceptions.extend(extra.exceptions.iter().cloned());
-                for selector in extra.hide_selectors {
-                    if style_rules.len() < MAX_STYLE_RULES {
-                        style_rules.push((selector, "display: none !important".to_string()));
-                    }
-                }
+                path_hide_selectors.extend(extra.hide_selectors);
                 for entry in extra.procedural_actions {
                     let Ok(parsed) = serde_json::from_str::<ProceduralOrActionFilter>(&entry)
                     else {
@@ -1416,6 +1495,8 @@ impl FilterEngine {
             // `$elemhide`: no cosmetic rule at all, specific or generic.
             // Scriptlets stay — those are `$jsinject`'s business.
             hide_selectors.clear();
+            style_default_hides.clear();
+            path_hide_selectors.clear();
             style_rules.clear();
             procedural.clear();
         } else if switches.specifichide {
@@ -1430,6 +1511,8 @@ impl FilterEngine {
                 .into_iter()
                 .filter(|selector| !exceptions.contains(selector))
                 .collect();
+            style_default_hides.clear();
+            path_hide_selectors.clear();
             style_rules.clear();
             procedural.clear();
             scriptlets.clear();
@@ -1456,6 +1539,34 @@ impl FilterEngine {
                 }
             }
         }
+        // A page-scoped style/procedural/scriptlet exception cancels only the
+        // rule it names. The crate already applied it inside the side engine;
+        // this subtracts the copy the main engine returned. Plain hiding
+        // exceptions are applied below, after every source has contributed.
+        style_rules.retain(|rule| !cancelled_styles.contains(rule));
+        style_default_hides.retain(|selector| {
+            !cancelled_styles.contains(&(selector.clone(), default_style.to_string()))
+        });
+        // Path hides are plain `Hide` rules from the side engine, not style
+        // actions: add them after the style subtraction so a `#@$#` exception
+        // cannot take one back.
+        for selector in path_hide_selectors {
+            if style_rules.len() < MAX_STYLE_RULES {
+                style_rules.push((selector, default_style.to_string()));
+            }
+        }
+        procedural.retain(|entry| !cancelled_procedural.contains(entry));
+        for (args, permission) in cancelled_scriptlets {
+            if let Some(invocation) = scriptlet_invocation(&args, permission) {
+                scriptlets = scriptlets.replace(&invocation, "");
+            }
+        }
+        // Every injected scriptlet is wrapped in this block. Once the last
+        // one is gone, only its (now unused) dependency functions remain;
+        // sending those would be dead weight on a page with nothing to run.
+        if !scriptlets.contains("try {\n") {
+            scriptlets.clear();
+        }
         if scriptlets.len() > MAX_SCRIPTLET_BYTES {
             scriptlets.clear();
         }
@@ -1468,6 +1579,10 @@ impl FilterEngine {
         if inline_hides {
             hide_selectors.retain(|selector| !exceptions.contains(selector));
         }
+        // Default style actions are appended only now: a plain `#@#` above
+        // must not have touched them, and their own `#@$#` cancellation has
+        // already been applied.
+        hide_selectors.extend(style_default_hides);
         hide_selectors.truncate(MAX_HIDE_SELECTORS);
 
         CosmeticResources {
@@ -1927,11 +2042,11 @@ struct PathRule {
     /// parsed: the crate drops a generic scriptlet (`##+js(…)` with no
     /// domain), and the location mask is what scopes the rule anyway.
     generic: bool,
-    /// A plain `#@#` exception. Such a rule can cancel a selector the main
-    /// engine already returned, but the main engine could not apply its
-    /// location/app scope; when this rule reaches the page, the main hiding
-    /// selectors have to travel inline instead of in the per-host stylesheet.
-    hide_exception: bool,
+    /// An `#@#`-family exception. Its action decides what it cancels: a
+    /// selector, a style/procedural action, or a scriptlet. The main engine
+    /// cannot apply its location/app scope, so the page has to subtract the
+    /// matching main-engine answer itself.
+    exception: bool,
 }
 
 impl PathCosmetics {
@@ -1953,11 +2068,26 @@ impl PathCosmetics {
             .collect()
     }
 
-    /// Whether one of the matched rules is a page-scoped `#@#` exception.
-    fn has_hide_exception(&self, subset: &[usize]) -> bool {
+    /// The page-scoped exceptions that cover this page, parsed the same way
+    /// the side engine parses them. Each one names what the main engine has
+    /// to give back: an unhide selector, a style/procedural action, or a
+    /// scriptlet invocation.
+    fn exception_filters(&self, subset: &[usize], host: &str) -> Vec<CosmeticFilter> {
         subset
             .iter()
-            .any(|&index| self.rules[index].hide_exception)
+            .filter_map(|&index| {
+                let rule = &self.rules[index];
+                if !rule.exception {
+                    return None;
+                }
+                let mut line = String::new();
+                if rule.generic {
+                    line.push_str(host);
+                }
+                line.push_str(&rule.text);
+                CosmeticFilter::parse(&line, false, PermissionMask::default()).ok()
+            })
+            .collect()
     }
 
     /// The engine for one matched subset on one host, built on first use.
@@ -2002,6 +2132,16 @@ impl PathCosmetics {
         engines.insert(key, engine.clone());
         engine
     }
+}
+
+/// A plain unhide selector (`#@#sel`, or the selector-only `#@?#sel`): the
+/// only exception that changes the host hiding stylesheet. Style and
+/// scriptlet exceptions leave it alone.
+fn is_plain_hide_exception(filter: &CosmeticFilter) -> bool {
+    filter.mask.contains(CosmeticFilterMask::UNHIDE)
+        && !filter.mask.contains(CosmeticFilterMask::SCRIPT_INJECT)
+        && filter.action.is_none()
+        && filter.plain_css_selector().is_some()
 }
 
 /// What the path-bracket scan of the loaded lists has collected, before the
@@ -2159,7 +2299,7 @@ fn path_in_domain_parts(
                 }),
                 app: app.clone(),
                 generic: true,
-                hide_exception: marker == "#@#",
+                exception: EXCEPTION_MARKERS.contains(&marker),
             });
             continue;
         }
@@ -2177,7 +2317,7 @@ fn path_in_domain_parts(
                     }),
                     app: app.clone(),
                     generic: domains.is_empty(),
-                    hide_exception: marker == "#@#",
+                    exception: EXCEPTION_MARKERS.contains(&marker),
                 });
             }
             None => {
@@ -2189,7 +2329,7 @@ fn path_in_domain_parts(
                         location: None,
                         app: app.clone(),
                         generic: domains.is_empty(),
-                        hide_exception: marker == "#@#",
+                        exception: EXCEPTION_MARKERS.contains(&marker),
                     });
                 } else {
                     plain.push(domains);
@@ -2312,7 +2452,7 @@ fn bracket_cosmetic_line(line: &str, path: &mut PathScan) -> Option<String> {
                 location,
                 app,
                 generic,
-                hide_exception: marker == "#@#",
+                exception: EXCEPTION_MARKERS.contains(&marker),
             });
             Some(String::new())
         }
@@ -9115,6 +9255,57 @@ mod tests {
     }
 
     #[test]
+    fn scoped_default_style_exceptions_keep_plain_hiding_apart() {
+        let fe = cosmetic_engine(
+            "shop.test##.plain\n\
+             shop.test#$#.style-only { display: none !important }\n\
+             shop.test#$#.both { display: none !important }\n\
+             shop.test##.both\n\
+             [$path=/tv]shop.test##.path-hidden\n\
+             [$path=/tv]shop.test#@#.plain\n\
+             [$path=/tv]shop.test#@#.both\n\
+             [$path=/tv]shop.test#@$#.style-only { display: none !important }\n\
+             [$path=/tv]shop.test#@$#.path-hidden { display: none !important }\n",
+        );
+        let tv = fe.cosmetic_resources("https://shop.test/tv");
+        assert!(
+            !tv.hide_selectors.iter().any(|s| s == ".plain"),
+            "a plain unhide cancels the plain hide: {:?}",
+            tv
+        );
+        assert!(
+            !tv.hide_selectors.iter().any(|s| s == ".style-only"),
+            "a default style exception cancels the style action: {:?}",
+            tv
+        );
+        assert!(
+            tv.hide_selectors.iter().any(|s| s == ".both"),
+            "the plain unhide must not cancel the style action too: {:?}",
+            tv
+        );
+        assert!(
+            tv.style_rules
+                .iter()
+                .any(|(s, css)| s == ".path-hidden" && css == "display: none !important"),
+            "a style exception must not cancel a path plain hide: {:?}",
+            tv
+        );
+
+        let other = fe.cosmetic_resources("https://shop.test/other");
+        assert!(other.hide_selectors.iter().any(|s| s == ".plain"));
+        assert!(other.hide_selectors.iter().any(|s| s == ".style-only"));
+        assert!(other.hide_selectors.iter().any(|s| s == ".both"));
+        assert!(
+            !other
+                .style_rules
+                .iter()
+                .any(|(s, _)| s == ".path-hidden"),
+            "{:?}",
+            other.style_rules
+        );
+    }
+
+    #[test]
     fn a_scoped_style_exception_does_not_cancel_element_hiding() {
         let fe = cosmetic_engine(
             "shop.test##.ad\n\
@@ -9122,5 +9313,115 @@ mod tests {
         );
         let tv = fe.cosmetic_resources("https://shop.test/tv");
         assert!(tv.hide_selectors.iter().any(|s| s == ".ad"), "{:?}", tv);
+    }
+
+    #[test]
+    fn scoped_style_exceptions_cancel_classic_style_rules() {
+        let fe = cosmetic_engine(
+            "shop.test#$#.banner { color: red }\n\
+             shop.test#$#.banner { color: blue }\n\
+             shop.test##.still-hidden\n\
+             ##.generic-ad { display: block !important }\n\
+             [$path=/tv]shop.test#@$#.banner { color: red }\n\
+             [$path=/tv]shop.test#@$#.generic-ad { display: block !important }\n",
+        );
+        let tv = fe.cosmetic_resources("https://shop.test/tv");
+        assert!(
+            !tv.style_rules
+                .iter()
+                .any(|(s, css)| s == ".banner" && css == "color: red"),
+            "{:?}",
+            tv.style_rules
+        );
+        assert!(
+            tv.style_rules
+                .iter()
+                .any(|(s, css)| s == ".banner" && css == "color: blue"),
+            "a different action stays: {:?}",
+            tv.style_rules
+        );
+        assert!(tv.hide_selectors.iter().any(|s| s == ".still-hidden"));
+        assert!(
+            !tv.style_rules.iter().any(|(s, _)| s == ".generic-ad"),
+            "a generic style is cancelled too: {:?}",
+            tv.style_rules
+        );
+
+        let other = fe.cosmetic_resources("https://shop.test/other");
+        assert!(
+            other
+                .style_rules
+                .iter()
+                .any(|(s, css)| s == ".banner" && css == "color: red"),
+            "{:?}",
+            other.style_rules
+        );
+        assert!(other.style_rules.iter().any(|(s, _)| s == ".generic-ad"));
+    }
+
+    #[test]
+    fn scoped_procedural_exceptions_cancel_classic_actions() {
+        let fe = cosmetic_engine(
+            "shop.test#?#.late:has-text(Sponsored)\n\
+             shop.test#?#.box:style(color: red)\n\
+             [$path=/tv]shop.test#@$?#.late:has-text(Sponsored)\n\
+             [$path=/tv]shop.test#@$?#.box:style(color: red)\n",
+        );
+        let tv = fe.cosmetic_resources("https://shop.test/tv");
+        assert!(
+            !tv.procedural.iter().any(|p| p.contains("has-text")),
+            "{:?}",
+            tv.procedural
+        );
+        assert!(
+            !tv.style_rules.iter().any(|(s, _)| s == ".box"),
+            "{:?}",
+            tv.style_rules
+        );
+
+        let other = fe.cosmetic_resources("https://shop.test/other");
+        assert!(
+            other.procedural.iter().any(|p| p.contains("has-text")),
+            "{:?}",
+            other.procedural
+        );
+        assert!(
+            other
+                .style_rules
+                .iter()
+                .any(|(s, css)| s == ".box" && css == "color: red"),
+            "{:?}",
+            other.style_rules
+        );
+    }
+
+    #[test]
+    fn scoped_scriptlet_exceptions_cancel_classic_scriptlets() {
+        let fe = cosmetic_engine(
+            "shop.test#%#//scriptlet('set-constant', 'adblock', 'false')\n\
+             shop.test#%#//scriptlet('set-constant', 'youtube', 'false')\n\
+             [$path=/tv]shop.test#@%#//scriptlet('set-constant', 'adblock', 'false')\n",
+        );
+        let tv = fe.cosmetic_resources("https://shop.test/tv");
+        assert!(!tv.scriptlets.contains("adblock"), "{}", tv.scriptlets);
+        assert!(tv.scriptlets.contains("youtube"), "{}", tv.scriptlets);
+
+        let other = fe.cosmetic_resources("https://shop.test/other");
+        assert!(other.scriptlets.contains("adblock"), "{}", other.scriptlets);
+        assert!(other.scriptlets.contains("youtube"), "{}", other.scriptlets);
+    }
+
+    #[test]
+    fn an_extended_selector_only_exception_still_uses_inline_hides() {
+        let fe = cosmetic_engine(
+            "shop.test##.ad\n\
+             [$path=/tv]shop.test#@?#.ad\n",
+        );
+        let tv = fe.cosmetic_resources("https://shop.test/tv");
+        assert!(tv.inline_hides, "{:?}", tv);
+        assert!(!tv.hide_selectors.iter().any(|s| s == ".ad"), "{:?}", tv);
+        let other = fe.cosmetic_resources("https://shop.test/other");
+        assert!(!other.inline_hides, "{:?}", other);
+        assert!(other.hide_selectors.iter().any(|s| s == ".ad"));
     }
 }
