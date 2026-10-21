@@ -236,16 +236,30 @@ class AdGuardViewModel(
             is AdGuardIntent.ToggleFirewall ->
                 repository.toggleFirewall(!uiState.value.settings.isFirewallEnabled)
 
-            is AdGuardIntent.ToggleEcoMode ->
+            is AdGuardIntent.ToggleEcoMode -> {
                 repository.toggleEcoBatteryMode(!uiState.value.settings.isEcoBatteryModeEnabled)
+                syncConfig()
+            }
 
             is AdGuardIntent.ToggleStealth ->
                 repository.toggleStealthMode(!uiState.value.settings.isStealthModeEnabled)
 
-            is AdGuardIntent.ToggleBlockQuic -> repository.toggleBlockQuic(intent.enabled)
-            is AdGuardIntent.ToggleBlockDoh -> repository.toggleBlockDoh(intent.enabled)
-            is AdGuardIntent.ToggleLogAllowed -> repository.toggleLogAllowed(intent.enabled)
-            is AdGuardIntent.SetBlockMode -> repository.setBlockMode(intent.mode)
+            is AdGuardIntent.ToggleBlockQuic -> {
+                repository.toggleBlockQuic(intent.enabled)
+                syncConfig()
+            }
+            is AdGuardIntent.ToggleBlockDoh -> {
+                repository.toggleBlockDoh(intent.enabled)
+                syncConfig()
+            }
+            is AdGuardIntent.ToggleLogAllowed -> {
+                repository.toggleLogAllowed(intent.enabled)
+                syncConfig()
+            }
+            is AdGuardIntent.SetBlockMode -> {
+                repository.setBlockMode(intent.mode)
+                syncConfig()
+            }
             is AdGuardIntent.SearchQueryChanged -> _searchQuery.value = intent.query
             is AdGuardIntent.FilterStatusChanged -> _statusFilter.value = intent.status
             is AdGuardIntent.InspectLog -> _inspectedLog.value = intent.log

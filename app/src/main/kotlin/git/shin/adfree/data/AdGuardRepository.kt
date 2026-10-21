@@ -456,22 +456,55 @@ class AdGuardRepository(
         }
     }
 
-    /** Turns one list on or off; enabling downloads it when the file is missing. */
+    /**
+     * Turns one list on or off. Enabling a list whose body is missing first
+     * downloads it; the switch only moves to "on" after the file is on disk,
+     * so a failed request can never leave the UI claiming a list is active.
+     */
     fun toggleFilterList(listId: String, enabled: Boolean) {
         scope.launch {
-            _filterLists.update { lists ->
-                lists.map { if (it.id == listId) it.copy(isEnabled = enabled) else it }
-            }
-            val list = _filterLists.value.firstOrNull { it.id == listId }
-            val missingBody = list != null &&
-                withContext(Dispatchers.IO) { engine.filterState(list.id, withMeta = false) == null }
-            if (enabled && list != null && !list.isCustom && missingBody &&
-                !list.subscriptionUrl.isNullOrBlank()
-            ) {
-                _loadingMessage.value = "Đang tải ${list.name}…"
-                val result = withContext(Dispatchers.IO) { engine.downloadList(list) }
-                showTransientStatus(result.message)
-                if (result.ok) applyDownloadResult(list.id, result)
+            val list = _filterLists.value.firstOrNull { it.id == listId } ?: return@launch
+            if (!enabled) {
+                _filterLists.update { lists ->
+                    lists.map { if (it.id == listId) it.copy(isEnabled = false) else it }
+                }
+            } else {
+                val missingBody = withContext(Dispatchers.IO) {
+                    engine.filterState(list.id, withMeta = false) == null
+                }
+                when {
+                    list.isCustom || !missingBody -> {
+                        _filterLists.update { lists ->
+                            lists.map { if (it.id == listId) it.copy(isEnabled = true) else it }
+                        }
+                    }
+                    list.subscriptionUrl.isNullOrBlank() -> {
+                        _filterLists.update { lists ->
+                            lists.map { if (it.id == listId) it.copy(isEnabled = false) else it }
+                        }
+                        showTransientStatus(
+                            "Không có nội dung ${list.name}; hãy thêm lại hoặc chọn tệp khác",
+                        )
+                    }
+                    else -> {
+                        // Keep the switch off while the fetch is in flight; only
+                        // a successful download may turn it on.
+                        _filterLists.update { lists ->
+                            lists.map { if (it.id == listId) it.copy(isEnabled = false) else it }
+                        }
+                        _loadingMessage.value = "Đang tải ${list.name}…"
+                        val result = withContext(Dispatchers.IO) { engine.downloadList(list) }
+                        showTransientStatus(result.message)
+                        if (result.ok) {
+                            applyDownloadResult(list.id, result)
+                            _filterLists.update { lists ->
+                                lists.map {
+                                    if (it.id == listId) it.copy(isEnabled = true) else it
+                                }
+                            }
+                        }
+                    }
+                }
             }
             saveFilterChoices()
             pushListsToEngine()
@@ -555,7 +588,7 @@ class AdGuardRepository(
                 name = name.ifBlank { trimmedUrl.substringAfter("//").take(40) },
                 description = "Bộ lọc tùy chỉnh của bạn",
                 ruleCount = 0,
-                isEnabled = true,
+                isEnabled = false,
                 category = "custom",
                 version = "standard",
                 isOnlineSubscription = true,
@@ -567,7 +600,12 @@ class AdGuardRepository(
             _loadingMessage.value = "Đang tải ${list.name}…"
             val result = withContext(Dispatchers.IO) { engine.downloadList(list) }
             showTransientStatus(result.message)
-            if (result.ok) applyDownloadResult(list.id, result)
+            if (result.ok) {
+                applyDownloadResult(list.id, result)
+                _filterLists.update { lists ->
+                    lists.map { if (it.id == list.id) it.copy(isEnabled = true) else it }
+                }
+            }
             saveFilterChoices()
             pushListsToEngine()
         }
@@ -928,18 +966,31 @@ class AdGuardRepository(
         pushScriptsToCore()
     }
 
+    /**
+     * Enables a script only after its body exists. Catalogue entries start
+     * without one, so the download must finish first; a failed fetch leaves
+     * the switch off instead of claiming a script is running.
+     */
     fun toggleScript(id: String, enabled: Boolean) {
         scope.launch {
-            _userscripts.update { list ->
-                list.map { if (it.id == id) it.copy(isEnabled = enabled) else it }
+            val script = _userscripts.value.firstOrNull { it.id == id } ?: return@launch
+            var nextEnabled = enabled
+            if (enabled) {
+                val missingBody = withContext(Dispatchers.IO) { engine.scriptState(id) == null }
+                if (missingBody) {
+                    if (script.url.isBlank()) {
+                        showTransientStatus("Không tìm thấy nội dung ${script.name}")
+                        nextEnabled = false
+                    } else {
+                        _loadingMessage.value = "Đang tải ${script.name}…"
+                        val result = downloadScriptBody(script)
+                        showTransientStatus(result.message)
+                        nextEnabled = result.ok
+                    }
+                }
             }
-            val script = _userscripts.value.firstOrNull { it.id == id }
-            // Catalogue scripts start without a body: enabling one fetches it.
-            if (enabled && script != null && script.url.isNotBlank() &&
-                withContext(Dispatchers.IO) { engine.scriptState(script.id) } == null
-            ) {
-                _loadingMessage.value = "Đang tải ${script.name}…"
-                showTransientStatus(downloadScriptBody(script))
+            _userscripts.update { list ->
+                list.map { if (it.id == id) it.copy(isEnabled = nextEnabled) else it }
             }
             saveScripts()
             pushScriptsToCore()
@@ -1087,7 +1138,7 @@ class AdGuardRepository(
                 },
                 description = description.trim().take(300).ifEmpty { "Tiện ích tùy chỉnh của bạn" },
                 url = trimmed,
-                isEnabled = true,
+                isEnabled = false,
                 isUserAdded = true,
             )
             // Another tap can pass the check above before this coroutine runs;
@@ -1105,7 +1156,13 @@ class AdGuardRepository(
                 return@launch
             }
             _loadingMessage.value = "Đang tải ${script.name}…"
-            showTransientStatus(downloadScriptBody(script))
+            val result = downloadScriptBody(script)
+            showTransientStatus(result.message)
+            if (result.ok) {
+                _userscripts.update { list ->
+                    list.map { if (it.id == script.id) it.copy(isEnabled = true) else it }
+                }
+            }
             saveScripts()
             pushScriptsToCore()
         }
@@ -1115,17 +1172,27 @@ class AdGuardRepository(
         scope.launch {
             val script = _userscripts.value.firstOrNull { it.id == id } ?: return@launch
             _loadingMessage.value = "Đang tải ${script.name}…"
-            showTransientStatus(downloadScriptBody(script))
+            val result = downloadScriptBody(script)
+            showTransientStatus(result.message)
             saveScripts()
             pushScriptsToCore()
         }
     }
 
-    /** Downloads one script body to the store; returns the result line for the UI. */
-    private suspend fun downloadScriptBody(script: UserScriptInfo): String {
-        if (script.url.isBlank()) return "Tiện ích này không có URL"
+    private data class ScriptDownloadResult(val ok: Boolean, val message: String)
+
+    /** Downloads one script body to the store and reports whether it is usable. */
+    private suspend fun downloadScriptBody(script: UserScriptInfo): ScriptDownloadResult {
+        if (script.url.isBlank()) {
+            return ScriptDownloadResult(false, "Tiện ích này không có URL")
+        }
         val outcome = withContext(Dispatchers.IO) { engine.scriptFetch(script.id, script.url) }
-        if (!outcome.ok) return "Không tải được ${script.name}: ${outcome.message}"
+        if (!outcome.ok) {
+            return ScriptDownloadResult(
+                false,
+                "Không tải được ${script.name}: ${outcome.message}",
+            )
+        }
         _userscripts.update { list ->
             list.map {
                 if (it.id == script.id) {
@@ -1136,7 +1203,10 @@ class AdGuardRepository(
                 } else it
             }
         }
-        return "Đã tải ${script.name} (${outcome.sizeBytes / 1024} KB)"
+        return ScriptDownloadResult(
+            true,
+            "Đã tải ${script.name} (${outcome.sizeBytes / 1024} KB)",
+        )
     }
 
     /** Removes a user-added script (catalogue entries are toggled off, not deleted). */
