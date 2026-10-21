@@ -17,6 +17,7 @@ import git.shin.adfree.model.FilterList
 import git.shin.adfree.model.FilterStatus
 import git.shin.adfree.model.UserScriptInfo
 import git.shin.adfree.model.UserScriptStoreItem
+import git.shin.adfree.model.UserScriptStoreSort
 import git.shin.adfree.model.UserScriptStoreState
 import git.shin.adfree.model.NetworkRequestLog
 import git.shin.adfree.model.ProtectionStats
@@ -954,17 +955,38 @@ class AdGuardRepository(
 
     /**
      * Searches Greasy Fork with a small debounce. The query is trimmed and
-     * capped so a paste cannot turn into an unbounded request URL.
+     * capped so a paste cannot turn into an unbounded request URL. A new
+     * query always starts from page 1; the current sort is preserved.
      */
-    fun searchScriptStore(query: String) {
+    fun searchScriptStore(
+        query: String,
+        sort: UserScriptStoreSort = _scriptStore.value.sort,
+    ) {
         val trimmed = query.trim().take(80)
-        _scriptStore.update { it.copy(query = trimmed, loading = true, error = null) }
+        _scriptStore.update {
+            it.copy(
+                query = trimmed,
+                sort = sort,
+                loading = true,
+                loadingMore = false,
+                page = 1,
+                hasMore = false,
+                error = null,
+            )
+        }
         scriptStoreJob?.cancel()
         scriptStoreJob = scope.launch {
             try {
                 if (trimmed.isNotEmpty()) delay(350)
-                val items = withContext(Dispatchers.IO) { fetchGreasyFork(trimmed) }
-                _scriptStore.update { it.copy(items = items, loading = false) }
+                val items = withContext(Dispatchers.IO) { fetchGreasyFork(trimmed, 1, sort) }
+                _scriptStore.update {
+                    it.copy(
+                        items = items,
+                        loading = false,
+                        page = 1,
+                        hasMore = items.size >= GREASY_FORK_LIMIT,
+                    )
+                }
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
@@ -978,11 +1000,51 @@ class AdGuardRepository(
         }
     }
 
-    private fun fetchGreasyFork(query: String): List<UserScriptStoreItem> {
-        val encoded = URLEncoder.encode(query, "UTF-8")
-        val url = if (encoded.isEmpty()) GREASY_FORK_API else "$GREASY_FORK_API?q=$encoded"
+    /** Applies a different Greasy Fork ordering and repeats the search. */
+    fun setScriptStoreSort(sort: UserScriptStoreSort) {
+        if (sort == _scriptStore.value.sort) return
+        searchScriptStore(_scriptStore.value.query, sort)
+    }
+
+    /** Fetches the next page without dropping the rows already on screen. */
+    fun loadMoreScriptStore() {
+        val snapshot = _scriptStore.value
+        if (snapshot.loading || snapshot.loadingMore || !snapshot.hasMore) return
+        val nextPage = snapshot.page + 1
+        _scriptStore.update { it.copy(loadingMore = true, error = null) }
+        scriptStoreJob = scope.launch {
+            try {
+                val more = withContext(Dispatchers.IO) {
+                    fetchGreasyFork(snapshot.query, nextPage, snapshot.sort)
+                }
+                _scriptStore.update {
+                    it.copy(
+                        items = mergeGreasyForkItems(it.items, more),
+                        loadingMore = false,
+                        page = nextPage,
+                        hasMore = more.size >= GREASY_FORK_LIMIT,
+                    )
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                _scriptStore.update {
+                    it.copy(
+                        loadingMore = false,
+                        error = e.message?.take(160) ?: "Không tải thêm được tiện ích",
+                    )
+                }
+            }
+        }
+    }
+
+    private fun fetchGreasyFork(
+        query: String,
+        page: Int,
+        sort: UserScriptStoreSort,
+    ): List<UserScriptStoreItem> {
         val request = Request.Builder()
-            .url(url)
+            .url(greasyForkUrl(query, page, sort))
             .header("Accept", "application/json")
             .header("User-Agent", "AdFree/1.0 (Android)")
             .build()
@@ -1200,6 +1262,36 @@ class AdGuardRepository(
             DnsProvider("google", "Google DNS", "8.8.8.8", ProtocolType.DNS_UDP, "Resolver toàn cầu", pingMs = 11),
         )
     }
+}
+
+/**
+ * Greasy Fork only returns 50 rows per page. `page` starts at 1 and is omitted
+ * for the first page so the default request stays byte-for-byte compatible.
+ */
+internal fun greasyForkUrl(
+    query: String,
+    page: Int,
+    sort: UserScriptStoreSort,
+): String {
+    val params = ArrayList<String>(3)
+    if (query.isNotEmpty()) params += "q=${URLEncoder.encode(query, "UTF-8")}"
+    if (page > 1) params += "page=$page"
+    sort.apiValue?.let { params += "sort=$it" }
+    return if (params.isEmpty()) GREASY_FORK_API else "$GREASY_FORK_API?${params.joinToString("&")}"
+}
+
+/** Appends the next page, dropping rows that point at the same `.user.js`. */
+internal fun mergeGreasyForkItems(
+    existing: List<UserScriptStoreItem>,
+    incoming: List<UserScriptStoreItem>,
+): List<UserScriptStoreItem> {
+    val seen = existing.mapTo(HashSet(existing.size)) { it.url }
+    val merged = ArrayList<UserScriptStoreItem>(existing.size + incoming.size)
+    merged += existing
+    incoming.forEach { item ->
+        if (item.url.isNotBlank() && seen.add(item.url)) merged += item
+    }
+    return merged
 }
 
 /**

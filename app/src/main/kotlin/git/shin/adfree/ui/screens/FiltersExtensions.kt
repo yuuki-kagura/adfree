@@ -3,6 +3,7 @@ package git.shin.adfree.ui.screens
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -16,6 +17,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
@@ -30,6 +32,8 @@ import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.FilterChip
+import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.OutlinedButton
@@ -56,6 +60,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import git.shin.adfree.model.UserScriptInfo
 import git.shin.adfree.model.UserScriptStoreItem
+import git.shin.adfree.model.UserScriptStoreSort
 import git.shin.adfree.model.UserScriptStoreState
 import git.shin.adfree.ui.theme.AdGuardBlueDns
 import git.shin.adfree.ui.theme.AdGuardDarkOutline
@@ -187,6 +192,8 @@ fun UserScriptStoreSheet(
     state: UserScriptStoreState,
     installedByUrl: Map<String, UserScriptInfo>,
     onQueryChange: (String) -> Unit,
+    onSortChange: (UserScriptStoreSort) -> Unit,
+    onLoadMore: () -> Unit,
     onInstall: (UserScriptStoreItem) -> Unit,
     onEnable: (UserScriptInfo) -> Unit,
     onOpenPage: (String) -> Unit,
@@ -236,6 +243,36 @@ fun UserScriptStoreSheet(
                 unfocusedTextColor = AdGuardTextPrimary,
             ),
         )
+
+        Spacer(modifier = Modifier.height(10.dp))
+
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .horizontalScroll(rememberScrollState()),
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+            listOf(
+                UserScriptStoreSort.RELEVANCE to "Mặc định",
+                UserScriptStoreSort.DAILY_INSTALLS to "Cài/ngày",
+                UserScriptStoreSort.TOTAL_INSTALLS to "Tổng cài",
+                UserScriptStoreSort.RATINGS to "Đánh giá",
+                UserScriptStoreSort.UPDATED to "Mới cập nhật",
+                UserScriptStoreSort.NAME to "Tên A-Z",
+            ).forEach { (sort, label) ->
+                FilterChip(
+                    selected = state.sort == sort,
+                    onClick = { onSortChange(sort) },
+                    label = { Text(label, fontSize = 10.sp) },
+                    colors = FilterChipDefaults.filterChipColors(
+                        selectedContainerColor = AdGuardGreenPrimary,
+                        selectedLabelColor = Color.Black,
+                        containerColor = AdGuardDarkSurface,
+                        labelColor = AdGuardTextSecondary,
+                    ),
+                )
+            }
+        }
 
         Spacer(modifier = Modifier.height(10.dp))
 
@@ -298,6 +335,31 @@ fun UserScriptStoreSheet(
                             onEnable = onEnable,
                             onOpenPage = { onOpenPage(item.pageUrl) },
                         )
+                    }
+                    if (state.hasMore || state.loadingMore) {
+                        item(key = "load_more") {
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(vertical = 8.dp),
+                                contentAlignment = Alignment.Center,
+                            ) {
+                                if (state.loadingMore) {
+                                    CircularProgressIndicator(
+                                        color = AdGuardGreenPrimary,
+                                        strokeWidth = 2.dp,
+                                        modifier = Modifier.size(24.dp),
+                                    )
+                                } else {
+                                    OutlinedButton(
+                                        onClick = onLoadMore,
+                                        modifier = Modifier.testTag("script_store_load_more"),
+                                    ) {
+                                        Text("Tải thêm", fontSize = 12.sp, color = AdGuardGreenLight)
+                                    }
+                                }
+                            }
+                        }
                     }
                 }
             }

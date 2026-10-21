@@ -343,6 +343,8 @@ fun FiltersScreen(
                 state = state.scriptStore,
                 installedByUrl = installedByUrl,
                 onQueryChange = { viewModel.onIntent(AdGuardIntent.SearchScriptStore(it)) },
+                onSortChange = { sort -> viewModel.onIntent(AdGuardIntent.SortScriptStore(sort)) },
+                onLoadMore = { viewModel.onIntent(AdGuardIntent.LoadMoreScriptStore) },
                 onInstall = { item ->
                     viewModel.onIntent(
                         AdGuardIntent.InstallStoreScript(item.name, item.url, item.description),

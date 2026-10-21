@@ -341,6 +341,8 @@ class AdGuardViewModel(
                 if (intent.show) repository.openScriptStore()
             }
             is AdGuardIntent.SearchScriptStore -> repository.searchScriptStore(intent.query)
+            is AdGuardIntent.SortScriptStore -> repository.setScriptStoreSort(intent.sort)
+            is AdGuardIntent.LoadMoreScriptStore -> repository.loadMoreScriptStore()
             is AdGuardIntent.InstallStoreScript -> {
                 repository.addScript(intent.name, intent.url, intent.description)
                 emit(AdGuardEffect.ShowSnackbar("Đang cài ${intent.name}…"))

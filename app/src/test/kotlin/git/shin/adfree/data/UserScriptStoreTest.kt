@@ -1,5 +1,7 @@
 package git.shin.adfree.data
 
+import git.shin.adfree.model.UserScriptStoreItem
+import git.shin.adfree.model.UserScriptStoreSort
 import org.json.JSONArray
 import org.json.JSONObject
 import org.junit.Assert.assertEquals
@@ -76,4 +78,46 @@ class UserScriptStoreTest {
         assertEquals(50, items.size)
         assertTrue(items.all { it.url.startsWith("https://") })
     }
+
+    @Test
+    fun `url keeps the first page and default sort byte identical`() {
+        assertEquals(
+            "https://api.greasyfork.org/en/scripts.json",
+            greasyForkUrl("", 1, UserScriptStoreSort.RELEVANCE),
+        )
+    }
+
+    @Test
+    fun `url carries the page and the selected sort`() {
+        assertEquals(
+            "https://api.greasyfork.org/en/scripts.json?q=ad+block&page=2&sort=daily_installs",
+            greasyForkUrl("ad block", 2, UserScriptStoreSort.DAILY_INSTALLS),
+        )
+        assertEquals(
+            "https://api.greasyfork.org/en/scripts.json?page=3&sort=name",
+            greasyForkUrl("", 3, UserScriptStoreSort.NAME),
+        )
+    }
+
+    @Test
+    fun `merging a page drops the same download url`() {
+        val first = listOf(item(1), item(2))
+        val second = listOf(item(2), item(3), item(3))
+        val merged = mergeGreasyForkItems(first, second)
+
+        assertEquals(listOf(1L, 2L, 3L), merged.map { it.id })
+    }
+
+    private fun item(id: Int) = UserScriptStoreItem(
+        id = id.toLong(),
+        name = "Script $id",
+        description = "",
+        url = "https://update.greasyfork.org/scripts/$id/Test.user.js",
+        pageUrl = "https://greasyfork.org/scripts/$id",
+        version = "1",
+        dailyInstalls = 0,
+        totalInstalls = 0,
+        license = "",
+        codeSizeBytes = 0,
+    )
 }

@@ -10,6 +10,7 @@ import git.shin.adfree.model.ProtectionSettings
 import git.shin.adfree.model.ProtectionStats
 import git.shin.adfree.model.ThreatAnalysisResult
 import git.shin.adfree.model.UserScriptInfo
+import git.shin.adfree.model.UserScriptStoreSort
 import git.shin.adfree.model.UserScriptStoreState
 
 /** Consolidated MVI state. */
@@ -104,6 +105,8 @@ sealed interface AdGuardIntent {
     data class AddScript(val name: String, val url: String) : AdGuardIntent
     data class ShowScriptStore(val show: Boolean) : AdGuardIntent
     data class SearchScriptStore(val query: String) : AdGuardIntent
+    data class SortScriptStore(val sort: UserScriptStoreSort) : AdGuardIntent
+    data object LoadMoreScriptStore : AdGuardIntent
     data class InstallStoreScript(
         val name: String,
         val url: String,

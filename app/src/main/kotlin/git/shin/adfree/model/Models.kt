@@ -173,11 +173,25 @@ data class UserScriptStoreItem(
     val codeSizeBytes: Long,
 )
 
+/** Greasy Fork's supported orderings; `null` keeps the API default. */
+enum class UserScriptStoreSort(val apiValue: String?) {
+    RELEVANCE(null),
+    DAILY_INSTALLS("daily_installs"),
+    TOTAL_INSTALLS("total_installs"),
+    RATINGS("ratings"),
+    UPDATED("updated"),
+    NAME("name"),
+}
+
 /** Search state for the store sheet. */
 data class UserScriptStoreState(
     val query: String = "",
     val items: List<UserScriptStoreItem> = emptyList(),
     val loading: Boolean = false,
+    val loadingMore: Boolean = false,
+    val page: Int = 1,
+    val hasMore: Boolean = false,
+    val sort: UserScriptStoreSort = UserScriptStoreSort.RELEVANCE,
     val error: String? = null,
 )
 
