@@ -3,8 +3,20 @@ package git.shin.adfree.data
 import android.content.Context
 import android.util.Log
 import git.shin.adfree.model.DnsBlockMode
+import git.shin.adfree.model.DnsProvider
 import git.shin.adfree.model.ProtectionSettings
+import git.shin.adfree.model.ProtocolType
+import org.json.JSONArray
 import org.json.JSONObject
+
+/** One per-app firewall choice, persisted without the display-only fields. */
+data class StoredAppFirewall(
+    val packageName: String,
+    val cellular: Boolean,
+    val wifi: Boolean,
+    val filtered: Boolean,
+    val screenOff: Boolean,
+)
 
 /**
  * The protection switches, kept across launches.
@@ -33,11 +45,66 @@ class SettingsPreferences(
         return parse(raw)
     }
 
+    @Synchronized
     fun save(settings: ProtectionSettings) {
-        if (!store.set(encode(settings))) {
+        // Merge into the existing blob: the same row also holds app-firewall
+        // overrides and custom DNS providers, and replacing it here would
+        // erase them every time a switch changes.
+        val json = currentJson() ?: JSONObject()
+        writeSettings(json, settings)
+        if (!store.set(json.toString())) {
             Log.w(TAG, "core refused the settings blob; retrying on the next change")
         }
     }
+
+    /** Non-default per-app choices; an absent package means all defaults. */
+    fun appFirewall(): List<StoredAppFirewall> = decodeArray(KEY_APP_FIREWALL) { obj ->
+        StoredAppFirewall(
+            packageName = obj.getString("package"),
+            cellular = obj.optBoolean("cellular", true),
+            wifi = obj.optBoolean("wifi", true),
+            filtered = obj.optBoolean("filtered", true),
+            screenOff = obj.optBoolean("screenOff", false),
+        )
+    }
+
+    @Synchronized
+    fun saveAppFirewall(rules: List<StoredAppFirewall>) =
+        encodeArray(KEY_APP_FIREWALL, rules) { rule ->
+            JSONObject()
+                .put("package", rule.packageName)
+                .put("cellular", rule.cellular)
+                .put("wifi", rule.wifi)
+                .put("filtered", rule.filtered)
+                .put("screenOff", rule.screenOff)
+        }
+
+    /** Custom resolvers only; the built-in list is code and is never stored. */
+    fun customDnsProviders(): List<DnsProvider> = decodeArray(KEY_DNS_PROVIDERS) { obj ->
+        DnsProvider(
+            id = obj.getString("id"),
+            name = obj.optString("name"),
+            address = obj.optString("address"),
+            type = ProtocolType.entries
+                .firstOrNull { it.name == obj.optString("type") }
+                ?: ProtocolType.DNS_UDP,
+            description = obj.optString("description"),
+            isCustom = true,
+            pingMs = obj.optInt("pingMs", 12),
+        )
+    }
+
+    @Synchronized
+    fun saveCustomDnsProviders(providers: List<DnsProvider>) =
+        encodeArray(KEY_DNS_PROVIDERS, providers) { provider ->
+            JSONObject()
+                .put("id", provider.id)
+                .put("name", provider.name)
+                .put("address", provider.address)
+                .put("type", provider.type.name)
+                .put("description", provider.description)
+                .put("pingMs", provider.pingMs)
+        }
 
     /** Moves a pre-migration blob out of SharedPreferences; null when there is none. */
     private fun migrateLegacy(): String? {
@@ -91,29 +158,54 @@ class SettingsPreferences(
         )
     }.getOrNull()
 
-    private fun encode(settings: ProtectionSettings): String = JSONObject()
-        .put("protection", settings.isProtectionActive)
-        .put("adBlocking", settings.isAdBlockingEnabled)
-        .put("tracking", settings.isTrackingProtectionEnabled)
-        .put("dns", settings.isDnsProtectionEnabled)
-        .put("https", settings.isHttpsFilteringEnabled)
-        .put("fullEch", settings.isFullEchEnabled)
-        .put("firewall", settings.isFirewallEnabled)
-        .put("eco", settings.isEcoBatteryModeEnabled)
-        .put("stealth", settings.isStealthModeEnabled)
-        .put("blockQuic", settings.blockQuic)
-        .put("blockDoh", settings.blockDoh)
-        .put("logAllowed", settings.logAllowedRequests)
-        .put("blockMode", settings.blockMode.name)
-        .put("stripUtm", settings.stripUtmTracking)
-        .put("blockWebRtc", settings.blockWebRtcLeaks)
-        .put("disguiseUa", settings.disguiseUserAgent)
-        .put("blockCookies", settings.blockThirdPartyCookies)
-        .put("dnsProvider", settings.selectedDnsProviderId)
-        .toString()
+    private fun writeSettings(json: JSONObject, settings: ProtectionSettings) {
+        json
+            .put("protection", settings.isProtectionActive)
+            .put("adBlocking", settings.isAdBlockingEnabled)
+            .put("tracking", settings.isTrackingProtectionEnabled)
+            .put("dns", settings.isDnsProtectionEnabled)
+            .put("https", settings.isHttpsFilteringEnabled)
+            .put("fullEch", settings.isFullEchEnabled)
+            .put("firewall", settings.isFirewallEnabled)
+            .put("eco", settings.isEcoBatteryModeEnabled)
+            .put("stealth", settings.isStealthModeEnabled)
+            .put("blockQuic", settings.blockQuic)
+            .put("blockDoh", settings.blockDoh)
+            .put("logAllowed", settings.logAllowedRequests)
+            .put("blockMode", settings.blockMode.name)
+            .put("stripUtm", settings.stripUtmTracking)
+            .put("blockWebRtc", settings.blockWebRtcLeaks)
+            .put("disguiseUa", settings.disguiseUserAgent)
+            .put("blockCookies", settings.blockThirdPartyCookies)
+            .put("dnsProvider", settings.selectedDnsProviderId)
+    }
+
+    private fun currentJson(): JSONObject? {
+        val raw = store.get() ?: migrateLegacy() ?: return null
+        return runCatching { JSONObject(raw) }.getOrNull()
+    }
+
+    private fun <T> decodeArray(key: String, decode: (JSONObject) -> T): List<T> =
+        currentJson()?.optJSONArray(key)?.let { array ->
+            runCatching {
+                (0 until array.length()).map { decode(array.getJSONObject(it)) }
+            }.getOrDefault(emptyList())
+        } ?: emptyList()
+
+    private fun <T> encodeArray(key: String, items: List<T>, encode: (T) -> JSONObject) {
+        val json = currentJson() ?: JSONObject()
+        val array = JSONArray()
+        items.forEach { array.put(encode(it)) }
+        json.put(key, array)
+        if (!store.set(json.toString())) {
+            Log.w(TAG, "core refused the settings blob; retrying on the next change")
+        }
+    }
 
     private companion object {
         const val TAG = "AdFreePrefs"
         const val KEY_SETTINGS = "protection_settings"
+        const val KEY_APP_FIREWALL = "app_firewall"
+        const val KEY_DNS_PROVIDERS = "custom_dns_providers"
     }
 }

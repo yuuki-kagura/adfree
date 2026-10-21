@@ -155,6 +155,16 @@ class AdGuardRepository(
      * before the configuration is pushed down to the core.
      */
     fun loadSettings() {
+        // Custom resolvers live in the settings blob; merge them before the
+        // selected id is resolved, otherwise a restart would point at a
+        // provider that only exists in memory.
+        val customDns = settingsPrefs.customDnsProviders()
+        if (customDns.isNotEmpty()) {
+            _dnsProviders.update { current ->
+                val ids = current.mapTo(HashSet(current.size)) { it.id }
+                current + customDns.filter { ids.add(it.id) }
+            }
+        }
         val stored = settingsPrefs.settings() ?: return
         // Terminating TLS with a certificate the device no longer trusts would
         // break every page it touches, so that switch only comes back when the
@@ -320,19 +330,30 @@ class AdGuardRepository(
         engine.setResolver(host, port)
     }
 
-    fun addCustomDnsProvider(name: String, address: String) {
-        val id = "custom_" + System.currentTimeMillis()
+    /** Adds/selects a resolver and returns the line the Settings snackbar shows. */
+    fun addCustomDnsProvider(name: String, address: String): String {
+        val trimmed = address.trim()
+        if (trimmed.isEmpty()) return "Địa chỉ DNS trống"
+        val existing = _dnsProviders.value.firstOrNull { it.address == trimmed }
+        if (existing != null) {
+            selectDnsProvider(existing.id)
+            return "Đã chọn ${existing.name}"
+        }
         val provider = DnsProvider(
-            id = id,
-            name = name.ifBlank { address },
-            address = address,
-            type = if (address.startsWith("https://")) ProtocolType.DNS_DOH else ProtocolType.DNS_UDP,
+            id = "custom_" + System.currentTimeMillis(),
+            name = name.trim().ifBlank { trimmed },
+            address = trimmed,
+            type = if (trimmed.startsWith("https://")) ProtocolType.DNS_DOH else ProtocolType.DNS_UDP,
             description = "Tùy chỉnh",
             isCustom = true,
         )
+        val (host, port) = provider.hostAndPort()
+            ?: return "Địa chỉ DNS không hợp lệ: $trimmed"
         _dnsProviders.update { it + provider }
-        provider.hostAndPort()?.let { (host, port) -> engine.setResolver(host, port) }
-        _settings.update { it.copy(selectedDnsProviderId = id) }
+        settingsPrefs.saveCustomDnsProviders(_dnsProviders.value.filter { it.isCustom })
+        engine.setResolver(host, port)
+        _settings.update { it.copy(selectedDnsProviderId = provider.id) }
+        return "Đã thêm DNS tùy chỉnh: ${provider.name}"
     }
 
     // ----------------------------------------------------------- filter lists
@@ -838,10 +859,15 @@ class AdGuardRepository(
         scope.launch {
             val apps = withContext(Dispatchers.IO) { readInstalledApps() }
             _appFirewallRules.value = apps
+            // The persisted exclusions must reach the tunnel before the user
+            // opens the Apps tab; otherwise a restart silently re-enables
+            // filtering for every excluded app.
+            pushAppRouting()
         }
     }
 
     private fun readInstalledApps(): List<AppFirewallRule> {
+        val overrides = settingsPrefs.appFirewall().associateBy { it.packageName }
         val pm = context.packageManager
         val installed = if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) {
             pm.getInstalledApplications(PackageManager.ApplicationInfoFlags.of(0L))
@@ -853,13 +879,14 @@ class AdGuardRepository(
             .asSequence()
             .filter { (it.flags and ApplicationInfo.FLAG_SYSTEM) == 0 || it.flags and ApplicationInfo.FLAG_UPDATED_SYSTEM_APP != 0 }
             .map { info ->
+                val saved = overrides[info.packageName]
                 AppFirewallRule(
                     packageName = info.packageName,
                     appName = pm.getApplicationLabel(info).toString(),
-                    isCellularAllowed = true,
-                    isWifiAllowed = true,
-                    isFilterRouted = true,
-                    blockWhenScreenOff = false,
+                    isCellularAllowed = saved?.cellular ?: true,
+                    isWifiAllowed = saved?.wifi ?: true,
+                    isFilterRouted = saved?.filtered ?: true,
+                    blockWhenScreenOff = saved?.screenOff ?: false,
                     category = appCategory(info),
                 )
             }
@@ -911,6 +938,30 @@ class AdGuardRepository(
                 } else app
             }
         }
+        saveAppFirewallRules()
+    }
+
+    /**
+     * Persists only the non-default choices. An absent package is all-default
+     * when the list is rebuilt after a restart, so the blob stays small.
+     */
+    private fun saveAppFirewallRules() {
+        val overrides = _appFirewallRules.value.mapNotNull { app ->
+            if (app.isCellularAllowed && app.isWifiAllowed &&
+                app.isFilterRouted && !app.blockWhenScreenOff
+            ) {
+                null
+            } else {
+                StoredAppFirewall(
+                    packageName = app.packageName,
+                    cellular = app.isCellularAllowed,
+                    wifi = app.isWifiAllowed,
+                    filtered = app.isFilterRouted,
+                    screenOff = app.blockWhenScreenOff,
+                )
+            }
+        }
+        settingsPrefs.saveAppFirewall(overrides)
     }
 
     /**

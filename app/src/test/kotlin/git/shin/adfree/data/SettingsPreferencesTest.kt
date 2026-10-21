@@ -3,7 +3,9 @@ package git.shin.adfree.data
 import android.content.Context
 import androidx.test.core.app.ApplicationProvider
 import git.shin.adfree.model.DnsBlockMode
+import git.shin.adfree.model.DnsProvider
 import git.shin.adfree.model.ProtectionSettings
+import git.shin.adfree.model.ProtocolType
 import org.json.JSONObject
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
@@ -128,5 +130,37 @@ class SettingsPreferencesTest {
         assertTrue(prefs().settings()!!.isProtectionActive)
         assertEquals("still there to retry later", stored, legacyRaw())
         assertNull(store.value)
+    }
+
+    @Test
+    fun `firewall overrides and custom dns survive a settings write`() {
+        val first = prefs()
+        first.saveAppFirewall(
+            listOf(StoredAppFirewall("com.example.browser", false, true, false, true)),
+        )
+        first.saveCustomDnsProviders(
+            listOf(
+                DnsProvider(
+                    id = "custom_1",
+                    name = "My resolver",
+                    address = "1.2.3.4",
+                    type = ProtocolType.DNS_UDP,
+                    description = "Tùy chỉnh",
+                    isCustom = true,
+                ),
+            ),
+        )
+        // The settings collector writes after a switch changes; it must merge
+        // into the same blob instead of dropping the two arrays above.
+        first.save(ProtectionSettings(isAdBlockingEnabled = false))
+
+        val second = prefs()
+        assertEquals(false, second.settings()!!.isAdBlockingEnabled)
+        assertEquals(
+            listOf(StoredAppFirewall("com.example.browser", false, true, false, true)),
+            second.appFirewall(),
+        )
+        assertEquals("My resolver", second.customDnsProviders().single().name)
+        assertEquals("1.2.3.4", second.customDnsProviders().single().address)
     }
 }

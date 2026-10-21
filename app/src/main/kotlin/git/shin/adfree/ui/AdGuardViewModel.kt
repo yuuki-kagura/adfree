@@ -294,8 +294,8 @@ class AdGuardViewModel(
             }
 
             is AdGuardIntent.AddCustomDnsProvider -> {
-                repository.addCustomDnsProvider(intent.name, intent.address)
-                emit(AdGuardEffect.ShowSnackbar("Đã thêm DNS tuỳ chỉnh"))
+                val message = repository.addCustomDnsProvider(intent.name, intent.address)
+                emit(AdGuardEffect.ShowSnackbar(message))
             }
 
             is AdGuardIntent.UpdateAppFirewall -> {

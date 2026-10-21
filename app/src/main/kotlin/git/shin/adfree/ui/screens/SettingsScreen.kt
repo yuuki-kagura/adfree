@@ -23,9 +23,11 @@ import androidx.compose.material.icons.filled.Bolt
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.ChevronRight
+import androidx.compose.material.icons.filled.Dns
 import androidx.compose.material.icons.filled.Science
 import androidx.compose.material.icons.filled.Visibility
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.FilterChip
@@ -34,6 +36,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Switch
 import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
@@ -60,6 +63,7 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LifecycleEventEffect
 import git.shin.adfree.core.MitmStatus
 import git.shin.adfree.model.DnsBlockMode
+import git.shin.adfree.model.DnsProvider
 import git.shin.adfree.ui.AdGuardTab
 import git.shin.adfree.ui.AdGuardIntent
 import git.shin.adfree.ui.AdGuardViewModel
@@ -169,6 +173,17 @@ fun SettingsScreen(
                     )
                 }
             }
+
+            Spacer(modifier = Modifier.height(24.dp))
+
+            DnsProviderSection(
+                providers = state.dnsProviders,
+                selectedId = state.settings.selectedDnsProviderId,
+                onSelect = { viewModel.onIntent(AdGuardIntent.SelectDnsProvider(it)) },
+                onAdd = { name, address ->
+                    viewModel.onIntent(AdGuardIntent.AddCustomDnsProvider(name, address))
+                },
+            )
 
             Spacer(modifier = Modifier.height(24.dp))
 
@@ -553,6 +568,183 @@ private fun CertificateDialog(pem: String, onDismiss: () -> Unit) {
             }) { Text("Copy") }
         },
         dismissButton = { TextButton(onClick = onDismiss) { Text("Đóng") } },
+    )
+}
+
+/**
+ * Resolver selection. The list is real state from the repository, including
+ * custom resolvers restored from the settings blob; before this section it
+ * existed only as an orphan intent with no screen.
+ */
+@Composable
+private fun DnsProviderSection(
+    providers: List<DnsProvider>,
+    selectedId: String,
+    onSelect: (String) -> Unit,
+    onAdd: (String, String) -> Unit,
+) {
+    var showDialog by remember { mutableStateOf(false) }
+    val selected = providers.firstOrNull { it.id == selectedId } ?: providers.firstOrNull()
+
+    Column {
+        Text(
+            text = "Máy chủ DNS",
+            fontSize = 14.sp,
+            fontWeight = FontWeight.Bold,
+            color = AdGuardTextPrimary,
+        )
+        Text(
+            text = "Resolver AdFree dùng để phân giải tên miền trước khi lọc.",
+            fontSize = 11.sp,
+            color = AdGuardTextMuted,
+        )
+        Spacer(modifier = Modifier.height(10.dp))
+        Card(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clickable { showDialog = true },
+            shape = RoundedCornerShape(12.dp),
+            colors = CardDefaults.cardColors(containerColor = AdGuardDarkSurface),
+        ) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 14.dp, vertical = 12.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Icon(
+                    imageVector = Icons.Default.Dns,
+                    contentDescription = null,
+                    tint = AdGuardBlueDns,
+                    modifier = Modifier.size(20.dp),
+                )
+                Spacer(modifier = Modifier.width(12.dp))
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = selected?.name ?: "Chưa chọn resolver",
+                        fontSize = 13.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = AdGuardTextPrimary,
+                    )
+                    Text(
+                        text = selected?.address ?: "Nhấn để chọn máy chủ DNS",
+                        fontSize = 10.sp,
+                        color = AdGuardTextMuted,
+                    )
+                    if (selected?.isCustom == true) {
+                        Text("Tùy chỉnh", fontSize = 9.sp, color = AdGuardBlueDns)
+                    }
+                }
+                Text("Đổi", fontSize = 12.sp, color = AdGuardBlueDns)
+            }
+        }
+    }
+
+    if (showDialog) {
+        DnsProviderDialog(
+            providers = providers,
+            selectedId = selectedId,
+            onDismiss = { showDialog = false },
+            onSelect = {
+                onSelect(it)
+                showDialog = false
+            },
+            onAdd = { name, address ->
+                onAdd(name, address)
+                showDialog = false
+            },
+        )
+    }
+}
+
+@Composable
+private fun DnsProviderDialog(
+    providers: List<DnsProvider>,
+    selectedId: String,
+    onDismiss: () -> Unit,
+    onSelect: (String) -> Unit,
+    onAdd: (String, String) -> Unit,
+) {
+    var name by remember { mutableStateOf("") }
+    var address by remember { mutableStateOf("") }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Máy chủ DNS", fontSize = 16.sp) },
+        text = {
+            Column(
+                modifier = Modifier
+                    .heightIn(max = 430.dp)
+                    .verticalScroll(rememberScrollState()),
+            ) {
+                providers.forEach { provider ->
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable { onSelect(provider.id) }
+                            .padding(vertical = 4.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        RadioButton(
+                            selected = provider.id == selectedId,
+                            onClick = { onSelect(provider.id) },
+                        )
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = provider.name,
+                                fontSize = 13.sp,
+                                color = AdGuardTextPrimary,
+                            )
+                            Text(
+                                text = provider.address,
+                                fontSize = 10.sp,
+                                color = AdGuardTextMuted,
+                                fontFamily = FontFamily.Monospace,
+                            )
+                            if (provider.isCustom) {
+                                Text("Tùy chỉnh", fontSize = 9.sp, color = AdGuardBlueDns)
+                            }
+                        }
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(12.dp))
+                Text(
+                    text = "Thêm resolver",
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = AdGuardTextSecondary,
+                )
+                Spacer(modifier = Modifier.height(6.dp))
+                OutlinedTextField(
+                    value = name,
+                    onValueChange = { name = it },
+                    label = { Text("Tên", fontSize = 11.sp) },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                Spacer(modifier = Modifier.height(6.dp))
+                OutlinedTextField(
+                    value = address,
+                    onValueChange = { address = it },
+                    label = { Text("Địa chỉ", fontSize = 11.sp) },
+                    placeholder = { Text("1.1.1.1 hoặc https://…", fontSize = 11.sp) },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                Spacer(modifier = Modifier.height(8.dp))
+                Button(
+                    onClick = { onAdd(name, address) },
+                    enabled = address.isNotBlank(),
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Text("Thêm và chọn", fontSize = 12.sp)
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onDismiss) { Text("Đóng") }
+        },
     )
 }
 
