@@ -87,6 +87,8 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import git.shin.adfree.data.FilterGroup
+import git.shin.adfree.data.ModuleGate
+import git.shin.adfree.data.moduleGate
 import git.shin.adfree.model.FilterList
 import git.shin.adfree.model.assetSizeLabel
 import git.shin.adfree.model.filterUrlError
@@ -309,10 +311,23 @@ fun FiltersScreen(
                     val items = visibleCatalog.filter { it.groupId == group.id }
                     if (items.isEmpty()) continue
                     item(key = "group_${group.id}") {
+                        val gate = group.moduleGate
                         FilterGroupCard(
                             group = group,
                             lists = items,
                             expanded = query.isNotBlank() || group.id in expandedGroups,
+                            moduleEnabled = when (gate) {
+                                null -> true
+                                ModuleGate.AD_BLOCKING -> state.settings.isAdBlockingEnabled
+                                ModuleGate.TRACKING -> state.settings.isTrackingProtectionEnabled
+                            },
+                            onEnableModule = {
+                                when (gate) {
+                                    ModuleGate.TRACKING -> viewModel.onIntent(AdGuardIntent.ToggleTracking)
+                                    null -> Unit
+                                    ModuleGate.AD_BLOCKING -> viewModel.onIntent(AdGuardIntent.ToggleAdBlocking)
+                                }
+                            },
                             onToggleExpand = {
                                 expandedGroups = if (group.id in expandedGroups) {
                                     expandedGroups - group.id
@@ -512,11 +527,19 @@ private fun FilterGroupCard(
     group: FilterGroup,
     lists: List<FilterList>,
     expanded: Boolean,
+    /** False when the engine module gating this group is switched off. */
+    moduleEnabled: Boolean = true,
+    onEnableModule: () -> Unit = {},
     onToggleExpand: () -> Unit,
     onToggleList: (FilterList) -> Unit,
     onOpenList: (FilterList) -> Unit,
 ) {
     val enabled = lists.count { it.isEnabled }
+    // AdGuard shows "These filters aren't active because …" with an Enable
+    // action: the count keeps the configuration state and the note explains
+    // why none of it applies right now.
+    val gate = group.moduleGate
+    val inactive = gate != null && enabled > 0 && lists.any { it.isEnabled } && !moduleEnabled
 
     Card(
         modifier = Modifier
@@ -563,6 +586,34 @@ private fun FilterGroupCard(
                 )
             }
 
+            if (inactive) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .background(AdGuardRedBlocked.copy(alpha = 0.10f))
+                        .padding(start = 14.dp, end = 8.dp, top = 8.dp, bottom = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            "Không hoạt động",
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = AdGuardRedBlocked,
+                        )
+                        Text(
+                            "«${group.title}» có bộ lọc đang bật nhưng module " +
+                                "«${gate?.title}» đang tắt — không req nào của nhóm này bị lọc",
+                            fontSize = 10.sp,
+                            color = AdGuardTextMuted,
+                        )
+                    }
+                    TextButton(onClick = onEnableModule) {
+                        Text("Bật", fontSize = 12.sp, fontWeight = FontWeight.Bold, color = AdGuardGreenLight)
+                    }
+                }
+            }
+
             if (expanded) {
                 for (list in lists) {
                     FilterRow(
@@ -604,6 +655,18 @@ private fun FilterRow(
                 fontSize = 10.sp,
                 color = AdGuardTextMuted,
             )
+            // AdGuard rows carry "Version: … / Updated: …"; we only show a
+            // version once the list's own metadata provided one (empty
+            // before the first download, no more faked "standard").
+            if (list.version.isNotBlank()) {
+                Text(
+                    text = "Phiên bản ${list.version}",
+                    fontSize = 10.sp,
+                    color = AdGuardTextMuted,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
             // The honest-state line: a list that says "on" but failed to
             // download keeps its reason right on the row, like AdGuard's
             // inactive-filters banner.

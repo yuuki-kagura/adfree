@@ -29,6 +29,24 @@ enum class FilterGroup(val id: String, val title: String, val subtitle: String) 
     }
 }
 
+/**
+ * Which engine module flag (R30) gates a category group at request time:
+ * the ads module covers the AD and ANNOYANCE categories, the tracking
+ * module covers TRACKER, ANALYTICS and SOCIAL. Malware, custom rules and
+ * the user rules (`null` gates) are never switched off by a module.
+ */
+enum class ModuleGate(val title: String) {
+    AD_BLOCKING("Chặn quảng cáo"),
+    TRACKING("Chặn trình theo dõi"),
+}
+
+val FilterGroup.moduleGate: ModuleGate?
+    get() = when (this) {
+        FilterGroup.ADS, FilterGroup.ANNOYANCES, FilterGroup.LANGUAGE -> ModuleGate.AD_BLOCKING
+        FilterGroup.PRIVACY, FilterGroup.SOCIAL -> ModuleGate.TRACKING
+        else -> null
+    }
+
 data class CatalogFilter(
     val id: String,
     val name: String,
