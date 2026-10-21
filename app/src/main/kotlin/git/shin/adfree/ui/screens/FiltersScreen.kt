@@ -89,6 +89,7 @@ import androidx.compose.ui.unit.sp
 import git.shin.adfree.data.FilterGroup
 import git.shin.adfree.model.FilterList
 import git.shin.adfree.model.assetSizeLabel
+import git.shin.adfree.model.filterUrlError
 import git.shin.adfree.ui.AdGuardIntent
 import git.shin.adfree.ui.AdGuardViewModel
 import git.shin.adfree.ui.theme.AdGuardBlueDns
@@ -602,6 +603,18 @@ private fun FilterRow(
                 fontSize = 10.sp,
                 color = AdGuardTextMuted,
             )
+            // The honest-state line: a list that says "on" but failed to
+            // download keeps its reason right on the row, like AdGuard's
+            // inactive-filters banner.
+            if (list.lastError.isNotBlank()) {
+                Text(
+                    text = "Lỗi: ${list.lastError}",
+                    fontSize = 10.sp,
+                    color = AdGuardRedBlocked,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
         }
         Switch(
             checked = list.isEnabled,
@@ -795,6 +808,7 @@ private fun AddFilterDialog(
                     label = { Text("Đường dẫn (URL)", fontSize = 12.sp) },
                     placeholder = { Text("https://…", fontSize = 12.sp, color = AdGuardTextMuted) },
                     singleLine = true,
+                    isError = url.isNotBlank() && filterUrlError(url) != null,
                     modifier = Modifier.fillMaxWidth(),
                     shape = RoundedCornerShape(10.dp),
                     colors = OutlinedTextFieldDefaults.colors(
@@ -804,6 +818,13 @@ private fun AddFilterDialog(
                         unfocusedTextColor = AdGuardTextPrimary,
                     ),
                 )
+
+                // Inline validation like AdGuard's "Enter a valid URL or file
+                // path": reported at the field, not only after pressing Add.
+                filterUrlError(url)?.let { error ->
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Text(error, fontSize = 11.sp, color = AdGuardRedBlocked)
+                }
 
                 Spacer(modifier = Modifier.height(4.dp))
 
@@ -816,8 +837,8 @@ private fun AddFilterDialog(
         },
         confirmButton = {
             Button(
-                onClick = { if (url.isNotBlank()) onAdd(name, url) },
-                enabled = url.isNotBlank(),
+                onClick = { if (filterUrlError(url) == null) onAdd(name, url) },
+                enabled = filterUrlError(url) == null,
                 colors = ButtonDefaults.buttonColors(containerColor = AdGuardBlueDns),
                 shape = RoundedCornerShape(8.dp),
             ) {
@@ -916,6 +937,9 @@ fun FilterDetailSheet(
         if (list.version.isNotBlank()) {
             InfoRow("Phiên bản", list.version.take(24))
         }
+        if (list.lastError.isNotBlank()) {
+            InfoRow("Lỗi", list.lastError.take(160), AdGuardRedBlocked)
+        }
 
         if (!list.subscriptionUrl.isNullOrBlank()) {
             val url = list.subscriptionUrl
@@ -992,13 +1016,13 @@ fun FilterDetailSheet(
 }
 
 @Composable
-private fun InfoRow(label: String, value: String) {
+private fun InfoRow(label: String, value: String, valueColor: Color = AdGuardTextPrimary) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
             .padding(vertical = 3.dp),
     ) {
         Text(label, fontSize = 12.sp, color = AdGuardTextMuted, modifier = Modifier.width(110.dp))
-        Text(value, fontSize = 12.sp, color = AdGuardTextPrimary, modifier = Modifier.weight(1f))
+        Text(value, fontSize = 12.sp, color = valueColor, modifier = Modifier.weight(1f))
     }
 }

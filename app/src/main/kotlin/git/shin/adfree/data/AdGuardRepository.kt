@@ -15,6 +15,7 @@ import git.shin.adfree.model.DnsBlockMode
 import git.shin.adfree.model.DnsProvider
 import git.shin.adfree.model.FilterList
 import git.shin.adfree.model.FilterStatus
+import git.shin.adfree.model.filterUrlError
 import git.shin.adfree.model.UserScriptInfo
 import git.shin.adfree.model.UserScriptStoreItem
 import git.shin.adfree.model.UserScriptStoreSort
@@ -453,7 +454,16 @@ class AdGuardRepository(
             if (!list.isEnabled || list.subscriptionUrl.isNullOrBlank()) continue
             _loadingMessage.value = "Đang tải ${list.name}…"
             val result = withContext(Dispatchers.IO) { engine.downloadList(list) }
-            if (result.ok) applyDownloadResult(list.id, result)
+            if (result.ok) {
+                applyDownloadResult(list.id, result)
+            } else {
+                // Startup download failures used to vanish: the list stayed
+                // "on" with zero rules and no trace of why. Persist the
+                // reason on the list (row + detail sheet show it) and echo
+                // the usual transient toast.
+                applyFailure(list.id, result.message)
+                showTransientStatus(result.message)
+            }
         }
     }
 
@@ -467,6 +477,8 @@ class AdGuardRepository(
                         lastUpdatedText = state.updatedText ?: engine.dateText(state.modifiedMs),
                         version = state.version ?: it.version,
                         sizeBytes = state.sizeBytes,
+                        // A body is on disk again, so the old failure is stale.
+                        lastError = "",
                     )
                 } else it
             }
@@ -483,7 +495,23 @@ class AdGuardRepository(
                         version = result.version ?: it.version,
                         format = result.detectedFormat ?: it.format,
                         sizeBytes = result.sizeBytes,
+                        lastError = "",
                     )
+                } else it
+            }
+        }
+    }
+
+    /**
+     * Keeps a download failure on the list after the transient header toast
+     * is gone: the row gets a red error line and the detail sheet an "Lỗi"
+     * row, so a broken subscription never looks healthy.
+     */
+    private fun applyFailure(listId: String, message: String) {
+        _filterLists.update { current ->
+            current.map {
+                if (it.id == listId) {
+                    it.copy(lastError = message.ifBlank { "Tải thất bại" })
                 } else it
             }
         }
@@ -535,6 +563,8 @@ class AdGuardRepository(
                                     if (it.id == listId) it.copy(isEnabled = true) else it
                                 }
                             }
+                        } else {
+                            applyFailure(list.id, result.message)
                         }
                     }
                 }
@@ -581,6 +611,8 @@ class AdGuardRepository(
             if (result.ok) {
                 applyDownloadResult(list.id, result)
                 pushListsToEngine()
+            } else {
+                applyFailure(list.id, result.message)
             }
         }
     }
@@ -599,7 +631,12 @@ class AdGuardRepository(
             var failures = 0
             for (list in targets) {
                 val result = withContext(Dispatchers.IO) { engine.downloadList(list) }
-                if (result.ok) applyDownloadResult(list.id, result) else failures++
+                if (result.ok) {
+                    applyDownloadResult(list.id, result)
+                } else {
+                    failures++
+                    applyFailure(list.id, result.message)
+                }
             }
             showTransientStatus(
                 when (failures) {
@@ -615,7 +652,20 @@ class AdGuardRepository(
     fun addCustomFilter(name: String, url: String) {
         scope.launch {
             val trimmedUrl = url.trim()
-            if (trimmedUrl.isEmpty()) return@launch
+            // Validate like the core would: syntax, scheme, host. A bad URL
+            // used to become a permanent broken row before the first byte
+            // was ever checked.
+            filterUrlError(trimmedUrl)?.let {
+                showTransientStatus(it)
+                return@launch
+            }
+            if (_filterLists.value.any {
+                    it.subscriptionUrl?.equals(trimmedUrl, ignoreCase = true) == true
+                }
+            ) {
+                showTransientStatus("URL này đã có trong danh sách bộ lọc")
+                return@launch
+            }
             val list = FilterList(
                 id = "sub_${System.currentTimeMillis()}",
                 name = name.ifBlank { trimmedUrl.substringAfter("//").take(40) },
@@ -623,7 +673,7 @@ class AdGuardRepository(
                 ruleCount = 0,
                 isEnabled = false,
                 category = "custom",
-                version = "standard",
+                version = "",
                 isOnlineSubscription = true,
                 subscriptionUrl = trimmedUrl,
                 groupId = "custom",
@@ -638,6 +688,10 @@ class AdGuardRepository(
                 _filterLists.update { lists ->
                     lists.map { if (it.id == list.id) it.copy(isEnabled = true) else it }
                 }
+            } else {
+                // Keep the (now disabled) row with its reason so the list can
+                // be retried/edited without guessing what went wrong.
+                applyFailure(list.id, result.message)
             }
             saveFilterChoices()
             pushListsToEngine()
@@ -688,7 +742,7 @@ class AdGuardRepository(
                 it + list.copy(
                     ruleCount = state.lineCount.toInt(),
                     lastUpdatedText = "Vừa nhập",
-                    version = state.version ?: "standard",
+                    version = state.version ?: "",
                     format = state.detectedFormat ?: list.format,
                 )
             }
@@ -854,7 +908,7 @@ class AdGuardRepository(
                 format = if (list.format.equals("hosts", ignoreCase = true)) 1 else 0,
                 category = list.categoryIndex(),
                 ruleCount = list.ruleCount.toLong(),
-                lastError = "",
+                lastError = list.lastError,
                 // Catalogue entries are trusted by construction; a custom list
                 // only when the user said so.
                 trusted = list.trusted || list.catalogId != null,

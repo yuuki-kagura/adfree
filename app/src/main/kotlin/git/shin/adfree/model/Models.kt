@@ -124,6 +124,13 @@ data class FilterList(
     val lastUpdatedText: String = "Chưa cập nhật",
     /** Body size reported by the core, 0 while nothing is on disk. */
     val sizeBytes: Long = 0,
+    /**
+     * Last download failure of this list, "" when the body is healthy.
+     * The header toast disappears after a few seconds; this keeps the
+     * reason visible on the row and in the detail sheet (AdGuard's honest
+     * "filters aren't active" pattern).
+     */
+    val lastError: String = "",
     /** Catalog group id: ads/privacy/social/annoyances/security/other/language/custom. */
     val groupId: String = "other",
     /** "standard" (AdGuard/EasyList syntax) or "hosts". */
@@ -161,6 +168,27 @@ internal fun assetSizeLabel(bytes: Long): String = when {
             "%.1f MB",
             bytes / (1024.0 * 1024.0),
         )
+}
+
+/**
+ * Error message for URL the user pasted into "Add custom filter", or `null`
+ * when it is acceptable. Mirrors AdGuard's inline validation ("Enter a valid
+ * URL or file path"): local files go through the file picker, so only
+ * `http(s)://` with a real host counts here.
+ */
+internal fun filterUrlError(url: String): String? {
+    val trimmed = url.trim()
+    if (trimmed.isEmpty()) return "Nhập URL hoặc chọn tệp trong máy"
+    if (trimmed.length > 2048) return "URL quá dài"
+    val parsed = runCatching { java.net.URI(trimmed) }.getOrNull()
+        ?: return "Đường dẫn không hợp lệ"
+    val scheme = parsed.scheme?.lowercase()
+    return when {
+        scheme != "http" && scheme != "https" ->
+            "Chỉ chấp nhận URL http(s):// — dùng nút chọn tệp cho file trong máy"
+        parsed.host.isNullOrBlank() -> "URL thiếu địa chỉ máy chủ"
+        else -> null
+    }
 }
 
 /** One userscript served to intercepted pages (the Extensions section). */
