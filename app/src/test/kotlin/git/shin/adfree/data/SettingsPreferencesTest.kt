@@ -71,6 +71,7 @@ class SettingsPreferencesTest {
             isStealthModeEnabled = false,
             blockQuic = false,
             blockDoh = false,
+            blockDot = false,
             logAllowedRequests = true,
             blockMode = DnsBlockMode.REFUSED,
             stripUtmTracking = false,
@@ -101,6 +102,14 @@ class SettingsPreferencesTest {
             false,
             loaded.isFullEchEnabled,
         )
+    }
+
+    @Test
+    fun `an old encrypted-dns switch carries over to DoT`() {
+        // Blobs written before blockDot existed only had the DoH flag; the two
+        // transports share one settings switch, so DoT must inherit it.
+        store.value = JSONObject().put("blockDoh", false).toString()
+        assertEquals(false, prefs().settings()!!.blockDot)
     }
 
     @Test

@@ -248,6 +248,12 @@ pub struct EngineConfig {
     pub block_quic: bool,
     pub block_doh: bool,
     pub block_dot: bool,
+    /// Ad blocking module (ad + annoyance categories).
+    pub ad_blocking: bool,
+    /// Tracking protection (privacy, analytics and social categories).
+    pub tracking_protection: bool,
+    /// DNS protection; off means host lookups are forwarded unfiltered.
+    pub dns_protection: bool,
     /// 0 = NXDOMAIN, 1 = answer 0.0.0.0, 2 = REFUSED.
     pub block_mode: i32,
     pub log_allowed: bool,
@@ -262,6 +268,9 @@ impl From<EngineConfig> for Config {
             block_quic: c.block_quic,
             block_doh: c.block_doh,
             block_dot: c.block_dot,
+            ad_blocking: c.ad_blocking,
+            tracking_protection: c.tracking_protection,
+            dns_protection: c.dns_protection,
             block_mode: crate::dns::BlockMode::from_u8(c.block_mode.clamp(0, 2) as u8),
             log_allowed: c.log_allowed,
             eco_mode: c.eco_mode,
@@ -959,6 +968,9 @@ mod tests {
             block_quic: true,
             block_doh: false,
             block_dot: true,
+            ad_blocking: true,
+            tracking_protection: false,
+            dns_protection: true,
             block_mode: 1,
             log_allowed: true,
             eco_mode: false,
@@ -968,6 +980,9 @@ mod tests {
         assert!(native.full_ech, "the full-ECH switch must survive the trip");
         assert!(native.block_quic);
         assert!(!native.block_doh);
+        assert!(native.ad_blocking);
+        assert!(!native.tracking_protection);
+        assert!(native.dns_protection);
         assert!(matches!(native.block_mode, crate::dns::BlockMode::ZeroIp));
     }
 

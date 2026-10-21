@@ -280,6 +280,7 @@ data class ProtectionSettings(
     val isStealthModeEnabled: Boolean = true,
     val blockQuic: Boolean = true,
     val blockDoh: Boolean = true,
+    val blockDot: Boolean = true,
     val logAllowedRequests: Boolean = false,
     val blockMode: DnsBlockMode = DnsBlockMode.NXDOMAIN,
     val stripUtmTracking: Boolean = true,

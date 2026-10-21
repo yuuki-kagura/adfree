@@ -140,6 +140,13 @@ class SettingsPreferences(
                 json.optBoolean("stealth", defaults.isStealthModeEnabled),
             blockQuic = json.optBoolean("blockQuic", defaults.blockQuic),
             blockDoh = json.optBoolean("blockDoh", defaults.blockDoh),
+            // Older blobs had one DoH/DoT switch; carry its value over so a
+            // user who turned encrypted-DNS blocking off does not get DoT
+            // blocked again after the upgrade.
+            blockDot = json.optBoolean(
+                "blockDot",
+                json.optBoolean("blockDoh", defaults.blockDot),
+            ),
             logAllowedRequests =
                 json.optBoolean("logAllowed", defaults.logAllowedRequests),
             blockMode = DnsBlockMode.entries
@@ -171,6 +178,7 @@ class SettingsPreferences(
             .put("stealth", settings.isStealthModeEnabled)
             .put("blockQuic", settings.blockQuic)
             .put("blockDoh", settings.blockDoh)
+            .put("blockDot", settings.blockDot)
             .put("logAllowed", settings.logAllowedRequests)
             .put("blockMode", settings.blockMode.name)
             .put("stripUtm", settings.stripUtmTracking)

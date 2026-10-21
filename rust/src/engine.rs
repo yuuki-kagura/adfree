@@ -116,6 +116,12 @@ pub struct Config {
     pub block_quic: bool,
     pub block_doh: bool,
     pub block_dot: bool,
+    /// Ad blocking module (ad + annoyance categories).
+    pub ad_blocking: bool,
+    /// Tracking protection (privacy, analytics and social categories).
+    pub tracking_protection: bool,
+    /// DNS protection; off means host lookups are forwarded unfiltered.
+    pub dns_protection: bool,
     pub block_mode: BlockMode,
     /// Log requests that were *not* blocked (off by default: pure CPU cost).
     pub log_allowed: bool,
@@ -131,6 +137,9 @@ impl Default for Config {
             block_quic: true,
             block_doh: true,
             block_dot: true,
+            ad_blocking: true,
+            tracking_protection: true,
+            dns_protection: true,
             block_mode: BlockMode::NxDomain,
             log_allowed: false,
             eco_mode: true,
@@ -435,6 +444,13 @@ impl Core {
     // ---------------------------------------------------------------- config
 
     pub fn set_config(&self, cfg: Config) {
+        // The filter engine owns the hot-path copy so a module switch takes
+        // effect on the next packet without recompiling the lists.
+        self.filter.set_module_flags(
+            cfg.ad_blocking,
+            cfg.tracking_protection,
+            cfg.dns_protection,
+        );
         *self.cfg.write().unwrap() = cfg;
     }
 

@@ -319,7 +319,14 @@ class AdGuardRepository(
     }
 
     fun toggleBlockQuic(enabled: Boolean) = _settings.update { it.copy(blockQuic = enabled) }
-    fun toggleBlockDoh(enabled: Boolean) = _settings.update { it.copy(blockDoh = enabled) }
+
+    /**
+     * One switch covers both encrypted-DNS transports, matching the settings
+     * label: leaving DoT enabled while DoH is off would let clients bypass the
+     * filter through the other port.
+     */
+    fun toggleBlockDoh(enabled: Boolean) =
+        _settings.update { it.copy(blockDoh = enabled, blockDot = enabled) }
     fun toggleLogAllowed(enabled: Boolean) = _settings.update { it.copy(logAllowedRequests = enabled) }
     fun setBlockMode(mode: DnsBlockMode) = _settings.update { it.copy(blockMode = mode) }
 

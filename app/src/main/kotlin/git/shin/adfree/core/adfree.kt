@@ -1164,7 +1164,7 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
     if ((lib.uniffi_adfree_core_checksum_func_core_restore_ca() and 0xFFFF) != 62634) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if ((lib.uniffi_adfree_core_checksum_func_core_script_fetch() and 0xFFFF) != 11906) {
+    if ((lib.uniffi_adfree_core_checksum_func_core_script_fetch() and 0xFFFF) != 37467) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if ((lib.uniffi_adfree_core_checksum_func_core_script_remove() and 0xFFFF) != 35935) {
@@ -2464,6 +2464,21 @@ data class EngineConfig (
     var `blockDot`: kotlin.Boolean
     , 
     /**
+     * Ad blocking module (ad + annoyance categories).
+     */
+    var `adBlocking`: kotlin.Boolean
+    , 
+    /**
+     * Tracking protection (privacy, analytics and social categories).
+     */
+    var `trackingProtection`: kotlin.Boolean
+    , 
+    /**
+     * DNS protection; off means host lookups are forwarded unfiltered.
+     */
+    var `dnsProtection`: kotlin.Boolean
+    , 
+    /**
      * 0 = NXDOMAIN, 1 = answer 0.0.0.0, 2 = REFUSED.
      */
     var `blockMode`: kotlin.Int
@@ -2492,6 +2507,9 @@ public object FfiConverterTypeEngineConfig: FfiConverterRustBuffer<EngineConfig>
             FfiConverterBoolean.read(buf),
             FfiConverterBoolean.read(buf),
             FfiConverterBoolean.read(buf),
+            FfiConverterBoolean.read(buf),
+            FfiConverterBoolean.read(buf),
+            FfiConverterBoolean.read(buf),
             FfiConverterInt.read(buf),
             FfiConverterBoolean.read(buf),
             FfiConverterBoolean.read(buf),
@@ -2504,6 +2522,9 @@ public object FfiConverterTypeEngineConfig: FfiConverterRustBuffer<EngineConfig>
             FfiConverterBoolean.allocationSize(value.`blockQuic`) +
             FfiConverterBoolean.allocationSize(value.`blockDoh`) +
             FfiConverterBoolean.allocationSize(value.`blockDot`) +
+            FfiConverterBoolean.allocationSize(value.`adBlocking`) +
+            FfiConverterBoolean.allocationSize(value.`trackingProtection`) +
+            FfiConverterBoolean.allocationSize(value.`dnsProtection`) +
             FfiConverterInt.allocationSize(value.`blockMode`) +
             FfiConverterBoolean.allocationSize(value.`logAllowed`) +
             FfiConverterBoolean.allocationSize(value.`ecoMode`)
@@ -2515,6 +2536,9 @@ public object FfiConverterTypeEngineConfig: FfiConverterRustBuffer<EngineConfig>
             FfiConverterBoolean.write(value.`blockQuic`, buf)
             FfiConverterBoolean.write(value.`blockDoh`, buf)
             FfiConverterBoolean.write(value.`blockDot`, buf)
+            FfiConverterBoolean.write(value.`adBlocking`, buf)
+            FfiConverterBoolean.write(value.`trackingProtection`, buf)
+            FfiConverterBoolean.write(value.`dnsProtection`, buf)
             FfiConverterInt.write(value.`blockMode`, buf)
             FfiConverterBoolean.write(value.`logAllowed`, buf)
             FfiConverterBoolean.write(value.`ecoMode`, buf)
@@ -3768,7 +3792,10 @@ public object FfiConverterSequenceTypeUidApps: FfiConverterRustBuffer<List<UidAp
     
 
         /**
-         * Downloads one userscript body into the store (`scripts/<id>.js`).
+         * Downloads one userscript body into the store (`scripts/<id>.js`) and
+         * resolves its `@require` URLs at install/refresh time. The dependencies are
+         * embedded after the metadata header, so the page never fetches them and the
+         * `@run-at` timing is preserved.
          */ fun `coreScriptFetch`(`id`: kotlin.String, `url`: kotlin.String): DownloadOutcome {
             return FfiConverterTypeDownloadOutcome.lift(
     uniffiRustCall() { _status ->

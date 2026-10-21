@@ -34,7 +34,7 @@ use base64::engine::general_purpose::STANDARD as BASE64;
 use base64::Engine as _;
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicU8, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, OnceLock, RwLock};
 
 /// Format of a subscription file.
@@ -635,6 +635,14 @@ pub const CAT_ANNOYANCE: u8 = 4;
 pub const CAT_MALWARE: u8 = 5;
 pub const CAT_CUSTOM: u8 = 6;
 
+/// Runtime module masks. The app has three independent protection switches;
+/// DNS protection gates hostname lookups, while ads/tracking split the filter
+/// categories so turning one module off does not silence the other.
+pub const MODULE_ADS: u8 = 1 << 0;
+pub const MODULE_TRACKING: u8 = 1 << 1;
+pub const MODULE_DNS: u8 = 1 << 2;
+pub const MODULES_ALL: u8 = MODULE_ADS | MODULE_TRACKING | MODULE_DNS;
+
 /// Everything needed to (re)build and identify one subscription.
 #[derive(Clone, Debug)]
 pub struct FilterListInfo {
@@ -976,6 +984,9 @@ pub struct FilterEngine {
     build_ns: AtomicU64,
     pending_builds: AtomicUsize,
     generation: AtomicU64,
+    /// Enabled ad/tracking/DNS modules, read on every decision so a switch
+    /// takes effect without rebuilding the compiled filter.
+    module_flags: AtomicU8,
 }
 
 impl Default for FilterEngine {
@@ -1007,6 +1018,42 @@ impl FilterEngine {
             build_ns: AtomicU64::new(0),
             pending_builds: AtomicUsize::new(0),
             generation: AtomicU64::new(0),
+            module_flags: AtomicU8::new(MODULES_ALL),
+        }
+    }
+
+    /// Applies the three protection switches. No rebuild is needed: the flags
+    /// are consulted after a rule matches, so the compiled index stays warm.
+    pub fn set_module_flags(&self, ads: bool, tracking: bool, dns: bool) {
+        let mut flags = 0u8;
+        if ads {
+            flags |= MODULE_ADS;
+        }
+        if tracking {
+            flags |= MODULE_TRACKING;
+        }
+        if dns {
+            flags |= MODULE_DNS;
+        }
+        self.module_flags.store(flags, Ordering::Relaxed);
+    }
+
+    fn category_enabled(&self, category: u8) -> bool {
+        let flags = self.module_flags.load(Ordering::Relaxed);
+        match category {
+            CAT_AD | CAT_ANNOYANCE => flags & MODULE_ADS != 0,
+            CAT_TRACKER | CAT_ANALYTICS | CAT_SOCIAL => flags & MODULE_TRACKING != 0,
+            // Malware/security and the user's own rules are not tied to either
+            // module; a match there still blocks on its own.
+            _ => true,
+        }
+    }
+
+    fn gate_url(&self, verdict: UrlVerdict) -> UrlVerdict {
+        if verdict.blocked && !self.category_enabled(verdict.category) {
+            UrlVerdict::default()
+        } else {
+            verdict
         }
     }
 
@@ -1658,7 +1705,7 @@ impl FilterEngine {
     /// The hot path. Answers "block this host?" (cached).
     pub fn check_host(&self, host: &str) -> HostVerdict {
         let host = normalise_host(host);
-        if host.is_empty() {
+        if host.is_empty() || self.module_flags.load(Ordering::Relaxed) & MODULE_DNS == 0 {
             return HostVerdict::default();
         }
         let key = hash_str(host);
@@ -1666,7 +1713,7 @@ impl FilterEngine {
         let generation = compiled.generation;
 
         if let Some(hit) = self.cache.write().unwrap().get(key, generation) {
-            if !hit.blocked {
+            if !hit.blocked || !self.category_enabled(hit.category) {
                 return HostVerdict::default();
             }
             return HostVerdict {
@@ -1689,18 +1736,27 @@ impl FilterEngine {
             },
         );
         self.cache.write().unwrap().maybe_clear();
-        verdict
+        if verdict.blocked && !self.category_enabled(verdict.category) {
+            HostVerdict::default()
+        } else {
+            verdict
+        }
     }
 
     /// Same as [`check_host`] but always reports the matched rule, bypassing the
     /// cache. Used by the UI (log details, threat lab).
     pub fn check_host_detailed(&self, host: &str) -> HostVerdict {
         let host = normalise_host(host);
-        if host.is_empty() {
+        if host.is_empty() || self.module_flags.load(Ordering::Relaxed) & MODULE_DNS == 0 {
             return HostVerdict::default();
         }
         let compiled = self.compiled();
-        evaluate(&compiled, host)
+        let verdict = evaluate(&compiled, host);
+        if verdict.blocked && !self.category_enabled(verdict.category) {
+            HostVerdict::default()
+        } else {
+            verdict
+        }
     }
 
     /// A full request URL, evaluated against every network rule.
@@ -1734,14 +1790,16 @@ impl FilterEngine {
             return UrlVerdict::default();
         };
         let result = compiled.engine.check_network_request(&request);
-        let Some(app_rules) = compiled
+        let verdict = if let Some(app_rules) = compiled
             .app_rules
             .as_ref()
             .filter(|_| !apps.is_empty())
-        else {
-            return url_verdict(&compiled, &result, url_host(url));
+        {
+            app_merge(&compiled, app_rules, &request, result, apps, url_host(url))
+        } else {
+            url_verdict(&compiled, &result, url_host(url))
         };
-        app_merge(&compiled, app_rules, &request, result, apps, url_host(url))
+        self.gate_url(verdict)
     }
 
     /// Whether the loaded lists carry any `$app=` rule. The relay asks this
@@ -6124,6 +6182,55 @@ mod tests {
         assert!(v.blocked);
         assert_eq!(v.rule_text.as_deref(), Some("||doubleclick.net^"));
         assert_eq!(v.list_name.as_deref(), Some("base.txt"));
+    }
+
+    #[test]
+    fn module_switches_gate_categories_without_a_rebuild() {
+        let mut ads = temp_list("ads-module.txt", "||ads.module.test^\n", ListFormat::Standard, 1);
+        ads.category = CAT_AD;
+        let mut tracking = temp_list(
+            "tracking-module.txt",
+            "||tracker.module.test^\n",
+            ListFormat::Standard,
+            2,
+        );
+        tracking.category = CAT_TRACKER;
+        let fe = engine(vec![ads, tracking]);
+
+        let request = |host: &str| {
+            fe.check_url(
+                &format!("https://{host}/pixel.js"),
+                "https://page.test/",
+                "script",
+                "GET",
+                &[],
+            )
+            .blocked
+        };
+
+        assert!(fe.check_host("ads.module.test").blocked);
+        assert!(fe.check_host("tracker.module.test").blocked);
+        assert!(request("ads.module.test"));
+        assert!(request("tracker.module.test"));
+
+        fe.set_module_flags(false, true, true);
+        assert!(!fe.check_host("ads.module.test").blocked);
+        assert!(fe.check_host("tracker.module.test").blocked);
+        assert!(!request("ads.module.test"));
+        assert!(request("tracker.module.test"));
+
+        fe.set_module_flags(true, false, true);
+        assert!(fe.check_host("ads.module.test").blocked);
+        assert!(!fe.check_host("tracker.module.test").blocked);
+
+        // DNS protection only gates hostname lookups: HTTPS URL filtering can
+        // still see the full request even when the DNS module is off.
+        fe.set_module_flags(true, true, false);
+        assert!(!fe.check_host("ads.module.test").blocked);
+        assert!(request("ads.module.test"));
+
+        fe.set_module_flags(true, true, true);
+        assert!(fe.check_host("ads.module.test").blocked);
     }
 
     #[test]
