@@ -54,7 +54,10 @@ class FilterPreferencesTest {
         assertNull(prefs().userRules())
         assertEquals(emptyList<StoredFilter>(), prefs().customFilters())
         assertEquals(emptyList<StoredScript>(), prefs().scripts())
-        assertEquals(false, prefs().scriptsMasterEnabled())
+        // ON by default: the builtin scripts initialize as enabled, so the
+        // master switch falling back to off left rows claiming work that
+        // no script was doing.
+        assertEquals(true, prefs().scriptsMasterEnabled())
     }
 
     @Test

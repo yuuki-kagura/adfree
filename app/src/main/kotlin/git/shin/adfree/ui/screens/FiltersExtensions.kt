@@ -50,6 +50,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.testTag
@@ -125,6 +126,20 @@ fun ExtensionsSection(
                         fontSize = 10.sp,
                         color = AdGuardTextMuted,
                     )
+                    // AdGuard shows "Enabled: 1 of 2" on the hub row; the
+                    // honest count belongs next to the master switch that
+                    // ultimately decides if any of them run.
+                    if (scripts.isNotEmpty()) {
+                        Text(
+                            text = if (masterEnabled) {
+                                "Bật: ${scripts.count { it.isEnabled }}/${scripts.size} script"
+                            } else {
+                                "Tắt tổng — không script nào chạy"
+                            },
+                            fontSize = 10.sp,
+                            color = AdGuardTextMuted,
+                        )
+                    }
                 }
                 Switch(
                     checked = masterEnabled,
@@ -151,6 +166,7 @@ fun ExtensionsSection(
                 for (script in scripts) {
                     ScriptRow(
                         script = script,
+                        masterEnabled = masterEnabled,
                         onToggle = { onToggleScript(script, !script.isEnabled) },
                         onClick = { onOpenScript(script) },
                     )
@@ -473,6 +489,8 @@ private fun storeInstallsText(count: Int): String = when {
 @Composable
 private fun ScriptRow(
     script: UserScriptInfo,
+    /** When the master switch is off, this row cannot turn anything on. */
+    masterEnabled: Boolean,
     onToggle: () -> Unit,
     onClick: () -> Unit,
 ) {
@@ -486,7 +504,8 @@ private fun ScriptRow(
         modifier = Modifier
             .fillMaxWidth()
             .clickable { onClick() }
-            .padding(start = 14.dp, end = 8.dp, top = 6.dp, bottom = 6.dp),
+            .padding(start = 14.dp, end = 8.dp, top = 6.dp, bottom = 6.dp)
+            .alpha(if (masterEnabled) 1f else 0.55f),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Column(modifier = Modifier.weight(1f)) {
@@ -502,6 +521,7 @@ private fun ScriptRow(
         }
         Switch(
             checked = script.isEnabled,
+            enabled = masterEnabled,
             onCheckedChange = { onToggle() },
             colors = SwitchDefaults.colors(checkedTrackColor = AdGuardGreenPrimary),
         )
@@ -591,6 +611,8 @@ fun AddScriptDialog(
 @Composable
 fun ScriptDetailSheet(
     script: UserScriptInfo,
+    /** With the master switch off, even an enabled script cannot run. */
+    masterEnabled: Boolean = true,
     onToggle: () -> Unit,
     onRefresh: () -> Unit,
     onDelete: () -> Unit,
@@ -612,13 +634,20 @@ fun ScriptDetailSheet(
             Column(modifier = Modifier.weight(1f)) {
                 Text("Bật tiện ích này", fontSize = 13.sp, fontWeight = FontWeight.Bold, color = AdGuardTextPrimary)
                 Text(
-                    text = if (script.isEnabled) "Đang chạy khi lọc HTTPS bật" else "Đang tắt",
+                    text = when {
+                        // The master gate beats the per-script flag: say it
+                        // out loud instead of "Đang chạy" with nothing running.
+                        !masterEnabled -> "Tiện ích bị tắt tổng — không script nào chạy"
+                        script.isEnabled -> "Đang chạy khi lọc HTTPS bật"
+                        else -> "Đang tắt"
+                    },
                     fontSize = 11.sp,
                     color = AdGuardTextMuted,
                 )
             }
             Switch(
                 checked = script.isEnabled,
+                enabled = masterEnabled,
                 onCheckedChange = { onToggle() },
                 colors = SwitchDefaults.colors(checkedTrackColor = AdGuardGreenPrimary),
             )

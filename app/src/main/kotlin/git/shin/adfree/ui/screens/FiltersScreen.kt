@@ -482,6 +482,7 @@ fun FiltersScreen(
             ) {
                 ScriptDetailSheet(
                     script = script,
+                    masterEnabled = state.scriptsMasterEnabled,
                     onToggle = { viewModel.onIntent(AdGuardIntent.ToggleScript(script.id, !script.isEnabled)) },
                     onRefresh = { viewModel.onIntent(AdGuardIntent.RefreshScript(script.id)) },
                     onDelete = {

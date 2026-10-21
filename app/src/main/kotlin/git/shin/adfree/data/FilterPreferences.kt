@@ -102,7 +102,13 @@ class FilterPreferences(
             .put("enabled", s.enabled)
     }
 
-    fun scriptsMasterEnabled(): Boolean = blob().optBoolean(KEY_SCRIPTS_MASTER, false)
+    /**
+     * The master switch defaults to ON. The builtin catalogue disagrees
+     * otherwise: its scripts initialize as enabled (repository seeds
+     * `isEnabled = true`), so a row visibly says "running" while the core
+     * gate say off. AdGuard ships with the extensions switch on too.
+     */
+    fun scriptsMasterEnabled(): Boolean = blob().optBoolean(KEY_SCRIPTS_MASTER, true)
 
     fun saveScriptsMasterEnabled(enabled: Boolean) = update { it.put(KEY_SCRIPTS_MASTER, enabled) }
 
