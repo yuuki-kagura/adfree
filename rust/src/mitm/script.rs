@@ -22,6 +22,7 @@ pub const MAX_SCRIPT_BYTES: usize = 1024 * 1024;
 const MAX_META_PATTERNS: usize = 64;
 const MAX_PATTERN_LEN: usize = 2048;
 const MAX_REQUIRES: usize = 8;
+const MAX_GRANTS: usize = 16;
 const META_SCAN_LINES: usize = 256;
 
 /// One user script.
@@ -65,6 +66,9 @@ struct ScriptMeta {
     /// invalid, the script must not fall back to running everywhere.
     restrict: bool,
     version: String,
+    /// `@grant` names, kept for `GM_info.script.grant` and a warning when the
+    /// page runtime cannot provide one.
+    grants: Vec<String>,
     /// Dependencies we cannot execute; kept only to warn in the page console.
     requires: Vec<String>,
 }
@@ -119,6 +123,7 @@ impl ScriptMeta {
             exclude: Vec::new(),
             restrict: false,
             version: String::new(),
+            grants: Vec::new(),
             requires: Vec::new(),
         };
 
@@ -171,6 +176,15 @@ impl ScriptMeta {
                 }),
                 "@noframes" => meta.noframes = true,
                 "@version" if meta.version.is_empty() => meta.version = value.to_string(),
+                "@grant" if !value.is_empty() => {
+                    let name = value.trim();
+                    if name != "none"
+                        && meta.grants.len() < MAX_GRANTS
+                        && !meta.grants.iter().any(|g| g == name)
+                    {
+                        meta.grants.push(name.to_string());
+                    }
+                }
                 "@require" if !value.is_empty() && meta.requires.len() < MAX_REQUIRES => {
                     meta.requires.push(value.to_string());
                 }
@@ -363,6 +377,225 @@ fn js_string(value: &str) -> String {
     out
 }
 
+/// A JS array literal of strings, used by `GM_info.script.grant`.
+fn js_string_array(values: &[String]) -> String {
+    let mut out = String::from("[");
+    for (i, value) in values.iter().enumerate() {
+        if i > 0 {
+            out.push(',');
+        }
+        out.push_str(&js_string(value));
+    }
+    out.push(']');
+    out
+}
+
+/// `@require` URLs from the header, in order and deduplicated. The platform
+/// downloads them once at install time; they never turn into page requests.
+pub(crate) fn required_urls(body: &str) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for url in ScriptMeta::parse(body).requires {
+        if !out.contains(&url) {
+            out.push(url);
+        }
+    }
+    out
+}
+
+/// Put resolved `@require` bodies after the userscript header and remove the
+/// `@require` lines, so the page runtime no longer warns about them. Failed
+/// downloads leave a console warning in place of the missing body.
+pub(crate) fn embed_requires(
+    body: &str,
+    loaded: &[(String, String)],
+    failed: &[(String, String)],
+) -> String {
+    if loaded.is_empty() && failed.is_empty() {
+        return body.to_string();
+    }
+    let mut block = String::from("// AdFree: @require dependencies\n");
+    for (url, code) in loaded {
+        block.push_str("/* @require ");
+        block.push_str(&comment_name(url));
+        block.push_str(" */\ntry{\n");
+        block.push_str(code);
+        if !code.ends_with('\n') {
+            block.push('\n');
+        }
+        block.push_str("}catch(e){try{console.warn('AdFree: @require failed',");
+        block.push_str(&js_string(url));
+        block.push_str(",e);}catch(_){}}\n");
+    }
+    for (url, error) in failed {
+        block.push_str("try{console.warn('AdFree: @require failed',");
+        block.push_str(&js_string(url));
+        block.push(',');
+        block.push_str(&js_string(error));
+        block.push_str(");}catch(e){}\n");
+    }
+
+    // If the header never closes, put the dependencies right after its start
+    // line rather than before it: the metadata scanner still needs to see the
+    // header within its window.
+    let has_close = body.lines().take(META_SCAN_LINES).any(|line| {
+        line.trim_start_matches('\u{feff}')
+            .trim_start()
+            .starts_with("// ==/UserScript==")
+    });
+    let mut out = String::with_capacity(body.len() + block.len());
+    let mut in_header = false;
+    let mut inserted = false;
+    for line in body.split_inclusive('\n') {
+        let trimmed = line.trim_start_matches('\u{feff}').trim_start();
+        if trimmed.starts_with("// ==UserScript==") {
+            in_header = true;
+            out.push_str(line);
+            if !has_close {
+                if !line.ends_with('\n') {
+                    out.push('\n');
+                }
+                out.push_str(&block);
+                inserted = true;
+            }
+            continue;
+        }
+        if in_header && trimmed.starts_with("// ==/UserScript==") {
+            in_header = false;
+            out.push_str(line);
+            if !inserted {
+                if !line.ends_with('\n') {
+                    out.push('\n');
+                }
+                out.push_str(&block);
+                inserted = true;
+            }
+            continue;
+        }
+        if in_header && trimmed.starts_with("// @require") {
+            continue;
+        }
+        out.push_str(line);
+    }
+    if !inserted {
+        out.insert_str(0, &block);
+    }
+    out
+}
+
+/// Page-context GM helpers that do not need extension privileges. Network
+/// calls use the page's own `fetch`, so CORS and CSP still apply: this is a
+/// compatibility shim, not a CORS bypass.
+fn advanced_runtime_js() -> &'static str {
+    r##"
+var __adfree_fetch=window.fetch?window.fetch.bind(window):null;
+var __adfree_supported_grants={unsafeWindow:1,GM_addStyle:1,GM_log:1,GM_info:1,GM_xmlhttpRequest:1,GM_download:1,GM_openInTab:1,GM_notification:1,GM_setClipboard:1,GM_addElement:1};
+var __adfree_gm_call=function(cb,value){if(typeof cb==='function'){try{cb(value);}catch(e){try{console.warn('AdFree: GM callback failed',e);}catch(_){}}}};
+var __adfree_gm_headers=function(response){var out='';if(response.headers&&response.headers.forEach){response.headers.forEach(function(value,name){out+=name+': '+value+'\r\n';});}return out;};
+var __adfree_gm_fail=function(details,kind,message){var result={readyState:4,status:0,statusText:'',responseText:'',response:null,responseHeaders:'',finalUrl:'',error:message};if(kind==='timeout'){__adfree_gm_call(details.ontimeout,result);}else if(kind==='abort'){__adfree_gm_call(details.onabort,result);}else{__adfree_gm_call(details.onerror,result);}};
+var GM_xmlhttpRequest=function(details){
+  details=details||{};
+  var url=details.url;
+  if(typeof url!=='string'||!url){__adfree_gm_fail(details,'error','missing url');return {abort:function(){}};}
+  if(!__adfree_fetch){__adfree_gm_fail(details,'error','fetch is unavailable');return {abort:function(){}};}
+  var method=(details.method||'GET').toUpperCase();
+  var init={method:method,headers:details.headers||{},credentials:details.withCredentials?'include':'same-origin'};
+  if(details.data!==undefined&&details.data!==null&&method!=='GET'&&method!=='HEAD'){init.body=details.data;}
+  var controller=null;
+  if(window.AbortController){controller=new window.AbortController();init.signal=controller.signal;}
+  var timer=0;
+  var timedOut=false;
+  var aborted=false;
+  var clearTimer=function(){if(timer){clearTimeout(timer);timer=0;}};
+  var start={readyState:1,status:0,statusText:'',responseText:'',response:null,responseHeaders:'',finalUrl:url};
+  __adfree_gm_call(details.onloadstart,start);
+  __adfree_gm_call(details.onreadystatechange,start);
+  if(details.timeout>0){timer=setTimeout(function(){timedOut=true;if(controller){controller.abort();}},details.timeout);}
+  __adfree_fetch(url,init).then(function(response){
+    var type=details.responseType||'';
+    var reader=type==='arraybuffer'?response.arrayBuffer():type==='blob'?response.blob():response.text();
+    return reader.then(function(payload){
+      var text=typeof payload==='string'?payload:'';
+      var value=payload;
+      if(type==='json'){try{value=JSON.parse(text);}catch(e){value=null;}}
+      var result={readyState:4,status:response.status,statusText:response.statusText,responseText:text,response:value,responseHeaders:__adfree_gm_headers(response),finalUrl:response.url||url};
+      __adfree_gm_call(details.onreadystatechange,result);
+      __adfree_gm_call(details.onprogress,{readyState:4,status:response.status,statusText:response.statusText,responseText:text,response:value,responseHeaders:result.responseHeaders,finalUrl:result.finalUrl,loaded:text.length,total:text.length,lengthComputable:true});
+      __adfree_gm_call(details.onload,result);
+    });
+  }).then(clearTimer,function(error){
+    clearTimer();
+    if(timedOut){__adfree_gm_fail(details,'timeout','timeout');}
+    else if(aborted){__adfree_gm_fail(details,'abort','aborted');}
+    else{__adfree_gm_fail(details,'error',String(error&&error.message?error.message:error));}
+  });
+  return {abort:function(){aborted=true;if(controller){controller.abort();}}};
+};
+var GM_download=function(details){
+  if(typeof details==='string'){details={url:details};}
+  details=details||{};
+  if(typeof details.url!=='string'||!details.url){__adfree_gm_call(details.onerror,{error:'missing url'});return;}
+  if(!__adfree_fetch){__adfree_gm_call(details.onerror,{error:'fetch is unavailable'});return;}
+  __adfree_fetch(details.url,{credentials:'same-origin'}).then(function(response){
+    if(!response.ok){throw new Error('HTTP '+response.status);}
+    return response.blob();
+  }).then(function(blob){
+    var a=document.createElement('a');
+    var href=URL.createObjectURL(blob);
+    a.href=href;
+    a.download=details.name||'';
+    a.style.display='none';
+    (document.body||document.documentElement).appendChild(a);
+    a.click();
+    setTimeout(function(){URL.revokeObjectURL(href);if(a.parentNode){a.parentNode.removeChild(a);}},1000);
+    __adfree_gm_call(details.onload,{status:200,finalUrl:details.url});
+  },function(error){__adfree_gm_call(details.onerror,{error:String(error&&error.message?error.message:error)});});
+};
+var GM_openInTab=function(url){try{var w=window.open(url,'_blank','noopener');if(w){try{w.opener=null;}catch(e){}}return w;}catch(e){return null;}};
+var GM_notification=function(text,title,image,onclick){
+  var options={};
+  if(text&&typeof text==='object'){options=text;}else{options={text:text,title:title,image:image,onclick:onclick};}
+  var done=function(){__adfree_gm_call(options.ondone,{});};
+  var fail=function(message){__adfree_gm_call(options.onerror,{error:message});done();};
+  if(typeof Notification!=='function'){console.warn('AdFree: notifications are not available');done();return null;}
+  var show=function(){
+    try{
+      var n=new Notification(options.title||'AdFree',{body:String(options.text||''),icon:options.image||undefined});
+      n.onclick=function(){__adfree_gm_call(options.onclick,n);};
+      n.onclose=done;
+      setTimeout(done,0);
+      return n;
+    }catch(e){fail(String(e&&e.message?e.message:e));return null;}
+  };
+  if(Notification.permission==='granted'){return show();}
+  if(Notification.permission==='denied'){fail('notifications are denied');return null;}
+  try{Notification.requestPermission().then(function(permission){if(permission==='granted'){show();}else{fail('notifications are denied');}});}catch(e){fail(String(e&&e.message?e.message:e));}
+  return null;
+};
+var GM_setClipboard=function(text){
+  text=String(text==null?'':text);
+  try{
+    if(navigator.clipboard&&navigator.clipboard.writeText){navigator.clipboard.writeText(text).catch(function(e){console.warn('AdFree: clipboard write failed',e);});return;}
+    var area=document.createElement('textarea');
+    area.value=text;
+    area.style.position='fixed';
+    area.style.opacity='0';
+    (document.body||document.documentElement).appendChild(area);
+    area.select();
+    document.execCommand('copy');
+    if(area.parentNode){area.parentNode.removeChild(area);}
+  }catch(e){console.warn('AdFree: clipboard write failed',e);}
+};
+var GM_addElement=function(parent,tag,attributes){
+  if(typeof parent==='string'){attributes=tag;tag=parent;parent=document.head||document.documentElement;}
+  if(!parent||!tag){return null;}
+  var el=document.createElement(tag);
+  if(attributes){Object.keys(attributes).forEach(function(key){if(key==='textContent'){el.textContent=attributes[key];}else if(key==='innerHTML'){el.innerHTML=attributes[key];}else{el.setAttribute(key,attributes[key]);}});}
+  parent.appendChild(el);
+  return el;
+};
+"##
+}
+
 impl ScriptEntry {
     fn new(script: UserScript) -> Self {
         let meta = ScriptMeta::parse(&script.body);
@@ -391,15 +624,24 @@ impl ScriptEntry {
             out.push_str("if(window.top!==window)return;\n");
         }
         out.push_str("var __adfree_run=function(){\n");
-        // GM shims that are safe to provide in page context. A script that
-        // asked for GM_xmlhttpRequest/GM_setValue will still not find them;
-        // those need a real browser-extension sandbox, not a page injection.
+        // Page-context shims. The advanced network helpers live once in the
+        // outer IIFE (build_combined); GM_setValue/menu/resource need a real
+        // browser-extension sandbox, so they stay absent and are called out in
+        // the UI and the @grant warning.
         out.push_str("var unsafeWindow=window;\n");
         out.push_str("var GM_info={scriptHandler:'AdFree',version:'1.0',script:{name:");
         out.push_str(&js_string(&self.name));
         out.push_str(",version:");
         out.push_str(&js_string(&self.meta.version));
+        out.push_str(",grant:");
+        out.push_str(&js_string_array(&self.meta.grants));
         out.push_str("}};\n");
+        if !self.meta.grants.is_empty() {
+            out.push_str("var __adfree_grants=");
+            out.push_str(&js_string_array(&self.meta.grants));
+            out.push_str(";var __adfree_missing=__adfree_grants.filter(function(g){return !__adfree_supported_grants[g];});");
+            out.push_str("if(__adfree_missing.length){try{console.warn('AdFree: unsupported @grant: '+__adfree_missing.join(', '));}catch(e){}}\n");
+        }
         out.push_str(
             "var GM_addStyle=function(css){var s=document.createElement('style');s.textContent=css;(document.head||document.documentElement).appendChild(s);return s;};\n",
         );
@@ -510,6 +752,7 @@ impl ScriptSet {
         let mut out = String::with_capacity(256);
         out.push_str("/* AdFree user scripts */\n");
         out.push_str("(function(){'use strict';\n");
+        out.push_str(advanced_runtime_js());
         for script in self.scripts.iter().filter(|s| s.enabled) {
             out.push_str(&script.wrapped_js());
         }
@@ -781,5 +1024,106 @@ mod tests {
         )]);
         let js = set.combined_js();
         assert!(js.contains("requestIdleCallback"));
+    }
+
+    #[test]
+    fn grants_are_deduplicated_and_reach_gm_info() {
+        let body = "// ==UserScript==\n\
+                    // @grant GM_xmlhttpRequest\n\
+                    // @grant none\n\
+                    // @grant GM_setValue\n\
+                    // @grant GM_xmlhttpRequest\n\
+                    // ==/UserScript==\n\
+                    window.__grant = true;";
+        let meta = meta(body);
+        assert_eq!(meta.grants, vec!["GM_xmlhttpRequest", "GM_setValue"]);
+        let mut set = ScriptSet::new();
+        set.set_enabled(true);
+        set.replace_all(vec![script("granted", body)]);
+        let js = set.combined_js();
+        assert!(js.contains("grant:[\"GM_xmlhttpRequest\",\"GM_setValue\"]"));
+        assert!(js.contains("unsupported @grant"));
+    }
+
+    #[test]
+    fn require_urls_are_deduplicated_in_header_order() {
+        let body = "// ==UserScript==\n\
+                    // @require https://cdn.example/a.js\n\
+                    // @require https://cdn.example/b.js\n\
+                    // @require https://cdn.example/a.js\n\
+                    // ==/UserScript==\n\
+                    window.__requires = true;";
+        assert_eq!(
+            required_urls(body),
+            vec!["https://cdn.example/a.js", "https://cdn.example/b.js"]
+        );
+    }
+
+    #[test]
+    fn embed_requires_runs_dependencies_before_the_body_and_drops_header_lines() {
+        let body = "// ==UserScript==\n\
+                    // @name dependency\n\
+                    // @require https://cdn.example/lib.js\n\
+                    // ==/UserScript==\n\
+                    window.__body = true;";
+        let out = embed_requires(
+            body,
+            &[(
+                "https://cdn.example/lib.js".to_string(),
+                "window.__dependency = true;".to_string(),
+            )],
+            &[],
+        );
+        assert!(!out.contains("// @require https://cdn.example/lib.js"));
+        assert!(out.contains("window.__dependency = true;"));
+        let dep = out.find("window.__dependency = true;").unwrap();
+        let user = out.find("window.__body = true;").unwrap();
+        assert!(dep < user, "dependencies must run before the script body");
+        assert!(out.contains("// ==UserScript=="));
+    }
+
+    #[test]
+    fn a_failed_require_leaves_a_console_warning_not_a_header_line() {
+        let body = "// ==UserScript==\n\
+                    // @require https://cdn.example/missing.js\n\
+                    // ==/UserScript==\n\
+                    window.__body = true;";
+        let out = embed_requires(
+            body,
+            &[],
+            &[(
+                "https://cdn.example/missing.js".to_string(),
+                "HTTP 404".to_string(),
+            )],
+        );
+        assert!(!out.contains("// @require https://cdn.example/missing.js"));
+        assert!(out.contains("console.warn('AdFree: @require failed'"));
+        assert!(out.contains("HTTP 404"));
+    }
+
+    #[test]
+    fn advanced_gm_helpers_are_page_safe_and_storage_is_absent() {
+        let mut set = ScriptSet::new();
+        set.set_enabled(true);
+        set.replace_all(vec![script(
+            "advanced",
+            "// ==UserScript==\n\
+             // @grant GM_xmlhttpRequest\n\
+             // @grant GM_setValue\n\
+             // ==/UserScript==\n\
+             GM_xmlhttpRequest({url: location.href});",
+        )]);
+        let js = set.combined_js();
+        assert!(js.contains("var GM_xmlhttpRequest="));
+        assert!(js.contains("var GM_download="));
+        assert!(js.contains("var GM_openInTab="));
+        assert!(js.contains("var GM_notification="));
+        assert!(js.contains("var GM_setClipboard="));
+        assert!(js.contains("var GM_addElement="));
+        assert!(
+            !js.contains("var GM_setValue="),
+            "GM storage needs an extension sandbox; do not fake it in the page"
+        );
+        assert!(js.contains("credentials:details.withCredentials?'include':'same-origin'"));
     }
 }

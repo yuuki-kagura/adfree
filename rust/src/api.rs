@@ -17,6 +17,7 @@ use crate::engine::{Config, VpnStats};
 use crate::events;
 use crate::filter::{FilterListInfo, ListFormat};
 use std::sync::Arc;
+use std::time::Duration;
 
 /// Everything the UI needs about the engine, in one atomic read.
 #[derive(uniffi::Record, Clone, Copy, Default, Debug)]
@@ -609,17 +610,72 @@ pub fn core_filter_remove(id: String) -> bool {
     })
 }
 
-/// Downloads one userscript body into the store (`scripts/<id>.js`).
+/// `@require` files are libraries (jQuery, helpers), so they get a generous
+/// per-file cap; the combined script still has to fit `MAX_SCRIPT_BYTES`.
+const MAX_REQUIRE_BYTES: u64 = 2 * 1024 * 1024;
+const REQUIRE_TIMEOUT_SECS: u64 = 30;
+
+/// Downloads one userscript body into the store (`scripts/<id>.js`) and
+/// resolves its `@require` URLs at install/refresh time. The dependencies are
+/// embedded after the metadata header, so the page never fetches them and the
+/// `@run-at` timing is preserved.
 #[uniffi::export]
 pub fn core_script_fetch(id: String, url: String) -> DownloadOutcome {
     guard(download_failure("store is not open"), || {
         let Some(store) = crate::core().store() else {
             return download_failure("store is not open");
         };
-        match crate::assets::fetch(&store.scripts_dir(), &id, "js", &url, false) {
-            Ok(o) => to_outcome(o),
-            Err(e) => download_failure(&e),
+        let dir = store.scripts_dir();
+        let outcome = match crate::assets::fetch(&dir, &id, "js", &url, false) {
+            Ok(o) => o,
+            Err(e) => return download_failure(&e),
+        };
+        let Some(raw) = crate::assets::read_text(&dir, &id, "js") else {
+            return to_outcome(outcome);
+        };
+        let requires = crate::mitm::script::required_urls(&raw);
+        if requires.is_empty() {
+            return to_outcome(outcome);
         }
+
+        let mut loaded = Vec::new();
+        let mut failed = Vec::new();
+        let mut total = raw.len();
+        for require in requires {
+            match crate::assets::fetch_text(
+                &require,
+                MAX_REQUIRE_BYTES,
+                Duration::from_secs(REQUIRE_TIMEOUT_SECS),
+            ) {
+                Ok(code) => {
+                    if total.saturating_add(code.len()) > crate::mitm::script::MAX_SCRIPT_BYTES {
+                        failed.push((require, "script would exceed size limit".to_string()));
+                        continue;
+                    }
+                    total += code.len();
+                    loaded.push((require, code));
+                }
+                Err(e) => failed.push((require, e)),
+            }
+        }
+        let combined = crate::mitm::script::embed_requires(&raw, &loaded, &failed);
+        if combined.len() > crate::mitm::script::MAX_SCRIPT_BYTES {
+            let mut out = to_outcome(outcome);
+            out.message = "userscript plus @require is too large".to_string();
+            return out;
+        }
+        if let Err(e) = crate::assets::save(&dir, &id, "js", &combined) {
+            let mut out = to_outcome(outcome);
+            out.message = e;
+            return out;
+        }
+        let mut out = crate::assets::state(&dir, &id, "js", false)
+            .map(to_outcome)
+            .unwrap_or_else(|| to_outcome(outcome));
+        if !failed.is_empty() {
+            out.message = format!("{} @require failed", failed.len());
+        }
+        out
     })
 }
 

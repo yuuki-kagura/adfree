@@ -213,7 +213,7 @@ fun UserScriptStoreSheet(
         Spacer(modifier = Modifier.height(10.dp))
         Text(
             "Script chạy mã của tác giả trong trang. Chỉ cài khi bạn tin tưởng nguồn; " +
-                "các API GM_* nâng cao như GM_xmlhttpRequest chưa được hỗ trợ.",
+                "GM_xmlhttpRequest/GM_download vẫn theo CORS của trang, GM_setValue và @resource chưa hỗ trợ.",
             fontSize = 10.sp,
             color = AdGuardTextMuted,
         )
@@ -466,9 +466,11 @@ fun AddScriptDialog(
         text = {
             Column {
                 Text(
-                    text = "Dán đường dẫn tới tệp userscript (.user.js). AdFree đọc " +
-                        "@match, @include, @exclude, @run-at và @noframes. Các API GM_* " +
-                        "nâng cao (trừ unsafeWindow, GM_addStyle, GM_log) chưa được hỗ trợ.",
+                    text = "Dán đường dẫn tới tệp userscript (.user.js). AdFree đọc @match, " +
+                        "@include, @exclude, @run-at, @noframes và tải @require lúc cài. " +
+                        "Hỗ trợ unsafeWindow, GM_addStyle, GM_log, GM_info, GM_xmlhttpRequest/" +
+                        "GM_download (theo CORS của trang), GM_openInTab, GM_notification, " +
+                        "GM_setClipboard, GM_addElement; GM_setValue và @resource chưa hỗ trợ.",
                     fontSize = 12.sp,
                     color = AdGuardTextSecondary,
                 )

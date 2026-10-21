@@ -42,6 +42,32 @@ pub struct Outcome {
     pub modified_ms: i64,
 }
 
+/// Fetches a text body with a hard size cap and timeout. Used by the normal
+/// list/script download and by `@require` resolution at install time.
+pub fn fetch_text(url: &str, max_bytes: u64, timeout: Duration) -> Result<String, String> {
+    if !url.starts_with("https://") && !url.starts_with("http://") {
+        return Err("the list has no URL".to_string());
+    }
+    let response = ureq::get(url)
+        .set("User-Agent", USER_AGENT)
+        .timeout(timeout)
+        .call()
+        .map_err(|e| e.to_string())?;
+    if response.status() != 200 {
+        return Err(format!("HTTP {}", response.status()));
+    }
+    let mut body = String::new();
+    response
+        .into_reader()
+        .take(max_bytes)
+        .read_to_string(&mut body)
+        .map_err(|e| e.to_string())?;
+    if body.trim().is_empty() {
+        return Err("empty response".to_string());
+    }
+    Ok(body)
+}
+
 /// Downloads `url` into `dir/<id>.<ext>` through a temp file + rename.
 /// `with_meta` also parses filter headers and counts rules; scripts only
 /// need size and date.
@@ -52,26 +78,7 @@ pub fn fetch(
     url: &str,
     with_meta: bool,
 ) -> Result<Outcome, String> {
-    if !url.starts_with("https://") && !url.starts_with("http://") {
-        return Err("the list has no URL".to_string());
-    }
-    let response = ureq::get(url)
-        .set("User-Agent", USER_AGENT)
-        .timeout(Duration::from_secs(60))
-        .call()
-        .map_err(|e| e.to_string())?;
-    if response.status() != 200 {
-        return Err(format!("HTTP {}", response.status()));
-    }
-    let mut body = String::new();
-    response
-        .into_reader()
-        .take(MAX_BODY_BYTES)
-        .read_to_string(&mut body)
-        .map_err(|e| e.to_string())?;
-    if body.trim().is_empty() {
-        return Err("empty response".to_string());
-    }
+    let body = fetch_text(url, MAX_BODY_BYTES, Duration::from_secs(60))?;
     let path = save(dir, id, ext, &body)?;
     Ok(state_of(&path, &body, with_meta))
 }
@@ -361,6 +368,7 @@ mod tests {
     fn bad_urls_and_dates_are_rejected() {
         let dir = temp_dir("bad");
         assert!(fetch(&dir, "x", "txt", "ftp://example.com/list.txt", true).is_err());
+        assert!(fetch_text("ftp://example.com/req.js", 1024, Duration::from_secs(1)).is_err());
         assert_eq!(format_iso_date("not a date"), None);
         assert_eq!(format_iso_date("short"), None);
     }
