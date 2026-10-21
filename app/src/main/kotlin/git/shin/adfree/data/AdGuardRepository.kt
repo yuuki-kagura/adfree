@@ -385,7 +385,10 @@ class AdGuardRepository(
                     ruleCount = 0,
                     isEnabled = enabled,
                     category = entry.group.id,
-                    version = entry.format,
+                    // Only a downloaded list has a real version: seeding it with
+                    // the syntax made the detail sheet print "Phiên bản
+                    // standard" before the first byte had arrived.
+                    version = "",
                     isOnlineSubscription = true,
                     subscriptionUrl = entry.url,
                     lastUpdatedText = "Chưa tải",
@@ -407,7 +410,7 @@ class AdGuardRepository(
                     ruleCount = 0,
                     isEnabled = stored.enabled,
                     category = "custom",
-                    version = stored.format,
+                    version = "",
                     isOnlineSubscription = stored.url.isNotBlank(),
                     subscriptionUrl = stored.url.ifBlank { null },
                     lastUpdatedText = "Chưa tải",
@@ -426,7 +429,7 @@ class AdGuardRepository(
                 ruleCount = rules.size,
                 isEnabled = rules.isNotEmpty(),
                 category = "user",
-                version = "user",
+                version = "",
                 isCustom = true,
                 customRules = rules,
             )
@@ -463,6 +466,7 @@ class AdGuardRepository(
                         ruleCount = state.lineCount.toInt(),
                         lastUpdatedText = state.updatedText ?: engine.dateText(state.modifiedMs),
                         version = state.version ?: it.version,
+                        sizeBytes = state.sizeBytes,
                     )
                 } else it
             }
@@ -478,6 +482,7 @@ class AdGuardRepository(
                         lastUpdatedText = result.updatedText ?: "Vừa tải",
                         version = result.version ?: it.version,
                         format = result.detectedFormat ?: it.format,
+                        sizeBytes = result.sizeBytes,
                     )
                 } else it
             }

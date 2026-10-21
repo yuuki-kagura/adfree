@@ -122,6 +122,8 @@ data class FilterList(
     val subscriptionUrl: String? = null,
     val isOnlineSubscription: Boolean = false,
     val lastUpdatedText: String = "Chưa cập nhật",
+    /** Body size reported by the core, 0 while nothing is on disk. */
+    val sizeBytes: Long = 0,
     /** Catalog group id: ads/privacy/social/annoyances/security/other/language/custom. */
     val groupId: String = "other",
     /** "standard" (AdGuard/EasyList syntax) or "hosts". */
@@ -142,6 +144,24 @@ data class FilterList(
      */
     val trusted: Boolean = false,
 )
+
+/**
+ * "1.9 MB"-style label for a filter body. The decimal point is pinned to
+ * `Locale.US` so the label (and its unit test) do not drift with the device
+ * language; sub-1024 bodies show raw bytes, which never happens for real
+ * subscriptions but keeps a half-written file readable.
+ */
+internal fun assetSizeLabel(bytes: Long): String = when {
+    bytes <= 0L -> "0 B"
+    bytes < 1024L -> "$bytes B"
+    bytes < 1024L * 1024L -> "${bytes / 1024L} KB"
+    else ->
+        String.format(
+            java.util.Locale.US,
+            "%.1f MB",
+            bytes / (1024.0 * 1024.0),
+        )
+}
 
 /** One userscript served to intercepted pages (the Extensions section). */
 data class UserScriptInfo(

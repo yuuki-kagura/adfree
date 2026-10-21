@@ -2,6 +2,7 @@ package git.shin.adfree.ui.screens
 
 import android.content.Intent
 import android.net.Uri
+import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.BorderStroke
@@ -26,6 +27,7 @@ import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Block
 import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.ExpandLess
@@ -35,6 +37,7 @@ import androidx.compose.material.icons.filled.Language
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.NotificationsOff
+import androidx.compose.material.icons.filled.OpenInBrowser
 import androidx.compose.material.icons.filled.Public
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Science
@@ -74,8 +77,10 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -83,6 +88,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import git.shin.adfree.data.FilterGroup
 import git.shin.adfree.model.FilterList
+import git.shin.adfree.model.assetSizeLabel
 import git.shin.adfree.ui.AdGuardIntent
 import git.shin.adfree.ui.AdGuardViewModel
 import git.shin.adfree.ui.theme.AdGuardBlueDns
@@ -440,6 +446,7 @@ fun FiltersScreen(
             ) {
                 FilterDetailSheet(
                     list = list,
+                    isBuilding = state.stats.isFilterBuilding,
                     onToggle = { viewModel.onIntent(AdGuardIntent.ToggleFilterList(list.id, !list.isEnabled)) },
                     onTrustChanged = { viewModel.onIntent(AdGuardIntent.SetFilterTrusted(list.id, it)) },
                     onRefresh = { viewModel.onIntent(AdGuardIntent.RefreshSubscription(list.id)) },
@@ -448,6 +455,11 @@ fun FiltersScreen(
                         viewModel.onIntent(AdGuardIntent.InspectFilter(null))
                     },
                     onOpenHomepage = { url ->
+                        runCatching {
+                            context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)))
+                        }
+                    },
+                    onOpenSource = { url ->
                         runCatching {
                             context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)))
                         }
@@ -824,12 +836,17 @@ private fun AddFilterDialog(
 @Composable
 fun FilterDetailSheet(
     list: FilterList,
+    /** True while the core is still compiling the lists (stats tick drives it). */
+    isBuilding: Boolean = false,
     onToggle: () -> Unit,
     onTrustChanged: (Boolean) -> Unit,
     onRefresh: () -> Unit,
     onDelete: () -> Unit,
     onOpenHomepage: (String) -> Unit,
+    onOpenSource: (String) -> Unit,
 ) {
+    val clipboard = LocalClipboardManager.current
+    val context = LocalContext.current
     Column(
         modifier = Modifier
             .fillMaxWidth()
@@ -847,7 +864,14 @@ fun FilterDetailSheet(
             Column(modifier = Modifier.weight(1f)) {
                 Text("Bật bộ lọc này", fontSize = 13.sp, fontWeight = FontWeight.Bold, color = AdGuardTextPrimary)
                 Text(
-                    text = if (list.isEnabled) "Đang lọc" else "Đang tắt",
+                    text = when {
+                        // The switch follows the engine, so an in-flight compile
+                        // has to be said out loud or the user wonders why a
+                        // freshly enabled list is not filtering yet.
+                        isBuilding -> "Đang biên dịch quy tắc…"
+                        list.isEnabled -> "Đang lọc"
+                        else -> "Đang tắt"
+                    },
                     fontSize = 11.sp,
                     color = AdGuardTextMuted,
                 )
@@ -885,21 +909,56 @@ fun FilterDetailSheet(
         InfoRow("Nhóm", FilterGroup.fromId(list.groupId)?.title ?: "Tùy chỉnh")
         InfoRow("Định dạng", if (list.format.equals("hosts", ignoreCase = true)) "Hosts" else "AdGuard / EasyList")
         InfoRow("Quy tắc", "%,d".format(list.ruleCount))
+        if (list.sizeBytes > 0L) {
+            InfoRow("Dung lượng", assetSizeLabel(list.sizeBytes))
+        }
         InfoRow("Cập nhật", list.lastUpdatedText)
         if (list.version.isNotBlank()) {
             InfoRow("Phiên bản", list.version.take(24))
         }
 
         if (!list.subscriptionUrl.isNullOrBlank()) {
-            Spacer(modifier = Modifier.height(6.dp))
-            Text(
-                text = list.subscriptionUrl,
-                fontSize = 9.sp,
-                fontFamily = FontFamily.Monospace,
-                color = AdGuardTextMuted,
-                maxLines = 2,
-                overflow = TextOverflow.Ellipsis,
-            )
+            val url = list.subscriptionUrl
+            Spacer(modifier = Modifier.height(8.dp))
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    text = url,
+                    fontSize = 9.sp,
+                    fontFamily = FontFamily.Monospace,
+                    color = AdGuardTextMuted,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f),
+                )
+                IconButton(
+                    onClick = {
+                        clipboard.setText(AnnotatedString(url))
+                        Toast.makeText(context, "Đã sao chép URL", Toast.LENGTH_SHORT).show()
+                    },
+                    modifier = Modifier.size(32.dp),
+                ) {
+                    Icon(
+                        Icons.Default.ContentCopy,
+                        contentDescription = "Sao chép nguồn",
+                        tint = AdGuardTextSecondary,
+                        modifier = Modifier.size(16.dp),
+                    )
+                }
+                IconButton(
+                    onClick = { onOpenSource(url) },
+                    modifier = Modifier.size(32.dp),
+                ) {
+                    Icon(
+                        Icons.Default.OpenInBrowser,
+                        contentDescription = "Mở nguồn",
+                        tint = AdGuardTextSecondary,
+                        modifier = Modifier.size(16.dp),
+                    )
+                }
+            }
+        } else if (list.ruleCount > 0) {
+            Spacer(modifier = Modifier.height(8.dp))
+            InfoRow("Nguồn", "Nội dung cục bộ")
         }
 
         Spacer(modifier = Modifier.height(16.dp))

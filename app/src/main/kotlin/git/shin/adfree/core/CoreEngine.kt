@@ -239,6 +239,7 @@ class CoreEngine {
             version = outcome.version,
             updatedText = outcome.updatedText,
             detectedFormat = outcome.detectedFormat,
+            sizeBytes = outcome.sizeBytes,
         )
     }
 
@@ -557,6 +558,8 @@ data class DownloadResult(
     val version: String? = null,
     val updatedText: String? = null,
     val detectedFormat: String? = null,
+    /** Bytes on disk after the download; 0 for a failure. */
+    val sizeBytes: Long = 0,
 )
 
 /**
