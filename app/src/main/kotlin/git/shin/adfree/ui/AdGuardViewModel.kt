@@ -369,6 +369,8 @@ class AdGuardViewModel(
             is AdGuardIntent.InspectScript -> _inspectedScript.value = intent.id
 
             is AdGuardIntent.DeleteFilterList -> repository.deleteFilterList(intent.id)
+            is AdGuardIntent.UpdateCustomFilter ->
+                repository.updateCustomFilter(intent.id, intent.name, intent.url)
             is AdGuardIntent.RefreshSubscription -> repository.refreshSubscription(intent.id)
             is AdGuardIntent.RefreshAllSubscriptions -> repository.refreshAllSubscriptions()
             is AdGuardIntent.ToggleFilterList -> repository.toggleFilterList(intent.id, intent.enabled)

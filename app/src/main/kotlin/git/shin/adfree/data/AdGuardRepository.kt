@@ -764,6 +764,47 @@ class AdGuardRepository(
         }
     }
 
+    /**
+     * Edits a user-added list's name and/or source URL. Validation and the
+     * duplicate check run before the list model moves (same rules as
+     * [addCustomFilter]); a URL change immediately refetches, so a failure
+     * lands on the row instead of silently keeping stale content.
+     */
+    fun updateCustomFilter(id: String, rawName: String, rawUrl: String) {
+        scope.launch {
+            val list = _filterLists.value.firstOrNull { it.id == id } ?: return@launch
+            if (!list.isUserAdded) return@launch
+            val url = rawUrl.trim()
+            if (url.isNotBlank()) {
+                filterUrlError(url)?.let {
+                    showTransientStatus(it)
+                    return@launch
+                }
+                if (_filterLists.value.any {
+                        it.id != id && it.subscriptionUrl?.equals(url, ignoreCase = true) == true
+                    }
+                ) {
+                    showTransientStatus("URL này đã có trong danh sách bộ lọc")
+                    return@launch
+                }
+            }
+            val name = rawName.trim().let { if (it.isBlank()) url.substringAfter("//").take(40) else it }
+            val urlChanged = list.subscriptionUrl != url.ifBlank { null }
+            _filterLists.update { lists ->
+                lists.map {
+                    if (it.id == id) {
+                        // The old "Lỗi: …" belongs to the previous source.
+                        it.copy(name = name, subscriptionUrl = url.ifBlank { null }, lastError = "")
+                    } else it
+                }
+            }
+            saveFilterChoices()
+            pushListsToEngine()
+            showTransientStatus("Đã cập nhật $name")
+            if (urlChanged && url.isNotBlank()) refreshSubscription(id)
+        }
+    }
+
     /** AdGuard's "Khôi phục mặc định": the catalogue back to factory state. */
     fun restoreDefaultFilters() {
         scope.launch {

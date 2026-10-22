@@ -124,6 +124,15 @@ fun FiltersScreen(
     val context = LocalContext.current
     var expandedGroups by remember { mutableStateOf(setOf(FilterGroup.ADS.id)) }
     var showOverflow by remember { mutableStateOf(false) }
+    // "Khôi phục mặc định" deletes a chunk of configuration; the confirm
+    // (AdGuard pattern) says what resets and what survives, so a stray tap
+    // in the overflow menu cannot silently rebind the enabled sets.
+    var showResetConfirm by remember { mutableStateOf(false) }
+    // The detail sheet asks before deleting a user-added list and can open
+    // the name/URL editor; both hang off the sheet, so a mis-tap cannot
+    // silently remove or mangle a list.
+    var showDeleteConfirm by remember { mutableStateOf(false) }
+    var showEditFilter by remember { mutableStateOf(false) }
 
     // Local files are imported through the system picker; the URI is read once
     // and copied into the app's own directory (SAF permissions are not trusted
@@ -187,7 +196,7 @@ fun FiltersScreen(
                             text = { Text("Khôi phục mặc định", fontSize = 13.sp) },
                             onClick = {
                                 showOverflow = false
-                                viewModel.onIntent(AdGuardIntent.RestoreDefaultFilters)
+                                showResetConfirm = true
                             },
                             leadingIcon = {
                                 Icon(Icons.Default.Refresh, contentDescription = null, tint = AdGuardTextSecondary, modifier = Modifier.size(18.dp))
@@ -389,6 +398,92 @@ fun FiltersScreen(
         )
     }
 
+    state.inspectedFilterId?.let { id ->
+        val list = state.filterLists.firstOrNull { it.id == id }
+        if (list?.isUserAdded == true) {
+            if (showDeleteConfirm) {
+                AlertDialog(
+                    onDismissRequest = { showDeleteConfirm = false },
+                    title = { Text("Xóa bộ lọc?", fontSize = 17.sp, fontWeight = FontWeight.Bold, color = AdGuardTextPrimary) },
+                    text = {
+                        Text(
+                            "Bộ lọc «${list.name}» và nội dung đã tải của nó bị xóa, không thể hoàn tác.",
+                            fontSize = 12.sp,
+                            color = AdGuardTextSecondary,
+                        )
+                    },
+                    confirmButton = {
+                        TextButton(onClick = {
+                            showDeleteConfirm = false
+                            viewModel.onIntent(AdGuardIntent.DeleteFilterList(list.id))
+                            viewModel.onIntent(AdGuardIntent.InspectFilter(null))
+                        }) {
+                            Text("Xóa", fontSize = 13.sp, fontWeight = FontWeight.Bold, color = AdGuardRedBlocked)
+                        }
+                    },
+                    dismissButton = {
+                        TextButton(onClick = { showDeleteConfirm = false }) {
+                            Text("Hủy", fontSize = 13.sp, color = AdGuardTextSecondary)
+                        }
+                    },
+                )
+            }
+            if (showEditFilter) {
+                EditCustomFilterDialog(
+                    list = list,
+                    onDismiss = { showEditFilter = false },
+                    onSave = { name, url ->
+                        showEditFilter = false
+                        viewModel.onIntent(AdGuardIntent.UpdateCustomFilter(list.id, name, url))
+                    },
+                )
+            }
+        }
+    }
+
+    if (showResetConfirm) {
+        AlertDialog(
+            onDismissRequest = { showResetConfirm = false },
+            title = { Text("Khôi phục mặc định?", fontSize = 17.sp, fontWeight = FontWeight.Bold, color = AdGuardTextPrimary) },
+            text = {
+                Column {
+                    // AdGuard lists the scope and the consequences before the
+                    // destructive word; here the reset is honestly narrow.
+                    Text(
+                        "Các danh sách catalogue sẽ bật/tắt về đúng cấu hình mặc định của ứng dụng.",
+                        fontSize = 12.sp,
+                        color = AdGuardTextSecondary,
+                    )
+                    Spacer(modifier = Modifier.height(6.dp))
+                    Text(
+                        "Danh sách được bật lại sẽ tự tải về nếu máy chưa có nội dung.",
+                        fontSize = 12.sp,
+                        color = AdGuardTextSecondary,
+                    )
+                    Spacer(modifier = Modifier.height(6.dp))
+                    Text(
+                        "Bộ lọc tùy chỉnh, tiện ích và Quy tắc của bạn không bị thay đổi.",
+                        fontSize = 12.sp,
+                        color = AdGuardTextMuted,
+                    )
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    showResetConfirm = false
+                    viewModel.onIntent(AdGuardIntent.RestoreDefaultFilters)
+                }) {
+                    Text("Khôi phục", fontSize = 13.sp, fontWeight = FontWeight.Bold, color = AdGuardRedBlocked)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showResetConfirm = false }) {
+                    Text("Hủy", fontSize = 13.sp, color = AdGuardTextSecondary)
+                }
+            },
+        )
+    }
+
     if (state.showAddScriptDialog) {
         AddScriptDialog(
             onDismiss = { viewModel.onIntent(AdGuardIntent.ShowAddScriptDialog(false)) },
@@ -467,9 +562,9 @@ fun FiltersScreen(
                     onTrustChanged = { viewModel.onIntent(AdGuardIntent.SetFilterTrusted(list.id, it)) },
                     onRefresh = { viewModel.onIntent(AdGuardIntent.RefreshSubscription(list.id)) },
                     onDelete = {
-                        viewModel.onIntent(AdGuardIntent.DeleteFilterList(list.id))
-                        viewModel.onIntent(AdGuardIntent.InspectFilter(null))
+                        showDeleteConfirm = true
                     },
+                    onEdit = { showEditFilter = true },
                     onOpenHomepage = { url ->
                         runCatching {
                             context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)))
@@ -917,6 +1012,85 @@ private fun AddFilterDialog(
     )
 }
 
+/** Editor for a user-added list: rename it or point it at another source. */
+@Composable
+private fun EditCustomFilterDialog(
+    list: FilterList,
+    onDismiss: () -> Unit,
+    onSave: (String, String) -> Unit,
+) {
+    var name by remember { mutableStateOf(list.name) }
+    var url by remember { mutableStateOf(list.subscriptionUrl.orEmpty()) }
+    // A list imported from a file has no URL at all: leaving the field
+    // empty is valid there, an invalid URL never is.
+    val urlError = if (url.isBlank()) null else filterUrlError(url)
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Sửa bộ lọc", fontSize = 17.sp, fontWeight = FontWeight.Bold, color = AdGuardTextPrimary) },
+        text = {
+            Column {
+                OutlinedTextField(
+                    value = name,
+                    onValueChange = { name = it },
+                    label = { Text("Tên", fontSize = 12.sp) },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(10.dp),
+                    colors = OutlinedTextFieldDefaults.colors(
+                        focusedBorderColor = AdGuardGreenPrimary,
+                        unfocusedBorderColor = AdGuardDarkOutline,
+                        focusedTextColor = AdGuardTextPrimary,
+                        unfocusedTextColor = AdGuardTextPrimary,
+                    ),
+                )
+                Spacer(modifier = Modifier.height(8.dp))
+                OutlinedTextField(
+                    value = url,
+                    onValueChange = { url = it },
+                    label = { Text("Đường dẫn (URL)", fontSize = 12.sp) },
+                    placeholder = { Text("https://…", fontSize = 12.sp, color = AdGuardTextMuted) },
+                    singleLine = true,
+                    isError = urlError != null,
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(10.dp),
+                    colors = OutlinedTextFieldDefaults.colors(
+                        focusedBorderColor = AdGuardGreenPrimary,
+                        unfocusedBorderColor = AdGuardDarkOutline,
+                        focusedTextColor = AdGuardTextPrimary,
+                        unfocusedTextColor = AdGuardTextPrimary,
+                    ),
+                )
+                urlError?.let {
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Text(it, fontSize = 11.sp, color = AdGuardRedBlocked)
+                }
+                Spacer(modifier = Modifier.height(8.dp))
+                Text(
+                    "Đổi URL sẽ tải lại nội dung của bộ lọc.",
+                    fontSize = 10.sp,
+                    color = AdGuardTextMuted,
+                )
+            }
+        },
+        confirmButton = {
+            Button(
+                onClick = { onSave(name, url) },
+                enabled = urlError == null,
+                colors = ButtonDefaults.buttonColors(containerColor = AdGuardBlueDns),
+                shape = RoundedCornerShape(8.dp),
+            ) {
+                Text("Lưu", color = Color.Black, fontWeight = FontWeight.Bold)
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text("Hủy", fontSize = 13.sp, color = AdGuardTextSecondary)
+            }
+        },
+    )
+}
+
 /** Bottom sheet with everything we know about one filter list. */
 @Composable
 fun FilterDetailSheet(
@@ -926,6 +1100,8 @@ fun FilterDetailSheet(
     onToggle: () -> Unit,
     onTrustChanged: (Boolean) -> Unit,
     onRefresh: () -> Unit,
+    /** Opens the name/URL editor; wired only for user-added lists. */
+    onEdit: () -> Unit = {},
     onDelete: () -> Unit,
     onOpenHomepage: (String) -> Unit,
     onOpenSource: (String) -> Unit,
@@ -1060,6 +1236,11 @@ fun FilterDetailSheet(
                 }
             }
             if (list.isUserAdded) {
+                OutlinedButton(onClick = onEdit, shape = RoundedCornerShape(10.dp)) {
+                    Icon(Icons.Default.Edit, contentDescription = null, tint = AdGuardGreenLight, modifier = Modifier.size(16.dp))
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text("Sửa", fontSize = 12.sp, color = AdGuardGreenLight)
+                }
                 OutlinedButton(onClick = onDelete, shape = RoundedCornerShape(10.dp)) {
                     Icon(Icons.Default.Delete, contentDescription = null, tint = AdGuardRedBlocked, modifier = Modifier.size(16.dp))
                     Spacer(modifier = Modifier.width(6.dp))

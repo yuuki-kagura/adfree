@@ -118,6 +118,8 @@ sealed interface AdGuardIntent {
     data class DeleteScript(val id: String) : AdGuardIntent
     data class InspectScript(val id: String?) : AdGuardIntent
     data class DeleteFilterList(val id: String) : AdGuardIntent
+    /** Edits a user-added list's name and/or source URL. */
+    data class UpdateCustomFilter(val id: String, val name: String, val url: String) : AdGuardIntent
     data class RefreshSubscription(val id: String) : AdGuardIntent
     data object RefreshAllSubscriptions : AdGuardIntent
     data class ToggleFilterList(val id: String, val enabled: Boolean) : AdGuardIntent
