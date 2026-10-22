@@ -91,6 +91,7 @@ import git.shin.adfree.data.ModuleGate
 import git.shin.adfree.data.moduleGate
 import git.shin.adfree.model.FilterList
 import git.shin.adfree.model.assetSizeLabel
+import git.shin.adfree.model.filterMatchesQuery
 import git.shin.adfree.model.filterUrlError
 import git.shin.adfree.ui.AdGuardIntent
 import git.shin.adfree.ui.AdGuardViewModel
@@ -167,11 +168,7 @@ fun FiltersScreen(
     }
 
     val query = state.filterSearchQuery
-    val matchesQuery: (FilterList) -> Boolean = {
-        query.isBlank() ||
-            it.name.contains(query, ignoreCase = true) ||
-            it.description.contains(query, ignoreCase = true)
-    }
+    val matchesQuery: (FilterList) -> Boolean = { filterMatchesQuery(it, query) }
     val catalogLists = state.filterLists.filter { !it.isCustom && !it.isUserAdded }
     val customLists = state.filterLists.filter { it.isUserAdded }
     val visibleCatalog = catalogLists.filter(matchesQuery)
@@ -314,8 +311,27 @@ fun FiltersScreen(
                     .fillMaxWidth()
                     .testTag("filter_search_field"),
                 singleLine = true,
-                placeholder = { Text("Tìm bộ lọc theo tên…", color = AdGuardTextMuted, fontSize = 13.sp) },
+                placeholder = { Text("Tìm bộ lọc theo tên, mô tả hoặc URL…", color = AdGuardTextMuted, fontSize = 13.sp) },
                 leadingIcon = { Icon(Icons.Default.Search, contentDescription = null, tint = AdGuardTextMuted, modifier = Modifier.size(18.dp)) },
+                trailingIcon = if (query.isBlank()) {
+                    null
+                } else {
+                    {
+                        // AdGuard's field carries an explicit clear action; a
+                        // long query is otherwise deleted one character at a time.
+                        IconButton(
+                            onClick = { viewModel.onIntent(AdGuardIntent.FilterSearchQueryChanged("")) },
+                            modifier = Modifier.size(32.dp),
+                        ) {
+                            Icon(
+                                Icons.Default.Close,
+                                contentDescription = "Xóa tìm kiếm",
+                                tint = AdGuardTextMuted,
+                                modifier = Modifier.size(16.dp),
+                            )
+                        }
+                    }
+                },
                 shape = RoundedCornerShape(10.dp),
                 colors = OutlinedTextFieldDefaults.colors(
                     focusedContainerColor = AdGuardDarkSurface,
@@ -367,13 +383,24 @@ fun FiltersScreen(
                     }
                 }
 
-                item(key = "custom_filters") {
-                    CustomFiltersCard(
-                        lists = visibleCustom,
-                        onAdd = { viewModel.onIntent(AdGuardIntent.ShowAddFilterDialog(true)) },
-                        onToggleList = { viewModel.onIntent(AdGuardIntent.ToggleFilterList(it.id, !it.isEnabled)) },
-                        onOpenList = { viewModel.onIntent(AdGuardIntent.InspectFilter(it.id)) },
-                    )
+                if (query.isNotBlank() && visibleCatalog.isEmpty() && visibleCustom.isEmpty()) {
+                    // The screen used to end at the last group card with no
+                    // word about the query, which reads like a loading glitch.
+                    item(key = "no_results") {
+                        SearchEmptyCard(
+                            query = query,
+                            onClear = { viewModel.onIntent(AdGuardIntent.FilterSearchQueryChanged("")) },
+                        )
+                    }
+                } else {
+                    item(key = "custom_filters") {
+                        CustomFiltersCard(
+                            lists = visibleCustom,
+                            onAdd = { viewModel.onIntent(AdGuardIntent.ShowAddFilterDialog(true)) },
+                            onToggleList = { viewModel.onIntent(AdGuardIntent.ToggleFilterList(it.id, !it.isEnabled)) },
+                            onOpenList = { viewModel.onIntent(AdGuardIntent.InspectFilter(it.id)) },
+                        )
+                    }
                 }
 
                 item(key = "extensions") {
@@ -873,6 +900,43 @@ private fun FilterRow(
 }
 
 // --------------------------------------------------------- custom + rules
+
+/** Shown when the query matches no catalogue or custom list. */
+@Composable
+private fun SearchEmptyCard(
+    query: String,
+    onClear: () -> Unit,
+) {
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .testTag("filter_search_empty"),
+        shape = RoundedCornerShape(14.dp),
+        colors = CardDefaults.cardColors(containerColor = AdGuardDarkSurface),
+        border = BorderStroke(1.dp, AdGuardDarkOutline),
+    ) {
+        Column(modifier = Modifier.padding(16.dp)) {
+            Text(
+                text = "Không tìm thấy bộ lọc",
+                fontSize = 13.sp,
+                fontWeight = FontWeight.Bold,
+                color = AdGuardTextPrimary,
+            )
+            Spacer(modifier = Modifier.height(2.dp))
+            Text(
+                text = "Không có bộ lọc nào khớp «$query». Từ khóa được so với tên, mô tả và URL nguồn.",
+                fontSize = 11.sp,
+                color = AdGuardTextMuted,
+            )
+            TextButton(
+                onClick = onClear,
+                modifier = Modifier.padding(top = 4.dp),
+            ) {
+                Text("Xóa tìm kiếm", fontSize = 12.sp, fontWeight = FontWeight.Bold, color = AdGuardGreenLight)
+            }
+        }
+    }
+}
 
 @Composable
 private fun CustomFiltersCard(

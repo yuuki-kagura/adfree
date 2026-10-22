@@ -153,6 +153,18 @@ data class FilterList(
 )
 
 /**
+ * Case-insensitive match of one filter list against the search field: name,
+ * description, and the source URL (how users recognise a custom list). A
+ * blank query matches everything.
+ */
+internal fun filterMatchesQuery(list: FilterList, query: String): Boolean {
+    if (query.isBlank()) return true
+    return list.name.contains(query, ignoreCase = true) ||
+        list.description.contains(query, ignoreCase = true) ||
+        list.subscriptionUrl?.contains(query, ignoreCase = true) == true
+}
+
+/**
  * Display name for a userscript imported from a file: the picker's
  * `DISPLAY_NAME` minus the `.user.js` / `.js` suffix. A nameless picker
  * answer still has to produce a row the user can recognise.
