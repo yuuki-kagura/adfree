@@ -105,6 +105,7 @@ import git.shin.adfree.ui.theme.AdGuardRedBlocked
 import git.shin.adfree.ui.theme.AdGuardTextMuted
 import git.shin.adfree.ui.theme.AdGuardTextPrimary
 import git.shin.adfree.ui.theme.AdGuardTextSecondary
+import git.shin.adfree.AdGuardApplication
 
 /**
  * The "Bộ lọc" tab: the filter catalogue, custom lists and userscripts.
@@ -133,6 +134,11 @@ fun FiltersScreen(
     // silently remove or mangle a list.
     var showDeleteConfirm by remember { mutableStateOf(false) }
     var showEditFilter by remember { mutableStateOf(false) }
+    // Extensions: import from file, create new, edit source, and confirm
+    // deletion (the sheet is one tap away from the list otherwise).
+    var showCreateScript by remember { mutableStateOf(false) }
+    var editScriptTarget by remember { mutableStateOf<git.shin.adfree.model.UserScriptInfo?>(null) }
+    var deleteScriptTarget by remember { mutableStateOf<git.shin.adfree.model.UserScriptInfo?>(null) }
 
     // Local files are imported through the system picker; the URI is read once
     // and copied into the app's own directory (SAF permissions are not trusted
@@ -146,6 +152,17 @@ fun FiltersScreen(
                 )
             }
             viewModel.onIntent(AdGuardIntent.ImportLocalFilter(uri.toString()))
+        }
+    }
+    val scriptFilePicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        if (uri != null) {
+            runCatching {
+                context.contentResolver.takePersistableUriPermission(
+                    uri,
+                    Intent.FLAG_GRANT_READ_URI_PERMISSION,
+                )
+            }
+            viewModel.onIntent(AdGuardIntent.ImportLocalScript(uri.toString()))
         }
     }
 
@@ -488,6 +505,72 @@ fun FiltersScreen(
         AddScriptDialog(
             onDismiss = { viewModel.onIntent(AdGuardIntent.ShowAddScriptDialog(false)) },
             onAdd = { name, url -> viewModel.onIntent(AdGuardIntent.AddScript(name, url)) },
+            onImportFile = {
+                viewModel.onIntent(AdGuardIntent.ShowAddScriptDialog(false))
+                scriptFilePicker.launch(arrayOf("text/javascript", "application/x-javascript", "text/plain", "application/javascript", "*/*"))
+            },
+            onCreate = {
+                viewModel.onIntent(AdGuardIntent.ShowAddScriptDialog(false))
+                showCreateScript = true
+            },
+        )
+    }
+
+    if (showCreateScript) {
+        ScriptTextEditorDialog(
+            title = "Tạo tiện ích mới",
+            initialName = "",
+            initialText = "// ==UserScript==\n// @name         Tiện ích của tôi\n// @match        *://*/*\n// @grant        none\n// ==/UserScript==\n\n",
+            confirmText = "Tạo",
+            onDismiss = { showCreateScript = false },
+            onConfirm = { name, text ->
+                showCreateScript = false
+                viewModel.onIntent(AdGuardIntent.CreateScript(name, text))
+            },
+        )
+    }
+
+    editScriptTarget?.let { target ->
+        if (target.isUserAdded) {
+            ScriptTextEditorDialog(
+                title = "Sửa mã tiện ích",
+                initialName = target.name,
+                initialText = "",
+                confirmText = "Lưu",
+                onDismiss = { editScriptTarget = null },
+                onConfirm = { name, text ->
+                    editScriptTarget = null
+                    viewModel.onIntent(AdGuardIntent.UpdateScriptText(target.id, name, text))
+                },
+                loadText = { AdGuardApplication.instance.container.coreEngine.scriptText(target.id).orEmpty() },
+            )
+        }
+    }
+
+    deleteScriptTarget?.let { target ->
+        AlertDialog(
+            onDismissRequest = { deleteScriptTarget = null },
+            title = { Text("Xóa tiện ích?", fontSize = 17.sp, fontWeight = FontWeight.Bold, color = AdGuardTextPrimary) },
+            text = {
+                Text(
+                    "Tiện ích «${target.name}» và nội dung đã lưu sẽ bị xóa, không thể hoàn tác.",
+                    fontSize = 12.sp,
+                    color = AdGuardTextSecondary,
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    deleteScriptTarget = null
+                    viewModel.onIntent(AdGuardIntent.DeleteScript(target.id))
+                }) {
+                    Text("Xóa", fontSize = 13.sp, fontWeight = FontWeight.Bold, color = AdGuardRedBlocked)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { deleteScriptTarget = null }) {
+                    Text("Hủy", fontSize = 13.sp, color = AdGuardTextSecondary)
+                }
+            },
         )
     }
 
@@ -595,8 +678,14 @@ fun FiltersScreen(
                     masterEnabled = state.scriptsMasterEnabled,
                     onToggle = { viewModel.onIntent(AdGuardIntent.ToggleScript(script.id, !script.isEnabled)) },
                     onRefresh = { viewModel.onIntent(AdGuardIntent.RefreshScript(script.id)) },
+                    onEdit = {
+                        // The editor is its own sheet: close the detail sheet
+                        // first so two modals never stack.
+                        editScriptTarget = script
+                        viewModel.onIntent(AdGuardIntent.InspectScript(null))
+                    },
                     onDelete = {
-                        viewModel.onIntent(AdGuardIntent.DeleteScript(script.id))
+                        deleteScriptTarget = script
                         viewModel.onIntent(AdGuardIntent.InspectScript(null))
                     },
                 )

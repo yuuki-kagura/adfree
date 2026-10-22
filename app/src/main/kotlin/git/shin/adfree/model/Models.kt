@@ -153,6 +153,20 @@ data class FilterList(
 )
 
 /**
+ * Display name for a userscript imported from a file: the picker's
+ * `DISPLAY_NAME` minus the `.user.js` / `.js` suffix. A nameless picker
+ * answer still has to produce a row the user can recognise.
+ */
+internal fun scriptNameFromFile(displayName: String?): String =
+    displayName
+        ?.removeSuffix(".user.js")
+        ?.removeSuffix(".js")
+        ?.trim()
+        ?.take(60)
+        ?.takeIf { it.isNotBlank() }
+        ?: "Tiện ích từ tệp"
+
+/**
  * "1.9 MB"-style label for a filter body. The decimal point is pinned to
  * `Locale.US` so the label (and its unit test) do not drift with the device
  * language; sub-1024 bodies show raw bytes, which never happens for real

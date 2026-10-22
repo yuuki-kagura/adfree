@@ -16,6 +16,7 @@ import git.shin.adfree.model.DnsProvider
 import git.shin.adfree.model.FilterList
 import git.shin.adfree.model.FilterStatus
 import git.shin.adfree.model.filterUrlError
+import git.shin.adfree.model.scriptNameFromFile
 import git.shin.adfree.model.UserScriptInfo
 import git.shin.adfree.model.UserScriptStoreItem
 import git.shin.adfree.model.UserScriptStoreSort
@@ -1376,6 +1377,139 @@ class AdGuardRepository(
             withContext(Dispatchers.IO) { runCatching { engine.scriptRemove(id) } }
             saveScripts()
             pushScriptsToCore()
+        }
+    }
+
+    /** Imports a userscript body from a local file and enables it. */
+    fun importLocalScript(uriText: String) {
+        scope.launch {
+            val uri = android.net.Uri.parse(uriText)
+            val resolver = context.contentResolver
+            val text = withContext(Dispatchers.IO) {
+                runCatching { resolver.openInputStream(uri)?.bufferedReader()?.use { it.readText() } }
+                    .getOrNull()
+            }
+            if (text.isNullOrBlank()) {
+                showTransientStatus("Không đọc được tệp đã chọn")
+                return@launch
+            }
+            val displayName = withContext(Dispatchers.IO) {
+                runCatching {
+                    resolver.query(uri, null, null, null, null)?.use { cursor ->
+                        if (cursor.moveToFirst()) {
+                            val index = cursor.getColumnIndex(android.provider.OpenableColumns.DISPLAY_NAME)
+                            if (index >= 0) cursor.getString(index) else null
+                        } else null
+                    }
+                }.getOrNull()
+            }
+            val base = scriptNameFromFile(displayName)
+            val id = "script_local_${System.currentTimeMillis()}"
+            val script = UserScriptInfo(
+                id = id,
+                name = base,
+                description = "Tiện ích tùy chỉnh từ tệp trong máy",
+                url = "",
+                isEnabled = false,
+                isUserAdded = true,
+            )
+            val updated = _userscripts.updateAndGet { list -> if (list.any { it.id == id }) list else list + script }
+            if (updated.none { it.id == id }) {
+                showTransientStatus("$base đã có trong danh sách")
+                return@launch
+            }
+            val state = withContext(Dispatchers.IO) { engine.scriptSave(id, text) }
+            if (state == null) {
+                showTransientStatus("Lỗi ghi tệp: không lưu được tiện ích")
+                return@launch
+            }
+            _userscripts.update { list ->
+                list.map {
+                    if (it.id == id) {
+                        it.copy(
+                            sizeBytes = state.sizeBytes,
+                            lastUpdatedText = "Vừa nhập",
+                            isEnabled = true,
+                        )
+                    } else it
+                }
+            }
+            saveScripts()
+            pushScriptsToCore()
+            showTransientStatus("Đã thêm ${base}")
+        }
+    }
+
+    /** Creates a new userscript from pasted text (no URL). */
+    fun createScript(name: String, text: String) {
+        scope.launch {
+            val trimmed = text.trim()
+            if (trimmed.isBlank()) {
+                showTransientStatus("Nội dung không được trống")
+                return@launch
+            }
+            val displayName = name.trim().ifBlank { "Tiện ích tùy chỉnh" }.take(60)
+            val id = "script_custom_${System.currentTimeMillis()}"
+            val script = UserScriptInfo(
+                id = id,
+                name = displayName,
+                description = "Tiện ích tạo từ trình soạn thảo",
+                url = "",
+                isEnabled = false,
+                isUserAdded = true,
+            )
+            _userscripts.update { list -> list + script }
+            val state = withContext(Dispatchers.IO) { engine.scriptSave(id, trimmed) }
+            if (state == null) {
+                showTransientStatus("Lỗi lưu tiện ích")
+                _userscripts.update { list -> list.filter { it.id != id } }
+                return@launch
+            }
+            _userscripts.update { list ->
+                list.map {
+                    if (it.id == id) {
+                        it.copy(sizeBytes = state.sizeBytes, lastUpdatedText = "Vừa tạo", isEnabled = true)
+                    } else it
+                }
+            }
+            saveScripts()
+            pushScriptsToCore()
+            showTransientStatus("Đã tạo $displayName")
+        }
+    }
+
+    /** Overwrites an existing user-added script body (edit source). */
+    fun updateScriptText(id: String, name: String, text: String) {
+        scope.launch {
+            val script = _userscripts.value.firstOrNull { it.id == id } ?: return@launch
+            if (!script.isUserAdded) return@launch
+            val trimmed = text.trim()
+            if (trimmed.isBlank()) {
+                showTransientStatus("Nội dung không được trống")
+                return@launch
+            }
+            val displayName = name.trim().ifBlank { script.name }.take(60)
+            val state = withContext(Dispatchers.IO) { engine.scriptSave(id, trimmed) }
+            if (state == null) {
+                showTransientStatus("Lỗi lưu tiện ích")
+                return@launch
+            }
+            _userscripts.update { list ->
+                list.map {
+                    if (it.id == id) {
+                        // Editing the source never flips the enable switch: a
+                        // script the user turned off stays off until asked.
+                        it.copy(
+                            name = displayName,
+                            sizeBytes = state.sizeBytes,
+                            lastUpdatedText = "Vừa sửa",
+                        )
+                    } else it
+                }
+            }
+            saveScripts()
+            pushScriptsToCore()
+            showTransientStatus("Đã cập nhật $displayName")
         }
     }
 

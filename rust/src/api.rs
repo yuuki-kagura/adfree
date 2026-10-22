@@ -697,6 +697,18 @@ pub fn core_script_state(id: String) -> Option<AssetState> {
     })
 }
 
+/// Saves a userscript body the platform already has (imported from a file or
+/// pasted in the editor), with the same atomic write as a download.
+#[uniffi::export]
+pub fn core_script_save(id: String, text: String) -> Option<AssetState> {
+    guard(None, || {
+        let store = crate::core().store()?;
+        let dir = store.scripts_dir();
+        crate::assets::save(&dir, &id, "js", &text).ok()?;
+        crate::assets::state(&dir, &id, "js", false).map(to_asset_state)
+    })
+}
+
 /// Deletes a userscript body. False when there was nothing to delete.
 #[uniffi::export]
 pub fn core_script_remove(id: String) -> bool {

@@ -779,6 +779,8 @@ internal object IntegrityCheckingUniffiLib {
     ): Int
     external fun uniffi_adfree_core_checksum_func_core_script_remove(
     ): Int
+    external fun uniffi_adfree_core_checksum_func_core_script_save(
+    ): Int
     external fun uniffi_adfree_core_checksum_func_core_script_state(
     ): Int
     external fun uniffi_adfree_core_checksum_func_core_script_text(
@@ -921,6 +923,8 @@ internal object UniffiLib {
     ): RustBuffer.ByValue
     external fun uniffi_adfree_core_fn_func_core_script_remove(`id`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): Byte
+    external fun uniffi_adfree_core_fn_func_core_script_save(`id`: RustBuffer.ByValue,`text`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    ): RustBuffer.ByValue
     external fun uniffi_adfree_core_fn_func_core_script_state(`id`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
     external fun uniffi_adfree_core_fn_func_core_script_text(`id`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
@@ -1168,6 +1172,9 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if ((lib.uniffi_adfree_core_checksum_func_core_script_remove() and 0xFFFF) != 35935) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if ((lib.uniffi_adfree_core_checksum_func_core_script_save() and 0xFFFF) != 58583) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if ((lib.uniffi_adfree_core_checksum_func_core_script_state() and 0xFFFF) != 43374) {
@@ -3818,6 +3825,22 @@ public object FfiConverterSequenceTypeUidApps: FfiConverterRustBuffer<List<UidAp
     
         
         FfiConverterString.lower(`id`),_status)
+}
+    )
+    }
+    
+
+        /**
+         * Saves a userscript body the platform already has (imported from a file or
+         * pasted in the editor), with the same atomic write as a download.
+         */ fun `coreScriptSave`(`id`: kotlin.String, `text`: kotlin.String): AssetState? {
+            return FfiConverterOptionalTypeAssetState.lift(
+    uniffiRustCall() { _status ->
+    UniffiLib.uniffi_adfree_core_fn_func_core_script_save(
+    
+        
+        FfiConverterString.lower(`id`),
+        FfiConverterString.lower(`text`),_status)
 }
     )
     }

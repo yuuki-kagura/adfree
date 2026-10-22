@@ -22,6 +22,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Extension
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Search
@@ -32,6 +33,7 @@ import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.Icon
@@ -74,6 +76,98 @@ import git.shin.adfree.ui.theme.AdGuardRedBlocked
 import git.shin.adfree.ui.theme.AdGuardTextMuted
 import git.shin.adfree.ui.theme.AdGuardTextPrimary
 import git.shin.adfree.ui.theme.AdGuardTextSecondary
+import kotlinx.coroutines.withContext
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.rememberModalBottomSheetState
+import androidx.compose.runtime.LaunchedEffect
+
+/**
+ * Simple text editor for creating or editing userscript source.
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun ScriptTextEditorDialog(
+    title: String,
+    initialName: String,
+    initialText: String,
+    confirmText: String,
+    onDismiss: () -> Unit,
+    onConfirm: (String, String) -> Unit,
+    loadText: (() -> String)? = null,
+) {
+    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    var name by remember { mutableStateOf(initialName) }
+    var text by remember { mutableStateOf(initialText) }
+    LaunchedEffect(Unit) {
+        if (loadText != null && initialText.isBlank()) {
+            // A userscript can be tens of KB; read it off the main thread.
+            text = withContext(kotlinx.coroutines.Dispatchers.IO) { loadText() }
+        }
+    }
+    ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        sheetState = sheetState,
+        containerColor = AdGuardDarkSurface,
+        contentColor = AdGuardTextPrimary,
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp, vertical = 10.dp)
+                .verticalScroll(rememberScrollState()),
+        ) {
+            Text(title, fontSize = 17.sp, fontWeight = FontWeight.Bold, color = AdGuardTextPrimary)
+            Spacer(modifier = Modifier.height(10.dp))
+            OutlinedTextField(
+                value = name,
+                onValueChange = { name = it },
+                label = { Text("Tên tiện ích", fontSize = 12.sp) },
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(10.dp),
+                colors = OutlinedTextFieldDefaults.colors(
+                    focusedBorderColor = AdGuardGreenPrimary,
+                    unfocusedBorderColor = AdGuardDarkOutline,
+                    focusedTextColor = AdGuardTextPrimary,
+                    unfocusedTextColor = AdGuardTextPrimary,
+                ),
+            )
+            Spacer(modifier = Modifier.height(8.dp))
+            OutlinedTextField(
+                value = text,
+                onValueChange = { text = it },
+                label = { Text("Mã nguồn (.user.js)", fontSize = 12.sp) },
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(min = 260.dp),
+                shape = RoundedCornerShape(10.dp),
+                colors = OutlinedTextFieldDefaults.colors(
+                    focusedBorderColor = AdGuardGreenPrimary,
+                    unfocusedBorderColor = AdGuardDarkOutline,
+                    focusedTextColor = AdGuardTextPrimary,
+                    unfocusedTextColor = AdGuardTextPrimary,
+                ),
+            )
+            Spacer(modifier = Modifier.height(10.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Button(
+                    onClick = { onConfirm(name, text) },
+                    enabled = text.isNotBlank(),
+                    colors = ButtonDefaults.buttonColors(containerColor = AdGuardGreenPrimary),
+                    shape = RoundedCornerShape(8.dp),
+                ) {
+                    Text(confirmText, color = Color.Black, fontWeight = FontWeight.Bold)
+                }
+                TextButton(onClick = onDismiss) {
+                    Text("Hủy", color = AdGuardTextSecondary)
+                }
+            }
+            Spacer(modifier = Modifier.height(24.dp))
+        }
+    }
+}
 
 /**
  * The Extensions block of the "Bộ lọc" tab: userscripts that run on filtered
@@ -528,11 +622,13 @@ private fun ScriptRow(
     }
 }
 
-/** Dialog for adding a userscript by URL. */
+/** Dialog for adding a userscript by URL, from file, or by creating text. */
 @Composable
 fun AddScriptDialog(
     onDismiss: () -> Unit,
     onAdd: (String, String) -> Unit,
+    onImportFile: () -> Unit = {},
+    onCreate: () -> Unit = {},
 ) {
     var name by remember { mutableStateOf("") }
     var url by remember { mutableStateOf("") }
@@ -549,7 +645,8 @@ fun AddScriptDialog(
             Column {
                 Text(
                     text = "Dán đường dẫn tới tệp userscript (.user.js). AdFree đọc @match, " +
-                        "@include, @exclude, @run-at, @noframes và tải @require lúc cài. " +
+                        "@include, @exclude, @run-at, @noframes và tải @require khi cài từ URL " +
+                        "(tệp nhập tay giữ nguyên nội dung, @require không tự tải). " +
                         "Hỗ trợ unsafeWindow, GM_addStyle, GM_log, GM_info, GM_xmlhttpRequest/" +
                         "GM_download (theo CORS của trang), GM_openInTab, GM_notification, " +
                         "GM_setClipboard, GM_addElement; GM_setValue và @resource chưa hỗ trợ.",
@@ -587,6 +684,20 @@ fun AddScriptDialog(
                         unfocusedTextColor = AdGuardTextPrimary,
                     ),
                 )
+                Spacer(modifier = Modifier.height(8.dp))
+                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    OutlinedButton(onClick = onImportFile, shape = RoundedCornerShape(8.dp)) {
+                        Text("Chọn tệp", fontSize = 11.sp, color = AdGuardGreenLight)
+                    }
+                    OutlinedButton(onClick = onCreate, shape = RoundedCornerShape(8.dp)) {
+                        Text("Tạo mới", fontSize = 11.sp, color = AdGuardBlueDns)
+                    }
+                }
+                Text(
+                    "Lưu ý: tiện ích có thể truy cập dữ liệu trang — chỉ cài những script bạn hiểu và tin cậy.",
+                    fontSize = 10.sp,
+                    color = AdGuardTextMuted,
+                )
             }
         },
         confirmButton = {
@@ -615,6 +726,7 @@ fun ScriptDetailSheet(
     masterEnabled: Boolean = true,
     onToggle: () -> Unit,
     onRefresh: () -> Unit,
+    onEdit: () -> Unit = {},
     onDelete: () -> Unit,
 ) {
     Column(
@@ -679,7 +791,7 @@ fun ScriptDetailSheet(
         Spacer(modifier = Modifier.height(16.dp))
 
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            if (!script.isBuiltin) {
+            if (!script.isBuiltin && script.url.isNotBlank()) {
                 OutlinedButton(onClick = onRefresh, shape = RoundedCornerShape(10.dp)) {
                     Icon(Icons.Default.Sync, contentDescription = null, tint = AdGuardGreenLight, modifier = Modifier.size(16.dp))
                     Spacer(modifier = Modifier.width(6.dp))
@@ -687,6 +799,11 @@ fun ScriptDetailSheet(
                 }
             }
             if (script.isUserAdded) {
+                OutlinedButton(onClick = onEdit, shape = RoundedCornerShape(10.dp)) {
+                    Icon(Icons.Default.Edit, contentDescription = null, tint = AdGuardBlueDns, modifier = Modifier.size(16.dp))
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text("Sửa mã", fontSize = 12.sp, color = AdGuardBlueDns)
+                }
                 OutlinedButton(onClick = onDelete, shape = RoundedCornerShape(10.dp)) {
                     Icon(Icons.Default.Delete, contentDescription = null, tint = AdGuardRedBlocked, modifier = Modifier.size(16.dp))
                     Spacer(modifier = Modifier.width(6.dp))

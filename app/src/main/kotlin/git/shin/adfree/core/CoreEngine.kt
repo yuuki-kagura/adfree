@@ -280,6 +280,10 @@ class CoreEngine {
     fun scriptState(id: String): git.shin.adfree.core.AssetState? =
         runCatching { git.shin.adfree.core.coreScriptState(id) }.getOrNull()
 
+    /** Saves a userscript body (imported from a file / pasted); same atomic write. */
+    fun scriptSave(id: String, text: String): git.shin.adfree.core.AssetState? =
+        runCatching { git.shin.adfree.core.coreScriptSave(id, text) }.getOrNull()
+
     /** Deletes a userscript body. False when there was nothing to delete. */
     fun scriptRemove(id: String): Boolean =
         runCatching { git.shin.adfree.core.coreScriptRemove(id) }.getOrDefault(false)

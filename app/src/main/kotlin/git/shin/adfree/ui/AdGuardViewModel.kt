@@ -349,6 +349,17 @@ class AdGuardViewModel(
                 repository.addScript(intent.name, intent.url)
                 _showAddScriptDialog.value = false
             }
+            is AdGuardIntent.ImportLocalScript -> {
+                repository.importLocalScript(intent.uri)
+                _showAddScriptDialog.value = false
+            }
+            is AdGuardIntent.CreateScript -> {
+                repository.createScript(intent.name, intent.text)
+                _showAddScriptDialog.value = false
+            }
+            is AdGuardIntent.UpdateScriptText -> {
+                repository.updateScriptText(intent.id, intent.name, intent.text)
+            }
 
             is AdGuardIntent.ShowScriptStore -> {
                 _showScriptStore.value = intent.show

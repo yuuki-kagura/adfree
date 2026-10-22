@@ -102,7 +102,14 @@ sealed interface AdGuardIntent {
     data class InspectFilter(val id: String?) : AdGuardIntent
     data object RestoreDefaultFilters : AdGuardIntent
     data class ShowAddScriptDialog(val show: Boolean) : AdGuardIntent
+    /** Add a userscript from a URL. */
     data class AddScript(val name: String, val url: String) : AdGuardIntent
+    /** Import a userscript body from a file (SAF URI). */
+    data class ImportLocalScript(val uri: String) : AdGuardIntent
+    /** Create a new userscript from text (editor). */
+    data class CreateScript(val name: String, val text: String) : AdGuardIntent
+    /** Overwrite an existing userscript body and save it. */
+    data class UpdateScriptText(val id: String, val name: String, val text: String) : AdGuardIntent
     data class ShowScriptStore(val show: Boolean) : AdGuardIntent
     data class SearchScriptStore(val query: String) : AdGuardIntent
     data class SortScriptStore(val sort: UserScriptStoreSort) : AdGuardIntent
