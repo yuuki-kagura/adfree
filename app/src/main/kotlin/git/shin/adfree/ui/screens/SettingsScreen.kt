@@ -20,6 +20,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Bolt
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.ChevronRight
@@ -52,11 +53,12 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.Lifecycle
@@ -64,6 +66,8 @@ import androidx.lifecycle.compose.LifecycleEventEffect
 import git.shin.adfree.core.MitmStatus
 import git.shin.adfree.model.DnsBlockMode
 import git.shin.adfree.model.DnsProvider
+import git.shin.adfree.model.ProtectionSettings
+import git.shin.adfree.model.normalizeHttpsHost
 import git.shin.adfree.ui.AdGuardTab
 import git.shin.adfree.ui.AdGuardIntent
 import git.shin.adfree.ui.AdGuardViewModel
@@ -324,6 +328,9 @@ private fun HttpsFilterSection(viewModel: AdGuardViewModel, fullEchEnabled: Bool
     // Set when the gate dialog sends the user off to install the certificate,
     // so coming back with it installed turns filtering on as they intended.
     var pendingEnable by remember { mutableStateOf(false) }
+    // Which website list the add dialog is editing; null keeps it closed.
+    var addTarget by remember { mutableStateOf<HttpsListTarget?>(null) }
+    val ui by viewModel.uiState.collectAsState()
 
     val context = LocalContext.current
 
@@ -394,6 +401,20 @@ private fun HttpsFilterSection(viewModel: AdGuardViewModel, fullEchEnabled: Bool
                 "được nối thẳng, không lọc được.",
             checked = fullEchEnabled,
             onCheckedChange = { enabled -> viewModel.setFullEch(enabled) }
+        )
+
+        Spacer(modifier = Modifier.height(12.dp))
+
+        // AdGuard's "Filter HTTPS websites" block: an allowlist that keeps TLS
+        // intact for banking/client-cert sites, plus the inverse mode that only
+        // decrypts named hosts.
+        HttpsWebsiteSection(
+            settings = ui.settings,
+            onAddSkip = { addTarget = HttpsListTarget.SKIP },
+            onRemoveSkip = { viewModel.removeHttpsSkipHost(it) },
+            onOnlyModeChange = { viewModel.setHttpsOnlyMode(it) },
+            onAddOnly = { addTarget = HttpsListTarget.ONLY },
+            onRemoveOnly = { viewModel.removeHttpsOnlyHost(it) },
         )
 
         Spacer(modifier = Modifier.height(10.dp))
@@ -483,6 +504,19 @@ private fun HttpsFilterSection(viewModel: AdGuardViewModel, fullEchEnabled: Bool
 
     if (showCert) {
         CertificateDialog(status?.caPem.orEmpty()) { showCert = false }
+    }
+    addTarget?.let { target ->
+        HttpsHostDialog(
+            title = if (target == HttpsListTarget.SKIP) "Bỏ qua lọc HTTPS" else "Chỉ lọc trang này",
+            onDismiss = { addTarget = null },
+            onAdd = { host ->
+                if (target == HttpsListTarget.SKIP) {
+                    viewModel.addHttpsSkipHost(host)
+                } else {
+                    viewModel.addHttpsOnlyHost(host)
+                }
+            },
+        )
     }
     if (showCertGate) {
         AlertDialog(
@@ -870,4 +904,222 @@ fun StealthToggleRow(
             )
         )
     }
+}
+
+// ------------------------------------------------------- HTTPS website rules
+
+private enum class HttpsListTarget { SKIP, ONLY }
+
+/**
+ * The two website lists behind "Lọc HTTPS".
+ *
+ * AdGuard calls them the website allowlist and blocklist; here the first is
+ * always "leave these alone" and the second only applies when the inverse
+ * switch is on, which the copy says instead of relying on a label.
+ */
+@Composable
+private fun HttpsWebsiteSection(
+    settings: ProtectionSettings,
+    onAddSkip: () -> Unit,
+    onRemoveSkip: (String) -> Unit,
+    onOnlyModeChange: (Boolean) -> Unit,
+    onAddOnly: () -> Unit,
+    onRemoveOnly: (String) -> Unit,
+) {
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .testTag("https_website_rules"),
+        shape = RoundedCornerShape(12.dp),
+        colors = CardDefaults.cardColors(containerColor = AdGuardDarkSurface),
+    ) {
+        Column(modifier = Modifier.padding(14.dp)) {
+            Text(
+                text = "Trang web & HTTPS",
+                fontSize = 13.sp,
+                fontWeight = FontWeight.Bold,
+                color = AdGuardTextPrimary,
+            )
+            Text(
+                text = "Chọn trang không bị giải mã, hoặc chỉ giải mã một số trang. " +
+                    "Trang bị bỏ qua sẽ không lọc được quảng cáo và script.",
+                fontSize = 10.sp,
+                color = AdGuardTextMuted,
+            )
+
+            Spacer(modifier = Modifier.height(10.dp))
+
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = "Chỉ lọc các trang trong danh sách",
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = AdGuardTextPrimary,
+                    )
+                    Text(
+                        text = "Mọi trang khác được nối thẳng, không giải mã.",
+                        fontSize = 10.sp,
+                        color = AdGuardTextMuted,
+                    )
+                }
+                Switch(
+                    checked = settings.httpsOnlyMode,
+                    onCheckedChange = onOnlyModeChange,
+                    colors = SwitchDefaults.colors(checkedTrackColor = AdGuardGreenPrimary),
+                )
+            }
+
+            HttpsHostList(
+                label = if (settings.httpsOnlyMode) "Chỉ giải mã các trang này" else "Trang bỏ qua lọc",
+                hint = if (settings.httpsOnlyMode) {
+                    "Danh sách trắng của chế độ chỉ lọc."
+                } else {
+                    "Ngân hàng, trang dùng chứng chỉ riêng…"
+                },
+                hosts = if (settings.httpsOnlyMode) settings.httpsOnlyHosts else settings.httpsSkipHosts,
+                onAdd = if (settings.httpsOnlyMode) onAddOnly else onAddSkip,
+                onRemove = if (settings.httpsOnlyMode) onRemoveOnly else onRemoveSkip,
+            )
+
+            if (settings.httpsOnlyMode) {
+                HttpsHostList(
+                    label = "Luôn bỏ qua",
+                    hint = "Các trang này không bao giờ bị giải mã, kể cả khi nằm trong danh sách trên.",
+                    hosts = settings.httpsSkipHosts,
+                    onAdd = onAddSkip,
+                    onRemove = onRemoveSkip,
+                )
+            } else if (settings.httpsOnlyHosts.isNotEmpty()) {
+                Text(
+                    text = "${settings.httpsOnlyHosts.size} trang đang chờ trong danh sách " +
+                        "\"chỉ lọc\" — bật công tắc trên để dùng.",
+                    fontSize = 9.sp,
+                    color = AdGuardTextMuted,
+                    modifier = Modifier.padding(top = 8.dp),
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun HttpsHostList(
+    label: String,
+    hint: String,
+    hosts: List<String>,
+    onAdd: () -> Unit,
+    onRemove: (String) -> Unit,
+) {
+    Column(modifier = Modifier.padding(top = 10.dp)) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                text = "$label (${hosts.size})",
+                fontSize = 11.sp,
+                fontWeight = FontWeight.Bold,
+                color = AdGuardTextSecondary,
+                modifier = Modifier.weight(1f),
+            )
+            TextButton(onClick = onAdd) {
+                Text("Thêm", fontSize = 11.sp, color = AdGuardGreenLight)
+            }
+        }
+        Text(hint, fontSize = 9.sp, color = AdGuardTextMuted)
+        if (hosts.isEmpty()) {
+            Text(
+                text = "Chưa có trang nào.",
+                fontSize = 10.sp,
+                color = AdGuardTextMuted,
+                modifier = Modifier.padding(top = 4.dp),
+            )
+        } else {
+            hosts.forEach { host ->
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(top = 4.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        text = host,
+                        fontSize = 11.sp,
+                        fontFamily = FontFamily.Monospace,
+                        color = AdGuardTextPrimary,
+                        modifier = Modifier.weight(1f),
+                    )
+                    IconButton(onClick = { onRemove(host) }, modifier = Modifier.size(28.dp)) {
+                        Icon(
+                            Icons.Default.Close,
+                            contentDescription = "Xóa $host",
+                            tint = AdGuardTextMuted,
+                            modifier = Modifier.size(14.dp),
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun HttpsHostDialog(
+    title: String,
+    onDismiss: () -> Unit,
+    onAdd: (String) -> Unit,
+) {
+    var value by remember { mutableStateOf("") }
+    val normalized = normalizeHttpsHost(value)
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(title, fontSize = 16.sp, fontWeight = FontWeight.Bold) },
+        text = {
+            Column {
+                Text(
+                    text = "Nhập tên miền, ví dụ example.com, *.example.com hoặc dán URL.",
+                    fontSize = 12.sp,
+                    color = AdGuardTextSecondary,
+                )
+                Spacer(modifier = Modifier.height(8.dp))
+                OutlinedTextField(
+                    value = value,
+                    onValueChange = { value = it },
+                    singleLine = true,
+                    isError = value.isNotBlank() && normalized == null,
+                    placeholder = { Text("example.com", fontSize = 12.sp, color = AdGuardTextMuted) },
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(10.dp),
+                    colors = androidx.compose.material3.OutlinedTextFieldDefaults.colors(
+                        focusedBorderColor = AdGuardGreenPrimary,
+                        unfocusedBorderColor = AdGuardDarkOutline,
+                        focusedTextColor = AdGuardTextPrimary,
+                        unfocusedTextColor = AdGuardTextPrimary,
+                    ),
+                )
+                if (value.isNotBlank() && normalized == null) {
+                    Text(
+                        text = "Tên miền không hợp lệ (chỉ hỗ trợ ký tự ASCII; dùng dạng xn-- cho tên quốc tế).",
+                        fontSize = 10.sp,
+                        color = AdGuardOrangeWarning,
+                        modifier = Modifier.padding(top = 4.dp),
+                    )
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(
+                onClick = {
+                    normalized?.let {
+                        onAdd(it)
+                        onDismiss()
+                    }
+                },
+                enabled = normalized != null,
+            ) {
+                Text("Thêm", color = AdGuardGreenLight)
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text("Hủy", color = AdGuardTextSecondary) }
+        },
+    )
 }

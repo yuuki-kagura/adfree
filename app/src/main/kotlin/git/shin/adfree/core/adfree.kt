@@ -2500,6 +2500,18 @@ data class EngineConfig (
     var `logAllowed`: kotlin.Boolean
     , 
     var `ecoMode`: kotlin.Boolean
+    , 
+    /**
+     * HTTPS website allowlist: hosts whose TLS is spliced untouched.
+     */
+    var `httpsSkipHosts`: List<kotlin.String>
+    , 
+    /**
+     * HTTPS website blocklist: with `https_only_mode`, only these are decrypted.
+     */
+    var `httpsOnlyHosts`: List<kotlin.String>
+    , 
+    var `httpsOnlyMode`: kotlin.Boolean
     
 ){
     
@@ -2527,6 +2539,9 @@ public object FfiConverterTypeEngineConfig: FfiConverterRustBuffer<EngineConfig>
             FfiConverterInt.read(buf),
             FfiConverterBoolean.read(buf),
             FfiConverterBoolean.read(buf),
+            FfiConverterSequenceString.read(buf),
+            FfiConverterSequenceString.read(buf),
+            FfiConverterBoolean.read(buf),
         )
     }
 
@@ -2541,7 +2556,10 @@ public object FfiConverterTypeEngineConfig: FfiConverterRustBuffer<EngineConfig>
             FfiConverterBoolean.allocationSize(value.`dnsProtection`) +
             FfiConverterInt.allocationSize(value.`blockMode`) +
             FfiConverterBoolean.allocationSize(value.`logAllowed`) +
-            FfiConverterBoolean.allocationSize(value.`ecoMode`)
+            FfiConverterBoolean.allocationSize(value.`ecoMode`) +
+            FfiConverterSequenceString.allocationSize(value.`httpsSkipHosts`) +
+            FfiConverterSequenceString.allocationSize(value.`httpsOnlyHosts`) +
+            FfiConverterBoolean.allocationSize(value.`httpsOnlyMode`)
     )
 
     override fun write(value: EngineConfig, buf: ByteBuffer) {
@@ -2556,6 +2574,9 @@ public object FfiConverterTypeEngineConfig: FfiConverterRustBuffer<EngineConfig>
             FfiConverterInt.write(value.`blockMode`, buf)
             FfiConverterBoolean.write(value.`logAllowed`, buf)
             FfiConverterBoolean.write(value.`ecoMode`, buf)
+            FfiConverterSequenceString.write(value.`httpsSkipHosts`, buf)
+            FfiConverterSequenceString.write(value.`httpsOnlyHosts`, buf)
+            FfiConverterBoolean.write(value.`httpsOnlyMode`, buf)
     }
 }
 

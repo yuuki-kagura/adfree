@@ -486,6 +486,33 @@ class AdGuardViewModel(
         syncConfig()
     }
 
+    /** HTTPS allowlist: hosts the proxy must not decrypt. */
+    fun addHttpsSkipHost(raw: String) {
+        repository.addHttpsSkipHost(raw)
+        syncConfig()
+    }
+
+    fun removeHttpsSkipHost(host: String) {
+        repository.removeHttpsSkipHost(host)
+        syncConfig()
+    }
+
+    /** HTTPS blocklist + inverse mode: decrypt only these hosts. */
+    fun addHttpsOnlyHost(raw: String) {
+        repository.addHttpsOnlyHost(raw)
+        syncConfig()
+    }
+
+    fun removeHttpsOnlyHost(host: String) {
+        repository.removeHttpsOnlyHost(host)
+        syncConfig()
+    }
+
+    fun setHttpsOnlyMode(enabled: Boolean) {
+        repository.setHttpsOnlyMode(enabled)
+        syncConfig()
+    }
+
     /** Creates (or recreates) the local CA and returns the new status. */
     fun createCa(onDone: (git.shin.adfree.core.MitmStatus?) -> Unit) {
         // Drop the persisted pair first, otherwise ensureCa() only restores.

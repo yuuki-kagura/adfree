@@ -10,6 +10,7 @@
 
 pub mod ca;
 pub mod ech;
+pub mod hosts;
 pub mod hpke;
 pub mod http;
 pub mod proxy;

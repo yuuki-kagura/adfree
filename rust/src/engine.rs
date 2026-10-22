@@ -127,6 +127,12 @@ pub struct Config {
     pub log_allowed: bool,
     /// Screen-off battery mode: stop pushing events, keep stats.
     pub eco_mode: bool,
+    /// Hosts whose HTTPS traffic is left undecrypted (allowlist).
+    pub https_skip_hosts: Vec<String>,
+    /// Hosts to decrypt when `https_only_mode` is on (blocklist).
+    pub https_only_hosts: Vec<String>,
+    /// Invert the model: decrypt only `https_only_hosts`.
+    pub https_only_mode: bool,
 }
 
 impl Default for Config {
@@ -143,8 +149,23 @@ impl Default for Config {
             block_mode: BlockMode::NxDomain,
             log_allowed: false,
             eco_mode: true,
+            https_skip_hosts: Vec::new(),
+            https_only_hosts: Vec::new(),
+            https_only_mode: false,
         }
     }
+}
+
+/// The HTTPS website lists, parsed once per config change.
+///
+/// A connection clones the Arcs when it opens, so raising or lowering the
+/// lists never takes a lock in the packet path and never disturbs a session
+/// that is already running.
+#[derive(Clone, Default)]
+struct HttpsHosts {
+    skip: Arc<crate::mitm::hosts::HostPatterns>,
+    only: Arc<crate::mitm::hosts::HostPatterns>,
+    only_mode: bool,
 }
 
 /// Snapshot handed to the JNI layer.
@@ -251,6 +272,9 @@ pub struct Core {
     /// (see [`crate::mitm::ech`]). Public like the other state the tests and
     /// the platform poke at.
     pub ech_hosts: Arc<crate::mitm::ech::EchHosts>,
+    /// The HTTPS website lists, parsed once per config change and shared with
+    /// every connection (see [`crate::mitm::hosts`]).
+    https_hosts: RwLock<HttpsHosts>,
     /// Packets produced for the tun, collected only in tests: the end-to-end
     /// tests drive the packet loop without a device, and this is where
     /// client-bound segments would land.
@@ -333,6 +357,7 @@ impl Core {
             upstream_config: RwLock::new(crate::mitm::tls::UpstreamTls::system()),
             mitm_port: AtomicU16::new(crate::mitm::relay::MITM_PORT),
             ech_hosts: Arc::new(crate::mitm::ech::EchHosts::new()),
+            https_hosts: RwLock::new(HttpsHosts::default()),
             #[cfg(test)]
             outbox: Mutex::new(Vec::new()),
         }
@@ -451,6 +476,15 @@ impl Core {
             cfg.tracking_protection,
             cfg.dns_protection,
         );
+        *self.https_hosts.write().unwrap() = HttpsHosts {
+            skip: Arc::new(crate::mitm::hosts::HostPatterns::new(
+                cfg.https_skip_hosts.clone(),
+            )),
+            only: Arc::new(crate::mitm::hosts::HostPatterns::new(
+                cfg.https_only_hosts.clone(),
+            )),
+            only_mode: cfg.https_only_mode,
+        };
         *self.cfg.write().unwrap() = cfg;
     }
 
@@ -1087,6 +1121,8 @@ impl Core {
                     // a refusal from one of them can be learned as "requires
                     // ECH" (see `mitm::ech`).
                     proxy.set_ech_hosts(Arc::clone(&self.ech_hosts), cfg.full_ech);
+                    let https = self.https_hosts.read().unwrap().clone();
+                    proxy.set_https_hosts(https.skip, https.only, https.only_mode);
                     Some(proxy)
                 }
                 Err(e) => {

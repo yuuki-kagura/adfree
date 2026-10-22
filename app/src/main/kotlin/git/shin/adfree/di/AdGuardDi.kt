@@ -66,6 +66,9 @@ class AdGuardAppContainer(private val context: Context) {
             blockMode = settings.blockMode,
             logAllowed = settings.logAllowedRequests,
             ecoMode = settings.isEcoBatteryModeEnabled,
+            httpsSkipHosts = settings.httpsSkipHosts,
+            httpsOnlyHosts = settings.httpsOnlyHosts,
+            httpsOnlyMode = settings.httpsOnlyMode,
         )
         val provider = repository.dnsProviders.value
             .firstOrNull { it.id == settings.selectedDnsProviderId }

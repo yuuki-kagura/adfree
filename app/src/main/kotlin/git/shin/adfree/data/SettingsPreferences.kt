@@ -162,8 +162,21 @@ class SettingsPreferences(
                 json.optBoolean("blockCookies", defaults.blockThirdPartyCookies),
             selectedDnsProviderId =
                 json.optString("dnsProvider", defaults.selectedDnsProviderId),
+            httpsSkipHosts =
+                optStringList(json, "httpsSkipHosts") ?: defaults.httpsSkipHosts,
+            httpsOnlyHosts =
+                optStringList(json, "httpsOnlyHosts") ?: defaults.httpsOnlyHosts,
+            httpsOnlyMode =
+                json.optBoolean("httpsOnlyMode", defaults.httpsOnlyMode),
         )
     }.getOrNull()
+
+    /** A stored array of strings; `null` when the key was never written. */
+    private fun optStringList(json: JSONObject, key: String): List<String>? {
+        val array = json.optJSONArray(key) ?: return null
+        return (0 until array.length())
+            .mapNotNull { array.optString(it).takeIf(String::isNotBlank) }
+    }
 
     private fun writeSettings(json: JSONObject, settings: ProtectionSettings) {
         json
@@ -186,6 +199,9 @@ class SettingsPreferences(
             .put("disguiseUa", settings.disguiseUserAgent)
             .put("blockCookies", settings.blockThirdPartyCookies)
             .put("dnsProvider", settings.selectedDnsProviderId)
+            .put("httpsSkipHosts", JSONArray(settings.httpsSkipHosts))
+            .put("httpsOnlyHosts", JSONArray(settings.httpsOnlyHosts))
+            .put("httpsOnlyMode", settings.httpsOnlyMode)
     }
 
     private fun currentJson(): JSONObject? {

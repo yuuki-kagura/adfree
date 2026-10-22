@@ -133,6 +133,9 @@ class CoreEngine {
         blockMode: DnsBlockMode,
         logAllowed: Boolean,
         ecoMode: Boolean,
+        httpsSkipHosts: List<String> = emptyList(),
+        httpsOnlyHosts: List<String> = emptyList(),
+        httpsOnlyMode: Boolean = false,
     ) {
         val config = git.shin.adfree.core.EngineConfig(
             mitmEnabled = mitmEnabled,
@@ -146,6 +149,9 @@ class CoreEngine {
             blockMode = blockMode.code.toInt(),
             logAllowed = logAllowed,
             ecoMode = ecoMode,
+            httpsSkipHosts = httpsSkipHosts,
+            httpsOnlyHosts = httpsOnlyHosts,
+            httpsOnlyMode = httpsOnlyMode,
         )
         runCatching { git.shin.adfree.core.coreConfigure(config) }
             .onFailure { Log.w(tag, "configure failed", it) }

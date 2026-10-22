@@ -233,6 +233,13 @@ pub struct ProxySession {
     /// the hello makes the browser retry in the clear, where filtering still
     /// applies. With it on, an ECH public name is handed over untouched.
     full_ech: bool,
+    /// Hosts the user excluded from HTTPS filtering. A matching ClientHello is
+    /// spliced verbatim before rustls sees it (see [`crate::mitm::hosts`]).
+    https_skip: Arc<crate::mitm::hosts::HostPatterns>,
+    /// The inverse list: when `https_only_mode` is on, a host that is *not*
+    /// in this list is spliced, so only named sites are decrypted.
+    https_only: Arc<crate::mitm::hosts::HostPatterns>,
+    https_only_mode: bool,
     /// The upstream settings, kept only while the active half was armed with
     /// ECH: a server that rejects the offer gets one retry from these. `None`
     /// means the upstream is plain (or already retried once).
@@ -595,6 +602,9 @@ impl ProxySession {
             sink: None,
             ech_hosts: None,
             full_ech: false,
+            https_skip: Arc::new(crate::mitm::hosts::HostPatterns::default()),
+            https_only: Arc::new(crate::mitm::hosts::HostPatterns::default()),
+            https_only_mode: false,
             upstream_plain: None,
             client_discard: None,
             apps: Vec::new(),
@@ -641,6 +651,9 @@ impl ProxySession {
             sink: None,
             ech_hosts: None,
             full_ech: false,
+            https_skip: Arc::new(crate::mitm::hosts::HostPatterns::default()),
+            https_only: Arc::new(crate::mitm::hosts::HostPatterns::default()),
+            https_only_mode: false,
             upstream_plain: None,
             client_discard: None,
             apps: Vec::new(),
@@ -686,6 +699,9 @@ impl ProxySession {
             sink: None,
             ech_hosts: None,
             full_ech: false,
+            https_skip: Arc::new(crate::mitm::hosts::HostPatterns::default()),
+            https_only: Arc::new(crate::mitm::hosts::HostPatterns::default()),
+            https_only_mode: false,
             upstream_plain: None,
             client_discard: None,
             apps: Vec::new(),
@@ -719,6 +735,21 @@ impl ProxySession {
     pub fn set_ech_hosts(&mut self, ech: Arc<crate::mitm::ech::EchHosts>, full_ech: bool) {
         self.ech_hosts = Some(ech);
         self.full_ech = full_ech;
+    }
+
+    /// Installs the HTTPS website lists: hosts whose TLS must be spliced
+    /// instead of terminated, and — with `only_mode` — the inverse list, so
+    /// only the named hosts are decrypted. Patterns are matched against the
+    /// SNI before rustls reads the hello (see [`crate::mitm::hosts`]).
+    pub fn set_https_hosts(
+        &mut self,
+        skip: Arc<crate::mitm::hosts::HostPatterns>,
+        only: Arc<crate::mitm::hosts::HostPatterns>,
+        only_mode: bool,
+    ) {
+        self.https_skip = skip;
+        self.https_only = only;
+        self.https_only_mode = only_mode;
     }
 
     /// The SNI captured from the ClientHello, once it has arrived.
@@ -818,6 +849,17 @@ impl ProxySession {
         } = tls::first_flight(&state.raw)
         {
             let name = server_name.as_deref().unwrap_or("?");
+            if self.https_skip.matches(name)
+                || (self.https_only_mode && !self.https_only.matches(name))
+            {
+                // The user asked for these sites not to be decrypted. This is
+                // the same exit as ECH: the client's bytes go to the origin
+                // untouched, so filtering cannot apply to them.
+                crate::logbuf::push(&format!(
+                    "mitm {name}: HTTPS website list excludes this host, splicing verbatim"
+                ));
+                return Ok(self.splice_pending_verbatim());
+            }
             let public_ech = self
                 .ech_hosts
                 .as_deref()

@@ -79,6 +79,9 @@ class SettingsPreferencesTest {
             disguiseUserAgent = true,
             blockThirdPartyCookies = false,
             selectedDnsProviderId = "cloudflare",
+            httpsSkipHosts = listOf("bank.example", "*.internal.test"),
+            httpsOnlyHosts = listOf("shop.example"),
+            httpsOnlyMode = true,
         )
         prefs().save(saved)
         // A fresh instance, as after a restart.
@@ -97,6 +100,9 @@ class SettingsPreferencesTest {
         assertEquals(defaults.blockMode, loaded.blockMode)
         assertEquals(defaults.selectedDnsProviderId, loaded.selectedDnsProviderId)
         assertEquals(defaults.isStealthModeEnabled, loaded.isStealthModeEnabled)
+        assertEquals(defaults.httpsSkipHosts, loaded.httpsSkipHosts)
+        assertEquals(defaults.httpsOnlyHosts, loaded.httpsOnlyHosts)
+        assertEquals(defaults.httpsOnlyMode, loaded.httpsOnlyMode)
         assertEquals(
             "full ECH is opt-in, an old blob must not turn it on",
             false,

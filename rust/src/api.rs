@@ -238,7 +238,7 @@ impl From<&crate::store::LogRow> for LogEvent {
 }
 
 /// Runtime knobs, mirrored from the app's `ProtectionSettings`.
-#[derive(uniffi::Record, Clone, Copy, Debug)]
+#[derive(uniffi::Record, Clone, Debug)]
 pub struct EngineConfig {
     /// Terminate TLS for intercepted connections and inject scripts.
     pub mitm_enabled: bool,
@@ -258,6 +258,11 @@ pub struct EngineConfig {
     pub block_mode: i32,
     pub log_allowed: bool,
     pub eco_mode: bool,
+    /// HTTPS website allowlist: hosts whose TLS is spliced untouched.
+    pub https_skip_hosts: Vec<String>,
+    /// HTTPS website blocklist: with `https_only_mode`, only these are decrypted.
+    pub https_only_hosts: Vec<String>,
+    pub https_only_mode: bool,
 }
 
 impl From<EngineConfig> for Config {
@@ -274,6 +279,9 @@ impl From<EngineConfig> for Config {
             block_mode: crate::dns::BlockMode::from_u8(c.block_mode.clamp(0, 2) as u8),
             log_allowed: c.log_allowed,
             eco_mode: c.eco_mode,
+            https_skip_hosts: c.https_skip_hosts,
+            https_only_hosts: c.https_only_hosts,
+            https_only_mode: c.https_only_mode,
         }
     }
 }
@@ -1012,10 +1020,16 @@ mod tests {
             block_mode: 1,
             log_allowed: true,
             eco_mode: false,
+            https_skip_hosts: vec!["bank.example".to_string()],
+            https_only_hosts: vec!["shop.example".to_string()],
+            https_only_mode: true,
         };
         let native: Config = cfg.into();
         assert!(!native.mitm_enabled, "MITM must stay off until asked");
         assert!(native.full_ech, "the full-ECH switch must survive the trip");
+        assert_eq!(native.https_skip_hosts, vec!["bank.example".to_string()]);
+        assert_eq!(native.https_only_hosts, vec!["shop.example".to_string()]);
+        assert!(native.https_only_mode);
         assert!(native.block_quic);
         assert!(!native.block_doh);
         assert!(native.ad_blocking);

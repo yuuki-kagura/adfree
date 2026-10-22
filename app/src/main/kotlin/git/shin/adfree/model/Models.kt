@@ -364,6 +364,12 @@ data class ProtectionSettings(
     val disguiseUserAgent: Boolean = false,
     val blockThirdPartyCookies: Boolean = true,
     val selectedDnsProviderId: String = "adguard_default",
+    /** HTTPS allowlist: hosts never decrypted (banking, client-cert sites). */
+    val httpsSkipHosts: List<String> = emptyList(),
+    /** HTTPS blocklist: used only when [httpsOnlyMode] is on. */
+    val httpsOnlyHosts: List<String> = emptyList(),
+    /** Decrypt only [httpsOnlyHosts] instead of everything but [httpsSkipHosts]. */
+    val httpsOnlyMode: Boolean = false,
 )
 
 /** Result of scanning one domain on the Security Lab screen (no AI/API key). */

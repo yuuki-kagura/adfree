@@ -16,6 +16,7 @@ import git.shin.adfree.model.DnsProvider
 import git.shin.adfree.model.FilterList
 import git.shin.adfree.model.FilterStatus
 import git.shin.adfree.model.filterUrlError
+import git.shin.adfree.model.normalizeHttpsHost
 import git.shin.adfree.model.scriptNameFromFile
 import git.shin.adfree.model.UserScriptInfo
 import git.shin.adfree.model.UserScriptMetadata
@@ -306,6 +307,37 @@ class AdGuardRepository(
 
     fun toggleFullEch(enabled: Boolean) =
         _settings.update { it.copy(isFullEchEnabled = enabled) }
+
+    /** Adds a host pattern to the HTTPS allowlist (sites left undecrypted). */
+    fun addHttpsSkipHost(raw: String) {
+        val host = normalizeHttpsHost(raw) ?: return
+        _settings.update { settings ->
+            if (settings.httpsSkipHosts.any { it.equals(host, ignoreCase = true) }) settings
+            else settings.copy(httpsSkipHosts = settings.httpsSkipHosts + host)
+        }
+    }
+
+    fun removeHttpsSkipHost(host: String) {
+        _settings.update { it.copy(httpsSkipHosts = it.httpsSkipHosts - host) }
+    }
+
+    /** Adds a host to the list used when [setHttpsOnlyMode] is on. */
+    fun addHttpsOnlyHost(raw: String) {
+        val host = normalizeHttpsHost(raw) ?: return
+        _settings.update { settings ->
+            if (settings.httpsOnlyHosts.any { it.equals(host, ignoreCase = true) }) settings
+            else settings.copy(httpsOnlyHosts = settings.httpsOnlyHosts + host)
+        }
+    }
+
+    fun removeHttpsOnlyHost(host: String) {
+        _settings.update { it.copy(httpsOnlyHosts = it.httpsOnlyHosts - host) }
+    }
+
+    /** Inverts HTTPS filtering: decrypt only the hosts in the blocklist. */
+    fun setHttpsOnlyMode(enabled: Boolean) {
+        _settings.update { it.copy(httpsOnlyMode = enabled) }
+    }
 
     fun toggleFirewall(enabled: Boolean) = _settings.update { it.copy(isFirewallEnabled = enabled) }
     fun toggleEcoBatteryMode(enabled: Boolean) =
