@@ -739,6 +739,8 @@ internal object IntegrityCheckingUniffiLib {
     ): Int
     external fun uniffi_adfree_core_checksum_func_core_ensure_ca(
     ): Int
+    external fun uniffi_adfree_core_checksum_func_core_filter_build_errors(
+    ): Int
     external fun uniffi_adfree_core_checksum_func_core_filter_fetch(
     ): Int
     external fun uniffi_adfree_core_checksum_func_core_filter_remove(
@@ -882,6 +884,8 @@ internal object UniffiLib {
     external fun uniffi_adfree_core_fn_func_core_drain_events(`max`: Int,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
     external fun uniffi_adfree_core_fn_func_core_ensure_ca(uniffi_out_err: UniffiRustCallStatus, 
+    ): RustBuffer.ByValue
+    external fun uniffi_adfree_core_fn_func_core_filter_build_errors(uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
     external fun uniffi_adfree_core_fn_func_core_filter_fetch(`id`: RustBuffer.ByValue,`url`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
@@ -1112,6 +1116,9 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if ((lib.uniffi_adfree_core_checksum_func_core_ensure_ca() and 0xFFFF) != 62169) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if ((lib.uniffi_adfree_core_checksum_func_core_filter_build_errors() and 0xFFFF) != 43396) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if ((lib.uniffi_adfree_core_checksum_func_core_filter_fetch() and 0xFFFF) != 61610) {
@@ -2555,6 +2562,54 @@ public object FfiConverterTypeEngineConfig: FfiConverterRustBuffer<EngineConfig>
 
 
 /**
+ * One enabled list whose body the last filter build could not read.
+ */
+data class FilterBuildError (
+    /**
+     * The list's `FilterListBinding.id`.
+     */
+    var `listId`: kotlin.Int
+    , 
+    /**
+     * Why the body was unusable ("Permission denied (os error 13)", "invalid
+     * UTF-8: ..."), so the row can say it instead of showing zero rules.
+     */
+    var `message`: kotlin.String
+    
+){
+    
+
+    
+
+    
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeFilterBuildError: FfiConverterRustBuffer<FilterBuildError> {
+    override fun read(buf: ByteBuffer): FilterBuildError {
+        return FilterBuildError(
+            FfiConverterInt.read(buf),
+            FfiConverterString.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: FilterBuildError) = (
+            FfiConverterInt.allocationSize(value.`listId`) +
+            FfiConverterString.allocationSize(value.`message`)
+    )
+
+    override fun write(value: FilterBuildError, buf: ByteBuffer) {
+            FfiConverterInt.write(value.`listId`, buf)
+            FfiConverterString.write(value.`message`, buf)
+    }
+}
+
+
+
+/**
  * One filter list, as the UI sees it.
  */
 data class FilterListBinding (
@@ -3323,6 +3378,34 @@ public object FfiConverterSequenceString: FfiConverterRustBuffer<List<kotlin.Str
 /**
  * @suppress
  */
+public object FfiConverterSequenceTypeFilterBuildError: FfiConverterRustBuffer<List<FilterBuildError>> {
+    override fun read(buf: ByteBuffer): List<FilterBuildError> {
+        val len = buf.getInt()
+        return List<FilterBuildError>(len) {
+            FfiConverterTypeFilterBuildError.read(buf)
+        }
+    }
+
+    override fun allocationSize(value: List<FilterBuildError>): ULong {
+        val sizeForLength = 4UL
+        val sizeForItems = value.map { FfiConverterTypeFilterBuildError.allocationSize(it) }.sum()
+        return sizeForLength + sizeForItems
+    }
+
+    override fun write(value: List<FilterBuildError>, buf: ByteBuffer) {
+        buf.putInt(value.size)
+        value.iterator().forEach {
+            FfiConverterTypeFilterBuildError.write(it, buf)
+        }
+    }
+}
+
+
+
+
+/**
+ * @suppress
+ */
 public object FfiConverterSequenceTypeFilterListBinding: FfiConverterRustBuffer<List<FilterListBinding>> {
     override fun read(buf: ByteBuffer): List<FilterListBinding> {
         val len = buf.getInt()
@@ -3539,6 +3622,20 @@ public object FfiConverterSequenceTypeUidApps: FfiConverterRustBuffer<List<UidAp
             return FfiConverterString.lift(
     uniffiRustCall() { _status ->
     UniffiLib.uniffi_adfree_core_fn_func_core_ensure_ca(
+    
+        _status)
+}
+    )
+    }
+    
+
+        /**
+         * Failures from the most recent filter build; empty when every enabled list
+         * was read and compiled. The platform maps `list_id` back to its own rows.
+         */ fun `coreFilterBuildErrors`(): List<FilterBuildError> {
+            return FfiConverterSequenceTypeFilterBuildError.lift(
+    uniffiRustCall() { _status ->
+    UniffiLib.uniffi_adfree_core_fn_func_core_filter_build_errors(
     
         _status)
 }

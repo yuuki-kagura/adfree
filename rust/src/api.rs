@@ -363,6 +363,32 @@ pub fn core_set_lists_async(lists: Vec<FilterListBinding>, user_rules: Vec<Strin
     })
 }
 
+/// One enabled list whose body the last filter build could not read.
+#[derive(uniffi::Record, Clone, Debug, Default)]
+pub struct FilterBuildError {
+    /// The list's `FilterListBinding.id`.
+    pub list_id: i32,
+    /// Why the body was unusable ("Permission denied (os error 13)", "invalid
+    /// UTF-8: ..."), so the row can say it instead of showing zero rules.
+    pub message: String,
+}
+
+/// Failures from the most recent filter build; empty when every enabled list
+/// was read and compiled. The platform maps `list_id` back to its own rows.
+#[uniffi::export]
+pub fn core_filter_build_errors() -> Vec<FilterBuildError> {
+    guard(Vec::new(), || {
+        crate::core()
+            .filter_build_errors()
+            .into_iter()
+            .map(|(list_id, message)| FilterBuildError {
+                list_id: list_id as i32,
+                message,
+            })
+            .collect()
+    })
+}
+
 /// Replaces the uid -> packages table the `$app=` network rules are matched
 /// against. The platform calls this with what its package manager knows (the
 /// core cannot see other apps); the table stays until the next call.

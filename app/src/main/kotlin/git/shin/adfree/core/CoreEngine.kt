@@ -165,6 +165,16 @@ class CoreEngine {
             .onFailure { Log.w(tag, "setLists failed", it) }
     }
 
+    /**
+     * Lists whose body the most recent filter build could not read, keyed by
+     * the `FilterListBinding.id` the app pushed. Empty when every enabled
+     * list compiled.
+     */
+    fun filterBuildErrors(): Map<Int, String> =
+        runCatching {
+            git.shin.adfree.core.coreFilterBuildErrors().associate { it.listId to it.message }
+        }.getOrDefault(emptyMap())
+
     /** Scan one host (Security Lab screen). */
     fun checkHost(host: String): HostVerdictBinding =
         runCatching { git.shin.adfree.core.coreCheckHost(host) }.getOrElse {

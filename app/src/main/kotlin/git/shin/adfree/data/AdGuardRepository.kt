@@ -52,6 +52,9 @@ private const val GREASY_FORK_API = "https://api.greasyfork.org/en/scripts.json"
 /** Keep the sheet light: 50 results is already a lot of rows to scan. */
 private const val GREASY_FORK_LIMIT = 50
 
+/** Upper bound on waiting for a filter compile before reading its errors. */
+private const val FILTER_BUILD_WATCH_MS = 30_000L
+
 /**
  * Single source of truth.
  *
@@ -134,6 +137,9 @@ class AdGuardRepository(
     private val _scriptStore = MutableStateFlow(UserScriptStoreState())
     val scriptStore: StateFlow<UserScriptStoreState> = _scriptStore.asStateFlow()
     private var scriptStoreJob: Job? = null
+
+    /** Coalesces the post-build error checks started by [pushListsToEngine]. */
+    private var filterBuildJob: Job? = null
 
     private val scriptStoreClient by lazy {
         OkHttpClient.Builder()
@@ -958,6 +964,36 @@ class AdGuardRepository(
         }
         val userRules = lists.firstOrNull { it.isCustom }?.customRules.orEmpty()
         engine.setListsAsync(bindings, userRules)
+        watchFilterBuildErrors()
+    }
+
+    /**
+     * Waits for the background compile to finish and mirrors its per-list
+     * failures onto the rows. Until now an enabled list whose body could not
+     * be read contributed zero rules with no explanation; the engine's own
+     * reason ("Permission denied", "invalid UTF-8") is the only honest one.
+     *
+     * One watcher at a time: every toggle calls [pushListsToEngine], and only
+     * the newest build's errors matter.
+     */
+    private fun watchFilterBuildErrors() {
+        filterBuildJob?.cancel()
+        filterBuildJob = scope.launch {
+            val deadline = System.currentTimeMillis() + FILTER_BUILD_WATCH_MS
+            while (System.currentTimeMillis() < deadline) {
+                delay(300)
+                val building = withContext(Dispatchers.IO) { runCatching { engine.stats().isBuilding }.getOrDefault(false) }
+                if (!building) break
+            }
+            val errors = withContext(Dispatchers.IO) { engine.filterBuildErrors() }
+            if (errors.isEmpty()) return@launch
+            _filterLists.update { lists ->
+                lists.map { list ->
+                    val message = errors[list.stableId()] ?: return@map list
+                    list.copy(lastError = "Máy không đọc được tệp — $message")
+                }
+            }
+        }
     }
 
     // ------------------------------------------------------------ app firewall

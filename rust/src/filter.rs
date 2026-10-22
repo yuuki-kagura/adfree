@@ -987,6 +987,10 @@ pub struct FilterEngine {
     /// Enabled ad/tracking/DNS modules, read on every decision so a switch
     /// takes effect without rebuilding the compiled filter.
     module_flags: AtomicU8,
+    /// Lists whose body could not be read in the last build, keyed by list id.
+    /// The platform turns these into the row's "last error" so an enabled
+    /// list that silently contributes zero rules has a visible reason.
+    build_errors: Mutex<Vec<(u16, String)>>,
 }
 
 impl Default for FilterEngine {
@@ -1019,7 +1023,14 @@ impl FilterEngine {
             pending_builds: AtomicUsize::new(0),
             generation: AtomicU64::new(0),
             module_flags: AtomicU8::new(MODULES_ALL),
+            build_errors: Mutex::new(Vec::new()),
         }
+    }
+
+    /// Bodies the last [`rebuild`] could not read, as `(list id, reason)`.
+    /// Empty when every enabled list on disk was compiled.
+    pub fn build_errors(&self) -> Vec<(u16, String)> {
+        self.build_errors.lock().unwrap().clone()
     }
 
     /// Applies the three protection switches. No rebuild is needed: the flags
@@ -1064,7 +1075,8 @@ impl FilterEngine {
         let mut set = FilterSet::new(true);
         let mut sources: Vec<SourceMapEntry> = Vec::with_capacity(lists.len() + 1);
         let mut rule_count = 0u64;
-        let mut errors: Vec<String> = Vec::new();
+        // (list id, reason): the platform maps the id back to the row.
+        let mut errors: Vec<(u16, String)> = Vec::new();
         let mut cosmetic_exceptions = CosmeticExceptionScan::default();
         let mut replace_scan = ReplaceScan::default();
         let mut url_scan = ModifierScan::default();
@@ -1148,11 +1160,14 @@ impl FilterEngine {
                         });
                         rule_count += counted;
                     }
-                    Err(e) => errors.push(format!("{}: {}", path.display(), e)),
+                    Err(e) => errors.push((list.id, format!("invalid UTF-8: {e}"))),
                 },
                 Err(e) => {
+                    // A missing body is normal (the list was never downloaded);
+                    // anything else means an enabled list silently contributes
+                    // nothing, which the row has to say out loud.
                     if e.kind() != std::io::ErrorKind::NotFound {
-                        errors.push(format!("{}: {}", path.display(), e));
+                        errors.push((list.id, e.to_string()));
                     }
                 }
             }
@@ -1295,6 +1310,9 @@ impl FilterEngine {
             ));
         }
         redirect_scan.log();
+        // Publish this build's failures for the platform; the next successful
+        // build replaces (and usually empties) the list.
+        *self.build_errors.lock().unwrap() = errors;
         let compiled = Arc::new(Compiled {
             engine,
             generation,
@@ -6150,6 +6168,43 @@ mod tests {
         let fe = FilterEngine::new();
         fe.rebuild(&lists, &[]);
         fe
+    }
+
+    #[test]
+    fn build_errors_name_the_list_that_could_not_be_read() {
+        let dir = std::env::temp_dir().join("adfree-filter-errors");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        // A directory where a file is expected is unreadable as a body.
+        let unreadable = dir.join("as-directory.txt");
+        std::fs::create_dir(&unreadable).unwrap();
+        let missing = dir.join("never-downloaded.txt");
+        let list = |id: u16, name: &str, path: std::path::PathBuf| FilterListInfo {
+            id,
+            name: name.to_string(),
+            url: String::new(),
+            enabled: true,
+            local_path: Some(path),
+            format: ListFormat::Standard,
+            category: CAT_AD,
+            trusted: true,
+            rule_count: 0,
+            last_error: None,
+        };
+        let lists = vec![
+            list(7, "Broken", unreadable),
+            list(8, "Missing", missing),
+        ];
+        let fe = FilterEngine::new();
+        fe.rebuild(&lists, &[]);
+        let errors = fe.build_errors();
+        assert_eq!(errors.len(), 1, "only the unreadable body is an error");
+        assert_eq!(errors[0].0, 7);
+        assert!(!errors[0].1.is_empty());
+        // A clean build replaces the previous findings.
+        fe.rebuild(&[], &[]);
+        assert!(fe.build_errors().is_empty());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

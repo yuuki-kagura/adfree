@@ -562,6 +562,11 @@ impl Core {
         Arc::clone(&self.filter)
     }
 
+    /// Lists whose body the last filter build could not read.
+    pub fn filter_build_errors(&self) -> Vec<(u16, String)> {
+        self.filter.build_errors()
+    }
+
     pub fn lists(&self) -> Vec<FilterListInfo> {
         self.lists.read().unwrap().clone()
     }
