@@ -202,6 +202,13 @@ object FilterCatalog {
             group = FilterGroup.ANNOYANCES,
             url = "https://secure.fanboy.co.nz/easylist-cookie.txt",
         ),
+        CatalogFilter(
+            id = "adblock-warning-removal",
+            name = "Adblock Warning Removal List",
+            description = "Ẩn lời nhắc \"hãy tắt chặn quảng cáo\" trên các trang chống adblock.",
+            group = FilterGroup.ANNOYANCES,
+            url = ADGUARD_URL + "207_optimized.txt",
+        ),
 
         // -------------------------------------------------------- security
         CatalogFilter(
@@ -231,6 +238,13 @@ object FilterCatalog {
             description = "Cảnh báo phần mềm độc hại và rủi ro tải xuống.",
             group = FilterGroup.SECURITY,
             url = "https://raw.githubusercontent.com/uBlockOrigin/uAssets/master/filters/badware.txt",
+        ),
+        CatalogFilter(
+            id = "dandelion-malware",
+            name = "Dandelion Sprout's Anti-Malware List",
+            description = "Chặn tên miền phát tán mã độc và lừa đảo (Dandelion Sprout).",
+            group = FilterGroup.SECURITY,
+            url = ADGUARD_URL + "259_optimized.txt",
         ),
 
         // ----------------------------------------------------------- other
@@ -362,6 +376,79 @@ object FilterCatalog {
             description = "Bộ lọc quảng cáo tiếng Việt cho AdGuard/uBlock.",
             group = FilterGroup.LANGUAGE,
             url = "https://raw.githubusercontent.com/abpvn/abpvn/master/filter/abpvn_adguard.txt",
+        ),
+        // AdGuard's own language filters, same Android `_optimized` bodies the
+        // catalogue above uses. Coverage for the languages a Vietnamese user
+        // is most likely to browse; all URLs verified against filters.adtidy.org.
+        CatalogFilter(
+            id = "ag-italian",
+            name = "AdGuard Italian filter",
+            description = "Bộ lọc cho trang web tiếng Ý.",
+            group = FilterGroup.LANGUAGE,
+            url = ADGUARD_URL + "26_optimized.txt",
+        ),
+        CatalogFilter(
+            id = "easylist-germany",
+            name = "EasyList Germany",
+            description = "Bộ lọc bổ sung cho trang web tiếng Đức (EasyList).",
+            group = FilterGroup.LANGUAGE,
+            url = ADGUARD_URL + "107_optimized.txt",
+        ),
+        CatalogFilter(
+            id = "liste-fr",
+            name = "Liste FR",
+            description = "Bộ lọc bổ sung cho trang web tiếng Pháp (Liste FR).",
+            group = FilterGroup.LANGUAGE,
+            url = ADGUARD_URL + "113_optimized.txt",
+        ),
+        CatalogFilter(
+            id = "easylist-spanish",
+            name = "EasyList Spanish",
+            description = "Bộ lọc cho trang web tiếng Tây Ban Nha (EasyList).",
+            group = FilterGroup.LANGUAGE,
+            url = ADGUARD_URL + "231_optimized.txt",
+        ),
+        CatalogFilter(
+            id = "easylist-portuguese",
+            name = "EasyList Portuguese",
+            description = "Bộ lọc cho trang web tiếng Bồ Đào Nha (EasyList).",
+            group = FilterGroup.LANGUAGE,
+            url = ADGUARD_URL + "124_optimized.txt",
+        ),
+        CatalogFilter(
+            id = "easylist-china",
+            name = "EasyList China",
+            description = "Bộ lọc cho trang web tiếng Trung (EasyList China).",
+            group = FilterGroup.LANGUAGE,
+            url = ADGUARD_URL + "104_optimized.txt",
+        ),
+        CatalogFilter(
+            id = "easylist-thailand",
+            name = "EasyList Thailand",
+            description = "Bộ lọc cho trang web tiếng Thái (EasyList Thailand).",
+            group = FilterGroup.LANGUAGE,
+            url = ADGUARD_URL + "202_optimized.txt",
+        ),
+        CatalogFilter(
+            id = "adblock-id",
+            name = "AdBlockID",
+            description = "Bộ lọc cho trang web tiếng Indonesia (AdBlockID).",
+            group = FilterGroup.LANGUAGE,
+            url = ADGUARD_URL + "120_optimized.txt",
+        ),
+        CatalogFilter(
+            id = "youslist",
+            name = "YousList",
+            description = "Bộ lọc cho trang web tiếng Hàn (YousList).",
+            group = FilterGroup.LANGUAGE,
+            url = ADGUARD_URL + "244_optimized.txt",
+        ),
+        CatalogFilter(
+            id = "indianlist",
+            name = "IndianList",
+            description = "Bộ lọc cho trang web tiếng Hindi và khu vực Ấn Độ.",
+            group = FilterGroup.LANGUAGE,
+            url = ADGUARD_URL + "253_optimized.txt",
         ),
     )
 
