@@ -18,6 +18,8 @@ import git.shin.adfree.model.FilterStatus
 import git.shin.adfree.model.filterUrlError
 import git.shin.adfree.model.scriptNameFromFile
 import git.shin.adfree.model.UserScriptInfo
+import git.shin.adfree.model.UserScriptMetadata
+import git.shin.adfree.model.parseUserScriptMetadata
 import git.shin.adfree.model.UserScriptStoreItem
 import git.shin.adfree.model.UserScriptStoreSort
 import git.shin.adfree.model.UserScriptStoreState
@@ -1134,6 +1136,7 @@ class AdGuardRepository(
                     sizeBytes = asset?.sizeBytes ?: 0,
                     lastUpdatedText = asset?.let { engine.dateText(it.modifiedMs) } ?: "Chưa tải",
                     isBuiltin = entry.builtin,
+                    metadata = scriptMetadata(entry.id, asset),
                 )
             }
             for (state in stored.filter { s -> UserScriptCatalog.scripts.none { it.id == s.id } }) {
@@ -1147,12 +1150,24 @@ class AdGuardRepository(
                     sizeBytes = asset?.sizeBytes ?: 0,
                     lastUpdatedText = asset?.let { engine.dateText(it.modifiedMs) } ?: "Chưa tải",
                     isUserAdded = true,
+                    metadata = scriptMetadata(state.id, asset),
                 )
             }
             _userscripts.value = scripts
             _scriptsMasterEnabled.value = prefs.scriptsMasterEnabled()
             pushScriptsToCore()
         }
+    }
+
+    /**
+     * Reads the header fields the detail sheet explains ("Phiên bản", "Trang
+     * áp dụng", "Quyền"). Bodies are small and this runs on IO, once per
+     * refresh; a missing body simply has no metadata.
+     */
+    private suspend fun scriptMetadata(id: String, asset: AssetState?): UserScriptMetadata {
+        if (asset == null) return UserScriptMetadata()
+        val body = withContext(Dispatchers.IO) { engine.scriptText(id) } ?: return UserScriptMetadata()
+        return parseUserScriptMetadata(body)
     }
 
     fun toggleScriptsMaster(enabled: Boolean) {
@@ -1388,12 +1403,15 @@ class AdGuardRepository(
                 "Không tải được ${script.name}: ${outcome.message}",
             )
         }
+        val body = withContext(Dispatchers.IO) { engine.scriptText(script.id) }
+        val metadata = body?.let(::parseUserScriptMetadata) ?: UserScriptMetadata()
         _userscripts.update { list ->
             list.map {
                 if (it.id == script.id) {
                     it.copy(
                         sizeBytes = outcome.sizeBytes,
                         lastUpdatedText = engine.dateText(outcome.modifiedMs),
+                        metadata = metadata,
                     )
                 } else it
             }
@@ -1466,6 +1484,7 @@ class AdGuardRepository(
                             sizeBytes = state.sizeBytes,
                             lastUpdatedText = "Vừa nhập",
                             isEnabled = true,
+                            metadata = parseUserScriptMetadata(text),
                         )
                     } else it
                 }
@@ -1504,7 +1523,12 @@ class AdGuardRepository(
             _userscripts.update { list ->
                 list.map {
                     if (it.id == id) {
-                        it.copy(sizeBytes = state.sizeBytes, lastUpdatedText = "Vừa tạo", isEnabled = true)
+                        it.copy(
+                            sizeBytes = state.sizeBytes,
+                            lastUpdatedText = "Vừa tạo",
+                            isEnabled = true,
+                            metadata = parseUserScriptMetadata(trimmed),
+                        )
                     } else it
                 }
             }
@@ -1539,6 +1563,7 @@ class AdGuardRepository(
                             name = displayName,
                             sizeBytes = state.sizeBytes,
                             lastUpdatedText = "Vừa sửa",
+                            metadata = parseUserScriptMetadata(trimmed),
                         )
                     } else it
                 }

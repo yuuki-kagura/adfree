@@ -27,6 +27,7 @@ import androidx.compose.material.icons.filled.Extension
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Sync
+import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -71,6 +72,7 @@ import git.shin.adfree.ui.theme.AdGuardDarkSurface
 import git.shin.adfree.ui.theme.AdGuardDarkSurfaceVariant
 import git.shin.adfree.ui.theme.AdGuardGreenLight
 import git.shin.adfree.ui.theme.AdGuardGreenPrimary
+import git.shin.adfree.ui.theme.AdGuardOrangeWarning
 import git.shin.adfree.ui.theme.AdGuardPurpleAI
 import git.shin.adfree.ui.theme.AdGuardRedBlocked
 import git.shin.adfree.ui.theme.AdGuardTextMuted
@@ -653,6 +655,24 @@ fun AddScriptDialog(
                     fontSize = 12.sp,
                     color = AdGuardTextSecondary,
                 )
+                Spacer(modifier = Modifier.height(8.dp))
+                // AdGuard shows the same warning before installing an
+                // extension: a userscript sees the page it runs on.
+                Row(verticalAlignment = Alignment.Top) {
+                    Icon(
+                        Icons.Default.Warning,
+                        contentDescription = null,
+                        tint = AdGuardOrangeWarning,
+                        modifier = Modifier.size(14.dp),
+                    )
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text(
+                        text = "Tiện ích đọc và sửa được nội dung trang nó chạy trên. " +
+                            "Chỉ cài từ nguồn bạn tin cậy.",
+                        fontSize = 11.sp,
+                        color = AdGuardOrangeWarning,
+                    )
+                }
                 Spacer(modifier = Modifier.height(12.dp))
                 OutlinedTextField(
                     value = name,
@@ -770,6 +790,48 @@ fun ScriptDetailSheet(
         ScriptInfoRow("Kích thước", if (script.sizeBytes > 0) "${script.sizeBytes / 1024} KB" else "Chưa tải")
         ScriptInfoRow("Cập nhật", script.lastUpdatedText)
 
+        // Header fields are what tells a user whether a script touches more
+        // than the page it was installed for. Show them only when present.
+        if (script.metadata.version.isNotBlank()) {
+            ScriptInfoRow("Phiên bản", script.metadata.version)
+        }
+        if (script.metadata.runAt.isNotBlank()) {
+            ScriptInfoRow("Chạy ở", runAtLabel(script.metadata.runAt))
+        }
+        if (script.metadata.patterns.isNotEmpty()) {
+            val shown = script.metadata.patterns.take(3)
+            val extra = script.metadata.patterns.size - shown.size
+            ScriptInfoRow(
+                "Trang áp dụng",
+                buildString {
+                    append(shown.joinToString("\n"))
+                    if (extra > 0) append("\n+$extra mẫu nữa")
+                },
+            )
+        }
+        val grants = script.metadata.grants.filter { it != "none" }
+        if (grants.isNotEmpty()) {
+            ScriptInfoRow("Quyền", grants.joinToString(" · "))
+        }
+        if (script.metadata.hasBroadAccess) {
+            Spacer(modifier = Modifier.height(6.dp))
+            Row(verticalAlignment = Alignment.Top) {
+                Icon(
+                    Icons.Default.Warning,
+                    contentDescription = null,
+                    tint = AdGuardOrangeWarning,
+                    modifier = Modifier.size(14.dp),
+                )
+                Spacer(modifier = Modifier.width(6.dp))
+                Text(
+                    text = "Script dùng API vượt phạm vi trang (GM_xmlhttpRequest, unsafeWindow…). " +
+                        "Chỉ nên bật khi bạn tin nguồn phát hành.",
+                    fontSize = 10.sp,
+                    color = AdGuardOrangeWarning,
+                )
+            }
+        }
+
         Spacer(modifier = Modifier.height(6.dp))
         if (script.isBuiltin) {
             Text(
@@ -824,4 +886,13 @@ private fun ScriptInfoRow(label: String, value: String) {
         Text(label, fontSize = 12.sp, color = AdGuardTextMuted, modifier = Modifier.width(110.dp))
         Text(value, fontSize = 12.sp, color = AdGuardTextPrimary, modifier = Modifier.weight(1f))
     }
+}
+
+/** `@run-at` value → words a user can act on. */
+private fun runAtLabel(value: String): String = when (value.lowercase()) {
+    "document-start" -> "Trước khi trang tải"
+    "document-end" -> "Sau khi trang tải"
+    "document-idle" -> "Khi trang rảnh"
+    "document-body" -> "Khi trang có <body>"
+    else -> value
 }

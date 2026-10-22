@@ -229,6 +229,8 @@ data class UserScriptInfo(
     val isUserAdded: Boolean = false,
     /** Shipped with the app: no URL to refresh, cannot be deleted. */
     val isBuiltin: Boolean = false,
+    /** Header fields read from the body, for the detail sheet. */
+    val metadata: UserScriptMetadata = UserScriptMetadata(),
 )
 
 /** One userscript result from the Greasy Fork store. */
