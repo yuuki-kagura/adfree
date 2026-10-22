@@ -67,6 +67,7 @@ import git.shin.adfree.core.MitmStatus
 import git.shin.adfree.model.DnsBlockMode
 import git.shin.adfree.model.DnsProvider
 import git.shin.adfree.model.ProtectionSettings
+import git.shin.adfree.model.caNotAfterMs
 import git.shin.adfree.model.normalizeHttpsHost
 import git.shin.adfree.ui.AdGuardTab
 import git.shin.adfree.ui.AdGuardIntent
@@ -80,6 +81,7 @@ import git.shin.adfree.ui.theme.AdGuardDarkSurfaceVariant
 import git.shin.adfree.ui.theme.AdGuardGreenLight
 import git.shin.adfree.ui.theme.AdGuardGreenPrimary
 import git.shin.adfree.ui.theme.AdGuardOrangeWarning
+import git.shin.adfree.ui.theme.AdGuardRedBlocked
 import git.shin.adfree.ui.theme.AdGuardTextMuted
 import git.shin.adfree.ui.theme.AdGuardTextPrimary
 import git.shin.adfree.ui.theme.AdGuardTextSecondary
@@ -325,6 +327,9 @@ private fun HttpsFilterSection(viewModel: AdGuardViewModel, fullEchEnabled: Bool
     // Live view of the trust store: installing the CA while the app sits in
     // the background must flip this without a restart.
     var caTrusted by remember { mutableStateOf(viewModel.isCaTrusted()) }
+    // The CA is installed by hand, outside the app: its expiry is the only
+    // warning the user gets before every TLS connection starts failing.
+    val caExpiryMs = remember(status?.caPem) { status?.caPem?.let(::caNotAfterMs) }
     // Set when the gate dialog sends the user off to install the certificate,
     // so coming back with it installed turns filtering on as they intended.
     var pendingEnable by remember { mutableStateOf(false) }
@@ -450,6 +455,27 @@ private fun HttpsFilterSection(viewModel: AdGuardViewModel, fullEchEnabled: Bool
                             fontSize = 11.sp,
                             color = if (caTrusted) AdGuardGreenLight else AdGuardOrangeWarning,
                         )
+                        if (caExpiryMs != null) {
+                            val now = System.currentTimeMillis()
+                            // Compare instants for "expired": integer day math
+                            // would keep reporting "còn 0 ngày" for the last
+                            // day before, and the first day after, expiry.
+                            val expired = caExpiryMs <= now
+                            val daysLeft = (caExpiryMs - now) / 86_400_000L
+                            Text(
+                                text = if (expired) {
+                                    "Hạn CA: đã hết hạn (${formatCertDate(caExpiryMs)})"
+                                } else {
+                                    "Hạn CA: ${formatCertDate(caExpiryMs)} (còn $daysLeft ngày)"
+                                },
+                                fontSize = 10.sp,
+                                color = when {
+                                    expired -> AdGuardRedBlocked
+                                    daysLeft < 30 -> AdGuardOrangeWarning
+                                    else -> AdGuardTextMuted
+                                },
+                            )
+                        }
                     }
                     OutlinedButton(
                         onClick = { viewModel.createCa { status = it } },
@@ -1123,3 +1149,8 @@ private fun HttpsHostDialog(
         },
     )
 }
+
+/** `dd/MM/yyyy` for the certificate line; the device locale decides digits. */
+private fun formatCertDate(ms: Long): String =
+    java.text.SimpleDateFormat("dd/MM/yyyy", java.util.Locale.getDefault())
+        .format(java.util.Date(ms))
