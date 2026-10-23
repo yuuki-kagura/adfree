@@ -23,6 +23,7 @@ import git.shin.adfree.model.UserScriptInfo
 import git.shin.adfree.model.UserScriptMetadata
 import git.shin.adfree.model.parseUserScriptMetadata
 import git.shin.adfree.model.parseUserRulesText
+import git.shin.adfree.model.parseDnsEndpoint
 import git.shin.adfree.model.UserScriptStoreItem
 import git.shin.adfree.model.UserScriptStoreSort
 import git.shin.adfree.model.UserScriptStoreState
@@ -390,15 +391,21 @@ class AdGuardRepository(
 
     fun selectDnsProvider(id: String) {
         val provider = _dnsProviders.value.firstOrNull { it.id == id } ?: return
+        val endpoint = parseDnsEndpoint(provider.address)
+        if (endpoint == null) {
+            showTransientStatus("Resolver chỉ hỗ trợ DNS UDP dạng IP (ví dụ 1.1.1.1)")
+            return
+        }
         _settings.update { it.copy(selectedDnsProviderId = id) }
-        val (host, port) = provider.hostAndPort() ?: return
-        engine.setResolver(host, port)
+        engine.setResolver(endpoint.host, endpoint.port)
     }
 
     /** Adds/selects a resolver and returns the line the Settings snackbar shows. */
     fun addCustomDnsProvider(name: String, address: String): String {
         val trimmed = address.trim()
         if (trimmed.isEmpty()) return "Địa chỉ DNS trống"
+        val endpoint = parseDnsEndpoint(trimmed)
+            ?: return "Chỉ hỗ trợ DNS UDP dạng IP (ví dụ 1.1.1.1 hoặc 1.1.1.1:53)"
         val existing = _dnsProviders.value.firstOrNull { it.address == trimmed }
         if (existing != null) {
             selectDnsProvider(existing.id)
@@ -408,15 +415,15 @@ class AdGuardRepository(
             id = "custom_" + System.currentTimeMillis(),
             name = name.trim().ifBlank { trimmed },
             address = trimmed,
-            type = if (trimmed.startsWith("https://")) ProtocolType.DNS_DOH else ProtocolType.DNS_UDP,
+            // The forwarder sends plain UDP; DoH/DoT need a different
+            // transport and are rejected above rather than silently ignored.
+            type = ProtocolType.DNS_UDP,
             description = "Tùy chỉnh",
             isCustom = true,
         )
-        val (host, port) = provider.hostAndPort()
-            ?: return "Địa chỉ DNS không hợp lệ: $trimmed"
         _dnsProviders.update { it + provider }
         settingsPrefs.saveCustomDnsProviders(_dnsProviders.value.filter { it.isCustom })
-        engine.setResolver(host, port)
+        engine.setResolver(endpoint.host, endpoint.port)
         _settings.update { it.copy(selectedDnsProviderId = provider.id) }
         return "Đã thêm DNS tùy chỉnh: ${provider.name}"
     }
@@ -1762,22 +1769,7 @@ class AdGuardRepository(
             }
         }
 
-        private fun DnsProvider.hostAndPort(): Pair<String, Int>? {
-            val address = address.trim()
-            val hostPort = when {
-                address.startsWith("https://") -> address.removePrefix("https://")
-                address.startsWith("http://") -> address.removePrefix("http://")
-                address.startsWith("tls://") -> address.removePrefix("tls://")
-                else -> address
-            }.substringBefore('/').substringAfter('@')
-            val host = hostPort.substringBefore(':').substringBefore(']')
-            val port = hostPort.substringAfter(':', "").toIntOrNull()
-                ?: if (address.startsWith("https")) 443 else 53
-            if (host.isBlank()) return null
-            return Pair(host, port)
-        }
-
-        fun defaultDnsProviders() = listOf(
+        private fun defaultDnsProviders() = listOf(
             DnsProvider("adguard_default", "AdGuard DNS", "94.140.14.14", ProtocolType.DNS_UDP, "Chặn quảng cáo & tracker mặc định của AdGuard", pingMs = 12),
             DnsProvider("adguard_family", "AdGuard Family", "94.140.15.16", ProtocolType.DNS_UDP, "Chặn nội dung người lớn, bật SafeSearch", pingMs = 14),
             DnsProvider("cloudflare", "Cloudflare 1.1.1.1", "1.1.1.1", ProtocolType.DNS_UDP, "Nhanh, riêng tư, không ghi log", pingMs = 8),

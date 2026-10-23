@@ -5,6 +5,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import git.shin.adfree.core.CoreEngine
 import git.shin.adfree.data.AdGuardRepository
+import git.shin.adfree.model.parseDnsEndpoint
 import git.shin.adfree.security.ThreatAnalyzer
 import git.shin.adfree.ui.AdGuardViewModel
 import git.shin.adfree.vpn.VpnController
@@ -73,10 +74,9 @@ class AdGuardAppContainer(private val context: Context) {
         val provider = repository.dnsProviders.value
             .firstOrNull { it.id == settings.selectedDnsProviderId }
         if (provider != null) {
-            val host = provider.address.removePrefix("https://").removePrefix("http://")
-                .substringBefore('/').substringBefore(':')
-            val port = provider.address.substringAfterLast(':').toIntOrNull() ?: 53
-            coreEngine.setResolver(host, port)
+            parseDnsEndpoint(provider.address)?.let { endpoint ->
+                coreEngine.setResolver(endpoint.host, endpoint.port)
+            }
         }
     }
 }

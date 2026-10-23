@@ -173,7 +173,9 @@ fun FiltersScreen(
     val customLists = state.filterLists.filter { it.isUserAdded }
     val visibleCatalog = catalogLists.filter(matchesQuery)
     val visibleCustom = customLists.filter(matchesQuery)
-    val userRulesCount = state.filterLists.firstOrNull { it.isCustom }?.ruleCount ?: 0
+    val userRules = state.filterLists.firstOrNull { it.isCustom }?.customRules.orEmpty()
+    val userRulesCount = userRules.size
+    val allowCount = userRules.count { it.startsWith("@@") }
     val enabledCount = state.filterLists.count { it.isEnabled && !it.isCustom }
     val totalRules = state.filterLists.filter { it.isEnabled && !it.isCustom }.sumOf { it.ruleCount }
 
@@ -420,6 +422,7 @@ fun FiltersScreen(
                 item(key = "user_rules") {
                     UserRulesCard(
                         count = userRulesCount,
+                        allowCount = allowCount,
                         onOpen = { viewModel.onIntent(AdGuardIntent.ShowCustomRuleEditor(true)) },
                     )
                 }
@@ -1012,6 +1015,7 @@ private fun CustomFiltersCard(
 @Composable
 private fun UserRulesCard(
     count: Int,
+    allowCount: Int,
     onOpen: () -> Unit,
 ) {
     Card(
@@ -1041,7 +1045,7 @@ private fun UserRulesCard(
             Spacer(modifier = Modifier.width(12.dp))
             Column(modifier = Modifier.weight(1f)) {
                 Text("Quy tắc của bạn", fontSize = 13.sp, fontWeight = FontWeight.Bold, color = AdGuardTextPrimary)
-                Text("$count quy tắc chặn / cho phép tự viết", fontSize = 10.sp, color = AdGuardTextMuted)
+                Text("$count quy tắc • $allowCount ngoại lệ", fontSize = 10.sp, color = AdGuardTextMuted)
             }
             Icon(Icons.Default.ChevronRight, contentDescription = null, tint = AdGuardTextMuted, modifier = Modifier.size(20.dp))
         }

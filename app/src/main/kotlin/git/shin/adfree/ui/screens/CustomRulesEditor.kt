@@ -64,6 +64,7 @@ import git.shin.adfree.ui.theme.AdGuardTextMuted
 import git.shin.adfree.ui.theme.AdGuardTextPrimary
 import git.shin.adfree.ui.theme.AdGuardTextSecondary
 import git.shin.adfree.model.parseUserRulesText
+import git.shin.adfree.model.userWhitelistRule
 
 /**
  * Full-featured user-rules editor, opened from the "Quy tắc của bạn" row.
@@ -83,6 +84,7 @@ fun FriendlyCustomRuleEditorSheet(
     var rawText by remember { mutableStateOf(initialRules.joinToString("\n")) }
     var newSingleRule by remember { mutableStateOf("") }
     var searchQuery by remember { mutableStateOf("") }
+    var newWhitelistDomain by remember { mutableStateOf("") }
 
     val context = LocalContext.current
     var notice by remember { mutableStateOf<String?>(null) }
@@ -130,6 +132,8 @@ fun FriendlyCustomRuleEditorSheet(
         }
     }
 
+    val whitelistCount = rulesList.count { it.startsWith("@@") }
+
     Column(
         modifier = Modifier
             .fillMaxSize()
@@ -148,7 +152,7 @@ fun FriendlyCustomRuleEditorSheet(
                     color = AdGuardTextPrimary,
                 )
                 Text(
-                    text = "${rulesList.size} quy tắc đang áp dụng cho mọi trang",
+                    text = "${rulesList.size} quy tắc • $whitelistCount ngoại lệ",
                     fontSize = 12.sp,
                     color = AdGuardTextMuted,
                 )
@@ -219,9 +223,10 @@ fun FriendlyCustomRuleEditorSheet(
                 onClick = {
                     selectedTab = 0
                     // Pull in whatever was typed in the raw editor.
-                    rulesList = rawText.lines().map { it.trim() }.filter { it.isNotEmpty() }
+                    rulesList = parseUserRulesText(rawText)
+                    rawText = rulesList.joinToString("\n")
                 },
-                text = { Text("Quản lý trực quan (${rulesList.size})", fontSize = 12.sp, fontWeight = FontWeight.Bold) },
+                text = { Text("Trực quan", fontSize = 12.sp, fontWeight = FontWeight.Bold) },
             )
             Tab(
                 selected = selectedTab == 1,
@@ -229,7 +234,17 @@ fun FriendlyCustomRuleEditorSheet(
                     selectedTab = 1
                     rawText = rulesList.joinToString("\n")
                 },
-                text = { Text("Soạn thảo toàn văn (Raw)", fontSize = 12.sp, fontWeight = FontWeight.Bold) },
+                text = { Text("Toàn văn", fontSize = 12.sp, fontWeight = FontWeight.Bold) },
+            )
+            Tab(
+                selected = selectedTab == 2,
+                onClick = {
+                    selectedTab = 2
+                    // Include raw-tab edits before showing the filtered list.
+                    rulesList = parseUserRulesText(rawText)
+                    rawText = rulesList.joinToString("\n")
+                },
+                text = { Text("Cho phép ($whitelistCount)", fontSize = 12.sp, fontWeight = FontWeight.Bold) },
             )
         }
 
@@ -368,7 +383,7 @@ fun FriendlyCustomRuleEditorSheet(
                     }
                 }
             }
-        } else {
+        } else if (selectedTab == 1) {
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(6.dp),
@@ -436,6 +451,141 @@ fun FriendlyCustomRuleEditorSheet(
                     Icon(Icons.Default.Check, contentDescription = null, tint = Color.Black, modifier = Modifier.size(16.dp))
                     Spacer(modifier = Modifier.width(6.dp))
                     Text("Lưu $linesCount quy tắc", color = Color.Black, fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                }
+            }
+        } else {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                OutlinedTextField(
+                    value = newWhitelistDomain,
+                    onValueChange = {
+                        newWhitelistDomain = it
+                        notice = null
+                    },
+                    placeholder = {
+                        Text("domain được phép, vd: example.com", color = AdGuardTextMuted, fontSize = 12.sp)
+                    },
+                    singleLine = true,
+                    modifier = Modifier.weight(1f),
+                    shape = RoundedCornerShape(10.dp),
+                    colors = OutlinedTextFieldDefaults.colors(
+                        focusedContainerColor = AdGuardDarkSurfaceVariant,
+                        unfocusedContainerColor = AdGuardDarkSurfaceVariant,
+                        focusedBorderColor = AdGuardGreenPrimary,
+                        unfocusedBorderColor = AdGuardDarkOutline,
+                        focusedTextColor = AdGuardTextPrimary,
+                        unfocusedTextColor = AdGuardTextPrimary,
+                    ),
+                )
+                Spacer(modifier = Modifier.width(8.dp))
+                Button(
+                    onClick = {
+                        val rule = userWhitelistRule(newWhitelistDomain)
+                        if (rule == null) {
+                            notice = "Domain không hợp lệ"
+                        } else {
+                            val merged = (rulesList + rule).distinct()
+                            rulesList = merged
+                            rawText = merged.joinToString("\n")
+                            newWhitelistDomain = ""
+                            onSaveAll(merged)
+                            notice = "Đã thêm ngoại lệ"
+                        }
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = AdGuardGreenPrimary),
+                    shape = RoundedCornerShape(10.dp),
+                    modifier = Modifier.height(52.dp),
+                ) {
+                    Icon(Icons.Default.Add, contentDescription = null, tint = Color.Black)
+                }
+            }
+
+            Spacer(modifier = Modifier.height(10.dp))
+
+            Text(
+                text = "Quy tắc @@ cho phép domain bỏ qua mọi bộ lọc. " +
+                    "Thêm domain ở trên hoặc sửa trực tiếp trong tab Toàn văn.",
+                fontSize = 11.sp,
+                color = AdGuardTextMuted,
+            )
+
+            Spacer(modifier = Modifier.height(10.dp))
+
+            val whitelistRules = rulesList.filter { it.startsWith("@@") }
+            if (whitelistRules.isEmpty()) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .weight(1f),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Text(
+                        text = "Chưa có ngoại lệ nào",
+                        fontSize = 12.sp,
+                        color = AdGuardTextMuted,
+                    )
+                }
+            } else {
+                LazyColumn(
+                    modifier = Modifier
+                        .weight(1f)
+                        .fillMaxWidth(),
+                    verticalArrangement = Arrangement.spacedBy(6.dp),
+                ) {
+                    items(whitelistRules) { rule ->
+                        Card(
+                            modifier = Modifier.fillMaxWidth(),
+                            shape = RoundedCornerShape(10.dp),
+                            colors = CardDefaults.cardColors(containerColor = AdGuardDarkSurfaceVariant),
+                        ) {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(horizontal = 12.dp, vertical = 8.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                Box(
+                                    modifier = Modifier
+                                        .clip(RoundedCornerShape(6.dp))
+                                        .background(AdGuardGreenLight.copy(alpha = 0.15f))
+                                        .padding(horizontal = 6.dp, vertical = 2.dp),
+                                ) {
+                                    Text(
+                                        text = "CHO PHÉP",
+                                        fontSize = 9.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        color = AdGuardGreenLight,
+                                    )
+                                }
+                                Spacer(modifier = Modifier.width(10.dp))
+                                Text(
+                                    text = rule,
+                                    modifier = Modifier.weight(1f),
+                                    fontSize = 12.sp,
+                                    fontFamily = FontFamily.Monospace,
+                                    color = AdGuardTextPrimary,
+                                )
+                                IconButton(
+                                    onClick = {
+                                        rulesList = rulesList.filterNot { it == rule }
+                                        rawText = rulesList.joinToString("\n")
+                                        onSaveAll(rulesList)
+                                        notice = "Đã xoá ngoại lệ"
+                                    },
+                                    modifier = Modifier.size(28.dp),
+                                ) {
+                                    Icon(
+                                        Icons.Default.Delete,
+                                        contentDescription = "Xoá ngoại lệ",
+                                        tint = AdGuardTextMuted,
+                                        modifier = Modifier.size(16.dp),
+                                    )
+                                }
+                            }
+                        }
+                    }
                 }
             }
         }

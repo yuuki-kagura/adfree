@@ -714,10 +714,13 @@ fun AppDetailsFirewallSheet(
             )
         }
 
-        // Recent Requests made by this specific app
-        // The activity log no longer binds each row to an app, so this section only
-        // shows while the user filters by that app.
-        val appLogs = logs.filter { it.domain == app.packageName }.take(4)
+        // Recent Requests made by this specific app.
+        // LogEvent has no app column yet: the only reliable link is the
+        // package name inside a `$app=` rule, so use the same predicate as the
+        // ViewModel's app filter instead of comparing a domain to a package.
+        val appLogs = logs.filter {
+            it.matchedRule?.contains(app.packageName, true) == true
+        }.take(4)
         if (appLogs.isNotEmpty()) {
             Spacer(modifier = Modifier.height(16.dp))
             Text(

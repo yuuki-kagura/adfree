@@ -69,4 +69,21 @@ class UserRulesTextTest {
         assertEquals(emptyList<String>(), parseUserRulesText(""))
         assertEquals(emptyList<String>(), parseUserRulesText("\n\n! only a comment\n"))
     }
+
+    @Test
+    fun `a typed domain becomes an exception rule`() {
+        assertEquals("@@||example.com^", userWhitelistRule("example.com"))
+        assertEquals("@@||example.com^", userWhitelistRule("  https://Example.com/path?q=1  "))
+        assertEquals("@@||*.example.com^", userWhitelistRule("*.example.com"))
+        assertEquals("@@||safe.com^", userWhitelistRule("@@||safe.com^"))
+    }
+
+    @Test
+    fun `invalid whitelist input is rejected`() {
+        assertEquals(null, userWhitelistRule(""))
+        assertEquals(null, userWhitelistRule("bad host"))
+        assertEquals(null, userWhitelistRule("https://"))
+        assertEquals(null, userWhitelistRule("example.com:8080"))
+        assertEquals(null, userWhitelistRule("@@"))
+    }
 }
