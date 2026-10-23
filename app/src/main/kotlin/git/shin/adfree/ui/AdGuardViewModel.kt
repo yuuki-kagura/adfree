@@ -274,7 +274,8 @@ class AdGuardViewModel(
             is AdGuardIntent.RemoveCustomRule -> repository.removeCustomRule(intent.rule)
             is AdGuardIntent.UpdateAllCustomRules -> {
                 repository.updateAllCustomRules(intent.rules)
-                _showCustomRuleEditor.value = false
+                // Keep the sheet open: add/delete/import are incremental edits,
+                // and the import notice would vanish with the sheet.
                 emit(AdGuardEffect.ShowSnackbar("Đã lưu ${intent.rules.size} quy tắc"))
             }
 

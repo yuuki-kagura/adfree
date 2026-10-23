@@ -22,6 +22,7 @@ import git.shin.adfree.model.scriptNameFromFile
 import git.shin.adfree.model.UserScriptInfo
 import git.shin.adfree.model.UserScriptMetadata
 import git.shin.adfree.model.parseUserScriptMetadata
+import git.shin.adfree.model.parseUserRulesText
 import git.shin.adfree.model.UserScriptStoreItem
 import git.shin.adfree.model.UserScriptStoreSort
 import git.shin.adfree.model.UserScriptStoreState
@@ -962,9 +963,9 @@ class AdGuardRepository(
 
     fun updateAllCustomRules(newRules: List<String>) {
         scope.launch {
-            val cleaned = newRules.map { it.trim() }
-                .filter { it.isNotEmpty() && !it.startsWith("!") && !it.startsWith("#") && !it.startsWith("[") }
-                .distinct()
+            // The UI already parses, but this is the last gate before the core:
+            // keep cosmetic markers (#@#, ##, #%#) while dropping comments.
+            val cleaned = parseUserRulesText(newRules.joinToString("\n"))
             _filterLists.update { lists ->
                 lists.map {
                     if (it.isCustom) it.copy(ruleCount = cleaned.size, customRules = cleaned, isEnabled = cleaned.isNotEmpty()) else it
@@ -976,8 +977,7 @@ class AdGuardRepository(
     }
 
     fun addCustomRule(rawRule: String) {
-        val rule = rawRule.trim()
-        if (rule.isEmpty() || rule.startsWith("!")) return
+        val rule = parseUserRulesText(rawRule).firstOrNull() ?: return
         scope.launch {
             _filterLists.update { lists ->
                 lists.map {
