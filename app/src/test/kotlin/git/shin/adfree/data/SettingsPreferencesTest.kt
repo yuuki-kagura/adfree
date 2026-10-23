@@ -8,6 +8,7 @@ import git.shin.adfree.model.ProtectionSettings
 import git.shin.adfree.model.ProtocolType
 import org.json.JSONObject
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -183,5 +184,59 @@ class SettingsPreferencesTest {
         )
         assertEquals("My resolver", second.customDnsProviders().single().name)
         assertEquals("1.2.3.4", second.customDnsProviders().single().address)
+    }
+
+    @Test
+    fun `backup restores switches, firewall and custom dns together`() {
+        val first = prefs()
+        first.save(
+            ProtectionSettings(
+                isAdBlockingEnabled = false,
+                selectedDnsProviderId = "custom_1",
+            ),
+        )
+        first.saveAppFirewall(
+            listOf(StoredAppFirewall("com.example.browser", false, true, false, true)),
+        )
+        first.saveCustomDnsProviders(
+            listOf(
+                DnsProvider(
+                    id = "custom_1",
+                    name = "Backup resolver",
+                    address = "1.2.3.4",
+                    type = ProtocolType.DNS_UDP,
+                    description = "Tùy chỉnh",
+                    isCustom = true,
+                ),
+            ),
+        )
+        val backup = first.backupJson()!!
+
+        // Replace everything with different values.
+        first.save(
+            ProtectionSettings(
+                isAdBlockingEnabled = true,
+                selectedDnsProviderId = "cloudflare",
+            ),
+        )
+        first.saveAppFirewall(emptyList())
+        first.saveCustomDnsProviders(emptyList())
+
+        assertTrue(first.restoreBackup(backup))
+        assertEquals(false, first.settings()!!.isAdBlockingEnabled)
+        assertEquals("custom_1", first.settings()!!.selectedDnsProviderId)
+        assertEquals(1, first.appFirewall().size)
+        assertEquals("Backup resolver", first.customDnsProviders().single().name)
+    }
+
+    @Test
+    fun `a rejected settings restore does not overwrite the blob`() {
+        prefs().save(ProtectionSettings(isAdBlockingEnabled = false))
+        val backup = prefs().backupJson()!!
+        val before = store.value
+        store.rejectsWrites = true
+
+        assertFalse(prefs().restoreBackup(backup))
+        assertEquals(before, store.value)
     }
 }

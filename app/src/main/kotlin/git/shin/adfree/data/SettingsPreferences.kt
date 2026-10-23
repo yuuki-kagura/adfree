@@ -106,6 +106,18 @@ class SettingsPreferences(
                 .put("pingMs", provider.pingMs)
         }
 
+    /** A copy of the raw settings object for the backup file. */
+    fun backupJson(): JSONObject? = currentJson()?.let { JSONObject(it.toString()) }
+
+    /** Replaces the whole settings blob (switches, app rules, custom DNS). */
+    @Synchronized
+    fun restoreBackup(settings: JSONObject): Boolean {
+        // Validate before touching the store: a malformed settings object must
+        // leave the current blob alone.
+        runCatching { parse(settings.toString()) }.getOrNull() ?: return false
+        return store.set(settings.toString())
+    }
+
     /** Moves a pre-migration blob out of SharedPreferences; null when there is none. */
     private fun migrateLegacy(): String? {
         val raw = legacy.getString(KEY_SETTINGS, null) ?: return null

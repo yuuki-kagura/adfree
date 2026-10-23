@@ -5,6 +5,7 @@ import androidx.test.core.app.ApplicationProvider
 import org.json.JSONArray
 import org.json.JSONObject
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -115,5 +116,47 @@ class FilterPreferencesTest {
 
         assertEquals(listOf("||a.com^"), prefs().userRules())
         assertTrue("still there to retry later", legacyAll().containsKey("user_rules"))
+    }
+
+    @Test
+    fun `backup restores filter choices but leaves local scripts alone`() {
+        prefs().saveEnabledCatalogIds(setOf("adguard_base"))
+        prefs().saveCustomFilters(
+            listOf(StoredFilter("list_1", "Backup list", "https://x/y.txt", "hosts", true)),
+        )
+        prefs().saveUserRules(listOf("||backup.example^"))
+        val backup = prefs().backupJson()
+
+        // Change every backed-up key and add a device-local script.
+        prefs().saveEnabledCatalogIds(setOf("other"))
+        prefs().saveCustomFilters(emptyList())
+        prefs().saveUserRules(listOf("||current.example^"))
+        prefs().saveScripts(listOf(StoredScript("s1", "Local", "", "", true)))
+
+        assertTrue(prefs().restoreBackup(backup))
+        assertEquals(setOf("adguard_base"), prefs().enabledCatalogIds())
+        assertEquals("Backup list", prefs().customFilters().single().name)
+        assertEquals(listOf("||backup.example^"), prefs().userRules())
+        assertEquals("s1", prefs().scripts().single().id)
+    }
+
+    @Test
+    fun `a backup without filter keys returns the catalogue to defaults`() {
+        prefs().saveEnabledCatalogIds(setOf("adguard_base"))
+        prefs().saveUserRules(listOf("||a.com^"))
+
+        assertTrue(prefs().restoreBackup(JSONObject()))
+        assertNull(prefs().enabledCatalogIds())
+        assertNull(prefs().userRules())
+    }
+
+    @Test
+    fun `a rejected restore leaves the current choices alone`() {
+        prefs().saveUserRules(listOf("||keep.example^"))
+        val backup = prefs().backupJson()
+        store.rejectsWrites = true
+
+        assertFalse(prefs().restoreBackup(backup))
+        assertTrue(prefs().userRules() == listOf("||keep.example^"))
     }
 }

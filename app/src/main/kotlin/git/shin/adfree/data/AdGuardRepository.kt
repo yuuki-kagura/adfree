@@ -64,6 +64,9 @@ private const val FILTER_BUILD_WATCH_MS = 30_000L
 /** Do not re-scan stale lists more than once per half hour while foregrounded. */
 private const val AUTO_UPDATE_RESUME_MIN_INTERVAL_MS = 30 * 60 * 1000L
 
+/** A backup is settings plus rules, not a media file; keep the read bounded. */
+private const val MAX_BACKUP_BYTES = 4 * 1024 * 1024
+
 /**
  * Single source of truth.
  *
@@ -188,12 +191,19 @@ class AdGuardRepository(
                 current + customDns.filter { ids.add(it.id) }
             }
         }
-        val stored = settingsPrefs.settings() ?: return
-        // Terminating TLS with a certificate the device no longer trusts would
-        // break every page it touches, so that switch only comes back when the
-        // CA is still installed.
-        val https = stored.isHttpsFilteringEnabled && engine.isCaTrusted()
-        _settings.value = stored.copy(isHttpsFilteringEnabled = https)
+        val stored = settingsPrefs.settings()
+        // Never assign an intermediate default here: the settings collector
+        // writes every emission, and after a backup restore that would race
+        // with (and possibly overwrite) the blob just read from disk.
+        _settings.value = if (stored == null) {
+            ProtectionSettings()
+        } else {
+            // Terminating TLS with a certificate the device no longer trusts
+            // would break every page it touches, so that switch only comes
+            // back when the CA is still installed.
+            val https = stored.isHttpsFilteringEnabled && engine.isCaTrusted()
+            stored.copy(isHttpsFilteringEnabled = https)
+        }
     }
 
     /**
@@ -888,6 +898,83 @@ class AdGuardRepository(
             pushListsToEngine()
             showTransientStatus("Đã thêm ${list.name} (${state.lineCount} quy tắc)")
         }
+    }
+
+    /**
+     * Writes settings + filter choices to a SAF document.
+     *
+     * The file is plain JSON on purpose: it can be inspected, moved to a
+     * desktop port and restored without any Android-specific container.
+     */
+    suspend fun exportBackup(uriText: String): BackupResult {
+        val payload = BackupCodec.encode(
+            settings = settingsPrefs.backupJson(),
+            filters = prefs.backupJson(),
+        )
+        val ok = withContext(Dispatchers.IO) {
+            runCatching {
+                val uri = android.net.Uri.parse(uriText)
+                context.contentResolver.openOutputStream(uri)
+                    ?.bufferedWriter(Charsets.UTF_8)
+                    ?.use { it.write(payload) }
+                    ?: error("no output stream")
+            }.isSuccess
+        }
+        return if (ok) {
+            BackupResult(true, "Đã xuất bản sao lưu")
+        } else {
+            BackupResult(false, "Không ghi được tệp sao lưu")
+        }
+    }
+
+    /**
+     * Restores settings and filter choices from a SAF document.
+     *
+     * Settings are written first and rolled back if the filter blob is
+     * rejected, so a failed restore never leaves a half-applied pair. Filter
+     * bodies and userscripts are device-local: enabled lists without a body
+     * are downloaded again by [loadFilterState], and current scripts stay.
+     */
+    suspend fun importBackup(uriText: String): BackupResult {
+        val bytes = withContext(Dispatchers.IO) {
+            runCatching {
+                val uri = android.net.Uri.parse(uriText)
+                context.contentResolver.openInputStream(uri)?.use { it.readBytes() }
+            }.getOrNull()
+        } ?: return BackupResult(false, "Không đọc được tệp đã chọn")
+        if (bytes.size > MAX_BACKUP_BYTES) {
+            return BackupResult(false, "Tệp quá lớn để là bản sao lưu AdFree")
+        }
+        val raw = String(bytes, Charsets.UTF_8)
+        val payload = BackupCodec.decode(raw)
+            ?: return BackupResult(false, "Tệp không phải bản sao lưu AdFree hợp lệ")
+
+        val previousSettings = settingsPrefs.backupJson()
+        if (!settingsPrefs.restoreBackup(payload.settings)) {
+            return BackupResult(false, "Không lưu được cài đặt; bản sao lưu chưa được áp dụng")
+        }
+        if (!prefs.restoreBackup(payload.filters)) {
+            if (previousSettings != null) {
+                settingsPrefs.restoreBackup(previousSettings)
+            } else {
+                settingsPrefs.restoreBackup(JSONObject())
+            }
+            return BackupResult(false, "Không lưu được bộ lọc; đã giữ cài đặt cũ")
+        }
+        reloadAfterRestore()
+        return BackupResult(
+            true,
+            "Đã khôi phục cài đặt và bộ lọc; bật lại VPN nếu cần áp dụng bộ lọc app",
+        )
+    }
+
+    /** Rebuilds every in-memory flow after a restore wrote new blobs. */
+    private fun reloadAfterRestore() {
+        _dnsProviders.value = defaultDnsProviders()
+        loadSettings()
+        loadFilterState()
+        loadInstalledApps()
+        loadScriptsState()
     }
 
     /** Removes a user-added list (catalogue entries are toggled off, not deleted). */

@@ -112,6 +112,42 @@ class FilterPreferences(
 
     fun saveScriptsMasterEnabled(enabled: Boolean) = update { it.put(KEY_SCRIPTS_MASTER, enabled) }
 
+    // ---------------------------------------------------------------- backup
+
+    /**
+     * The filter choices a backup restores.
+     *
+     * Userscripts are device-local: their metadata rows and their bodies live
+     * in different places, so a backup restores the lists/rules and leaves the
+     * current scripts untouched.
+     */
+    fun backupJson(): JSONObject {
+        val current = blob()
+        return JSONObject().apply {
+            current.optJSONArray(KEY_ENABLED)?.let { put(KEY_ENABLED, it) }
+            current.optJSONArray(KEY_CUSTOM_FILTERS)?.let { put(KEY_CUSTOM_FILTERS, it) }
+            current.optJSONArray(KEY_USER_RULES)?.let { put(KEY_USER_RULES, it) }
+        }
+    }
+
+    /**
+     * Replaces only the keys a backup carries. A key missing from the backup
+     * is removed, so restoring a first-run backup really returns the catalogue
+     * to its default selection instead of keeping old custom lists.
+     */
+    @Synchronized
+    fun restoreBackup(filters: JSONObject): Boolean {
+        val json = blob()
+        replaceArray(json, KEY_ENABLED, filters.optJSONArray(KEY_ENABLED))
+        replaceArray(json, KEY_CUSTOM_FILTERS, filters.optJSONArray(KEY_CUSTOM_FILTERS))
+        replaceArray(json, KEY_USER_RULES, filters.optJSONArray(KEY_USER_RULES))
+        return store.set(json.toString())
+    }
+
+    private fun replaceArray(json: JSONObject, key: String, source: JSONArray?) {
+        if (source == null) json.remove(key) else json.put(key, source)
+    }
+
     // ------------------------------------------------------------- plumbing
 
     /** The blob, migrated from SharedPreferences on the first read. */

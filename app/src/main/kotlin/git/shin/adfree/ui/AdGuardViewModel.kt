@@ -341,6 +341,17 @@ class AdGuardViewModel(
                 _showAddFilterDialog.value = false
             }
 
+            is AdGuardIntent.ExportBackup -> viewModelScope.launch {
+                val result = repository.exportBackup(intent.uri)
+                emit(AdGuardEffect.ShowSnackbar(result.message))
+            }
+
+            is AdGuardIntent.ImportBackup -> viewModelScope.launch {
+                val result = repository.importBackup(intent.uri)
+                if (result.ok) syncConfig()
+                emit(AdGuardEffect.ShowSnackbar(result.message))
+            }
+
             is AdGuardIntent.InspectFilter -> _inspectedFilter.value = intent.id
             is AdGuardIntent.RestoreDefaultFilters -> {
                 repository.restoreDefaultFilters()

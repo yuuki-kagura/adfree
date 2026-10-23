@@ -101,6 +101,10 @@ sealed interface AdGuardIntent {
     data class ShowAddFilterDialog(val show: Boolean) : AdGuardIntent
     data class AddCustomFilter(val name: String, val url: String) : AdGuardIntent
     data class ImportLocalFilter(val uri: String) : AdGuardIntent
+    /** Write settings + filter choices to a JSON backup (SAF URI). */
+    data class ExportBackup(val uri: String) : AdGuardIntent
+    /** Restore settings + filter choices from a JSON backup (SAF URI). */
+    data class ImportBackup(val uri: String) : AdGuardIntent
     data class InspectFilter(val id: String?) : AdGuardIntent
     data object RestoreDefaultFilters : AdGuardIntent
     data class ShowAddScriptDialog(val show: Boolean) : AdGuardIntent

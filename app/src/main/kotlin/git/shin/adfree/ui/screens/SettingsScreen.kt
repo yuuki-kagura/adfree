@@ -1,6 +1,8 @@
 package git.shin.adfree.ui.screens
 
 import android.widget.Toast
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
@@ -102,6 +104,19 @@ fun SettingsScreen(
 ) {
     val state by viewModel.uiState.collectAsState()
     val scrollState = rememberScrollState()
+    var pendingRestoreUri by remember { mutableStateOf<String?>(null) }
+
+    val exportLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.CreateDocument("application/json"),
+    ) { uri ->
+        uri?.let { viewModel.onIntent(AdGuardIntent.ExportBackup(it.toString())) }
+    }
+    val importLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.OpenDocument(),
+    ) { uri ->
+        // Ask before overwriting; the actual read happens after confirmation.
+        uri?.let { pendingRestoreUri = it.toString() }
+    }
 
     // The header lives outside the scrolling column on purpose: it describes
     // where you are, and should not slide away as soon as the list moves.
@@ -266,6 +281,15 @@ fun SettingsScreen(
 
             Spacer(modifier = Modifier.height(24.dp))
 
+            BackupSection(
+                onExport = { exportLauncher.launch("adfree-backup.json") },
+                onImport = {
+                    importLauncher.launch(arrayOf("application/json", "text/plain", "*/*"))
+                },
+            )
+
+            Spacer(modifier = Modifier.height(24.dp))
+
             EngineInfoSection(state.stats.filterBuildMs)
 
             Spacer(modifier = Modifier.height(24.dp))
@@ -280,6 +304,81 @@ fun SettingsScreen(
 
             Spacer(modifier = Modifier.height(72.dp))
     }
+    }
+
+    pendingRestoreUri?.let { uri ->
+        AlertDialog(
+            onDismissRequest = { pendingRestoreUri = null },
+            title = { Text("Khôi phục bản sao lưu?") },
+            text = {
+                Text(
+                    "Cài đặt, bộ lọc đang bật, bộ lọc tự thêm và quy tắc sẽ bị " +
+                        "thay bằng nội dung tệp. Userscript trên máy này được giữ nguyên.",
+                    fontSize = 12.sp,
+                )
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        pendingRestoreUri = null
+                        viewModel.onIntent(AdGuardIntent.ImportBackup(uri))
+                    },
+                ) {
+                    Text("Khôi phục", color = AdGuardOrangeWarning)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { pendingRestoreUri = null }) {
+                    Text("Huỷ")
+                }
+            },
+        )
+    }
+}
+
+/** Export/restore the two core blobs without including device-local scripts. */
+@Composable
+private fun BackupSection(
+    onExport: () -> Unit,
+    onImport: () -> Unit,
+) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(12.dp),
+        colors = CardDefaults.cardColors(containerColor = AdGuardDarkSurface),
+    ) {
+        Column(modifier = Modifier.padding(14.dp)) {
+            Text(
+                text = "Sao lưu & khôi phục",
+                fontSize = 13.sp,
+                fontWeight = FontWeight.Bold,
+                color = AdGuardTextPrimary,
+            )
+            Text(
+                text = "Gồm cài đặt, bộ lọc đang bật, bộ lọc tự thêm và quy tắc. " +
+                    "Userscript ở lại thiết bị.",
+                fontSize = 11.sp,
+                color = AdGuardTextMuted,
+                modifier = Modifier.padding(top = 2.dp),
+            )
+            Spacer(modifier = Modifier.height(10.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedButton(
+                    onClick = onExport,
+                    modifier = Modifier.weight(1f),
+                    shape = RoundedCornerShape(8.dp),
+                ) {
+                    Text("Xuất tệp", fontSize = 11.sp, color = AdGuardGreenLight)
+                }
+                OutlinedButton(
+                    onClick = onImport,
+                    modifier = Modifier.weight(1f),
+                    shape = RoundedCornerShape(8.dp),
+                ) {
+                    Text("Khôi phục", fontSize = 11.sp, color = AdGuardOrangeWarning)
+                }
+            }
+        }
     }
 }
 
