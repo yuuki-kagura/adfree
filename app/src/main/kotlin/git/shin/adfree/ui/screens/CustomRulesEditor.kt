@@ -1,5 +1,7 @@
 package git.shin.adfree.ui.screens
 
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -36,6 +38,7 @@ import androidx.compose.material3.TabRow
 import androidx.compose.material3.TabRowDefaults
 import androidx.compose.material3.TabRowDefaults.tabIndicatorOffset
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
@@ -46,6 +49,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -59,6 +63,7 @@ import git.shin.adfree.ui.theme.AdGuardRedBlocked
 import git.shin.adfree.ui.theme.AdGuardTextMuted
 import git.shin.adfree.ui.theme.AdGuardTextPrimary
 import git.shin.adfree.ui.theme.AdGuardTextSecondary
+import git.shin.adfree.model.parseUserRulesText
 
 /**
  * Full-featured user-rules editor, opened from the "Quy tắc của bạn" row.
@@ -78,6 +83,52 @@ fun FriendlyCustomRuleEditorSheet(
     var rawText by remember { mutableStateOf(initialRules.joinToString("\n")) }
     var newSingleRule by remember { mutableStateOf("") }
     var searchQuery by remember { mutableStateOf("") }
+
+    val context = LocalContext.current
+    var notice by remember { mutableStateOf<String?>(null) }
+    var exportText by remember { mutableStateOf("") }
+
+    // Files come from anywhere: AdGuard's export, a hosts file, or a plain
+    // editor. Parse on import so comments and duplicates never reach the core.
+    val importPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        if (uri == null) return@rememberLauncherForActivityResult
+        val text = runCatching {
+            context.contentResolver.openInputStream(uri)?.bufferedReader()?.use { it.readText() }
+        }.getOrNull()
+        if (text == null) {
+            notice = "Không đọc được tệp"
+            return@rememberLauncherForActivityResult
+        }
+        val imported = parseUserRulesText(text)
+        if (imported.isEmpty()) {
+            notice = "Tệp không có quy tắc hợp lệ"
+            return@rememberLauncherForActivityResult
+        }
+        val before = rulesList.toSet()
+        val merged = (rulesList + imported).distinct()
+        val added = merged.count { it !in before }
+        rulesList = merged
+        rawText = merged.joinToString("\n")
+        onSaveAll(merged)
+        notice = if (added == 0) "Tệp chỉ chứa quy tắc đã có" else "Đã nhập $added quy tắc"
+    }
+
+    // CreateDocument writes the current rules, including unsaved edits in the
+    // raw tab, so an export never silently drops what the user just typed.
+    val exportPicker = rememberLauncherForActivityResult(
+        ActivityResultContracts.CreateDocument("text/plain"),
+    ) { uri ->
+        if (uri == null) return@rememberLauncherForActivityResult
+        val written = runCatching {
+            context.contentResolver.openOutputStream(uri)?.bufferedWriter()?.use { it.write(exportText) }
+                ?: error("no output stream")
+        }.isSuccess
+        notice = if (written) {
+            "Đã xuất ${parseUserRulesText(exportText).size} quy tắc"
+        } else {
+            "Không ghi được tệp"
+        }
+    }
 
     Column(
         modifier = Modifier
@@ -105,6 +156,47 @@ fun FriendlyCustomRuleEditorSheet(
 
             IconButton(onClick = onClose) {
                 Icon(Icons.Default.Close, contentDescription = "Đóng", tint = AdGuardTextSecondary)
+            }
+        }
+
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(2.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            TextButton(
+                onClick = {
+                    notice = null
+                    importPicker.launch(arrayOf("text/plain", "text/*", "*/*"))
+                },
+            ) {
+                Text("Nhập tệp", fontSize = 12.sp, fontWeight = FontWeight.Bold, color = AdGuardGreenLight)
+            }
+            TextButton(
+                onClick = {
+                    notice = null
+                    exportText = if (selectedTab == 0) {
+                        rulesList.joinToString("\n")
+                    } else {
+                        parseUserRulesText(rawText).joinToString("\n")
+                    }
+                    if (exportText.isBlank()) {
+                        notice = "Chưa có quy tắc để xuất"
+                    } else {
+                        exportPicker.launch("adfree-user-rules.txt")
+                    }
+                },
+            ) {
+                Text("Xuất tệp", fontSize = 12.sp, fontWeight = FontWeight.Bold, color = AdGuardGreenLight)
+            }
+            Spacer(modifier = Modifier.weight(1f))
+            notice?.let {
+                Text(
+                    text = it,
+                    fontSize = 11.sp,
+                    color = AdGuardGreenLight,
+                    maxLines = 1,
+                )
             }
         }
 
@@ -172,8 +264,12 @@ fun FriendlyCustomRuleEditorSheet(
                 Button(
                     onClick = {
                         val trimmed = newSingleRule.trim()
-                        if (trimmed.isNotEmpty()) {
-                            rulesList = listOf(trimmed) + rulesList
+                        val parsed = parseUserRulesText(trimmed)
+                        if (parsed.isEmpty()) {
+                            if (trimmed.isNotEmpty()) notice = "Chú thích không phải là quy tắc"
+                        } else {
+                            val rule = parsed.first()
+                            rulesList = (listOf(rule) + rulesList).distinct()
                             rawText = rulesList.joinToString("\n")
                             newSingleRule = ""
                             onSaveAll(rulesList)
@@ -306,7 +402,7 @@ fun FriendlyCustomRuleEditorSheet(
 
             Spacer(modifier = Modifier.height(10.dp))
 
-            val linesCount = rawText.lines().map { it.trim() }.filter { it.isNotEmpty() && !it.startsWith("!") }.size
+            val linesCount = parseUserRulesText(rawText).size
 
             Row(
                 modifier = Modifier.fillMaxWidth(),
@@ -315,10 +411,7 @@ fun FriendlyCustomRuleEditorSheet(
             ) {
                 Button(
                     onClick = {
-                        val cleaned = rawText.lines()
-                            .map { it.trim() }
-                            .filter { it.isNotEmpty() }
-                            .distinct()
+                        val cleaned = parseUserRulesText(rawText)
                         rawText = cleaned.joinToString("\n")
                     },
                     colors = ButtonDefaults.buttonColors(containerColor = AdGuardDarkSurfaceVariant),
@@ -331,9 +424,11 @@ fun FriendlyCustomRuleEditorSheet(
 
                 Button(
                     onClick = {
-                        val newRules = rawText.lines().map { it.trim() }.filter { it.isNotEmpty() && !it.startsWith("!") }
+                        val newRules = parseUserRulesText(rawText)
                         rulesList = newRules
+                        rawText = newRules.joinToString("\n")
                         onSaveAll(newRules)
+                        notice = "Đã lưu ${newRules.size} quy tắc"
                     },
                     colors = ButtonDefaults.buttonColors(containerColor = AdGuardGreenPrimary),
                     shape = RoundedCornerShape(8.dp),
