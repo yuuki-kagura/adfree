@@ -256,6 +256,7 @@ class CoreEngine {
             updatedText = outcome.updatedText,
             detectedFormat = outcome.detectedFormat,
             sizeBytes = outcome.sizeBytes,
+            modifiedMs = outcome.modifiedMs,
         )
     }
 
@@ -580,6 +581,8 @@ data class DownloadResult(
     val detectedFormat: String? = null,
     /** Bytes on disk after the download; 0 for a failure. */
     val sizeBytes: Long = 0,
+    /** Modification time of the written body, for the auto-update interval. */
+    val modifiedMs: Long = 0,
 )
 
 /**

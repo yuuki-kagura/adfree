@@ -252,6 +252,8 @@ class AdGuardViewModel(
                 repository.toggleBlockDoh(intent.enabled)
                 syncConfig()
             }
+            is AdGuardIntent.SetFilterAutoUpdate ->
+                repository.setFilterAutoUpdate(intent.hours)
             is AdGuardIntent.ToggleLogAllowed -> {
                 repository.toggleLogAllowed(intent.enabled)
                 syncConfig()

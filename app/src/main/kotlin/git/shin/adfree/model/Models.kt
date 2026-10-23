@@ -122,6 +122,8 @@ data class FilterList(
     val subscriptionUrl: String? = null,
     val isOnlineSubscription: Boolean = false,
     val lastUpdatedText: String = "Chưa cập nhật",
+    /** File timestamp of the body on disk, 0 while nothing has been downloaded. */
+    val lastUpdatedMs: Long = 0,
     /** Body size reported by the core, 0 while nothing is on disk. */
     val sizeBytes: Long = 0,
     /**
@@ -357,6 +359,12 @@ data class ProtectionSettings(
     val blockQuic: Boolean = true,
     val blockDoh: Boolean = true,
     val blockDot: Boolean = true,
+    /**
+     * Refresh enabled subscriptions older than this many hours when the app
+     * opens. 0 disables it. No background worker: a stale list is refreshed
+     * on the next launch, so the radio is never woken just to check a file.
+     */
+    val filterAutoUpdateHours: Int = 24,
     val logAllowedRequests: Boolean = false,
     val blockMode: DnsBlockMode = DnsBlockMode.NXDOMAIN,
     val stripUtmTracking: Boolean = true,

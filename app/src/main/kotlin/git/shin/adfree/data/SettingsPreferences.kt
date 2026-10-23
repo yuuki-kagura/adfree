@@ -147,6 +147,10 @@ class SettingsPreferences(
                 "blockDot",
                 json.optBoolean("blockDoh", defaults.blockDot),
             ),
+            filterAutoUpdateHours = json.optInt(
+                "filterAutoUpdateHours",
+                defaults.filterAutoUpdateHours,
+            ).coerceIn(0, 168),
             logAllowedRequests =
                 json.optBoolean("logAllowed", defaults.logAllowedRequests),
             blockMode = DnsBlockMode.entries
@@ -192,6 +196,7 @@ class SettingsPreferences(
             .put("blockQuic", settings.blockQuic)
             .put("blockDoh", settings.blockDoh)
             .put("blockDot", settings.blockDot)
+            .put("filterAutoUpdateHours", settings.filterAutoUpdateHours)
             .put("logAllowed", settings.logAllowedRequests)
             .put("blockMode", settings.blockMode.name)
             .put("stripUtm", settings.stripUtmTracking)

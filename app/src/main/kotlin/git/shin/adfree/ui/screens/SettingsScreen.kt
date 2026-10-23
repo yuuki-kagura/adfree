@@ -3,6 +3,7 @@ package git.shin.adfree.ui.screens
 import android.widget.Toast
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -68,6 +69,7 @@ import git.shin.adfree.model.DnsBlockMode
 import git.shin.adfree.model.DnsProvider
 import git.shin.adfree.model.ProtectionSettings
 import git.shin.adfree.model.caNotAfterMs
+import git.shin.adfree.model.filterAutoUpdateLabel
 import git.shin.adfree.model.normalizeHttpsHost
 import git.shin.adfree.ui.AdGuardTab
 import git.shin.adfree.ui.AdGuardIntent
@@ -172,6 +174,41 @@ fun SettingsScreen(
                         selected = state.settings.blockMode == mode,
                         onClick = { viewModel.onIntent(AdGuardIntent.SetBlockMode(mode)) },
                         label = { Text(mode.label, fontSize = 11.sp) },
+                        colors = FilterChipDefaults.filterChipColors(
+                            selectedContainerColor = AdGuardGreenPrimary,
+                            selectedLabelColor = Color.Black,
+                        ),
+                    )
+                }
+            }
+
+            Spacer(modifier = Modifier.height(18.dp))
+
+            Text(
+                text = "Tự động cập nhật bộ lọc",
+                fontSize = 12.sp,
+                fontWeight = FontWeight.Bold,
+                color = AdGuardTextSecondary,
+            )
+            Text(
+                text = "Chỉ kiểm tra khi mở app — không đánh thức radio hay chạy nền. " +
+                    "List bật và đã tải sẽ được làm mới khi quá hạn.",
+                fontSize = 11.sp,
+                color = AdGuardTextMuted,
+                modifier = Modifier.padding(top = 2.dp, bottom = 6.dp),
+            )
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .horizontalScroll(rememberScrollState())
+                    .testTag("filter_auto_update_chips"),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                listOf(0, 6, 12, 24, 48, 72).forEach { hours ->
+                    FilterChip(
+                        selected = state.settings.filterAutoUpdateHours == hours,
+                        onClick = { viewModel.onIntent(AdGuardIntent.SetFilterAutoUpdate(hours)) },
+                        label = { Text(filterAutoUpdateLabel(hours), fontSize = 11.sp) },
                         colors = FilterChipDefaults.filterChipColors(
                             selectedContainerColor = AdGuardGreenPrimary,
                             selectedLabelColor = Color.Black,

@@ -17,13 +17,14 @@ class AdGuardApplication : Application() {
         // a CA the engine cannot terminate TLS - it would relay port 443
         // unfiltered instead of filtering it.
         container.coreEngine.ensureCa()
+        // Restore the switches before the filter state: the launch-time
+        // subscription refresh reads the auto-update interval, and the engine
+        // has to be configured with the user's modules from the first frame.
+        container.repository.loadSettings()
         // Load the filter/script state from disk and sync the configuration to
         // the core.
         container.repository.loadFilterState()
         container.repository.loadScriptsState()
-        // The switches the user left on come back before the engine is told
-        // what to do: HTTPS filtering and bypass blocking depend on them.
-        container.repository.loadSettings()
         container.syncConfigToEngine()
     }
 

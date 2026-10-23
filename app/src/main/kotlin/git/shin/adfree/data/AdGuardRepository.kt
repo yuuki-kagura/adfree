@@ -15,6 +15,7 @@ import git.shin.adfree.model.DnsBlockMode
 import git.shin.adfree.model.DnsProvider
 import git.shin.adfree.model.FilterList
 import git.shin.adfree.model.FilterStatus
+import git.shin.adfree.model.filterUpdateDue
 import git.shin.adfree.model.filterUrlError
 import git.shin.adfree.model.normalizeHttpsHost
 import git.shin.adfree.model.scriptNameFromFile
@@ -143,6 +144,9 @@ class AdGuardRepository(
 
     /** Coalesces the post-build error checks started by [pushListsToEngine]. */
     private var filterBuildJob: Job? = null
+
+    /** Guards the launch-only subscription refresh against a double start. */
+    private var autoUpdateRunning = false
 
     private val scriptStoreClient by lazy {
         OkHttpClient.Builder()
@@ -369,6 +373,17 @@ class AdGuardRepository(
      */
     fun toggleBlockDoh(enabled: Boolean) =
         _settings.update { it.copy(blockDoh = enabled, blockDot = enabled) }
+
+    /** Refresh interval for subscriptions, in hours; 0 turns it off. */
+    fun setFilterAutoUpdate(hours: Int) {
+        val clamped = hours.coerceIn(0, 168)
+        _settings.update { it.copy(filterAutoUpdateHours = clamped) }
+        showTransientStatus(
+            if (clamped == 0) "Đã tắt tự động cập nhật bộ lọc"
+            else "Tự động cập nhật bộ lọc mỗi $clamped giờ",
+        )
+    }
+
     fun toggleLogAllowed(enabled: Boolean) = _settings.update { it.copy(logAllowedRequests = enabled) }
     fun setBlockMode(mode: DnsBlockMode) = _settings.update { it.copy(blockMode = mode) }
 
@@ -481,6 +496,56 @@ class AdGuardRepository(
             pushListsToEngine()
             saveFilterChoices()
             _loadingMessage.value = null
+            // After the first compile so the engine is usable while the
+            // refresh runs; only lists whose body is already on disk and
+            // older than the configured interval are touched.
+            autoUpdateStaleLists()
+        }
+    }
+
+    /**
+     * Refreshes enabled subscriptions older than `filterAutoUpdateHours`.
+     *
+     * This is deliberately launch-only: no periodic worker, no wake lock, no
+     * radio wake-up while the phone is idle. A stale list simply catches up
+     * the next time the user opens the app.
+     */
+    private suspend fun autoUpdateStaleLists() {
+        if (autoUpdateRunning) return
+        val hours = settingsPrefs.settings()?.filterAutoUpdateHours
+            ?: _settings.value.filterAutoUpdateHours
+        if (hours <= 0) return
+        val now = System.currentTimeMillis()
+        val stale = _filterLists.value.filter {
+            it.isEnabled && !it.isCustom && !it.subscriptionUrl.isNullOrBlank() &&
+                filterUpdateDue(it.lastUpdatedMs, now, hours)
+        }
+        if (stale.isEmpty()) return
+
+        autoUpdateRunning = true
+        try {
+            _loadingMessage.value = "Đang tự động cập nhật ${stale.size} bộ lọc…"
+            var updated = 0
+            for (list in stale) {
+                val result = withContext(Dispatchers.IO) { engine.downloadList(list) }
+                if (result.ok) {
+                    applyDownloadResult(list.id, result)
+                    updated++
+                } else {
+                    applyFailure(list.id, result.message)
+                }
+            }
+            if (updated > 0) pushListsToEngine()
+            showTransientStatus(
+                if (updated == stale.size) {
+                    "Đã tự động cập nhật ${stale.size} bộ lọc"
+                } else {
+                    "Tự động cập nhật: $updated/${stale.size} bộ lọc thành công"
+                },
+            )
+        } finally {
+            autoUpdateRunning = false
+            _loadingMessage.value = null
         }
     }
 
@@ -516,6 +581,7 @@ class AdGuardRepository(
                     it.copy(
                         ruleCount = state.lineCount.toInt(),
                         lastUpdatedText = state.updatedText ?: engine.dateText(state.modifiedMs),
+                        lastUpdatedMs = state.modifiedMs,
                         version = state.version ?: it.version,
                         sizeBytes = state.sizeBytes,
                         // A body is on disk again, so the old failure is stale.
@@ -533,6 +599,8 @@ class AdGuardRepository(
                     it.copy(
                         ruleCount = result.lineCount.toInt(),
                         lastUpdatedText = result.updatedText ?: "Vừa tải",
+                        lastUpdatedMs = result.modifiedMs.takeIf { ms -> ms > 0 }
+                            ?: System.currentTimeMillis(),
                         version = result.version ?: it.version,
                         format = result.detectedFormat ?: it.format,
                         sizeBytes = result.sizeBytes,

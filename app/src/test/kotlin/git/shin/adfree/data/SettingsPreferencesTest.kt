@@ -72,6 +72,7 @@ class SettingsPreferencesTest {
             blockQuic = false,
             blockDoh = false,
             blockDot = false,
+            filterAutoUpdateHours = 6,
             logAllowedRequests = true,
             blockMode = DnsBlockMode.REFUSED,
             stripUtmTracking = false,
@@ -103,6 +104,11 @@ class SettingsPreferencesTest {
         assertEquals(defaults.httpsSkipHosts, loaded.httpsSkipHosts)
         assertEquals(defaults.httpsOnlyHosts, loaded.httpsOnlyHosts)
         assertEquals(defaults.httpsOnlyMode, loaded.httpsOnlyMode)
+        assertEquals(
+            "auto-update defaults to one day, not off",
+            24,
+            loaded.filterAutoUpdateHours,
+        )
         assertEquals(
             "full ECH is opt-in, an old blob must not turn it on",
             false,
