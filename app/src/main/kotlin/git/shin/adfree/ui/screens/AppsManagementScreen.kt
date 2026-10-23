@@ -567,10 +567,16 @@ fun AppDetailsFirewallSheet(
 
         // Section: Firewall Rules
         Text(
-            text = "QUY TẮC TƯỜNG LỬA MẠNG (FIREWALL)",
+            text = "LỌC THEO ỨNG DỤNG",
             fontSize = 11.sp,
             fontWeight = FontWeight.Bold,
             color = AdGuardTextMuted,
+        )
+        Text(
+            text = "Bản dựng này chưa chặn lưu lượng theo loại mạng; " +
+                "các công tắc Wi-Fi/di động lưu lựa chọn cho giai đoạn tiếp theo.",
+            fontSize = 10.sp,
+            color = AdGuardOrangeWarning,
         )
 
         Spacer(modifier = Modifier.height(8.dp))
@@ -789,11 +795,11 @@ fun AppDetailsFirewallSheet(
             horizontalArrangement = Arrangement.spacedBy(10.dp)
         ) {
             OutlinedButton(
-                onClick = { onUpdate(app.packageName, false, false, false, false) },
+                onClick = { onUpdate(app.packageName, true, true, false, false) },
                 modifier = Modifier.weight(1f),
                 shape = RoundedCornerShape(8.dp)
             ) {
-                Text("Chặn toàn bộ mạng", fontSize = 11.sp, color = AdGuardRedBlocked)
+                Text("Bỏ lọc & mở mạng", fontSize = 11.sp, color = AdGuardOrangeWarning)
             }
 
             Button(
@@ -802,7 +808,7 @@ fun AppDetailsFirewallSheet(
                 colors = ButtonDefaults.buttonColors(containerColor = AdGuardDarkSurfaceVariant),
                 shape = RoundedCornerShape(8.dp)
             ) {
-                Text("Mặc định an toàn", fontSize = 11.sp, color = AdGuardGreenLight, fontWeight = FontWeight.Bold)
+                Text("Bật lọc mặc định", fontSize = 11.sp, color = AdGuardGreenLight, fontWeight = FontWeight.Bold)
             }
         }
 

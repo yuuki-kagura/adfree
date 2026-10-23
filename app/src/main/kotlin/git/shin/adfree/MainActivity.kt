@@ -45,6 +45,8 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LifecycleEventEffect
 import git.shin.adfree.ui.AdGuardEffect
 import git.shin.adfree.ui.AdGuardIntent
 import git.shin.adfree.ui.AdGuardTab
@@ -95,6 +97,12 @@ class MainActivity : ComponentActivity() {
                             }
                         }
                     }
+                }
+
+                // Foreground-only stale-list check. No worker/alarm: opening
+                // the app after a day in Recents is the catch-up point.
+                LifecycleEventEffect(Lifecycle.Event.ON_RESUME) {
+                    container.repository.autoUpdateIfStale()
                 }
 
                 // VPN consent: the system shows a confirmation dialog once (and after a revoke).

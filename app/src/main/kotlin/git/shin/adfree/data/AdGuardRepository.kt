@@ -61,6 +61,9 @@ private const val GREASY_FORK_LIMIT = 50
 /** Upper bound on waiting for a filter compile before reading its errors. */
 private const val FILTER_BUILD_WATCH_MS = 30_000L
 
+/** Do not re-scan stale lists more than once per half hour while foregrounded. */
+private const val AUTO_UPDATE_RESUME_MIN_INTERVAL_MS = 30 * 60 * 1000L
+
 /**
  * Single source of truth.
  *
@@ -147,8 +150,11 @@ class AdGuardRepository(
     /** Coalesces the post-build error checks started by [pushListsToEngine]. */
     private var filterBuildJob: Job? = null
 
-    /** Guards the launch-only subscription refresh against a double start. */
+    /** Guards the launch/resume subscription refresh against a double start. */
     private var autoUpdateRunning = false
+
+    /** Last time a stale-list scan ran; throttles ON_RESUME checks. */
+    private var lastAutoUpdateCheckMs = 0L
 
     private val scriptStoreClient by lazy {
         OkHttpClient.Builder()
@@ -512,13 +518,28 @@ class AdGuardRepository(
     }
 
     /**
+     * Re-checks stale subscriptions when the activity comes back to the
+     * foreground (for example after a long session or a day in Recents).
+     *
+     * There is still no worker, alarm or wake lock: the check only runs while
+     * the user is already looking at the app. The 30-minute throttle keeps a
+     * failed download from retrying on every tab switch or dialog dismissal.
+     */
+    fun autoUpdateIfStale() {
+        val now = System.currentTimeMillis()
+        if (now - lastAutoUpdateCheckMs < AUTO_UPDATE_RESUME_MIN_INTERVAL_MS) return
+        lastAutoUpdateCheckMs = now
+        scope.launch { autoUpdateStaleLists() }
+    }
+
+    /**
      * Refreshes enabled subscriptions older than `filterAutoUpdateHours`.
      *
-     * This is deliberately launch-only: no periodic worker, no wake lock, no
-     * radio wake-up while the phone is idle. A stale list simply catches up
-     * the next time the user opens the app.
+     * There is no periodic worker, no wake lock and no radio wake-up while the
+     * phone is idle. A stale list catches up on launch/resume instead.
      */
     private suspend fun autoUpdateStaleLists() {
+        lastAutoUpdateCheckMs = System.currentTimeMillis()
         if (autoUpdateRunning) return
         val hours = settingsPrefs.settings()?.filterAutoUpdateHours
             ?: _settings.value.filterAutoUpdateHours
