@@ -310,6 +310,29 @@ class AdGuardViewModel(
                     intent.blockWhenScreenOff,
                 )
                 repository.pushAppRouting()
+                // The sheet reads this snapshot, not the repository flow, so
+                // without the copy every switch would snap back to its old
+                // value on the next recomposition.
+                _inspectedApp.value = _inspectedApp.value?.let { current ->
+                    if (current.packageName != intent.packageName) {
+                        current
+                    } else {
+                        current.copy(
+                            isCellularAllowed = intent.cellular ?: current.isCellularAllowed,
+                            isWifiAllowed = intent.wifi ?: current.isWifiAllowed,
+                            isFilterRouted = intent.filtered ?: current.isFilterRouted,
+                            blockWhenScreenOff = intent.blockWhenScreenOff ?: current.blockWhenScreenOff,
+                        )
+                    }
+                }
+            }
+            is AdGuardIntent.RestartVpn -> {
+                if (vpnController.isVpnActive.value) {
+                    vpnController.restartVpnService()
+                    emit(AdGuardEffect.ShowSnackbar("Đang khởi động lại VPN để áp dụng…"))
+                } else {
+                    emit(AdGuardEffect.ShowSnackbar("VPN chưa bật — thay đổi áp dụng ở lần bật sau"))
+                }
             }
 
             is AdGuardIntent.InspectAppDetails -> _inspectedApp.value = intent.app

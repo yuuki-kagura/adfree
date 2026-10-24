@@ -3,6 +3,8 @@ package git.shin.adfree.vpn
 import android.content.Context
 import android.content.Intent
 import android.net.VpnService
+import android.os.Handler
+import android.os.Looper
 import git.shin.adfree.core.CoreEngine
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -21,6 +23,12 @@ class VpnController(
 ) {
     private val _isVpnActive = MutableStateFlow(false)
     val isVpnActive: StateFlow<Boolean> = _isVpnActive.asStateFlow()
+
+    private val mainHandler = Handler(Looper.getMainLooper())
+    private val restartRunnable = Runnable {
+        // A stop-then-start can be cancelled by turning protection off.
+        if (coreEngine.wantsStart) startVpnService()
+    }
 
     /** The user flipped the switch in the UI. */
     val wantsStart: StateFlow<Boolean> = coreEngine.wantsVpnStateFlow
@@ -64,6 +72,25 @@ class VpnController(
         }
     }
 
+    /**
+     * Rebuild the tunnel so app exclusions take effect. `wantsStart` stays
+     * true, hence the separate stop path: the service must tear down before a
+     * fresh `establish()` can pick up the new disallowed-app list.
+     */
+    fun restartVpnService() {
+        if (!_isVpnActive.value) return
+        mainHandler.removeCallbacks(restartRunnable)
+        _isVpnActive.value = false
+        runCatching {
+            context.startService(
+                Intent(context, AdGuardVpnService::class.java).apply {
+                    action = AdGuardVpnService.ACTION_STOP_VPN
+                },
+            )
+        }
+        mainHandler.postDelayed(restartRunnable, RESTART_DELAY_MS)
+    }
+
     fun onVpnStarted() {
         _isVpnActive.value = true
         _permissionGranted.value = true
@@ -71,5 +98,10 @@ class VpnController(
 
     fun onVpnStopped() {
         _isVpnActive.value = false
+    }
+
+    private companion object {
+        /** Long enough for `onDestroy` to finish before the next start. */
+        const val RESTART_DELAY_MS = 1_500L
     }
 }

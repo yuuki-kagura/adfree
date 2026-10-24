@@ -83,6 +83,8 @@ sealed interface AdGuardIntent {
         val filtered: Boolean? = null,
         val blockWhenScreenOff: Boolean? = null,
     ) : AdGuardIntent
+    /** Rebuild the running tunnel so the latest app exclusions apply. */
+    data object RestartVpn : AdGuardIntent
 
     data class InspectAppDetails(val app: AppFirewallRule?) : AdGuardIntent
     data class ViewAppLogs(val app: AppFirewallRule) : AdGuardIntent

@@ -265,7 +265,9 @@ fun AppsManagementScreen(
             AppDetailsFirewallSheet(
                 app = state.inspectedApp!!,
                 logs = state.logs,
+                vpnActive = state.isVpnActive,
                 onViewLogs = { viewModel.onIntent(AdGuardIntent.ViewAppLogs(it)) },
+                onRestartVpn = { viewModel.onIntent(AdGuardIntent.RestartVpn) },
                 onUpdate = { pkg, cell, wifi, filtered, screenOff ->
                     viewModel.onIntent(
                         AdGuardIntent.UpdateAppFirewall(pkg, cell, wifi, filtered, screenOff)
@@ -469,7 +471,9 @@ private fun rememberAppIcon(packageName: String): ImageBitmap? {
 fun AppDetailsFirewallSheet(
     app: AppFirewallRule,
     logs: List<NetworkRequestLog> = emptyList(),
+    vpnActive: Boolean = false,
     onViewLogs: (AppFirewallRule) -> Unit = {},
+    onRestartVpn: () -> Unit = {},
     onUpdate: (packageName: String, cellular: Boolean?, wifi: Boolean?, filtered: Boolean?, screenOff: Boolean?) -> Unit,
     onClose: () -> Unit
 ) {
@@ -561,6 +565,40 @@ fun AppDetailsFirewallSheet(
                     )
                 )
             }
+        }
+
+        Spacer(modifier = Modifier.height(10.dp))
+
+        if (vpnActive) {
+            OutlinedButton(
+                onClick = onRestartVpn,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(40.dp)
+                    .testTag("btn_apply_app_routing"),
+                shape = RoundedCornerShape(10.dp),
+                colors = ButtonDefaults.outlinedButtonColors(contentColor = AdGuardOrangeWarning)
+            ) {
+                Icon(Icons.Default.PowerSettingsNew, contentDescription = null, modifier = Modifier.size(16.dp))
+                Spacer(modifier = Modifier.width(8.dp))
+                Text(
+                    text = "Khởi động lại VPN để áp dụng",
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.SemiBold
+                )
+            }
+            Spacer(modifier = Modifier.height(4.dp))
+            Text(
+                text = "VPN đang chạy giữ danh sách app được lọc từ lúc bật; khởi động lại để thay đổi có hiệu lực.",
+                fontSize = 10.sp,
+                color = AdGuardTextMuted
+            )
+        } else {
+            Text(
+                text = "Thay đổi sẽ được áp dụng ở lần bật VPN kế tiếp.",
+                fontSize = 10.sp,
+                color = AdGuardTextMuted
+            )
         }
 
         Spacer(modifier = Modifier.height(16.dp))
