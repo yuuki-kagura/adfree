@@ -791,6 +791,8 @@ internal object IntegrityCheckingUniffiLib {
     ): Int
     external fun uniffi_adfree_core_checksum_func_core_set_doh_ranges(
     ): Int
+    external fun uniffi_adfree_core_checksum_func_core_set_https_skip_apps(
+    ): Int
     external fun uniffi_adfree_core_checksum_func_core_set_lists(
     ): Int
     external fun uniffi_adfree_core_checksum_func_core_set_lists_async(
@@ -937,6 +939,8 @@ internal object UniffiLib {
     ): Byte
     external fun uniffi_adfree_core_fn_func_core_set_doh_ranges(`ranges`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): Byte
+    external fun uniffi_adfree_core_fn_func_core_set_https_skip_apps(`packages`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    ): Unit
     external fun uniffi_adfree_core_fn_func_core_set_lists(`lists`: RustBuffer.ByValue,`userRules`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): Byte
     external fun uniffi_adfree_core_fn_func_core_set_lists_async(`lists`: RustBuffer.ByValue,`userRules`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
@@ -1194,6 +1198,9 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if ((lib.uniffi_adfree_core_checksum_func_core_set_doh_ranges() and 0xFFFF) != 51723) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if ((lib.uniffi_adfree_core_checksum_func_core_set_https_skip_apps() and 0xFFFF) != 24421) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if ((lib.uniffi_adfree_core_checksum_func_core_set_lists() and 0xFFFF) != 34567) {
@@ -4019,6 +4026,22 @@ public object FfiConverterSequenceTypeUidApps: FfiConverterRustBuffer<List<UidAp
 }
     )
     }
+    
+
+        /**
+         * Replaces the packages whose HTTPS traffic must not be decrypted (the
+         * per-app "HTTPS filtering" switch turned off). Their flows are still carried
+         * by the tunnel, so DNS filtering keeps working; the TLS stream is spliced.
+         * Applies to connections opened afterwards.
+         */ fun `coreSetHttpsSkipApps`(`packages`: List<kotlin.String>)
+        = 
+    uniffiRustCall() { _status ->
+    UniffiLib.uniffi_adfree_core_fn_func_core_set_https_skip_apps(
+    
+        
+        FfiConverterSequenceString.lower(`packages`),_status)
+}
+    
     
 
         /**

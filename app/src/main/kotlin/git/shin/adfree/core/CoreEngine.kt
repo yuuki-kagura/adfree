@@ -159,6 +159,16 @@ class CoreEngine {
 
     fun setScreenOff(off: Boolean) = runCatching { git.shin.adfree.core.coreSetScreenOff(off) }
 
+    /**
+     * Packages whose HTTPS payload must not be decrypted (per-app switch off).
+     * Their flows stay in the tunnel, so DNS filtering still applies. The core
+     * reads the list when a connection opens; no tunnel restart is needed.
+     */
+    fun setHttpsSkipApps(packages: List<String>) {
+        runCatching { git.shin.adfree.core.coreSetHttpsSkipApps(packages) }
+            .onFailure { Log.w(tag, "setHttpsSkipApps failed", it) }
+    }
+
     // --------------------------------------------------------------- filters
 
     /**

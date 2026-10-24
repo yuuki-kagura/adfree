@@ -35,6 +35,7 @@ use crate::udpnat::{UdpFlow, UdpKey, UdpNat, UDP_MAX_FLOWS};
 use crate::uidmap::UidMap;
 use crate::upstream::Upstream;
 use crate::util::{now_ms, now_ns};
+use std::collections::HashSet;
 use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
 use std::os::unix::io::RawFd;
 use std::sync::atomic::{AtomicBool, AtomicI32, AtomicU16, AtomicU64, Ordering};
@@ -275,6 +276,9 @@ pub struct Core {
     /// The HTTPS website lists, parsed once per config change and shared with
     /// every connection (see [`crate::mitm::hosts`]).
     https_hosts: RwLock<HttpsHosts>,
+    /// Packages whose TLS is spliced untouched (per-app HTTPS filtering off).
+    /// Replaced as a whole, so a running session keeps the set it opened with.
+    https_skip_apps: RwLock<Arc<HashSet<String>>>,
     /// Packets produced for the tun, collected only in tests: the end-to-end
     /// tests drive the packet loop without a device, and this is where
     /// client-bound segments would land.
@@ -358,6 +362,7 @@ impl Core {
             mitm_port: AtomicU16::new(crate::mitm::relay::MITM_PORT),
             ech_hosts: Arc::new(crate::mitm::ech::EchHosts::new()),
             https_hosts: RwLock::new(HttpsHosts::default()),
+            https_skip_apps: RwLock::new(Arc::new(HashSet::new())),
             #[cfg(test)]
             outbox: Mutex::new(Vec::new()),
         }
@@ -1117,6 +1122,10 @@ impl Core {
                     // platform names the app the `$app=` rules are about, and
                     // the flow keeps that name for as long as it lives.
                     proxy.set_apps(self.apps_for_packet(pkt));
+                    // Per-app HTTPS exclusions: decided once per flow, like
+                    // the app name, and read before any byte reaches rustls.
+                    let skip_apps = Arc::clone(&*self.https_skip_apps.read().unwrap());
+                    proxy.set_https_skip_apps(skip_apps);
                     // ECH: which hosts had their ECHConfig rewritten away, so
                     // a refusal from one of them can be learned as "requires
                     // ECH" (see `mitm::ech`).
@@ -1882,6 +1891,13 @@ impl Core {
         }
     }
 
+    /// Replaces the per-app HTTPS exclusions: flows owned by these packages are
+    /// spliced untouched instead of decrypted. Applies to connections opened
+    /// after the call; a live session keeps the decision it started with.
+    pub fn set_https_skip_apps(&self, apps: Vec<String>) {
+        *self.https_skip_apps.write().unwrap() = Arc::new(apps.into_iter().collect());
+    }
+
     /// Installs the platform connection-to-app lookup (Android's
     /// `ConnectivityManager`). Without it the kernel's `/proc` table is read.
     pub fn set_uid_lookup(&self, lookup: Arc<dyn crate::api::ConnectionUidLookup>) {
@@ -1890,14 +1906,17 @@ impl Core {
 
     /// The package names behind the app that owns the TCP flow `pkt` opens,
     /// for the `$app=` rules. Empty when the flow is unattributed, when the
-    /// platform has not pushed the table yet, or when no loaded list carries an
-    /// `$app=` rule (nothing is then asked of the platform or of the kernel).
+    /// platform has not pushed the table yet, or when neither the loaded lists
+    /// nor the per-app HTTPS exclusions need it (nothing is then asked of the
+    /// platform or of the kernel).
     ///
     /// One lookup per connection, at SYN time: the app is a property of the
     /// flow, not of the request, and asking later would race with the first
     /// request of the same connection.
     fn apps_for_packet(&self, pkt: &Packet<'_>) -> Vec<String> {
-        if !self.filter.has_app_rules() {
+        let need_apps = self.filter.has_app_rules()
+            || !self.https_skip_apps.read().unwrap().is_empty();
+        if !need_apps {
             return Vec::new();
         }
         let lookup = self.uid_lookup.read().unwrap().clone();
@@ -2900,6 +2919,29 @@ mod tests {
         p.extend_from_slice(&[0x50, 0x02, 0xff, 0xff, 0x00, 0x00, 0x00, 0x00]);
         crate::packet::fix_ipv4_checksum(&mut p);
         p
+    }
+
+    /// The per-app HTTPS exclusion needs the flow's package even when no loaded
+    /// list carries an `$app=` rule; without that gate the proxy would see an
+    /// unattributed flow and decrypt it again.
+    #[test]
+    fn https_skip_apps_force_flow_attribution_without_app_rules() {
+        let core = Core::new();
+        core.set_uid_apps(vec![(10_123, vec!["com.example.news".to_string()])]);
+        core.pin_uid_for_port(40000, 10_123);
+        let raw = tcp_syn(40000, [93, 184, 216, 34], 443);
+        let pkt = Packet::parse(&raw).expect("packet");
+
+        assert!(
+            core.apps_for_packet(&pkt).is_empty(),
+            "nothing asks for attribution yet"
+        );
+        core.set_https_skip_apps(vec!["com.example.news".to_string()]);
+        assert_eq!(
+            core.apps_for_packet(&pkt),
+            vec!["com.example.news".to_string()],
+            "the exclusion list alone must resolve the app"
+        );
     }
 
     #[test]

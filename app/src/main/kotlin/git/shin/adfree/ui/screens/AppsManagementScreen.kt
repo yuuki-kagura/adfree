@@ -22,6 +22,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Apps
@@ -65,6 +66,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
@@ -266,11 +268,12 @@ fun AppsManagementScreen(
                 app = state.inspectedApp!!,
                 logs = state.logs,
                 vpnActive = state.isVpnActive,
+                httpsFilteringEnabled = state.settings.isHttpsFilteringEnabled,
                 onViewLogs = { viewModel.onIntent(AdGuardIntent.ViewAppLogs(it)) },
                 onRestartVpn = { viewModel.onIntent(AdGuardIntent.RestartVpn) },
-                onUpdate = { pkg, cell, wifi, filtered, screenOff ->
+                onUpdate = { pkg, cell, wifi, filtered, screenOff, https ->
                     viewModel.onIntent(
-                        AdGuardIntent.UpdateAppFirewall(pkg, cell, wifi, filtered, screenOff)
+                        AdGuardIntent.UpdateAppFirewall(pkg, cell, wifi, filtered, screenOff, https)
                     )
                 },
                 onClose = { viewModel.onIntent(AdGuardIntent.InspectAppDetails(null)) }
@@ -297,15 +300,13 @@ fun AppFirewallCard(
         colors = CardDefaults.cardColors(containerColor = AdGuardDarkSurface),
         border = CardDefaults.outlinedCardBorder().copy(brush = androidx.compose.ui.graphics.SolidColor(AdGuardDarkOutline))
     ) {
-        Row(
+        Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 14.dp, vertical = 12.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.SpaceBetween
+                .padding(horizontal = 14.dp, vertical = 12.dp)
         ) {
             Row(
-                modifier = Modifier.weight(1f),
+                modifier = Modifier.fillMaxWidth(),
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 // The real launcher icon: a generic glyph tells the user nothing
@@ -339,19 +340,16 @@ fun AppFirewallCard(
                 Column(modifier = Modifier.weight(1f)) {
                     Text(
                         text = app.appName,
-                        fontSize = 14.sp,
+                        fontSize = 15.sp,
                         fontWeight = FontWeight.Bold,
                         color = AdGuardTextPrimary,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis
                     )
                     Spacer(modifier = Modifier.height(2.dp))
-                    // The four quick-action buttons leave too little width for
-                    // a side-by-side chip on a 360 dp screen; it used to wrap
-                    // one character per line.
                     Text(
                         text = app.category,
-                        fontSize = 9.sp,
+                        fontSize = 11.sp,
                         color = AdGuardTextSecondary,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis
@@ -359,81 +357,102 @@ fun AppFirewallCard(
                     Spacer(modifier = Modifier.height(2.dp))
                     Text(
                         text = "${app.blockedRequestsToday} chặn • ${app.dataTransferredBytes / (1024 * 1024)} MB",
-                        fontSize = 10.sp,
+                        fontSize = 11.sp,
                         fontFamily = FontFamily.Monospace,
                         color = AdGuardTextMuted,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis
                     )
                 }
+
+                Spacer(modifier = Modifier.width(8.dp))
+
+                AppQuickAction(
+                    icon = Icons.Default.Shield,
+                    description = if (app.isFilterRouted) {
+                        "Tắt lọc AdGuard cho ${app.appName}"
+                    } else {
+                        "Bật lọc AdGuard cho ${app.appName}"
+                    },
+                    tint = if (app.isFilterRouted) AdGuardGreenPrimary else AdGuardOrangeWarning,
+                    background = if (app.isFilterRouted) Color(0x2200D06C) else Color(0x22FF9800),
+                    onClick = onToggleFiltered,
+                    modifier = Modifier
+                        .size(34.dp)
+                        .testTag("app_filter_btn_${app.packageName}")
+                )
             }
 
-            Spacer(modifier = Modifier.width(8.dp))
+            Spacer(modifier = Modifier.height(10.dp))
 
-            // Fast Actions (Logs, Cellular, Wifi, Filtered)
-            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                Box(
+            // Auxiliary actions on their own row: beside the text, four buttons
+            // left barely 80 dp for the name on a 360 dp screen, and they were
+            // top-aligned inside their boxes.
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                AppQuickAction(
+                    icon = Icons.Default.FilterList,
+                    description = "Xem nhật ký của ${app.appName}",
+                    tint = AdGuardGreenLight,
+                    background = AdGuardDarkSurfaceVariant,
+                    onClick = onViewLogs,
                     modifier = Modifier
-                        .clickable { onViewLogs }
-                        .size(34.dp)
-                        .clip(RoundedCornerShape(8.dp))
-                        .background(AdGuardDarkSurfaceVariant)
+                        .weight(1f)
+                        .height(32.dp)
                         .testTag("app_logs_btn_${app.packageName}")
-                ) {
-                    Icon(
-                        imageVector = Icons.Default.FilterList,
-                        contentDescription = "Xem nhật ký của ${app.appName}",
-                        tint = AdGuardGreenLight,
-                        modifier = Modifier.size(16.dp)
-                    )
-                }
-
-                Box(
+                )
+                AppQuickAction(
+                    icon = Icons.Default.CellTower,
+                    description = "Chuyển Di động",
+                    tint = if (app.isCellularAllowed) AdGuardGreenLight else AdGuardRedBlocked,
+                    background = if (app.isCellularAllowed) Color(0x2200D06C) else Color(0x22FF435A),
+                    onClick = onToggleCellular,
                     modifier = Modifier
-                    .clickable { onToggleCellular }
-                        .size(34.dp)
-                        .clip(RoundedCornerShape(8.dp))
-                        .background(if (app.isCellularAllowed) Color(0x2200D06C) else Color(0x22FF435A))
-                ) {
-                    Icon(
-                        imageVector = Icons.Default.CellTower,
-                        contentDescription = "Chuyển Di động",
-                        tint = if (app.isCellularAllowed) AdGuardGreenLight else AdGuardRedBlocked,
-                        modifier = Modifier.size(16.dp)
-                    )
-                }
-
-                Box(
+                        .weight(1f)
+                        .height(32.dp)
+                        .testTag("app_cell_btn_${app.packageName}")
+                )
+                AppQuickAction(
+                    icon = Icons.Default.Wifi,
+                    description = "Chuyển Wi-Fi",
+                    tint = if (app.isWifiAllowed) AdGuardGreenLight else AdGuardRedBlocked,
+                    background = if (app.isWifiAllowed) Color(0x2200D06C) else Color(0x22FF435A),
+                    onClick = onToggleWifi,
                     modifier = Modifier
-                    .clickable { onToggleWifi }
-                        .size(34.dp)
-                        .clip(RoundedCornerShape(8.dp))
-                        .background(if (app.isWifiAllowed) Color(0x2200D06C) else Color(0x22FF435A))
-                ) {
-                    Icon(
-                        imageVector = Icons.Default.Wifi,
-                        contentDescription = "Chuyển Wi-Fi",
-                        tint = if (app.isWifiAllowed) AdGuardGreenLight else AdGuardRedBlocked,
-                        modifier = Modifier.size(16.dp)
-                    )
-                }
-
-                Box(
-                    modifier = Modifier
-                    .clickable { onToggleFiltered }
-                        .size(34.dp)
-                        .clip(RoundedCornerShape(8.dp))
-                        .background(if (app.isFilterRouted) Color(0x2200D06C) else Color(0x22FF9800))
-                ) {
-                    Icon(
-                        imageVector = Icons.Default.Shield,
-                        contentDescription = "Chuyển lọc AdGuard",
-                        tint = if (app.isFilterRouted) AdGuardGreenPrimary else AdGuardOrangeWarning,
-                        modifier = Modifier.size(16.dp)
-                    )
-                }
+                        .weight(1f)
+                        .height(32.dp)
+                        .testTag("app_wifi_btn_${app.packageName}")
+                )
             }
         }
+    }
+}
+
+/** One compact, centre-aligned icon button of an app row. */
+@Composable
+private fun AppQuickAction(
+    icon: ImageVector,
+    description: String,
+    tint: Color,
+    background: Color,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Box(
+        modifier = modifier
+            .clip(RoundedCornerShape(8.dp))
+            .background(background)
+            .clickable { onClick() },
+        contentAlignment = Alignment.Center
+    ) {
+        Icon(
+            imageVector = icon,
+            contentDescription = description,
+            tint = tint,
+            modifier = Modifier.size(16.dp)
+        )
     }
 }
 
@@ -474,14 +493,23 @@ fun AppDetailsFirewallSheet(
     app: AppFirewallRule,
     logs: List<NetworkRequestLog> = emptyList(),
     vpnActive: Boolean = false,
+    httpsFilteringEnabled: Boolean = false,
     onViewLogs: (AppFirewallRule) -> Unit = {},
     onRestartVpn: () -> Unit = {},
-    onUpdate: (packageName: String, cellular: Boolean?, wifi: Boolean?, filtered: Boolean?, screenOff: Boolean?) -> Unit,
+    onUpdate: (
+        packageName: String,
+        cellular: Boolean?,
+        wifi: Boolean?,
+        filtered: Boolean?,
+        screenOff: Boolean?,
+        httpsFiltered: Boolean?,
+    ) -> Unit,
     onClose: () -> Unit
 ) {
     Column(
         modifier = Modifier
             .fillMaxWidth()
+            .verticalScroll(rememberScrollState())
             .padding(horizontal = 24.dp, vertical = 16.dp)
     ) {
         // App Title & Close
@@ -558,7 +586,7 @@ fun AppDetailsFirewallSheet(
 
                 Switch(
                     checked = app.isFilterRouted,
-                    onCheckedChange = { onUpdate(app.packageName, null, null, it, null) },
+                    onCheckedChange = { onUpdate(app.packageName, null, null, it, null, null) },
                     colors = SwitchDefaults.colors(
                         checkedThumbColor = Color.White,
                         checkedTrackColor = AdGuardGreenPrimary,
@@ -605,6 +633,71 @@ fun AppDetailsFirewallSheet(
 
         Spacer(modifier = Modifier.height(16.dp))
 
+        // The only per-app switch with a live effect on the tunnel today.
+        Text(
+            text = "LỌC HTTPS",
+            fontSize = 11.sp,
+            fontWeight = FontWeight.Bold,
+            color = AdGuardTextMuted,
+        )
+        Text(
+            text = if (httpsFilteringEnabled) {
+                "Áp dụng cho kết nối mới của ứng dụng này."
+            } else {
+                "Lọc HTTPS đang tắt trong Cài đặt — công tắc này có hiệu lực khi bật lại."
+            },
+            fontSize = 10.sp,
+            color = if (httpsFilteringEnabled) AdGuardTextMuted else AdGuardOrangeWarning,
+        )
+        Spacer(modifier = Modifier.height(8.dp))
+
+        Card(
+            modifier = Modifier.fillMaxWidth(),
+            shape = RoundedCornerShape(12.dp),
+            colors = CardDefaults.cardColors(containerColor = AdGuardDarkSurfaceVariant)
+        ) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp, vertical = 14.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = "Giải mã HTTPS để lọc nội dung",
+                        fontSize = 13.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        color = AdGuardTextPrimary
+                    )
+                    Text(
+                        text = if (app.isHttpsFiltered) {
+                            "Chặn quảng cáo và tracker trong lưu lượng HTTPS của ứng dụng."
+                        } else {
+                            "Splice TLS: DNS vẫn được lọc, còn nội dung HTTPS thì không bị chặn."
+                        },
+                        fontSize = 11.sp,
+                        color = if (app.isHttpsFiltered) AdGuardTextSecondary else AdGuardOrangeWarning
+                    )
+                }
+                Switch(
+                    checked = app.isHttpsFiltered,
+                    onCheckedChange = {
+                        onUpdate(app.packageName, null, null, null, null, it)
+                    },
+                    modifier = Modifier.testTag("switch_app_https_${app.packageName}"),
+                    colors = SwitchDefaults.colors(
+                        checkedThumbColor = Color.White,
+                        checkedTrackColor = AdGuardGreenPrimary,
+                        uncheckedThumbColor = AdGuardTextMuted,
+                        uncheckedTrackColor = AdGuardDarkSurface
+                    )
+                )
+            }
+        }
+
+        Spacer(modifier = Modifier.height(16.dp))
+
         // Section: Firewall Rules
         Text(
             text = "LỌC THEO ỨNG DỤNG",
@@ -639,7 +732,7 @@ fun AppDetailsFirewallSheet(
                     }
                     Switch(
                         checked = app.isCellularAllowed,
-                        onCheckedChange = { onUpdate(app.packageName, it, null, null, null) },
+                        onCheckedChange = { onUpdate(app.packageName, it, null, null, null, null) },
                         colors = SwitchDefaults.colors(
                             checkedThumbColor = Color.White,
                             checkedTrackColor = AdGuardGreenPrimary,
@@ -663,7 +756,7 @@ fun AppDetailsFirewallSheet(
                     }
                     Switch(
                         checked = app.isWifiAllowed,
-                        onCheckedChange = { onUpdate(app.packageName, null, it, null, null) },
+                        onCheckedChange = { onUpdate(app.packageName, null, it, null, null, null) },
                         colors = SwitchDefaults.colors(
                             checkedThumbColor = Color.White,
                             checkedTrackColor = AdGuardGreenPrimary,
@@ -687,7 +780,7 @@ fun AppDetailsFirewallSheet(
                     }
                     Switch(
                         checked = app.blockWhenScreenOff,
-                        onCheckedChange = { onUpdate(app.packageName, null, null, null, it) },
+                        onCheckedChange = { onUpdate(app.packageName, null, null, null, it, null) },
                         colors = SwitchDefaults.colors(
                             checkedThumbColor = Color.White,
                             checkedTrackColor = AdGuardGreenPrimary,
@@ -835,7 +928,7 @@ fun AppDetailsFirewallSheet(
             horizontalArrangement = Arrangement.spacedBy(10.dp)
         ) {
             OutlinedButton(
-                onClick = { onUpdate(app.packageName, true, true, false, false) },
+                onClick = { onUpdate(app.packageName, true, true, false, false, false) },
                 modifier = Modifier.weight(1f),
                 shape = RoundedCornerShape(8.dp)
             ) {
@@ -843,7 +936,7 @@ fun AppDetailsFirewallSheet(
             }
 
             Button(
-                onClick = { onUpdate(app.packageName, true, true, true, false) },
+                onClick = { onUpdate(app.packageName, true, true, true, false, true) },
                 modifier = Modifier.weight(1f),
                 colors = ButtonDefaults.buttonColors(containerColor = AdGuardDarkSurfaceVariant),
                 shape = RoundedCornerShape(8.dp)

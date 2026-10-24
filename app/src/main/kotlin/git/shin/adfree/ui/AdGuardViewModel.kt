@@ -308,6 +308,7 @@ class AdGuardViewModel(
                     intent.wifi,
                     intent.filtered,
                     intent.blockWhenScreenOff,
+                    intent.httpsFiltered,
                 )
                 repository.pushAppRouting()
                 // The sheet reads this snapshot, not the repository flow, so
@@ -322,6 +323,7 @@ class AdGuardViewModel(
                             isWifiAllowed = intent.wifi ?: current.isWifiAllowed,
                             isFilterRouted = intent.filtered ?: current.isFilterRouted,
                             blockWhenScreenOff = intent.blockWhenScreenOff ?: current.blockWhenScreenOff,
+                            isHttpsFiltered = intent.httpsFiltered ?: current.isHttpsFiltered,
                         )
                     }
                 }

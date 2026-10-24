@@ -279,6 +279,12 @@ data class AppFirewallRule(
     val isCellularAllowed: Boolean = true,
     val isWifiAllowed: Boolean = true,
     val isFilterRouted: Boolean = true,
+    /**
+     * Whether this app's HTTPS payload is decrypted for content filtering.
+     * Off keeps the flow in the tunnel (DNS stays filtered) but splices TLS
+     * untouched, so ads inside HTTPS pages are not blocked.
+     */
+    val isHttpsFiltered: Boolean = true,
     val blockWhenScreenOff: Boolean = false,
     val category: String = "Ứng dụng cài đặt",
     val blockedRequestsToday: Int = 0,

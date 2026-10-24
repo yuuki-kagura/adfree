@@ -158,7 +158,7 @@ class SettingsPreferencesTest {
     fun `firewall overrides and custom dns survive a settings write`() {
         val first = prefs()
         first.saveAppFirewall(
-            listOf(StoredAppFirewall("com.example.browser", false, true, false, true)),
+            listOf(StoredAppFirewall("com.example.browser", false, true, false, true, https = false)),
         )
         first.saveCustomDnsProviders(
             listOf(
@@ -179,11 +179,29 @@ class SettingsPreferencesTest {
         val second = prefs()
         assertEquals(false, second.settings()!!.isAdBlockingEnabled)
         assertEquals(
-            listOf(StoredAppFirewall("com.example.browser", false, true, false, true)),
+            listOf(StoredAppFirewall("com.example.browser", false, true, false, true, https = false)),
             second.appFirewall(),
         )
         assertEquals("My resolver", second.customDnsProviders().single().name)
         assertEquals("1.2.3.4", second.customDnsProviders().single().address)
+    }
+
+    @Test
+    fun `an older firewall blob keeps per-app HTTPS filtering on`() {
+        store.value = JSONObject()
+            .put(
+                "app_firewall",
+                org.json.JSONArray().put(
+                    JSONObject()
+                        .put("package", "com.example.browser")
+                        .put("cellular", false),
+                ),
+            )
+            .toString()
+
+        val rule = prefs().appFirewall().single()
+        assertFalse(rule.cellular)
+        assertTrue("the switch did not exist when this blob was written", rule.https)
     }
 
     @Test
@@ -196,7 +214,7 @@ class SettingsPreferencesTest {
             ),
         )
         first.saveAppFirewall(
-            listOf(StoredAppFirewall("com.example.browser", false, true, false, true)),
+            listOf(StoredAppFirewall("com.example.browser", false, true, false, true, https = false)),
         )
         first.saveCustomDnsProviders(
             listOf(

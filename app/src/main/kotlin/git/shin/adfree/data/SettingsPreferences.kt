@@ -16,6 +16,7 @@ data class StoredAppFirewall(
     val wifi: Boolean,
     val filtered: Boolean,
     val screenOff: Boolean,
+    val https: Boolean,
 )
 
 /**
@@ -65,6 +66,7 @@ class SettingsPreferences(
             wifi = obj.optBoolean("wifi", true),
             filtered = obj.optBoolean("filtered", true),
             screenOff = obj.optBoolean("screenOff", false),
+            https = obj.optBoolean("https", true),
         )
     }
 
@@ -77,6 +79,7 @@ class SettingsPreferences(
                 .put("wifi", rule.wifi)
                 .put("filtered", rule.filtered)
                 .put("screenOff", rule.screenOff)
+                .put("https", rule.https)
         }
 
     /** Custom resolvers only; the built-in list is code and is never stored. */

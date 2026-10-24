@@ -1247,6 +1247,7 @@ class AdGuardRepository(
                     isCellularAllowed = saved?.cellular ?: true,
                     isWifiAllowed = saved?.wifi ?: true,
                     isFilterRouted = saved?.filtered ?: true,
+                    isHttpsFiltered = saved?.https ?: true,
                     blockWhenScreenOff = saved?.screenOff ?: false,
                     category = appCategory(info),
                 )
@@ -1286,6 +1287,7 @@ class AdGuardRepository(
         isWifiAllowed: Boolean? = null,
         isFilterRouted: Boolean? = null,
         blockWhenScreenOff: Boolean? = null,
+        isHttpsFiltered: Boolean? = null,
     ) {
         _appFirewallRules.update { list ->
             list.map { app ->
@@ -1295,6 +1297,7 @@ class AdGuardRepository(
                         isWifiAllowed = isWifiAllowed ?: app.isWifiAllowed,
                         isFilterRouted = isFilterRouted ?: app.isFilterRouted,
                         blockWhenScreenOff = blockWhenScreenOff ?: app.blockWhenScreenOff,
+                        isHttpsFiltered = isHttpsFiltered ?: app.isHttpsFiltered,
                     )
                 } else app
             }
@@ -1309,7 +1312,7 @@ class AdGuardRepository(
     private fun saveAppFirewallRules() {
         val overrides = _appFirewallRules.value.mapNotNull { app ->
             if (app.isCellularAllowed && app.isWifiAllowed &&
-                app.isFilterRouted && !app.blockWhenScreenOff
+                app.isFilterRouted && app.isHttpsFiltered && !app.blockWhenScreenOff
             ) {
                 null
             } else {
@@ -1319,6 +1322,7 @@ class AdGuardRepository(
                     wifi = app.isWifiAllowed,
                     filtered = app.isFilterRouted,
                     screenOff = app.blockWhenScreenOff,
+                    https = app.isHttpsFiltered,
                 )
             }
         }
@@ -1815,10 +1819,16 @@ class AdGuardRepository(
      * it builds the tunnel next time.
      */
     fun pushAppRouting() {
+        val rules = _appFirewallRules.value
         routedExclusions.clear()
-        routedExclusions += _appFirewallRules.value
+        routedExclusions += rules
             .filterNot { it.isFilterRouted }
             .map { it.packageName }
+        // Per-app HTTPS filtering is read at connection time, so this applies
+        // to new flows without rebuilding the tunnel.
+        engine.setHttpsSkipApps(
+            rules.filterNot { it.isHttpsFiltered }.map { it.packageName }
+        )
     }
 
     /** Apps kept out of the tunnel (read by VpnService during establish). */

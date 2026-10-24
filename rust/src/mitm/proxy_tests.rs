@@ -663,6 +663,50 @@ fn a_pending_session_opens_from_the_client_hello() {
     );
 }
 
+/// Per-app HTTPS filtering off: the flow is still carried by the tunnel (so
+/// DNS stays filtered), but the hello reaches the origin byte for byte and
+/// rustls never terminates the handshake.
+#[test]
+fn an_app_with_https_filtering_off_is_spliced_untouched() {
+    use rustls::pki_types::ServerName;
+    use rustls::ClientConnection;
+
+    let mitm_ca = CertificateAuthority::generate().expect("mitm ca");
+    let resolver = Arc::new(SniCertResolver::new(Arc::new(
+        CertificateAuthority::from_pem(&mitm_ca.cert_pem(), &mitm_ca.key_pem()).expect("restore"),
+    )));
+    let mut proxy = ProxySession::new_pending(
+        resolver,
+        tls::UpstreamTls::system(),
+        "/adfree-user.js".into(),
+        Arc::from(""),
+    )
+    .expect("pending session");
+    proxy.set_apps(vec!["com.example.news".to_string()]);
+    proxy.set_https_skip_apps(Arc::new(
+        ["com.example.news".to_string()].into_iter().collect(),
+    ));
+
+    let mut browser_roots = rustls::RootCertStore::empty();
+    browser_roots
+        .add(rustls::pki_types::CertificateDer::from(mitm_ca.cert_der()))
+        .expect("browser root");
+    let name = ServerName::try_from("origin.example.com".to_string()).expect("server name");
+    let mut browser =
+        ClientConnection::new(tls::client_config_with(browser_roots), name).expect("browser");
+    let hello = tls::take_client_outbound(&mut browser);
+    assert!(!hello.is_empty(), "the browser has a first flight");
+
+    let out = proxy.on_client_payload(&hello).expect("client step");
+    assert_eq!(
+        out.to_peer, hello,
+        "the hello must reach the origin untouched"
+    );
+    assert!(out.to_client.is_empty(), "no handshake was terminated");
+    assert!(!proxy.server_handshaking(), "the flow is on the plain path");
+    assert_eq!(proxy.captured_sni(), None, "no name was captured");
+}
+
 /// A script body larger than rustls' 64 KiB buffer cap must still reach the
 /// client: the write has to drain records between chunks, or the splice dies
 /// with `WriteZero` and the page hangs (the stitched AdGuard Extra + Disable

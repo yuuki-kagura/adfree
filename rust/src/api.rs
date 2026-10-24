@@ -412,6 +412,15 @@ pub fn core_set_uid_apps(entries: Vec<UidApps>) -> bool {
     })
 }
 
+/// Replaces the packages whose HTTPS traffic must not be decrypted (the
+/// per-app "HTTPS filtering" switch turned off). Their flows are still carried
+/// by the tunnel, so DNS filtering keeps working; the TLS stream is spliced.
+/// Applies to connections opened afterwards.
+#[uniffi::export]
+pub fn core_set_https_skip_apps(packages: Vec<String>) {
+    guard((), || crate::core().set_https_skip_apps(packages))
+}
+
 #[uniffi::export]
 pub fn core_check_host(host: String) -> HostVerdictBinding {
     guard(HostVerdictBinding::default(), || {

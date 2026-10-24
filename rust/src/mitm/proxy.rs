@@ -19,7 +19,7 @@ use crate::stats::Stats;
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use base64::Engine as _;
 use rustls::ServerConnection;
-use std::collections::VecDeque;
+use std::collections::{HashSet, VecDeque};
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -240,6 +240,10 @@ pub struct ProxySession {
     /// in this list is spliced, so only named sites are decrypted.
     https_only: Arc<crate::mitm::hosts::HostPatterns>,
     https_only_mode: bool,
+    /// Packages whose HTTPS traffic the user excluded from filtering. Any app
+    /// in this set splices the flow verbatim, the same exit as a host on
+    /// [`Self::https_skip`]; DNS filtering still applies.
+    https_skip_apps: Arc<HashSet<String>>,
     /// The upstream settings, kept only while the active half was armed with
     /// ECH: a server that rejects the offer gets one retry from these. `None`
     /// means the upstream is plain (or already retried once).
@@ -605,6 +609,7 @@ impl ProxySession {
             https_skip: Arc::new(crate::mitm::hosts::HostPatterns::default()),
             https_only: Arc::new(crate::mitm::hosts::HostPatterns::default()),
             https_only_mode: false,
+            https_skip_apps: Arc::new(HashSet::new()),
             upstream_plain: None,
             client_discard: None,
             apps: Vec::new(),
@@ -654,6 +659,7 @@ impl ProxySession {
             https_skip: Arc::new(crate::mitm::hosts::HostPatterns::default()),
             https_only: Arc::new(crate::mitm::hosts::HostPatterns::default()),
             https_only_mode: false,
+            https_skip_apps: Arc::new(HashSet::new()),
             upstream_plain: None,
             client_discard: None,
             apps: Vec::new(),
@@ -702,6 +708,7 @@ impl ProxySession {
             https_skip: Arc::new(crate::mitm::hosts::HostPatterns::default()),
             https_only: Arc::new(crate::mitm::hosts::HostPatterns::default()),
             https_only_mode: false,
+            https_skip_apps: Arc::new(HashSet::new()),
             upstream_plain: None,
             client_discard: None,
             apps: Vec::new(),
@@ -750,6 +757,14 @@ impl ProxySession {
         self.https_skip = skip;
         self.https_only = only;
         self.https_only_mode = only_mode;
+    }
+
+    /// Installs the per-app HTTPS exclusions: any flow attributed to one of
+    /// these packages is spliced untouched, so DNS filtering still applies
+    /// while the TLS payload does not. The engine hands each session the
+    /// current set when the connection opens.
+    pub fn set_https_skip_apps(&mut self, apps: Arc<HashSet<String>>) {
+        self.https_skip_apps = apps;
     }
 
     /// The SNI captured from the ClientHello, once it has arrived.
@@ -844,7 +859,7 @@ impl ProxySession {
         }
         state.raw.extend_from_slice(payload);
         if let tls::Flight::Hello {
-            ech_len: Some(ech_len),
+            ech_len,
             server_name,
         } = tls::first_flight(&state.raw)
         {
@@ -860,41 +875,58 @@ impl ProxySession {
                 ));
                 return Ok(self.splice_pending_verbatim());
             }
-            let public_ech = self
-                .ech_hosts
-                .as_deref()
-                .is_some_and(|ech| ech.public_name(name));
-            if self
-                .ech_hosts
-                .as_deref()
-                .is_some_and(|ech| ech.splices(name, self.full_ech))
+            if let Some(app) = self
+                .apps
+                .iter()
+                .find(|app| self.https_skip_apps.contains(*app))
             {
-                // A real ECH hello exposes only the config's public name: the
-                // host inside is encrypted, and terminating this TLS could
-                // only serve the wrong certificate for the wrong host, so the
-                // connection is handed over untouched (`mitm::ech`). The
-                // extension length is in the log because that is what tells a
-                // real offer from the GREASE one browsers attach everywhere.
+                // HTTPS filtering is off for this app: DNS lookups are still
+                // filtered, but the TLS stream goes to the origin untouched.
+                // Same exit as the website list above.
                 crate::logbuf::push(&format!(
-                    "mitm {name}: client offered ECH ({ech_len} byte extension), \
-                     splicing verbatim"
+                    "mitm {name}: HTTPS filtering is off for {app}, splicing verbatim"
                 ));
                 return Ok(self.splice_pending_verbatim());
             }
-            if public_ech {
-                // The client cached this ECHConfig outside the DNS half, and
-                // full ECH is off. Refusing the wrapped hello costs one failed
-                // handshake; the retry is in the clear and stays filterable.
-                // Splicing instead would quietly drop filtering for the page.
-                crate::logbuf::push(&format!(
-                    "mitm {name}: client offered ECH ({ech_len} byte extension), \
-                     full ECH is off, terminating for filtering"
-                ));
+            if let Some(ech_len) = ech_len {
+                let public_ech = self
+                    .ech_hosts
+                    .as_deref()
+                    .is_some_and(|ech| ech.public_name(name));
+                if self
+                    .ech_hosts
+                    .as_deref()
+                    .is_some_and(|ech| ech.splices(name, self.full_ech))
+                {
+                    // A real ECH hello exposes only the config's public name:
+                    // the host inside is encrypted, and terminating this TLS
+                    // could only serve the wrong certificate for the wrong
+                    // host, so the connection is handed over untouched
+                    // (`mitm::ech`). The extension length is in the log
+                    // because that is what tells a real offer from the GREASE
+                    // one browsers attach everywhere.
+                    crate::logbuf::push(&format!(
+                        "mitm {name}: client offered ECH ({ech_len} byte extension), \
+                         splicing verbatim"
+                    ));
+                    return Ok(self.splice_pending_verbatim());
+                }
+                if public_ech {
+                    // The client cached this ECHConfig outside the DNS half,
+                    // and full ECH is off. Refusing the wrapped hello costs one
+                    // failed handshake; the retry is in the clear and stays
+                    // filterable. Splicing instead would quietly drop
+                    // filtering for the page.
+                    crate::logbuf::push(&format!(
+                        "mitm {name}: client offered ECH ({ech_len} byte extension), \
+                         full ECH is off, terminating for filtering"
+                    ));
+                }
+                // Otherwise this is a GREASE extension — browsers put one on
+                // ordinary connections — or a host not learned to require ECH:
+                // rustls ignores the extension, and the hello is terminated
+                // and filtered as usual.
             }
-            // Otherwise this is a GREASE extension — browsers put one on
-            // ordinary connections — or a host not learned to require ECH:
-            // rustls ignores the extension, and the hello is terminated and
-            // filtered as usual.
         }
         let started = Instant::now();
         let handshaking = tls::server_handshaking(&state.server);

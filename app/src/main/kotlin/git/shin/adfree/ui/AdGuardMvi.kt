@@ -82,6 +82,7 @@ sealed interface AdGuardIntent {
         val wifi: Boolean? = null,
         val filtered: Boolean? = null,
         val blockWhenScreenOff: Boolean? = null,
+        val httpsFiltered: Boolean? = null,
     ) : AdGuardIntent
     /** Rebuild the running tunnel so the latest app exclusions apply. */
     data object RestartVpn : AdGuardIntent
