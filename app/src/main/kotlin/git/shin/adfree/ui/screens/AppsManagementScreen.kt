@@ -337,31 +337,33 @@ fun AppFirewallCard(
                 Spacer(modifier = Modifier.width(12.dp))
 
                 Column(modifier = Modifier.weight(1f)) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Text(
-                            text = app.appName,
-                            fontSize = 14.sp,
-                            fontWeight = FontWeight.Bold,
-                            color = AdGuardTextPrimary,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis
-                        )
-                        Spacer(modifier = Modifier.width(6.dp))
-                        Box(
-                            modifier = Modifier
-                                .clip(RoundedCornerShape(4.dp))
-                                .background(AdGuardDarkSurfaceVariant)
-                                .padding(horizontal = 5.dp, vertical = 1.dp)
-                        ) {
-                            Text(app.category, fontSize = 9.sp, color = AdGuardTextSecondary)
-                        }
-                    }
+                    Text(
+                        text = app.appName,
+                        fontSize = 14.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = AdGuardTextPrimary,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                    Spacer(modifier = Modifier.height(2.dp))
+                    // The four quick-action buttons leave too little width for
+                    // a side-by-side chip on a 360 dp screen; it used to wrap
+                    // one character per line.
+                    Text(
+                        text = app.category,
+                        fontSize = 9.sp,
+                        color = AdGuardTextSecondary,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
                     Spacer(modifier = Modifier.height(2.dp))
                     Text(
-                        text = "Đã chặn ${app.blockedRequestsToday} • ${app.dataTransferredBytes / (1024 * 1024)} MB truyền tải",
-                        fontSize = 11.sp,
+                        text = "${app.blockedRequestsToday} chặn • ${app.dataTransferredBytes / (1024 * 1024)} MB",
+                        fontSize = 10.sp,
                         fontFamily = FontFamily.Monospace,
-                        color = AdGuardTextMuted
+                        color = AdGuardTextMuted,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
                     )
                 }
             }
