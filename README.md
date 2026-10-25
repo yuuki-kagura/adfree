@@ -57,7 +57,7 @@ cargo clippy --all-targets      # must stay warning-free
 
 cd ..
 ./gradlew :app:testDebugUnitTest
-bun install && bun run test     # 15 Chromium tests for the injected page runtime
+bun install && bun run test     # 22 Chromium tests (1 needs ADFREE_CDP)
 ```
 
 CI runs Vitest, the Rust tests, clippy, Android Lint and a debug build on every
@@ -74,6 +74,8 @@ including the Android 14+ user trust store path, is documented in
 
 ## Limitations
 
-- Android only (VpnService); no iOS or desktop build.
+- Android is the only shipping shell today; Linux, Windows, macOS and iOS are
+  the planned targets — see the
+  [platform roadmap](DESIGN.md#platform-roadmap).
 - HTTPS filtering requires installing the CA.
 - Hosts using full ECH are spliced rather than filtered.
