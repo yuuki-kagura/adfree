@@ -254,6 +254,8 @@ pub struct EngineConfig {
     pub tracking_protection: bool,
     /// DNS protection; off means host lookups are forwarded unfiltered.
     pub dns_protection: bool,
+    /// Let a host blocked in a tight retry loop through for a cooldown.
+    pub smart_filtering: bool,
     /// 0 = NXDOMAIN, 1 = answer 0.0.0.0, 2 = REFUSED.
     pub block_mode: i32,
     pub log_allowed: bool,
@@ -276,6 +278,7 @@ impl From<EngineConfig> for Config {
             ad_blocking: c.ad_blocking,
             tracking_protection: c.tracking_protection,
             dns_protection: c.dns_protection,
+            smart_filtering: c.smart_filtering,
             block_mode: crate::dns::BlockMode::from_u8(c.block_mode.clamp(0, 2) as u8),
             log_allowed: c.log_allowed,
             eco_mode: c.eco_mode,
@@ -1026,6 +1029,7 @@ mod tests {
             ad_blocking: true,
             tracking_protection: false,
             dns_protection: true,
+            smart_filtering: true,
             block_mode: 1,
             log_allowed: true,
             eco_mode: false,
@@ -1044,6 +1048,7 @@ mod tests {
         assert!(native.ad_blocking);
         assert!(!native.tracking_protection);
         assert!(native.dns_protection);
+        assert!(native.smart_filtering);
         assert!(matches!(native.block_mode, crate::dns::BlockMode::ZeroIp));
     }
 

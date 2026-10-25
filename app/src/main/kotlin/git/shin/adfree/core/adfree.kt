@@ -2500,6 +2500,11 @@ data class EngineConfig (
     var `dnsProtection`: kotlin.Boolean
     , 
     /**
+     * Let a host blocked in a tight retry loop through for a cooldown.
+     */
+    var `smartFiltering`: kotlin.Boolean
+    , 
+    /**
      * 0 = NXDOMAIN, 1 = answer 0.0.0.0, 2 = REFUSED.
      */
     var `blockMode`: kotlin.Int
@@ -2543,6 +2548,7 @@ public object FfiConverterTypeEngineConfig: FfiConverterRustBuffer<EngineConfig>
             FfiConverterBoolean.read(buf),
             FfiConverterBoolean.read(buf),
             FfiConverterBoolean.read(buf),
+            FfiConverterBoolean.read(buf),
             FfiConverterInt.read(buf),
             FfiConverterBoolean.read(buf),
             FfiConverterBoolean.read(buf),
@@ -2561,6 +2567,7 @@ public object FfiConverterTypeEngineConfig: FfiConverterRustBuffer<EngineConfig>
             FfiConverterBoolean.allocationSize(value.`adBlocking`) +
             FfiConverterBoolean.allocationSize(value.`trackingProtection`) +
             FfiConverterBoolean.allocationSize(value.`dnsProtection`) +
+            FfiConverterBoolean.allocationSize(value.`smartFiltering`) +
             FfiConverterInt.allocationSize(value.`blockMode`) +
             FfiConverterBoolean.allocationSize(value.`logAllowed`) +
             FfiConverterBoolean.allocationSize(value.`ecoMode`) +
@@ -2578,6 +2585,7 @@ public object FfiConverterTypeEngineConfig: FfiConverterRustBuffer<EngineConfig>
             FfiConverterBoolean.write(value.`adBlocking`, buf)
             FfiConverterBoolean.write(value.`trackingProtection`, buf)
             FfiConverterBoolean.write(value.`dnsProtection`, buf)
+            FfiConverterBoolean.write(value.`smartFiltering`, buf)
             FfiConverterInt.write(value.`blockMode`, buf)
             FfiConverterBoolean.write(value.`logAllowed`, buf)
             FfiConverterBoolean.write(value.`ecoMode`, buf)

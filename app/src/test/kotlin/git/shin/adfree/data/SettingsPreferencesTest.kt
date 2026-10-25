@@ -65,6 +65,7 @@ class SettingsPreferencesTest {
             isAdBlockingEnabled = false,
             isTrackingProtectionEnabled = false,
             isDnsProtectionEnabled = false,
+            isSmartFilteringEnabled = false,
             isHttpsFilteringEnabled = true,
             isFullEchEnabled = true,
             isFirewallEnabled = false,
@@ -114,6 +115,10 @@ class SettingsPreferencesTest {
             "full ECH is opt-in, an old blob must not turn it on",
             false,
             loaded.isFullEchEnabled,
+        )
+        assertTrue(
+            "smart filtering is on by default for an existing install",
+            loaded.isSmartFilteringEnabled,
         )
     }
 

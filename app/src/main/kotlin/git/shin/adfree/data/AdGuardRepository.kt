@@ -324,6 +324,9 @@ class AdGuardRepository(
     fun toggleDnsProtection(enabled: Boolean) =
         _settings.update { it.copy(isDnsProtectionEnabled = enabled) }
 
+    fun toggleSmartFiltering(enabled: Boolean) =
+        _settings.update { it.copy(isSmartFilteringEnabled = enabled) }
+
     fun toggleHttpsFiltering(enabled: Boolean) =
         _settings.update { it.copy(isHttpsFilteringEnabled = enabled) }
 

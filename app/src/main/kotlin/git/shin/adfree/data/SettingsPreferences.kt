@@ -143,6 +143,8 @@ class SettingsPreferences(
                 json.optBoolean("tracking", defaults.isTrackingProtectionEnabled),
             isDnsProtectionEnabled =
                 json.optBoolean("dns", defaults.isDnsProtectionEnabled),
+            isSmartFilteringEnabled =
+                json.optBoolean("smartFiltering", defaults.isSmartFilteringEnabled),
             isHttpsFilteringEnabled =
                 json.optBoolean("https", defaults.isHttpsFilteringEnabled),
             isFullEchEnabled =
@@ -203,6 +205,7 @@ class SettingsPreferences(
             .put("adBlocking", settings.isAdBlockingEnabled)
             .put("tracking", settings.isTrackingProtectionEnabled)
             .put("dns", settings.isDnsProtectionEnabled)
+            .put("smartFiltering", settings.isSmartFilteringEnabled)
             .put("https", settings.isHttpsFilteringEnabled)
             .put("fullEch", settings.isFullEchEnabled)
             .put("firewall", settings.isFirewallEnabled)

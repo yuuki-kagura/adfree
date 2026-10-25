@@ -28,6 +28,7 @@ import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material.icons.filled.Dns
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Science
 import androidx.compose.material.icons.filled.Visibility
 import androidx.compose.material3.AlertDialog
@@ -173,6 +174,16 @@ fun SettingsScreen(
                 subtitle = "Tắt để tiết kiệm CPU: chỉ ghi lại những gì bị chặn",
                 checked = state.settings.logAllowedRequests,
                 onCheckedChange = { viewModel.onIntent(AdGuardIntent.ToggleLogAllowed(it)) }
+            )
+
+            Spacer(modifier = Modifier.height(10.dp))
+
+            SettingsSwitch(
+                icon = Icons.Default.Refresh,
+                title = "Lọc thông minh",
+                subtitle = "Host bị chặn liên tục được tạm cho qua 60 giây để app ngừng retry tốn CPU",
+                checked = state.settings.isSmartFilteringEnabled,
+                onCheckedChange = { viewModel.onIntent(AdGuardIntent.ToggleSmartFiltering(it)) }
             )
 
             Spacer(modifier = Modifier.height(10.dp))

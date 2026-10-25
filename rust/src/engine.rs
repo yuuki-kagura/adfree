@@ -123,6 +123,10 @@ pub struct Config {
     pub tracking_protection: bool,
     /// DNS protection; off means host lookups are forwarded unfiltered.
     pub dns_protection: bool,
+    /// Let a host that is blocked in a tight retry loop through for a cooldown
+    /// (see [`crate::smart`]). On by default: a refused request an app insists
+    /// on otherwise costs CPU on every retry.
+    pub smart_filtering: bool,
     pub block_mode: BlockMode,
     /// Log requests that were *not* blocked (off by default: pure CPU cost).
     pub log_allowed: bool,
@@ -147,6 +151,7 @@ impl Default for Config {
             ad_blocking: true,
             tracking_protection: true,
             dns_protection: true,
+            smart_filtering: true,
             block_mode: BlockMode::NxDomain,
             log_allowed: false,
             eco_mode: true,
@@ -219,6 +224,9 @@ pub struct Core {
     /// timeout cadence instead.
     wake_fd: RawFd,
     conntrack: Mutex<ConnTable>,
+    /// Hosts let through because their block is being retried in a loop
+    /// (see [`crate::smart`]); disabled by the matching config switch.
+    smart: Mutex<crate::smart::SmartFilter>,
     doh_ips: RwLock<CidrSet>,
     stats: Arc<Stats>,
     events: Mutex<EventLog>,
@@ -335,6 +343,7 @@ impl Core {
             upstream: Mutex::new(Upstream::new(resolver)),
             wake_fd: unsafe { libc::eventfd(0, libc::EFD_CLOEXEC | libc::EFD_NONBLOCK) },
             conntrack: Mutex::new(ConnTable::new()),
+            smart: Mutex::new(crate::smart::SmartFilter::new(true)),
             doh_ips: RwLock::new(default_doh_cidrs()),
             stats: Arc::new(Stats::new()),
             events: Mutex::new(EventLog::default()),
@@ -481,6 +490,7 @@ impl Core {
             cfg.tracking_protection,
             cfg.dns_protection,
         );
+        self.smart.lock().unwrap().set_enabled(cfg.smart_filtering);
         *self.https_hosts.write().unwrap() = HttpsHosts {
             skip: Arc::new(crate::mitm::hosts::HostPatterns::new(
                 cfg.https_skip_hosts.clone(),
@@ -1362,7 +1372,15 @@ impl Core {
             return true;
         }
         let conn = self.conntrack.lock().unwrap();
-        matches!(conn.lookup(&dst, now_ms()), IpVerdict::Blocked { .. })
+        let verdict = conn.lookup(&dst, now_ms());
+        drop(conn);
+        match verdict {
+            // The address came from a DNS answer learned as blocked. An app
+            // that keeps dialling it is the retry loop smart filtering exists
+            // for: once the host trips the limit the SYN is relayed as usual.
+            IpVerdict::Blocked { host } => !self.smart.lock().unwrap().note_blocked(&host),
+            _ => false,
+        }
     }
 
     fn udp_blocked(&self, pkt: &Packet<'_>, cfg: &Config) -> bool {
@@ -1441,7 +1459,13 @@ impl Core {
         // rule really applies to. Without TLS termination there is nothing to
         // serve it, so the host is sinkholed as usual rather than let through.
         let deferred = verdict.redirect && self.mitm_ready(cfg);
-        if verdict.blocked && !deferred {
+        // A host the app keeps demanding must not become a retry storm: after
+        // a few blocked attempts inside the window it is forwarded for a
+        // cooldown and the answer below is learned as allowed.
+        let smart_allowed = verdict.blocked
+            && !deferred
+            && self.smart.lock().unwrap().note_blocked(host);
+        if verdict.blocked && !deferred && !smart_allowed {
             self.stats.inc(&self.stats.dns_blocked);
             let saved = BYTES_PER_BLOCKED_REQUEST;
             self.stats.add(&self.stats.bytes_saved, saved);
@@ -1691,7 +1715,11 @@ impl Core {
         let verdict = self.filter.check_host(&host);
         // A `$redirect` host is answered by the HTTPS path, so its addresses
         // must stay reachable — but only while that path is actually armed.
-        let blocked = verdict.blocked && !(verdict.redirect && mitm);
+        // A host in a smart-allow window is reachable too, otherwise the DNS
+        // answer would contradict the forwarded query.
+        let blocked = verdict.blocked
+            && !(verdict.redirect && mitm)
+            && !self.smart.lock().unwrap().allows(&host);
         let records = dns::parse_answers(message);
         if records.is_empty() {
             return;
@@ -2864,6 +2892,52 @@ mod tests {
             ..Config::default()
         });
         assert_eq!(dns_reply_rcode(&core, "redir.test"), Some(NXDOMAIN));
+    }
+
+    /// Some apps retry a refused request until it succeeds. After a few
+    /// attempts inside the window the host is forwarded, which stops the
+    /// storm; turning the switch off restores plain blocking.
+    #[test]
+    fn a_blocked_query_retry_loop_is_forwarded() {
+        let dir = std::env::temp_dir().join("adfree-engine-smart");
+        std::fs::create_dir_all(&dir).expect("temp dir");
+        let path = dir.join("smart-list.txt");
+        std::fs::write(&path, "||ads.test^\n").expect("write list");
+        let lists = vec![FilterListInfo {
+            id: 1,
+            name: "smart-list".to_string(),
+            url: String::new(),
+            enabled: true,
+            local_path: Some(path),
+            format: crate::filter::ListFormat::Standard,
+            category: 0,
+            trusted: true,
+            rule_count: 0,
+            last_error: None,
+        }];
+        const NXDOMAIN: u8 = 3;
+        const SERVFAIL: u8 = 2;
+
+        let core = Core::new();
+        core.set_lists(lists.clone(), Vec::new());
+        for _ in 0..crate::smart::RETRY_LIMIT - 1 {
+            assert_eq!(dns_reply_rcode(&core, "ads.test"), Some(NXDOMAIN));
+        }
+        // The limit is reached: the query goes to the upstream path instead
+        // of the sinkhole. No sockets are protected in a test, so the
+        // forwarder answers SERVFAIL — anything but NXDOMAIN is the signal.
+        assert_eq!(dns_reply_rcode(&core, "ads.test"), Some(SERVFAIL));
+        assert_eq!(dns_reply_rcode(&core, "ads.test"), Some(SERVFAIL));
+
+        let plain = Core::new();
+        plain.set_lists(lists, Vec::new());
+        plain.set_config(Config {
+            smart_filtering: false,
+            ..Config::default()
+        });
+        for _ in 0..crate::smart::RETRY_LIMIT * 2 {
+            assert_eq!(dns_reply_rcode(&plain, "ads.test"), Some(NXDOMAIN));
+        }
     }
 
     struct AllowAll;

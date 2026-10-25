@@ -254,6 +254,10 @@ class AdGuardViewModel(
             }
             is AdGuardIntent.SetFilterAutoUpdate ->
                 repository.setFilterAutoUpdate(intent.hours)
+            is AdGuardIntent.ToggleSmartFiltering -> {
+                repository.toggleSmartFiltering(intent.enabled)
+                syncConfig()
+            }
             is AdGuardIntent.ToggleLogAllowed -> {
                 repository.toggleLogAllowed(intent.enabled)
                 syncConfig()

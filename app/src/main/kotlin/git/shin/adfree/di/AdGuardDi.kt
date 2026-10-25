@@ -64,6 +64,7 @@ class AdGuardAppContainer(private val context: Context) {
             adBlocking = settings.isAdBlockingEnabled,
             trackingProtection = settings.isTrackingProtectionEnabled,
             dnsProtection = settings.isDnsProtectionEnabled,
+            smartFiltering = settings.isSmartFilteringEnabled,
             blockMode = settings.blockMode,
             logAllowed = settings.logAllowedRequests,
             ecoMode = settings.isEcoBatteryModeEnabled,
