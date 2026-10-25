@@ -27,8 +27,9 @@ android {
         applicationId = "git.shin.adfree"
         minSdk = 24
         targetSdk = 36
-        versionCode = 1
-        versionName = "1.0"
+        // semantic-release bumps these in gradle.properties before building.
+        versionCode = project.property("versionCode").toString().toInt()
+        versionName = project.property("versionName").toString()
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
@@ -41,14 +42,21 @@ android {
 
     signingConfigs {
         // Release signing reads everything from the environment, so no secret is
-        // committed: KEYSTORE_PATH / STORE_PASSWORD / KEY_PASSWORD.
+        // committed. CI decodes KEYSTORE_CONTENT to KEYSTORE_PATH and exports
+        // KEYSTORE_*; local builds can use KEYSTORE_PATH / STORE_PASSWORD /
+        // KEY_PASSWORD directly.
         val keystorePath = System.getenv("KEYSTORE_PATH")
         if (!keystorePath.isNullOrBlank() && file(keystorePath).exists()) {
+            val storePass = System.getenv("STORE_PASSWORD")?.takeUnless { it.isBlank() }
+                ?: System.getenv("KEYSTORE_PASSWORD")?.takeUnless { it.isBlank() }
             create("release") {
                 storeFile = file(keystorePath)
-                storePassword = System.getenv("STORE_PASSWORD")
-                keyAlias = "upload"
-                keyPassword = System.getenv("KEY_PASSWORD")
+                storePassword = storePass
+                keyAlias = System.getenv("KEY_ALIAS")?.takeUnless { it.isBlank() }
+                    ?: System.getenv("KEYSTORE_ALIAS")?.takeUnless { it.isBlank() }
+                    ?: "git.shin.adfree"
+                keyPassword = System.getenv("KEY_PASSWORD")?.takeUnless { it.isBlank() }
+                    ?: storePass
             }
         }
         // Debug signing comes from the Android SDK's well known debug key.
@@ -66,6 +74,11 @@ android {
         }
     }
 
+    // A fresh CI runner has no ~/.android/debug.keystore yet; AGP's built-in
+    // debug config creates it on demand.
+    val debugSigning = signingConfigs.findByName("debugConfig")
+        ?: signingConfigs.getByName("debug")
+
     buildTypes {
         release {
             isCrunchPngs = false
@@ -75,10 +88,10 @@ android {
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro",
             )
-            signingConfig = signingConfigs.findByName("release")?: signingConfigs.getByName("debugConfig")
+            signingConfig = signingConfigs.findByName("release") ?: debugSigning
         }
         debug {
-            signingConfig = signingConfigs.getByName("debugConfig")
+            signingConfig = debugSigning
         }
     }
 
