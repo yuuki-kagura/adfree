@@ -22,7 +22,6 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Bolt
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Lock
@@ -134,7 +133,7 @@ fun SettingsScreen(
                 color = AdGuardTextPrimary,
             )
             Text(
-                text = "Chặn DNS mã hóa, chế độ tàng hình và lọc HTTPS",
+                text = "Ghi log, lọc thông minh, tàng hình và sao lưu",
                 fontSize = 12.sp,
                 color = AdGuardTextMuted
             )
@@ -147,26 +146,6 @@ fun SettingsScreen(
                 .padding(horizontal = 16.dp)
         ) {
         Spacer(modifier = Modifier.height(8.dp))
-
-            SettingsSwitch(
-                icon = Icons.Default.Bolt,
-                title = "Chặn QUIC / UDP 443",
-                subtitle = "Buộc client quay về TCP để engine thấy được hostname",
-                checked = state.settings.blockQuic,
-                onCheckedChange = { viewModel.onIntent(AdGuardIntent.ToggleBlockQuic(it)) }
-            )
-
-            Spacer(modifier = Modifier.height(10.dp))
-
-            SettingsSwitch(
-                icon = Icons.Default.Lock,
-                title = "Chặn DNS mã hóa (DoH/DoT)",
-                subtitle = "Chặn IP của nhà cung cấp encrypted DNS để tránh bypass filter",
-                checked = state.settings.blockDoh,
-                onCheckedChange = { viewModel.onIntent(AdGuardIntent.ToggleBlockDoh(it)) }
-            )
-
-            Spacer(modifier = Modifier.height(10.dp))
 
             SettingsSwitch(
                 icon = Icons.Default.Visibility,
@@ -243,24 +222,6 @@ fun SettingsScreen(
                     )
                 }
             }
-
-            Spacer(modifier = Modifier.height(24.dp))
-
-            DnsProviderSection(
-                providers = state.dnsProviders,
-                selectedId = state.settings.selectedDnsProviderId,
-                onSelect = { viewModel.onIntent(AdGuardIntent.SelectDnsProvider(it)) },
-                onAdd = { name, address ->
-                    viewModel.onIntent(AdGuardIntent.AddCustomDnsProvider(name, address))
-                },
-            )
-
-            Spacer(modifier = Modifier.height(24.dp))
-
-            HttpsFilterSection(
-                viewModel = viewModel,
-                fullEchEnabled = state.settings.isFullEchEnabled,
-            )
 
             Spacer(modifier = Modifier.height(24.dp))
 
@@ -459,10 +420,14 @@ private fun SettingsLink(
 
 /**
  * HTTPS filtering (MITM) section: shows the CA state, hands the user an install
- * button, and opens the script editor.
+ * button, and points at the extensions destination.
  */
 @Composable
-private fun HttpsFilterSection(viewModel: AdGuardViewModel, fullEchEnabled: Boolean) {
+internal fun HttpsFilterSection(
+    viewModel: AdGuardViewModel,
+    fullEchEnabled: Boolean,
+    onManageScripts: () -> Unit,
+) {
     var status by remember { mutableStateOf<MitmStatus?>(null) }
     var showCert by remember { mutableStateOf(false) }
     var showCertGate by remember { mutableStateOf(false) }
@@ -666,11 +631,11 @@ private fun HttpsFilterSection(viewModel: AdGuardViewModel, fullEchEnabled: Bool
                 )
 
                 OutlinedButton(
-                    onClick = { viewModel.onIntent(AdGuardIntent.SelectTab(AdGuardTab.FILTERS)) },
+                    onClick = onManageScripts,
                     modifier = Modifier.padding(top = 8.dp),
                     shape = RoundedCornerShape(8.dp),
                 ) {
-                    Text("Quản lý script trong Bộ lọc", fontSize = 11.sp)
+                    Text("Quản lý tiện ích", fontSize = 11.sp)
                 }
             }
         }
@@ -785,7 +750,7 @@ private fun CertificateDialog(pem: String, onDismiss: () -> Unit) {
  * existed only as an orphan intent with no screen.
  */
 @Composable
-private fun DnsProviderSection(
+internal fun DnsProviderSection(
     providers: List<DnsProvider>,
     selectedId: String,
     onSelect: (String) -> Unit,

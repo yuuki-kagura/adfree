@@ -52,8 +52,8 @@ import git.shin.adfree.ui.AdGuardIntent
 import git.shin.adfree.ui.AdGuardTab
 import git.shin.adfree.ui.AdGuardViewModel
 import git.shin.adfree.ui.screens.AppsManagementScreen
+import git.shin.adfree.ui.screens.FilteringHubScreen
 import git.shin.adfree.ui.screens.FilteringLogScreen
-import git.shin.adfree.ui.screens.FiltersScreen
 import git.shin.adfree.ui.screens.HomeScreen
 import git.shin.adfree.ui.screens.SecurityLabScreen
 import git.shin.adfree.ui.screens.SettingsScreen
@@ -151,7 +151,7 @@ class MainActivity : ComponentActivity() {
                         when (state.currentTab) {
                             AdGuardTab.HOME -> HomeScreen(viewModel = viewModel)
                             AdGuardTab.ACTIVITY -> FilteringLogScreen(viewModel = viewModel)
-                            AdGuardTab.FILTERS -> FiltersScreen(viewModel = viewModel)
+                            AdGuardTab.FILTERS -> FilteringHubScreen(viewModel = viewModel)
                             AdGuardTab.APPS -> AppsManagementScreen(viewModel = viewModel)
                             AdGuardTab.SETTINGS -> SettingsScreen(viewModel = viewModel)
                             // Reached from Settings instead of the tab bar: it is

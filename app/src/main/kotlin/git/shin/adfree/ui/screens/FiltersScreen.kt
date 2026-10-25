@@ -23,6 +23,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Block
 import androidx.compose.material.icons.filled.ChevronRight
@@ -107,10 +108,10 @@ import git.shin.adfree.ui.theme.AdGuardRedBlocked
 import git.shin.adfree.ui.theme.AdGuardTextMuted
 import git.shin.adfree.ui.theme.AdGuardTextPrimary
 import git.shin.adfree.ui.theme.AdGuardTextSecondary
-import git.shin.adfree.AdGuardApplication
 
 /**
- * The "Bộ lọc" tab: the filter catalogue, custom lists and userscripts.
+ * The filter-list destination inside the filtering hub: catalogue, custom
+ * lists and user rules.
  *
  * Layout mirrors AdGuard's Filters screen: the catalogue is grouped (ads,
  * privacy, annoyances…) with a switch per list, every group shows an
@@ -121,6 +122,7 @@ import git.shin.adfree.AdGuardApplication
 @Composable
 fun FiltersScreen(
     viewModel: AdGuardViewModel,
+    onBack: (() -> Unit)? = null,
     modifier: Modifier = Modifier,
 ) {
     val state by viewModel.uiState.collectAsState()
@@ -137,11 +139,6 @@ fun FiltersScreen(
     // silently remove or mangle a list.
     var showDeleteConfirm by remember { mutableStateOf(false) }
     var showEditFilter by remember { mutableStateOf(false) }
-    // Extensions: import from file, create new, edit source, and confirm
-    // deletion (the sheet is one tap away from the list otherwise).
-    var showCreateScript by remember { mutableStateOf(false) }
-    var editScriptTarget by remember { mutableStateOf<git.shin.adfree.model.UserScriptInfo?>(null) }
-    var deleteScriptTarget by remember { mutableStateOf<git.shin.adfree.model.UserScriptInfo?>(null) }
 
     // Local files are imported through the system picker; the URI is read once
     // and copied into the app's own directory (SAF permissions are not trusted
@@ -157,18 +154,6 @@ fun FiltersScreen(
             viewModel.onIntent(AdGuardIntent.ImportLocalFilter(uri.toString()))
         }
     }
-    val scriptFilePicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
-        if (uri != null) {
-            runCatching {
-                context.contentResolver.takePersistableUriPermission(
-                    uri,
-                    Intent.FLAG_GRANT_READ_URI_PERMISSION,
-                )
-            }
-            viewModel.onIntent(AdGuardIntent.ImportLocalScript(uri.toString()))
-        }
-    }
-
     val query = state.filterSearchQuery
     val matchesQuery: (FilterList) -> Boolean = { filterMatchesQuery(it, query) }
     val catalogLists = state.filterLists.filter { !it.isCustom && !it.isUserAdded }
@@ -192,6 +177,15 @@ fun FiltersScreen(
                 .padding(horizontal = 16.dp, vertical = 12.dp),
         ) {
             Row(verticalAlignment = Alignment.CenterVertically) {
+                onBack?.let {
+                    IconButton(onClick = it) {
+                        Icon(
+                            imageVector = Icons.AutoMirrored.Filled.ArrowBack,
+                            contentDescription = "Quay lại",
+                            tint = AdGuardTextPrimary,
+                        )
+                    }
+                }
                 Column(modifier = Modifier.weight(1f)) {
                     Text(
                         text = "Bộ lọc",
@@ -419,20 +413,6 @@ fun FiltersScreen(
                     }
                 }
 
-                item(key = "extensions") {
-                    ExtensionsSection(
-                        scripts = state.userscripts,
-                        masterEnabled = state.scriptsMasterEnabled,
-                        onToggleMaster = { viewModel.onIntent(AdGuardIntent.ToggleScriptsMaster(it)) },
-                        onToggleScript = { script, enabled ->
-                            viewModel.onIntent(AdGuardIntent.ToggleScript(script.id, enabled))
-                        },
-                        onOpenScript = { viewModel.onIntent(AdGuardIntent.InspectScript(it.id)) },
-                        onAddScript = { viewModel.onIntent(AdGuardIntent.ShowAddScriptDialog(true)) },
-                        onOpenStore = { viewModel.onIntent(AdGuardIntent.ShowScriptStore(true)) },
-                    )
-                }
-
                 item(key = "user_rules") {
                     UserRulesCard(
                         count = userRulesCount,
@@ -545,119 +525,6 @@ fun FiltersScreen(
         )
     }
 
-    if (state.showAddScriptDialog) {
-        AddScriptDialog(
-            onDismiss = { viewModel.onIntent(AdGuardIntent.ShowAddScriptDialog(false)) },
-            onAdd = { name, url -> viewModel.onIntent(AdGuardIntent.AddScript(name, url)) },
-            onImportFile = {
-                viewModel.onIntent(AdGuardIntent.ShowAddScriptDialog(false))
-                scriptFilePicker.launch(arrayOf("text/javascript", "application/x-javascript", "text/plain", "application/javascript", "*/*"))
-            },
-            onCreate = {
-                viewModel.onIntent(AdGuardIntent.ShowAddScriptDialog(false))
-                showCreateScript = true
-            },
-        )
-    }
-
-    if (showCreateScript) {
-        ScriptTextEditorDialog(
-            title = "Tạo tiện ích mới",
-            initialName = "",
-            initialText = "// ==UserScript==\n// @name         Tiện ích của tôi\n// @match        *://*/*\n// @grant        none\n// ==/UserScript==\n\n",
-            confirmText = "Tạo",
-            onDismiss = { showCreateScript = false },
-            onConfirm = { name, text ->
-                showCreateScript = false
-                viewModel.onIntent(AdGuardIntent.CreateScript(name, text))
-            },
-        )
-    }
-
-    editScriptTarget?.let { target ->
-        if (target.isUserAdded) {
-            ScriptTextEditorDialog(
-                title = "Sửa mã tiện ích",
-                initialName = target.name,
-                initialText = "",
-                confirmText = "Lưu",
-                onDismiss = { editScriptTarget = null },
-                onConfirm = { name, text ->
-                    editScriptTarget = null
-                    viewModel.onIntent(AdGuardIntent.UpdateScriptText(target.id, name, text))
-                },
-                loadText = { AdGuardApplication.instance.container.coreEngine.scriptText(target.id).orEmpty() },
-            )
-        }
-    }
-
-    deleteScriptTarget?.let { target ->
-        AlertDialog(
-            onDismissRequest = { deleteScriptTarget = null },
-            title = { Text("Xóa tiện ích?", fontSize = 17.sp, fontWeight = FontWeight.Bold, color = AdGuardTextPrimary) },
-            text = {
-                Text(
-                    "Tiện ích «${target.name}» và nội dung đã lưu sẽ bị xóa, không thể hoàn tác.",
-                    fontSize = 12.sp,
-                    color = AdGuardTextSecondary,
-                )
-            },
-            confirmButton = {
-                TextButton(onClick = {
-                    deleteScriptTarget = null
-                    viewModel.onIntent(AdGuardIntent.DeleteScript(target.id))
-                }) {
-                    Text("Xóa", fontSize = 13.sp, fontWeight = FontWeight.Bold, color = AdGuardRedBlocked)
-                }
-            },
-            dismissButton = {
-                TextButton(onClick = { deleteScriptTarget = null }) {
-                    Text("Hủy", fontSize = 13.sp, color = AdGuardTextSecondary)
-                }
-            },
-        )
-    }
-
-    if (state.showScriptStore) {
-        val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
-        val installedByUrl = state.userscripts
-            .filter { it.url.isNotBlank() }
-            .associateBy { it.url }
-        ModalBottomSheet(
-            onDismissRequest = { viewModel.onIntent(AdGuardIntent.ShowScriptStore(false)) },
-            sheetState = sheetState,
-            containerColor = AdGuardDarkSurface,
-            contentColor = AdGuardTextPrimary,
-        ) {
-            UserScriptStoreSheet(
-                state = state.scriptStore,
-                installedByUrl = installedByUrl,
-                onQueryChange = { viewModel.onIntent(AdGuardIntent.SearchScriptStore(it)) },
-                onSortChange = { sort -> viewModel.onIntent(AdGuardIntent.SortScriptStore(sort)) },
-                onLoadMore = { viewModel.onIntent(AdGuardIntent.LoadMoreScriptStore) },
-                onFirstPage = {
-                    viewModel.onIntent(AdGuardIntent.SearchScriptStore(state.scriptStore.query))
-                },
-                onInstall = { item ->
-                    viewModel.onIntent(
-                        AdGuardIntent.InstallStoreScript(item.name, item.url, item.description),
-                    )
-                },
-                onEnable = { script -> viewModel.onIntent(AdGuardIntent.ToggleScript(script.id, true)) },
-                onOpenPage = { url ->
-                    if (url.startsWith("https://") || url.startsWith("http://")) {
-                        runCatching {
-                            context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)))
-                        }
-                    }
-                },
-                onRetry = {
-                    viewModel.onIntent(AdGuardIntent.SearchScriptStore(state.scriptStore.query))
-                },
-            )
-        }
-    }
-
     if (state.showCustomRuleEditor) {
         val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
         val currentRules = state.filterLists.firstOrNull { it.isCustom }?.customRules ?: emptyList()
@@ -704,36 +571,6 @@ fun FiltersScreen(
                         runCatching {
                             context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)))
                         }
-                    },
-                )
-            }
-        }
-    }
-
-    state.inspectedScriptId?.let { id ->
-        val script = state.userscripts.firstOrNull { it.id == id }
-        if (script != null) {
-            val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
-            ModalBottomSheet(
-                onDismissRequest = { viewModel.onIntent(AdGuardIntent.InspectScript(null)) },
-                sheetState = sheetState,
-                containerColor = AdGuardDarkSurface,
-                contentColor = AdGuardTextPrimary,
-            ) {
-                ScriptDetailSheet(
-                    script = script,
-                    masterEnabled = state.scriptsMasterEnabled,
-                    onToggle = { viewModel.onIntent(AdGuardIntent.ToggleScript(script.id, !script.isEnabled)) },
-                    onRefresh = { viewModel.onIntent(AdGuardIntent.RefreshScript(script.id)) },
-                    onEdit = {
-                        // The editor is its own sheet: close the detail sheet
-                        // first so two modals never stack.
-                        editScriptTarget = script
-                        viewModel.onIntent(AdGuardIntent.InspectScript(null))
-                    },
-                    onDelete = {
-                        deleteScriptTarget = script
-                        viewModel.onIntent(AdGuardIntent.InspectScript(null))
                     },
                 )
             }
