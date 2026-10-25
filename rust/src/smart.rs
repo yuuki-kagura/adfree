@@ -88,10 +88,7 @@ impl SmartFilter {
         }
         let entry = match self.hosts.get_mut(host) {
             Some(entry) => entry,
-            None => self
-                .hosts
-                .entry(host.into())
-                .or_insert_with(Entry::default),
+            None => self.hosts.entry(host.into()).or_default(),
         };
         if entry.allow_until_ms > now {
             return true;
