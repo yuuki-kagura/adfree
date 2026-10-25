@@ -306,6 +306,7 @@ fun UserScriptStoreSheet(
     onQueryChange: (String) -> Unit,
     onSortChange: (UserScriptStoreSort) -> Unit,
     onLoadMore: () -> Unit,
+    onFirstPage: () -> Unit,
     onInstall: (UserScriptStoreItem) -> Unit,
     onEnable: (UserScriptInfo) -> Unit,
     onOpenPage: (String) -> Unit,
@@ -383,6 +384,22 @@ fun UserScriptStoreSheet(
                         labelColor = AdGuardTextSecondary,
                     ),
                 )
+            }
+        }
+
+        if (state.page > 1) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween,
+            ) {
+                Text("Trang ${state.page}", fontSize = 10.sp, color = AdGuardTextMuted)
+                TextButton(
+                    onClick = onFirstPage,
+                    modifier = Modifier.testTag("script_store_first_page"),
+                ) {
+                    Text("Về trang 1", fontSize = 11.sp, color = AdGuardGreenLight)
+                }
             }
         }
 

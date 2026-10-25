@@ -79,6 +79,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontFamily
@@ -124,6 +125,7 @@ fun FiltersScreen(
 ) {
     val state by viewModel.uiState.collectAsState()
     val context = LocalContext.current
+    val uriHandler = LocalUriHandler.current
     var expandedGroups by remember { mutableStateOf(setOf(FilterGroup.ADS.id)) }
     var showOverflow by remember { mutableStateOf(false) }
     // "Khôi phục mặc định" deletes a chunk of configuration; the confirm
@@ -216,6 +218,18 @@ fun FiltersScreen(
                             },
                             leadingIcon = {
                                 Icon(Icons.Default.Refresh, contentDescription = null, tint = AdGuardTextSecondary, modifier = Modifier.size(18.dp))
+                            },
+                        )
+                        DropdownMenuItem(
+                            text = { Text("Trợ giúp & thiết kế", fontSize = 13.sp) },
+                            onClick = {
+                                showOverflow = false
+                                runCatching {
+                                    uriHandler.openUri("https://github.com/tachibana-shin/adfree/blob/main/DESIGN.md")
+                                }
+                            },
+                            leadingIcon = {
+                                Icon(Icons.Default.Info, contentDescription = null, tint = AdGuardTextSecondary, modifier = Modifier.size(18.dp))
                             },
                         )
                     }
@@ -621,6 +635,9 @@ fun FiltersScreen(
                 onQueryChange = { viewModel.onIntent(AdGuardIntent.SearchScriptStore(it)) },
                 onSortChange = { sort -> viewModel.onIntent(AdGuardIntent.SortScriptStore(sort)) },
                 onLoadMore = { viewModel.onIntent(AdGuardIntent.LoadMoreScriptStore) },
+                onFirstPage = {
+                    viewModel.onIntent(AdGuardIntent.SearchScriptStore(state.scriptStore.query))
+                },
                 onInstall = { item ->
                     viewModel.onIntent(
                         AdGuardIntent.InstallStoreScript(item.name, item.url, item.description),
