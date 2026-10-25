@@ -11,6 +11,7 @@
 use crate::mitm::proxy::ProxySession;
 use crate::mitm::tcp::{Flow, FlowState};
 use crate::util::now_ms;
+use std::collections::VecDeque;
 use std::os::unix::io::RawFd;
 
 /// Port we intercept for TLS termination. Everything else keeps flowing.
@@ -18,6 +19,17 @@ pub const MITM_PORT: u16 = 443;
 
 /// Fallback payload cap when the client's SYN carried no MSS option.
 pub const DEFAULT_MSS: usize = 1460;
+
+/// Bytes a relay may hold for a client that is not acknowledging fast enough.
+/// At the cap the peer socket stops being read, so the kernel's receive
+/// buffer (and then TCP backpressure) slows the server down instead of this
+/// queue growing with the whole response.
+pub const MAX_PENDING_TO_CLIENT: usize = 4 * 1024 * 1024;
+
+/// Reading the peer resumes once the backlog fell to this much: the gap
+/// between the two marks keeps an ACK from re-arming the read on every flush
+/// while the client sits at the cap.
+pub const CLIENT_RESUME_AT: usize = MAX_PENDING_TO_CLIENT / 2;
 
 /// One relayed connection.
 ///
@@ -52,8 +64,15 @@ pub struct Relay {
     /// its send buffer is full). Flushed by the engine on the next writable.
     pub pending_to_peer: Vec<u8>,
     /// Wire bytes for the client the receive window could not take yet.
-    /// Flushed as the client's ACKs open the window further.
-    pub pending_to_client: Vec<u8>,
+    /// Flushed as the client's ACKs open the window further. A deque, not a
+    /// vec: the flush takes from the front on every ACK, and shifting a
+    /// multi-megabyte backlog per segment would dwarf the filtering work.
+    pub pending_to_client: VecDeque<u8>,
+    /// The client-facing backlog hit [`MAX_PENDING_TO_CLIENT`]: the engine
+    /// leaves the peer socket out of its read set until the queue drains to
+    /// [`CLIENT_RESUME_AT`]. Without this a stalled client turns the queue
+    /// into a copy of whatever the server is willing to send.
+    pub client_paused: bool,
     /// The peer closed while bytes were still pending: the FIN must wait for
     /// them, or it would carry a sequence number ahead of data the client has
     /// not seen (and the relay would drop that data on retirement).
@@ -89,7 +108,8 @@ impl Relay {
             connecting,
             connect_retries: 0,
             pending_to_peer: Vec::new(),
-            pending_to_client: Vec::new(),
+            pending_to_client: VecDeque::new(),
+            client_paused: false,
             fin_after_flush: false,
             flushing: false,
             shutdown_after_flush: false,
@@ -117,7 +137,8 @@ impl Relay {
             connecting,
             connect_retries: 0,
             pending_to_peer: Vec::new(),
-            pending_to_client: Vec::new(),
+            pending_to_client: VecDeque::new(),
+            client_paused: false,
             fin_after_flush: false,
             flushing: false,
             shutdown_after_flush: false,
@@ -141,8 +162,16 @@ impl Relay {
     /// Buffers wire bytes for the client until its window takes them.
     pub fn queue_to_client(&mut self, bytes: &[u8]) {
         if !bytes.is_empty() {
-            self.pending_to_client.extend_from_slice(bytes);
+            self.pending_to_client.extend(bytes.iter().copied());
+            if self.pending_to_client.len() >= MAX_PENDING_TO_CLIENT {
+                self.client_paused = true;
+            }
         }
+    }
+
+    /// Whether the engine must stop reading this relay's peer socket.
+    pub fn client_paused(&self) -> bool {
+        self.client_paused
     }
 
     /// Records the ACK and window carried by any packet from the client.
@@ -165,6 +194,11 @@ impl Relay {
         if self.closed {
             return out;
         }
+        // Parsing the SYN template once is enough: the loop only swaps the
+        // sequence numbers and copies the payload in.
+        let Some(pkt) = crate::packet::Packet::parse(&self.syn_packet) else {
+            return out;
+        };
         while !self.pending_to_client.is_empty() {
             let in_flight = self
                 .flow
@@ -176,21 +210,27 @@ impl Relay {
             }
             let room = (window - in_flight) as usize;
             let take = room.min(self.mss).min(self.pending_to_client.len());
-            let Some(pkt) = crate::packet::Packet::parse(&self.syn_packet) else {
-                break;
-            };
+            // A segment has to come out as one slice; the rotation only runs
+            // when the used region wrapped, and it is amortized over the
+            // bytes it moves.
+            let pending = self.pending_to_client.make_contiguous();
             let seq = self.flow.next_send_seq();
             let Some(segment) = crate::mitm::segment::build_data_segment(
                 &pkt,
                 seq,
                 self.flow.acked_seq,
-                &self.pending_to_client[..take],
+                &pending[..take],
             ) else {
                 break;
             };
             self.pending_to_client.drain(..take);
             self.flow.up_bytes += take as u64;
             out.push(segment);
+        }
+        // Below the low-water mark the peer may be read again; the engine is
+        // woken from here because only it owns the read set.
+        if self.client_paused && self.pending_to_client.len() <= CLIENT_RESUME_AT {
+            self.client_paused = false;
         }
         // A deferred FIN rides out once the last byte is on its way and the
         // window has room for its sequence number.
@@ -440,9 +480,10 @@ impl RelayTable {
     }
 
     /// Every peer socket in play, so the engine can poll them: client port,
-    /// descriptor, whether the connection is still being established, and
-    /// whether buffered client bytes are waiting for a writable socket.
-    pub fn poll_snapshot(&self) -> Vec<(u16, RawFd, bool, bool)> {
+    /// descriptor, whether the connection is still being established, whether
+    /// buffered client bytes are waiting for a writable socket, and whether
+    /// the client-facing backlog forbids reading more.
+    pub fn poll_snapshot(&self) -> Vec<(u16, RawFd, bool, bool, bool)> {
         self.relays
             .values()
             .filter(|r| !r.closed)
@@ -452,6 +493,7 @@ impl RelayTable {
                     r.peer_fd,
                     r.connecting,
                     !r.connecting && !r.pending_to_peer.is_empty(),
+                    r.client_paused,
                 )
             })
             .collect()
@@ -553,6 +595,36 @@ mod tests {
         assert_eq!(r.flow.down_bytes, 18);
         let back = r.on_peer_data(b"HTTP/1.1 200 OK\r\n\r\n").expect("peer step");
         assert_eq!(back, (Vec::new(), b"HTTP/1.1 200 OK\r\n\r\n".to_vec(), false));
+    }
+
+    #[test]
+    fn a_full_client_backlog_stops_peer_reads_until_acks_drain_it() {
+        let mut r = plain_relay_with_syn();
+        r.queue_to_client(&vec![0u8; MAX_PENDING_TO_CLIENT - 1]);
+        assert!(!r.client_paused(), "the cap itself has not been reached");
+
+        // A client that stops opening its window: the backlog reaches the cap
+        // and the engine must leave the peer socket unread.
+        r.flow.client_window = 0;
+        r.queue_to_client(&[0u8]);
+        assert!(r.client_paused());
+        assert!(r.flush_to_client().is_empty(), "a zero window takes nothing");
+        assert!(r.client_paused());
+        let mut table = RelayTable::new();
+        table.insert(r);
+        assert!(
+            table.poll_snapshot()[0].4,
+            "the snapshot must tell the engine not to read the peer"
+        );
+
+        // ACKs open the window: the queue drains and the peer may be read
+        // again.
+        let mut r = table.remove(40000).expect("relay");
+        r.flow.client_window = u32::MAX;
+        let segments = r.flush_to_client();
+        assert!(!segments.is_empty());
+        assert!(r.pending_to_client.is_empty());
+        assert!(!r.client_paused());
     }
 
     #[test]

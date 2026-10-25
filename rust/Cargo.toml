@@ -42,6 +42,10 @@ regex = "1"
 # Byte-level searching for the HTML filter (substrings inside response
 # bodies); already in the tree through `regex`, named here to use it directly.
 memchr = "2"
+# Multi-pattern byte search: one pass finds every `class`/`id` attribute in a
+# response, and it also serves case-insensitive content predicates without
+# lowercasing (and copying) the element's content per rule.
+aho-corasick = "1"
 # `$redirect` resources come out of the engine as `data:` URLs; the HTTPS path
 # decodes them into a response body.
 base64 = "0.22"

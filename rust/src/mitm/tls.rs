@@ -90,21 +90,19 @@ impl ResolvesServerCert for FlowResolver {
 /// right place to mint a certificate: rustls asks for it at exactly that moment.
 pub struct SniCertResolver {
     ca: Arc<crate::mitm::ca::CertificateAuthority>,
-    /// Hosts minted so far, for the UI's "certificates issued" counter.
-    issued: Mutex<Vec<String>>,
 }
 
 impl SniCertResolver {
     pub fn new(ca: Arc<crate::mitm::ca::CertificateAuthority>) -> Self {
-        SniCertResolver {
-            ca,
-            issued: Mutex::new(Vec::new()),
-        }
+        SniCertResolver { ca }
     }
 
     /// Hosts this resolver has signed a leaf for.
+    ///
+    /// The CA's cache already holds exactly one entry per host, so a second
+    /// list here would only be a linear-scan price paid on every handshake.
     pub fn issued_hosts(&self) -> Vec<String> {
-        self.issued.lock().unwrap().clone()
+        self.ca.cached_host_names()
     }
 }
 
@@ -134,11 +132,6 @@ impl SniCertResolver {
                 .collect::<Vec<_>>(),
             signing_key,
         ));
-        if let Ok(mut issued) = self.issued.lock() {
-            if !issued.iter().any(|h| h == host) {
-                issued.push(host.to_string());
-            }
-        }
         Some(certified)
     }
 }

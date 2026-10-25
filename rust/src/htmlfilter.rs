@@ -58,6 +58,7 @@
 
 use crate::appmask::AppMask;
 use crate::pathmask::{self, BracketParse, Location};
+use aho_corasick::AhoCorasick;
 use regex::bytes::Regex;
 use std::collections::{HashMap, HashSet};
 
@@ -151,7 +152,7 @@ enum TextMode {
 pub struct Rule {
     /// The domain position: what stands before the marker, or the bracket's
     /// `$domain=`. `None` applies to every host.
-    domains: Option<String>,
+    domains: Option<DomainSpec>,
     /// The rule's location, matched against the page: the bracket's
     /// `$path=` / `$url=` or a path-in-domain target. `None` when the rule
     /// is not pinned to a page location.
@@ -169,6 +170,108 @@ pub struct Rule {
     /// The fingerprint two rules' selectors must share for an exception to
     /// cancel a rule (the reference compares selectors, not domains).
     canonical: String,
+}
+
+/// A rule's domain position, read once when the rule is parsed.
+///
+/// Splitting and lowercasing the list spelling per page would repeat the
+/// same work for every rule and every request; the plan build now hands the
+/// parsed position a host that is already normalized.
+#[derive(Clone, Debug)]
+struct DomainSpec {
+    entries: Vec<DomainEntry>,
+}
+
+#[derive(Clone, Debug)]
+struct DomainEntry {
+    negated: bool,
+    kind: DomainKind,
+}
+
+#[derive(Clone, Debug)]
+enum DomainKind {
+    /// `*`: every host.
+    Any,
+    /// `base.*`: the base label appears as a whole label of the host.
+    WildTld(String),
+    /// `example.com` / `*.example.com`: the host or one of its parents.
+    Suffix(String),
+}
+
+impl DomainSpec {
+    /// `None` for "no position written": the rule applies to every host.
+    fn parse(position: Option<&str>) -> Option<DomainSpec> {
+        let position = position?;
+        let mut entries = Vec::new();
+        for entry in position.split(',') {
+            let entry = entry.trim().to_ascii_lowercase();
+            if entry.is_empty() {
+                continue;
+            }
+            let (negated, entry) = match entry.strip_prefix('~') {
+                Some(rest) => (true, rest),
+                None => (false, entry.as_str()),
+            };
+            let kind = if entry.is_empty() {
+                continue;
+            } else if entry == "*" {
+                DomainKind::Any
+            } else if let Some(base) = entry.strip_suffix(".*") {
+                DomainKind::WildTld(base.to_string())
+            } else {
+                DomainKind::Suffix(entry.strip_prefix("*.").unwrap_or(entry).to_string())
+            };
+            entries.push(DomainEntry { negated, kind });
+        }
+        Some(DomainSpec { entries })
+    }
+
+    /// Whether `host` passes the position. `host` must already be trimmed of
+    /// its trailing dot and lowercased.
+    fn matches(&self, host: &str) -> bool {
+        let mut positive = false;
+        let mut matched = false;
+        for entry in &self.entries {
+            let hit = match &entry.kind {
+                DomainKind::Any => true,
+                DomainKind::WildTld(base) => wild_tld_matches(host, base),
+                DomainKind::Suffix(domain) => suffix_matches(host, domain),
+            };
+            if entry.negated {
+                if hit {
+                    return false;
+                }
+            } else {
+                positive = true;
+                matched |= hit;
+            }
+        }
+        !positive || matched
+    }
+}
+
+/// `example.*` in the reference's reading: the base label has a dot after it,
+/// at the start of the host or between two labels.
+fn wild_tld_matches(host: &str, base: &str) -> bool {
+    if base.is_empty() {
+        return false;
+    }
+    let host = host.as_bytes();
+    let base = base.as_bytes();
+    if host.len() > base.len() && host.starts_with(base) && host[base.len()] == b'.' {
+        return true;
+    }
+    host.windows(base.len() + 2).any(|window| {
+        window[0] == b'.' && &window[1..base.len() + 1] == base && window[base.len() + 1] == b'.'
+    })
+}
+
+/// `example.com`: the host itself or a subdomain of it.
+fn suffix_matches(host: &str, domain: &str) -> bool {
+    host == domain
+        || (host.len() > domain.len()
+            && host.ends_with(domain)
+            && host.as_bytes()[host.len() - domain.len() - 1] == b'.')
 }
 
 /// What one line turned out to be.
@@ -211,10 +314,13 @@ enum AttrMatch {
 #[derive(Clone, Debug)]
 enum Content {
     /// A literal searched in the element's content. The needle is stored
-    /// lowercased when the search ignores case.
+    /// lowercased when the search ignores case; `ci` is the same needle as a
+    /// case-insensitive matcher, so the search never has to copy (and
+    /// lowercase) the element's content per rule.
     Text {
         needle: String,
         case_insensitive: bool,
+        ci: Option<AhoCorasick>,
     },
     /// A regular expression searched in the element's content.
     Regex(Regex),
@@ -223,6 +329,25 @@ enum Content {
     /// The content's length in bytes.
     MinLen(usize),
     MaxLen(usize),
+}
+
+impl Content {
+    /// A literal content search. Callers pass the needle already lowercased
+    /// for a case-insensitive one.
+    fn text(needle: impl Into<String>, case_insensitive: bool) -> Content {
+        let needle = needle.into();
+        let ci = case_insensitive.then(|| {
+            AhoCorasick::builder()
+                .ascii_case_insensitive(true)
+                .build([needle.as_str()])
+                .expect("a single literal always builds")
+        });
+        Content::Text {
+            needle,
+            case_insensitive,
+            ci,
+        }
+    }
 }
 
 /// A `*`-wildcard pattern: literal pieces that must appear in order.
@@ -380,7 +505,7 @@ fn rule_line(
             let mut blocking = Vec::new();
             let mut exceptions = Vec::new();
             for target in targets {
-                let domains = target.domain;
+                let domains = target.domain.as_deref();
                 let location = match (target.path, target.authority) {
                     (None, Some(authority)) => Some(Location {
                         path: None,
@@ -404,7 +529,7 @@ fn rule_line(
                     return Parsed::Unsupported;
                 }
                 let rule = Rule {
-                    domains,
+                    domains: DomainSpec::parse(domains),
                     location,
                     app: app.clone(),
                     chain: chain.clone(),
@@ -435,14 +560,14 @@ fn rule_line(
     if !domain_position_ok(prefix) {
         return Parsed::NotHtml;
     }
-    let domains = if !prefix.is_empty() {
-        Some(prefix.to_string())
+    let domain_position: Option<&str> = if !prefix.is_empty() {
+        Some(prefix)
     } else {
-        bracket_domain
+        bracket_domain.as_deref()
     };
     // uBO writes a hostname on every blocking HTML filter; a generic one is
     // refused by the reference itself.
-    if syntax == Syntax::Ubo && !exception && domains.is_none() {
+    if syntax == Syntax::Ubo && !exception && domain_position.is_none() {
         return Parsed::Unsupported;
     }
     let Ok(chain) = parse_chain(selector, syntax) else {
@@ -450,7 +575,7 @@ fn rule_line(
     };
     let canonical = canonical(&chain, syntax);
     let rule = Rule {
-        domains,
+        domains: DomainSpec::parse(domain_position),
         location,
         app,
         chain,
@@ -727,10 +852,9 @@ fn parse_attribute(inner: &str, syntax: Syntax, compound: &mut Compound) -> Resu
                 if value.is_empty() {
                     return Err(());
                 }
-                compound.content.push(Content::Text {
-                    needle: value.to_string(),
-                    case_insensitive: false,
-                });
+                compound
+                    .content
+                    .push(Content::text(value.to_string(), false));
                 Ok(())
             }
             ("wildcard", "=" | "*=", Some(value)) => {
@@ -883,10 +1007,7 @@ fn pseudo_content(name: &str, arg: &str, syntax: Syntax) -> Result<Vec<Content>,
             if arg.is_empty() {
                 return Err(());
             }
-            Ok(vec![Content::Text {
-                needle: arg.to_string(),
-                case_insensitive: false,
-            }])
+            Ok(vec![Content::text(arg.to_string(), false)])
         }
         Syntax::Ubo => {
             if arg.len() > 3 && arg.starts_with('/') && arg.ends_with("/i") {
@@ -899,10 +1020,7 @@ fn pseudo_content(name: &str, arg: &str, syntax: Syntax) -> Result<Vec<Content>,
                 return Err(());
             }
             // uBO's literal text search is case-insensitive by default.
-            Ok(vec![Content::Text {
-                needle: arg.to_ascii_lowercase(),
-                case_insensitive: true,
-            }])
+            Ok(vec![Content::text(arg.to_ascii_lowercase(), true)])
         }
     }
 }
@@ -1134,6 +1252,7 @@ fn canonical(chain: &[Compound], syntax: Syntax) -> String {
                 Content::Text {
                     needle,
                     case_insensitive,
+                    ..
                 } => {
                     if *case_insensitive {
                         format!("t:{needle}:i")
@@ -1186,14 +1305,17 @@ impl Plan {
         url: &str,
         apps: &[String],
     ) -> Option<Plan> {
+        // Every rule asks about the same host: normalize it once instead of
+        // re-trimming and re-lowercasing it per rule.
+        let host = host.trim_end_matches('.').to_ascii_lowercase();
         let cancelled: HashSet<&str> = exceptions
             .iter()
-            .filter(|rule| rule.applies(host, url, apps))
+            .filter(|rule| rule.applies(&host, url, apps))
             .map(|rule| rule.canonical.as_str())
             .collect();
         let mut kept = Vec::new();
         for rule in rules {
-            if !rule.applies(host, url, apps) || cancelled.contains(rule.canonical.as_str()) {
+            if !rule.applies(&host, url, apps) || cancelled.contains(rule.canonical.as_str()) {
                 continue;
             }
             kept.push(rule.clone());
@@ -1463,10 +1585,11 @@ impl Plan {
 
 impl Rule {
     /// Whether the rule's domain position, location and applications cover
-    /// one page.
+    /// one page. `host` must already be trimmed of its trailing dot and
+    /// lowercased ([`Plan::build_for_apps`] normalizes it once per build).
     fn applies(&self, host: &str, url: &str, apps: &[String]) -> bool {
         if let Some(domains) = &self.domains {
-            if !crate::filter::domains_match(Some(domains), host) {
+            if !domains.matches(host) {
                 return false;
             }
         }
@@ -1511,12 +1634,13 @@ fn content_matches(predicate: &Content, hay: &[u8]) -> bool {
         Content::Text {
             needle,
             case_insensitive,
+            ci,
         } => {
             if hay.is_empty() {
                 return false;
             }
             if *case_insensitive {
-                memchr::memmem::find(&hay.to_ascii_lowercase(), needle.as_bytes()).is_some()
+                ci.as_ref().is_some_and(|ci| ci.is_match(hay))
             } else {
                 memchr::memmem::find(hay, needle.as_bytes()).is_some()
             }
@@ -2120,6 +2244,35 @@ mod tests {
         assert!(out.is_empty());
         assert_eq!(texts, vec!["div[class=\"ad\"]".to_string()]);
         assert!(Plan::build(&rules, &[], "other.test", "/").is_none());
+    }
+
+    #[test]
+    fn a_domain_position_is_read_once_and_matched_the_same_way() {
+        // `.*` stands for any TLD: a whole label at the start or in the
+        // middle of the host.
+        let wild = DomainSpec::parse(Some("Example.*")).expect("spec");
+        assert!(wild.matches("example.com"));
+        assert!(wild.matches("www.example.co.uk"));
+        assert!(!wild.matches("notexample.com"));
+        // A leading `*.` and a bare parent both admit the host and its
+        // subdomains.
+        let suffix = DomainSpec::parse(Some("*.shop.test")).expect("spec");
+        assert!(suffix.matches("shop.test"));
+        assert!(suffix.matches("a.shop.test"));
+        assert!(!suffix.matches("notshop.test"));
+        // `~` excludes; a position with only negations applies elsewhere.
+        let mixed = DomainSpec::parse(Some("~quiet.test, shop.test")).expect("spec");
+        assert!(mixed.matches("shop.test"));
+        assert!(mixed.matches("cdn.shop.test"));
+        assert!(!mixed.matches("quiet.test"));
+        assert!(!mixed.matches("other.test"));
+        let negated_only = DomainSpec::parse(Some("~quiet.test")).expect("spec");
+        assert!(negated_only.matches("any.test"));
+        assert!(!negated_only.matches("quiet.test"));
+        // `*` alone admits everything.
+        assert!(DomainSpec::parse(Some("*"))
+            .expect("spec")
+            .matches("whatever.test"));
     }
 
     #[test]

@@ -524,95 +524,122 @@ fn is_nonce_or_hash(source: &str) -> bool {
 
 /// Class and id tokens used by an HTML body, for generic `##.class` rules.
 ///
-/// A byte scan instead of a parser: attributes are recognised by name
-/// (`class`/`id`) followed by `=`, values split on whitespace and deduped.
-/// False positives (a token inside a script or a comment) are harmless: the
-/// lookup only ever returns rules that already exist in the lists.
+/// A byte scan instead of a parser: one Aho-Corasick pass finds both
+/// attribute names, then a value is recognised by name, `=`, and the same
+/// quoting rules as before. False positives (a token inside a script or a
+/// comment) are harmless: the lookup only ever returns rules that already
+/// exist in the lists.
 pub fn collect_class_id_tokens(body: &[u8]) -> (Vec<String>, Vec<String>) {
     let mut classes = Vec::new();
     let mut ids = Vec::new();
     let mut seen_c = std::collections::HashSet::new();
     let mut seen_i = std::collections::HashSet::new();
-    collect_tokens(body, b"class", &mut classes, &mut seen_c, MAX_CLASS_TOKENS);
-    collect_tokens(body, b"id", &mut ids, &mut seen_i, MAX_ID_TOKENS);
+    let matcher = class_id_matcher();
+    let mut at = 0;
+    while at < body.len() && (classes.len() < MAX_CLASS_TOKENS || ids.len() < MAX_ID_TOKENS) {
+        let Some(hit) = matcher.find(aho_corasick::Input::new(body).span(at..body.len())) else {
+            break;
+        };
+        let start = hit.start();
+        // The name must start an attribute, not sit inside a word or another
+        // attribute's name (`myid=`, `data-class=`).
+        if start > 0 {
+            let prev = body[start - 1];
+            if prev.is_ascii_alphanumeric() || prev == b'-' || prev == b'_' {
+                at = start + 1;
+                continue;
+            }
+        }
+        // Pattern order is what the matcher was built with: 0 = class, 1 = id.
+        let (out, seen, cap) = if hit.pattern().as_usize() == 0 {
+            (&mut classes, &mut seen_c, MAX_CLASS_TOKENS)
+        } else {
+            (&mut ids, &mut seen_i, MAX_ID_TOKENS)
+        };
+        at = match collect_attribute_value(body, hit.end(), out, seen, cap) {
+            // Past the value: its bytes are text, not attribute names.
+            Some(end) => end,
+            None => start + 1,
+        };
+    }
     (classes, ids)
 }
 
-fn collect_tokens(
+/// One `class`/`id` matcher for the whole process: ASCII-case-insensitive
+/// and allocation-free per body.
+fn class_id_matcher() -> &'static aho_corasick::AhoCorasick {
+    static MATCHER: std::sync::OnceLock<aho_corasick::AhoCorasick> = std::sync::OnceLock::new();
+    MATCHER.get_or_init(|| {
+        aho_corasick::AhoCorasick::builder()
+            .ascii_case_insensitive(true)
+            .build(["class", "id"])
+            .expect("a two-literal pattern set always builds")
+    })
+}
+
+/// Reads the value of the attribute whose name just ended at `after_name`,
+/// and returns the index just past it. `None` when there is no `=`: the
+/// caller then resumes one byte in, as a plain scan would.
+fn collect_attribute_value(
     body: &[u8],
-    name: &[u8],
+    after_name: usize,
     out: &mut Vec<String>,
     seen: &mut std::collections::HashSet<String>,
     cap: usize,
-) {
-    let mut i = 0;
-    while i < body.len() && out.len() < cap {
-        if !body[i].eq_ignore_ascii_case(&name[0]) {
-            i += 1;
-            continue;
+) -> Option<usize> {
+    let mut j = after_name;
+    while j < body.len() && body[j] == b' ' {
+        j += 1;
+    }
+    if j >= body.len() || body[j] != b'=' {
+        return None;
+    }
+    j += 1;
+    let mut quote = 0u8;
+    if j < body.len() && (body[j] == b'"' || body[j] == b'\'') {
+        quote = body[j];
+        j += 1;
+    }
+    let start = j;
+    while j < body.len() {
+        let b = body[j];
+        if (quote != 0 && b == quote) || (quote == 0 && (b == b' ' || b == b'>' || b == b'/')) {
+            break;
         }
-        // The name must start an attribute, not sit inside a word or another
-        // attribute's name (`myid=`, `data-class=`).
-        if i > 0 {
-            let prev = body[i - 1];
-            if prev.is_ascii_alphanumeric() || prev == b'-' || prev == b'_' {
-                i += 1;
-                continue;
-            }
+        if quote == 0 && (b == b'\n' || b == b'\r' || b == b'\t') {
+            break;
         }
-        if i + name.len() > body.len() || !body[i..i + name.len()].eq_ignore_ascii_case(name) {
-            i += 1;
-            continue;
-        }
-        let mut j = i + name.len();
-        while j < body.len() && body[j] == b' ' {
-            j += 1;
-        }
-        if j >= body.len() || body[j] != b'=' {
-            i += 1;
-            continue;
+        if j - start > 256 {
+            break;
         }
         j += 1;
-        let mut quote = 0u8;
-        if j < body.len() && (body[j] == b'"' || body[j] == b'\'') {
-            quote = body[j];
-            j += 1;
+    }
+    if quote != 0 && j < body.len() {
+        // Consume the closing quote.
+        j += 1;
+    }
+    if out.len() >= cap {
+        // The name's quota is full but (with two names in one scan) the
+        // other's may not be: still resume past the value so its bytes are
+        // not read as attribute names.
+        return Some(j);
+    }
+    for token in body[start..j.min(body.len())]
+        .split(|b| matches!(b, b' ' | b'\t' | b'\n' | b'\r' | b'"' | b'\''))
+    {
+        if token.is_empty() || token.len() > MAX_TOKEN_LEN {
+            continue;
         }
-        let start = j;
-        while j < body.len() {
-            let b = body[j];
-            if (quote != 0 && b == quote) || (quote == 0 && (b == b' ' || b == b'>' || b == b'/')) {
-                break;
-            }
-            if quote == 0 && (b == b'\n' || b == b'\r' || b == b'\t') {
-                break;
-            }
-            if j - start > 256 {
-                break;
-            }
-            j += 1;
-        }
-        if quote != 0 && j < body.len() {
-            // Consume the closing quote.
-            j += 1;
-        }
-        for token in body[start..j.min(body.len())].split(|b| {
-            matches!(b, b' ' | b'\t' | b'\n' | b'\r' | b'"' | b'\'')
-        }) {
-            if token.is_empty() || token.len() > MAX_TOKEN_LEN {
-                continue;
-            }
-            if let Ok(s) = std::str::from_utf8(token) {
-                if seen.insert(s.to_string()) {
-                    out.push(s.to_string());
-                    if out.len() >= cap {
-                        break;
-                    }
+        if let Ok(s) = std::str::from_utf8(token) {
+            if seen.insert(s.to_string()) {
+                out.push(s.to_string());
+                if out.len() >= cap {
+                    break;
                 }
             }
         }
-        i = j;
     }
+    Some(j)
 }
 
 // ---------------------------------------------------------------- response shape

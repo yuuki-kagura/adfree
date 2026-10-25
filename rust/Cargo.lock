@@ -44,6 +44,7 @@ name = "adfree-core"
 version = "1.0.0"
 dependencies = [
  "adblock",
+ "aho-corasick",
  "base64",
  "flate2",
  "libc",

@@ -20,6 +20,19 @@
 use std::collections::HashMap;
 use std::sync::{Mutex, OnceLock};
 
+/// Upper bound on the leaf cache.
+///
+/// Each entry is a few hundred bytes, but a page can fan out to hosts without
+/// any limit of its own (CDN shards, tracker subdomains), and the cache lives
+/// for the whole session. Once full it is cleared instead of evicting one by
+/// one: the cap is high enough that a real browsing session never reaches it,
+/// so the simpler policy never turns into a per-handshake cost.
+#[cfg(not(test))]
+const MAX_CACHED_LEAVES: usize = 4_096;
+/// Small enough for a test to reach without minting thousands of leaves.
+#[cfg(test)]
+const MAX_CACHED_LEAVES: usize = 8;
+
 /// The local CA: mints leaf certs for the hosts we intercept.
 ///
 /// A `failed()` instance stands in for "no CA loaded yet": issuing reports an
@@ -167,7 +180,13 @@ impl CertificateAuthority {
             cert: cert.der().to_vec(),
             key: leaf_key.serialize_der(),
         };
-        self.cache.lock().unwrap().insert(host, issued.clone());
+        {
+            let mut cache = self.cache.lock().unwrap();
+            if cache.len() >= MAX_CACHED_LEAVES {
+                cache.clear();
+            }
+            cache.insert(host, issued.clone());
+        }
         Ok(issued)
     }
 
@@ -178,6 +197,11 @@ impl CertificateAuthority {
 
     pub fn cached_hosts(&self) -> usize {
         self.cache.lock().unwrap().len()
+    }
+
+    /// The hosts a leaf is already cached for (diagnostics and tests).
+    pub fn cached_host_names(&self) -> Vec<String> {
+        self.cache.lock().unwrap().keys().cloned().collect()
     }
 
     pub fn is_ca(&self) -> bool {
@@ -297,6 +321,23 @@ mod tests {
         ca.issue("other.example.com").expect("second host");
         assert_eq!(ca.cached_hosts(), 2);
         assert_eq!(ca.chain_for(&first).len(), 2);
+    }
+
+    #[test]
+    fn the_leaf_cache_stays_bounded() {
+        let ca = CertificateAuthority::generate().expect("ca");
+        for i in 0..MAX_CACHED_LEAVES {
+            ca.issue(&format!("h{i}.example.com")).expect("leaf");
+        }
+        assert_eq!(ca.cached_hosts(), MAX_CACHED_LEAVES);
+        ca.issue("one-too-many.example.com").expect("leaf");
+        // The cap is a ceiling, not a target: a full cache is cleared rather
+        // than grown, whatever the page named.
+        assert_eq!(ca.cached_hosts(), 1);
+        assert_eq!(
+            ca.cached_host_names(),
+            vec!["one-too-many.example.com".to_string()]
+        );
     }
 
     #[test]

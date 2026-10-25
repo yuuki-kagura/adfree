@@ -32,7 +32,7 @@ use adblock::resources::{
 };
 use base64::engine::general_purpose::STANDARD as BASE64;
 use base64::Engine as _;
-use std::collections::{BTreeSet, HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet, VecDeque};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU8, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, OnceLock, RwLock};
@@ -853,6 +853,11 @@ struct Compiled {
     /// The `$app=` rules, found by [`scan_app_rules`]. `None` when no loaded
     /// list carries one.
     app_rules: Option<AppRules>,
+    /// Plans already built for a page, keyed by `(page, apps)`. A document
+    /// and its subresources ask the same question within one page load; the
+    /// cache keeps that from re-walking every rule and cloning the matches
+    /// per request.
+    html_plans: Mutex<HtmlPlanCache>,
 }
 
 /// One `$app=` rule, read out of a list by [`scan_app_rules`].
@@ -1017,6 +1022,7 @@ impl FilterEngine {
                 js_rules: None,
                 generic_styles: None,
                 app_rules: None,
+                html_plans: Mutex::new(HtmlPlanCache::default()),
             })),
             cache: RwLock::new(DecisionCache::new(1 << 15)),
             build_ns: AtomicU64::new(0),
@@ -1328,6 +1334,7 @@ impl FilterEngine {
             js_rules,
             generic_styles,
             app_rules,
+            html_plans: Mutex::new(HtmlPlanCache::default()),
         });
         *self.inner.write().unwrap() = compiled;
         self.cache.write().unwrap().clear();
@@ -3898,6 +3905,46 @@ impl HtmlPlan {
     }
 }
 
+/// How many page plans stay warm. One entry per concurrently open page is
+/// plenty (a page's subresources arrive within its own load); the bound also
+/// caps what the cloned rule sets can hold.
+const MAX_CACHED_HTML_PLANS: usize = 64;
+
+/// Bounded FIFO cache of the plan built for one `(page, apps)` pair.
+///
+/// `None` is cached as well: most pages have no HTML rule at all, and that
+/// answer costs the full rule walk to produce. The list is short enough that
+/// a linear scan beats hashing the key.
+#[derive(Default)]
+struct HtmlPlanCache {
+    entries: VecDeque<(String, Vec<String>, Option<Arc<HtmlPlan>>)>,
+}
+
+impl HtmlPlanCache {
+    fn get(&self, page: &str, apps: &[String]) -> Option<Option<Arc<HtmlPlan>>> {
+        self.entries
+            .iter()
+            .find(|(p, a, _)| p == page && a.as_slice() == apps)
+            .map(|(_, _, plan)| plan.clone())
+    }
+
+    fn insert(&mut self, page: &str, apps: &[String], plan: Option<Arc<HtmlPlan>>) {
+        if let Some((_, _, slot)) = self
+            .entries
+            .iter_mut()
+            .find(|(p, a, _)| p == page && a.as_slice() == apps)
+        {
+            *slot = plan;
+            return;
+        }
+        if self.entries.len() >= MAX_CACHED_HTML_PLANS {
+            self.entries.pop_front();
+        }
+        self.entries
+            .push_back((page.to_string(), apps.to_vec(), plan));
+    }
+}
+
 /// Reads the rules the crate refuses because of their modifier: `$urltransform`
 /// and the `$removeparam` shapes it does not implement (bare, `~`, and
 /// `/regexp/`; only `=name` ever reached the crate) rewrite the request URL,
@@ -5800,7 +5847,16 @@ impl FilterEngine {
     /// asks about itself and a subresource about the document it came from.
     /// A `$content` exception switches the family off for its pages (see
     /// [`content_vetoed`]); the plan is `None` when no rule applies at all.
-    pub fn html_plan(&self, url: &str, source: &str, request_type: &str) -> Option<HtmlPlan> {
+    ///
+    /// The plan is shared with every other request the same page makes (the
+    /// returned `Arc` is the cached one), so holding it for a response costs
+    /// nothing beyond the page's own entry.
+    pub fn html_plan(
+        &self,
+        url: &str,
+        source: &str,
+        request_type: &str,
+    ) -> Option<Arc<HtmlPlan>> {
         self.html_plan_for_apps(url, source, request_type, &[])
     }
 
@@ -5812,9 +5868,11 @@ impl FilterEngine {
         source: &str,
         request_type: &str,
         apps: &[String],
-    ) -> Option<HtmlPlan> {
+    ) -> Option<Arc<HtmlPlan>> {
         let compiled = self.compiled();
         let rules = compiled.html_rules.as_ref()?;
+        // A `$content` exception is about this one URL and request type, not
+        // the page, so it is answered before (and outside) the cache.
         if content_vetoed(&compiled, url, source, request_type) {
             return None;
         }
@@ -5823,14 +5881,20 @@ impl FilterEngine {
         } else {
             source
         };
-        crate::htmlfilter::Plan::build_for_apps(
+        let mut plans = compiled.html_plans.lock().unwrap();
+        if let Some(plan) = plans.get(page, apps) {
+            return plan;
+        }
+        let plan = crate::htmlfilter::Plan::build_for_apps(
             &rules.rules,
             &rules.exceptions,
             url_host(page),
             page,
             apps,
         )
-        .map(|plan| HtmlPlan { plan })
+        .map(|plan| Arc::new(HtmlPlan { plan }));
+        plans.insert(page, apps, plan.clone());
+        plan
     }
 
     /// How many `$jsonprune` rules they carry (diagnostics).
@@ -7297,7 +7361,7 @@ mod tests {
 
     /// The `$$` / `##^` plan covering one request, the way the HTTPS path
     /// asks about it.
-    fn cuts(fe: &FilterEngine, url: &str, source: &str, kind: &str) -> Option<HtmlPlan> {
+    fn cuts(fe: &FilterEngine, url: &str, source: &str, kind: &str) -> Option<Arc<HtmlPlan>> {
         fe.html_plan(url, source, kind)
     }
 
@@ -7367,6 +7431,25 @@ mod tests {
             .expect("the uBO rule still covers any page")
             .apply(b"<div class=\"ad\">x</div>")
             .is_none());
+    }
+
+    #[test]
+    fn one_page_keeps_one_plan_however_many_requests_it_makes() {
+        let fe = cosmetic_engine("shop.test$$div[class=\"ad\"]\n");
+        let page = "https://shop.test/page";
+        let document = cuts(&fe, page, "", "document").expect("plan");
+        let again = cuts(&fe, page, "", "document").expect("plan");
+        assert!(
+            Arc::ptr_eq(&document, &again),
+            "the page's plan is built once, not per request"
+        );
+        // Every subresource of the same page asks the same question.
+        let sub = cuts(&fe, "https://cdn.test/x.js", page, "script").expect("plan");
+        assert!(Arc::ptr_eq(&document, &sub));
+        // A page no rule covers caches that answer too, instead of walking
+        // every rule again for each of its requests.
+        assert!(cuts(&fe, "https://quiet.test/p", "", "document").is_none());
+        assert!(cuts(&fe, "https://quiet.test/x.js", "https://quiet.test/p", "script").is_none());
     }
 
     /// Whether any `$replace` rule covers a request, the way the HTTPS path

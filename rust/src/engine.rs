@@ -924,6 +924,7 @@ impl Core {
         let mut to_peer = Vec::new();
         let mut reset = false;
         let mut fin_pending = false;
+        let resumed;
         {
             let mut guard = self.relays.lock().unwrap();
             let Some(relay) = guard.get_mut(port) else {
@@ -965,9 +966,14 @@ impl Core {
             }
             // Flush whatever the window now takes. A pure ACK lands here too:
             // it is exactly the event that opens the window further.
+            let was_paused = relay.client_paused;
             for segment in relay.flush_to_client() {
                 out.push(segment);
             }
+            // The peer was left out of the wait set while the backlog was at
+            // its cap; the forwarder has to re-arm it now that ACKs drained
+            // the queue below the low-water mark.
+            resumed = was_paused && !relay.client_paused;
             if reset {
                 relay.close();
             } else if pkt.is_fin && !relay.client_fin {
@@ -986,6 +992,9 @@ impl Core {
         }
         if reset {
             return true;
+        }
+        if resumed {
+            self.wake();
         }
         if !to_peer.is_empty() {
             self.push_to_peer(port, &to_peer);
@@ -2087,15 +2096,21 @@ impl Core {
         fds.extend(
             relays
                 .iter()
-                .map(|(_, fd, connecting, want_write)| libc::pollfd {
-                    fd: *fd,
-                    events: libc::POLLIN
-                        | if *connecting || *want_write {
-                            libc::POLLOUT
-                        } else {
-                            0
-                        },
-                    revents: 0,
+                .map(|(_, fd, connecting, want_write, paused)| {
+                    let write = *connecting || *want_write;
+                    let listen = !*paused;
+                    libc::pollfd {
+                        // A paused relay is left out of the read set. Dropping
+                        // the descriptor entirely, rather than asking for no
+                        // events, matters: POLLHUP is reported whatever the
+                        // requested mask, so a peer that finished sending
+                        // would wake the loop on every pass while its data
+                        // sits unread in the kernel buffer.
+                        fd: if listen || write { *fd } else { -1 },
+                        events: (if listen { libc::POLLIN } else { 0 })
+                            | (if write { libc::POLLOUT } else { 0 }),
+                        revents: 0,
+                    }
                 }),
         );
         fds.extend(udp.iter().map(|(_, fd)| libc::pollfd {
@@ -2247,8 +2262,8 @@ fn forwarder_loop(core: &'static Core) {
 impl Core {
 
     /// One relay's peer socket became readable (or writable again).
-    fn handle_relay_ready(&self, peer: (u16, RawFd, bool, bool), revents: libc::c_short) {
-        let (client_port, fd, was_connecting, was_writing) = peer;
+    fn handle_relay_ready(&self, peer: (u16, RawFd, bool, bool, bool), revents: libc::c_short) {
+        let (client_port, fd, was_connecting, was_writing, _) = peer;
         // A client RST may have marked the relay closed since the poll(); the
         // entry itself is still there (only this thread reaps relays), so
         // matching it back means the descriptor is ours to touch.
@@ -2320,7 +2335,11 @@ impl Core {
                 self.close_relay_from_peer(client_port, false);
                 break;
             }
-            self.relay_peer_bytes(client_port, &buf[..read as usize]);
+            if self.relay_peer_bytes(client_port, &buf[..read as usize]) {
+                // The client is not draining what it already owes: stop
+                // pulling from the peer until the backlog clears.
+                break;
+            }
         }
     }
 
@@ -2502,11 +2521,15 @@ impl Core {
     }
 
     /// Moves server bytes through the splice and writes them back to the client.
-    fn relay_peer_bytes(&self, client_port: u16, bytes: &[u8]) {
-        let (segments, to_peer, restart) = {
+    ///
+    /// Returns `true` when the caller must stop reading the peer socket: the
+    /// client-facing backlog reached its cap, the relay is gone, or the socket
+    /// was replaced and the current descriptor is stale.
+    fn relay_peer_bytes(&self, client_port: u16, bytes: &[u8]) -> bool {
+        let (segments, to_peer, restart, paused) = {
             let mut guard = self.relays.lock().unwrap();
             let Some(relay) = guard.get_mut(client_port) else {
-                return;
+                return true;
             };
             match relay.on_peer_data(bytes) {
                 // The upstream half may want bytes on its own socket (its
@@ -2518,17 +2541,19 @@ impl Core {
                     } else {
                         relay.segments_for_client(&outbound)
                     };
-                    (segments, to_peer, restart)
+                    (segments, to_peer, restart, relay.client_paused())
                 }
                 Err(e) => {
                     crate::logbuf::push(&format!("relay peer step: {e}"));
-                    return;
+                    return true;
                 }
             }
         };
-        if restart && !self.restart_peer_socket(client_port) {
-            crate::logbuf::push("relay: no fresh peer socket for the plain ECH retry");
-            return;
+        if restart {
+            if !self.restart_peer_socket(client_port) {
+                crate::logbuf::push("relay: no fresh peer socket for the plain ECH retry");
+            }
+            return true;
         }
         for segment in segments {
             self.write_raw(&segment);
@@ -2536,6 +2561,7 @@ impl Core {
         if !to_peer.is_empty() {
             self.push_to_peer(client_port, &to_peer);
         }
+        paused
     }
 }
 

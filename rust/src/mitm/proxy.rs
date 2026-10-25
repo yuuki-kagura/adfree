@@ -1336,7 +1336,7 @@ impl ProxySession {
         // and before `$replace`.
         if filter.has_html_rules() {
             if let Some(rules) = filter.html_plan_for_apps(&url, &source, request_type, apps) {
-                plan.html = Some(Arc::new(rules));
+                plan.html = Some(rules);
             }
         }
 
