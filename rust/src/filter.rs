@@ -170,6 +170,16 @@ const GOOGLETAGSERVICES_GPT_JS: &str =
     include_str!("../assets/redirects/googletagservices-gpt.js");
 const AMAZON_APSTAG_JS: &str = include_str!("../assets/redirects/amazon-apstag.js");
 const GOOGLE_IMA3_JS: &str = include_str!("../assets/redirects/google-ima3.js");
+const GOOGLE_ANALYTICS_JS: &str = include_str!("../assets/redirects/google-analytics.js");
+const GOOGLE_ANALYTICS_GA_JS: &str = include_str!("../assets/redirects/google-analytics-ga.js");
+const GEMIUS_JS: &str = include_str!("../assets/redirects/gemius.js");
+const PREBID_ADS_JS: &str = include_str!("../assets/redirects/prebid-ads.js");
+const FINGERPRINTJS2_JS: &str = include_str!("../assets/redirects/fingerprintjs2.js");
+const FINGERPRINTJS3_JS: &str = include_str!("../assets/redirects/fingerprintjs3.js");
+const ATI_SMARTTAG_JS: &str = include_str!("../assets/redirects/ati-smarttag.js");
+const METRIKA_YANDEX_TAG_JS: &str = include_str!("../assets/redirects/metrika-yandex-tag.js");
+const METRIKA_YANDEX_WATCH_JS: &str = include_str!("../assets/redirects/metrika-yandex-watch.js");
+const SCORECARD_BEACON_JS: &str = include_str!("../assets/redirects/scorecardresearch-beacon.js");
 /// The detection-library neutraliser: served in place of BlockAdBlock /
 /// FuckAdBlock, and shipped as the built-in "AdFree Extra" userscript.
 pub const EXTRA_JS: &str = include_str!("../assets/extra.js");
@@ -296,6 +306,71 @@ const REDIRECT_TABLE: &[(&str, &[&str], MimeType, RedirectBody)] = &[
         &["prevent-fab.js"],
         MimeType::ApplicationJavascript,
         RedirectBody::Source(EXTRA_JS),
+    ),
+    // Analytics and fingerprinting stubs. No shipped list names these yet
+    // (the four enabled catalogs have zero live rules for them), so they are
+    // compatibility for lists a user adds. The `.js` spellings are all taken
+    // by the scriptlet bundle; an alias that collides makes the engine drop
+    // the whole redirect, so only the extension-less names are registered.
+    (
+        "google-analytics",
+        &["googletagmanager-gtm"],
+        MimeType::ApplicationJavascript,
+        RedirectBody::Source(GOOGLE_ANALYTICS_JS),
+    ),
+    (
+        "google-analytics-ga",
+        &[],
+        MimeType::ApplicationJavascript,
+        RedirectBody::Source(GOOGLE_ANALYTICS_GA_JS),
+    ),
+    (
+        "gemius",
+        &[],
+        MimeType::ApplicationJavascript,
+        RedirectBody::Source(GEMIUS_JS),
+    ),
+    (
+        "prebid-ads",
+        &[],
+        MimeType::ApplicationJavascript,
+        RedirectBody::Source(PREBID_ADS_JS),
+    ),
+    (
+        "fingerprintjs2",
+        &[],
+        MimeType::ApplicationJavascript,
+        RedirectBody::Source(FINGERPRINTJS2_JS),
+    ),
+    (
+        "fingerprintjs3",
+        &[],
+        MimeType::ApplicationJavascript,
+        RedirectBody::Source(FINGERPRINTJS3_JS),
+    ),
+    (
+        "ati-smarttag",
+        &[],
+        MimeType::ApplicationJavascript,
+        RedirectBody::Source(ATI_SMARTTAG_JS),
+    ),
+    (
+        "metrika-yandex-tag",
+        &[],
+        MimeType::ApplicationJavascript,
+        RedirectBody::Source(METRIKA_YANDEX_TAG_JS),
+    ),
+    (
+        "metrika-yandex-watch",
+        &[],
+        MimeType::ApplicationJavascript,
+        RedirectBody::Source(METRIKA_YANDEX_WATCH_JS),
+    ),
+    (
+        "scorecardresearch-beacon",
+        &[],
+        MimeType::ApplicationJavascript,
+        RedirectBody::Source(SCORECARD_BEACON_JS),
     ),
 ];
 
@@ -7683,7 +7758,7 @@ mod tests {
         assert!(body.starts_with("data:video/mp4;base64,"), "{body}");
 
         // A resource this app does not carry degrades to a plain block.
-        let fe = cosmetic_engine("||shop.test/fake.js$redirect=google-analytics\n");
+        let fe = cosmetic_engine("||shop.test/fake.js$redirect=not-a-resource\n");
         let v = fe.check_url(
             "https://shop.test/fake.js",
             "https://shop.test/",
@@ -7703,7 +7778,7 @@ mod tests {
         let v = fe.check_host("plain.test");
         assert!(v.blocked && !v.redirect, "{v:?}");
         // A resource we cannot serve is not a reason to step aside.
-        let fe = cosmetic_engine("||tracker.test^$redirect=google-analytics\n");
+        let fe = cosmetic_engine("||tracker.test^$redirect=not-a-resource\n");
         assert!(!fe.check_host("tracker.test").redirect);
         // A resource we can serve keeps the redirect the rule asked for.
         let fe = cosmetic_engine("||tracker.test^$redirect=googlesyndication-adsbygoogle\n");
@@ -7771,6 +7846,51 @@ mod tests {
         let fab = text("prevent-fab-3.2.0");
         assert!(fab.contains("BlockAdBlock") && fab.contains("FuckAdBlock"), "{fab}");
         assert!(fab.contains("_checkBait"), "{fab}");
+        // Analytics and fingerprinting stubs: the globals each script exists
+        // to publish have to be there, or the page breaks on the replacement.
+        let ga = text("google-analytics");
+        assert!(ga.contains("window[name] = ga"), "{ga}");
+        assert!(ga.contains("dataLayer"), "{ga}");
+        let ga_old = text("google-analytics-ga");
+        assert!(ga_old.contains("window._gaq") && ga_old.contains("window._gat"), "{ga_old}");
+        let gemius = text("gemius");
+        assert!(gemius.contains("window.GemiusPlayer"), "{gemius}");
+        let prebid = text("prebid-ads");
+        assert!(
+            prebid.contains("canRunAds = true") && prebid.contains("isAdBlockActive = false"),
+            "{prebid}"
+        );
+        let fp2 = text("fingerprintjs2");
+        assert!(
+            fp2.contains("window.Fingerprint2") && fp2.contains("getPromise"),
+            "{fp2}"
+        );
+        let fp3 = text("fingerprintjs3");
+        assert!(
+            fp3.contains("window.FingerprintJS") && fp3.contains("hashComponents"),
+            "{fp3}"
+        );
+        let ati = text("ati-smarttag");
+        assert!(
+            ati.contains("window.ATInternet") && ati.contains("setConfig"),
+            "{ati}"
+        );
+        let metrika = text("metrika-yandex-tag");
+        assert!(
+            metrika.contains("window.ym") && metrika.contains("reachGoal"),
+            "{metrika}"
+        );
+        let metrika_watch = text("metrika-yandex-watch");
+        assert!(
+            metrika_watch.contains("Ya.Metrika")
+                && metrika_watch.contains("yandex_metrika_callbacks"),
+            "{metrika_watch}"
+        );
+        let scorecard = text("scorecardresearch-beacon");
+        assert!(
+            scorecard.contains("window.COMSCORE") && scorecard.contains("beacon"),
+            "{scorecard}"
+        );
         // Every name and alias must be unique: the engine refuses duplicates,
         // and a resource that silently fails to load turns a redirect into a
         // hard block — exactly the breakage the table exists to avoid.

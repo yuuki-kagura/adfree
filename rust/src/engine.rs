@@ -2870,7 +2870,7 @@ mod tests {
         let path = dir.join("dns-list.txt");
         std::fs::write(
             &path,
-            "||ads.test^\n||redir.test^$redirect=nooptext\n||media.test^$redirect=noopmp4-1s\n||missing.test^$redirect=google-analytics\n",
+            "||ads.test^\n||redir.test^$redirect=nooptext\n||media.test^$redirect=noopmp4-1s\n||missing.test^$redirect=not-a-resource\n",
         )
         .expect("write list");
         let lists = vec![FilterListInfo {

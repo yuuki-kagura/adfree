@@ -95,6 +95,12 @@ with `default-features = false` plus `full-regex-handling`, and **without**
 - **Response-body rules** — the modifiers the upstream crate does not
   implement are handled locally: HTML filtering (`$$`, `##^`),
   `$jsonprune`, `$hls`, and the bracket form of `$path` / `$url`.
+- **Redirect resources** — `$redirect` / `$redirect-rule` names resolve to
+  resources embedded in the binary: no-op script/text/CSS/JSON/HTML,
+  transparent image, silent MP4/MP3, VAST/VMAP stubs, the anti-adblock
+  shims (AdSense, GPT, APS, FuckAdBlock) and inert analytics/fingerprint
+  stubs. A name the build cannot serve degrades to the plain block the rule
+  would have produced, and the build-time audit names it in the log.
 - **Per-app rules** — `$app` values match against the uid attribution above;
   the UI also routes or excludes whole apps from the tunnel.
 - **Cosmetic filtering and userscripts** — a script is injected into filtered
