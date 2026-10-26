@@ -279,6 +279,10 @@ class CoreEngine {
      * carries — which is exactly the traffic being filtered.
      */
     fun setConnectionUidLookup(context: Context) {
+        // Below Android 10 the kernel table the core reads is still open to
+        // apps, and it costs no binder round-trip per flow; from Android 10 on
+        // `/proc` is closed, so the framework is the only answer.
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) return
         runCatching {
             git.shin.adfree.core.coreSetUidLookup(FrameworkUidLookup(context.applicationContext))
         }.onFailure { Log.w(tag, "setUidLookup failed", it) }
@@ -642,7 +646,7 @@ data class DownloadResult(
 /**
  * The core's `$app=` attribution, answered by the framework.
  *
- * `ConnectivityManager.getConnectionOwnerUid` (API 34+) is the only
+ * `ConnectivityManager.getConnectionOwnerUid` (API 29+) is the only
  * unprivileged way to learn which app owns a connection: a VpnService may ask
  * it about the flows its own tunnel carries, and the system names their owner
  * from the kernel's socket table on our behalf. `/proc/net/tcp` — what the
@@ -663,7 +667,7 @@ private class FrameworkUidLookup(private val context: Context) :
         remoteIp: String,
         remotePort: UShort,
     ): UInt? {
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.UPSIDE_DOWN_CAKE) return null
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) return null
         return runCatching {
             val connections = context.getSystemService(android.net.ConnectivityManager::class.java)
                 ?: return null
