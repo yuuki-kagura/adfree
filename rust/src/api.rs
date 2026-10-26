@@ -424,6 +424,32 @@ pub fn core_set_https_skip_apps(packages: Vec<String>) {
     guard((), || crate::core().set_https_skip_apps(packages))
 }
 
+/// Replaces the per-app network firewall. `cellular_blocked` and
+/// `wifi_blocked` name packages that must not use that network;
+/// `screen_off_blocked` names packages that must stay offline while the screen
+/// is off. Open flows belonging to a newly restricted app are cut immediately.
+#[uniffi::export]
+pub fn core_set_app_network_policy(
+    cellular_blocked: Vec<String>,
+    wifi_blocked: Vec<String>,
+    screen_off_blocked: Vec<String>,
+) {
+    guard((), || {
+        crate::core().set_app_network_policy(
+            cellular_blocked,
+            wifi_blocked,
+            screen_off_blocked,
+        )
+    })
+}
+
+/// The platform's classification of the default network: 0 unknown, 1 Wi-Fi,
+/// 2 cellular, 3 anything else (Ethernet, VPN over another transport...).
+#[uniffi::export]
+pub fn core_set_network_type(kind: u8) {
+    guard((), || crate::core().set_network_type(kind))
+}
+
 #[uniffi::export]
 pub fn core_check_host(host: String) -> HostVerdictBinding {
     guard(HostVerdictBinding::default(), || {

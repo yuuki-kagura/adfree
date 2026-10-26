@@ -38,7 +38,7 @@ use crate::util::{now_ms, now_ns};
 use std::collections::HashSet;
 use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
 use std::os::unix::io::RawFd;
-use std::sync::atomic::{AtomicBool, AtomicI32, AtomicU16, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI32, AtomicU16, AtomicU64, AtomicU8, Ordering};
 use std::sync::{Arc, Mutex, OnceLock, RwLock};
 
 /// Read size for the TUN descriptor.
@@ -160,6 +160,70 @@ impl Default for Config {
             https_only_mode: false,
         }
     }
+}
+
+/// The active default network, as classified by the platform. Only Wi-Fi and
+/// cellular carry per-app restrictions; anything else is treated as unmetered
+/// and unrestricted.
+pub const NETWORK_UNKNOWN: u8 = 0;
+pub const NETWORK_WIFI: u8 = 1;
+pub const NETWORK_CELLULAR: u8 = 2;
+pub const NETWORK_OTHER: u8 = 3;
+
+/// Per-app firewall rules: packages that must not use the current network, or
+/// must not reach the network at all while the screen is off.
+///
+/// The sets are pushed by the platform (only it knows package names), and a
+/// flow is evaluated against them when it opens and again whenever the network
+/// or screen state changes.
+#[derive(Clone, Default)]
+pub struct AppNetworkPolicy {
+    cellular_blocked: Arc<HashSet<String>>,
+    wifi_blocked: Arc<HashSet<String>>,
+    screen_off_blocked: Arc<HashSet<String>>,
+}
+
+impl AppNetworkPolicy {
+    pub fn is_empty(&self) -> bool {
+        self.cellular_blocked.is_empty()
+            && self.wifi_blocked.is_empty()
+            && self.screen_off_blocked.is_empty()
+    }
+
+    fn blocked_reason(
+        &self,
+        packages: &[String],
+        network: u8,
+        screen_off: bool,
+    ) -> Option<&'static str> {
+        if packages.is_empty() {
+            return None;
+        }
+        if screen_off && packages.iter().any(|p| self.screen_off_blocked.contains(p)) {
+            return Some("app blocked while the screen is off");
+        }
+        match network {
+            NETWORK_WIFI if packages.iter().any(|p| self.wifi_blocked.contains(p)) => {
+                Some("app not allowed on Wi-Fi")
+            }
+            NETWORK_CELLULAR
+                if packages.iter().any(|p| self.cellular_blocked.contains(p)) =>
+            {
+                Some("app not allowed on cellular data")
+            }
+            _ => None,
+        }
+    }
+}
+
+/// Result of trying to open a TCP relay.
+enum RelayStart {
+    Started,
+    /// The app firewall refuses this flow; the caller resets the client and
+    /// logs this reason instead of the generic "connection dropped".
+    Blocked(&'static str),
+    /// No descriptor or no route: fail the client now.
+    Failed,
 }
 
 /// The HTTPS website lists, parsed once per config change.
@@ -287,6 +351,10 @@ pub struct Core {
     /// Packages whose TLS is spliced untouched (per-app HTTPS filtering off).
     /// Replaced as a whole, so a running session keeps the set it opened with.
     https_skip_apps: RwLock<Arc<HashSet<String>>>,
+    /// Per-app network/screen-off restrictions, replaced as a whole.
+    app_network_policy: RwLock<Arc<AppNetworkPolicy>>,
+    /// The active default network, classified by the platform.
+    network_type: AtomicU8,
     /// Packets produced for the tun, collected only in tests: the end-to-end
     /// tests drive the packet loop without a device, and this is where
     /// client-bound segments would land.
@@ -372,6 +440,8 @@ impl Core {
             ech_hosts: Arc::new(crate::mitm::ech::EchHosts::new()),
             https_hosts: RwLock::new(HttpsHosts::default()),
             https_skip_apps: RwLock::new(Arc::new(HashSet::new())),
+            app_network_policy: RwLock::new(Arc::new(AppNetworkPolicy::default())),
+            network_type: AtomicU8::new(NETWORK_UNKNOWN),
             #[cfg(test)]
             outbox: Mutex::new(Vec::new()),
         }
@@ -514,7 +584,92 @@ impl Core {
             // reading the log, so drop both.
             self.uidmap.lock().unwrap().invalidate();
             self.upstream.lock().unwrap().clear();
+            // Apps configured to stay off the network while the screen is off
+            // lose their open flows now, not when they next reconnect.
+            self.drop_restricted_flows();
         }
+    }
+
+    /// Replaces the per-app network firewall. Open flows belonging to a newly
+    /// restricted app are cut immediately.
+    pub fn set_app_network_policy(
+        &self,
+        cellular_blocked: Vec<String>,
+        wifi_blocked: Vec<String>,
+        screen_off_blocked: Vec<String>,
+    ) {
+        *self.app_network_policy.write().unwrap() = Arc::new(AppNetworkPolicy {
+            cellular_blocked: Arc::new(cellular_blocked.into_iter().collect()),
+            wifi_blocked: Arc::new(wifi_blocked.into_iter().collect()),
+            screen_off_blocked: Arc::new(screen_off_blocked.into_iter().collect()),
+        });
+        self.drop_restricted_flows();
+    }
+
+    /// Records the platform's classification of the default network. A change
+    /// reevaluates every open flow against the per-app rules.
+    pub fn set_network_type(&self, network: u8) {
+        if self.network_type.swap(network, Ordering::Relaxed) == network {
+            return;
+        }
+        self.drop_restricted_flows();
+    }
+
+    pub fn network_type(&self) -> u8 {
+        self.network_type.load(Ordering::Relaxed)
+    }
+
+    /// The reason this collection of packages may not use the network right
+    /// now, or `None` when it is allowed.
+    fn app_blocked_reason(&self, packages: &[String]) -> Option<&'static str> {
+        let policy = Arc::clone(&*self.app_network_policy.read().unwrap());
+        policy.blocked_reason(packages, self.network_type(), self.is_screen_off())
+    }
+
+    /// Cuts every TCP relay and retires every UDP mapping whose app is now
+    /// restricted.
+    ///
+    /// Runs on whichever thread pushed the change (the platform callback), so
+    /// descriptors are never closed here: relays are marked closed and dropped
+    /// by the forwarder, and UDP mappings are flagged for the same pass.
+    fn drop_restricted_flows(&self) {
+        let network = self.network_type();
+        let screen_off = self.is_screen_off();
+        let policy = Arc::clone(&*self.app_network_policy.read().unwrap());
+        if policy.is_empty() {
+            return;
+        }
+        let mut resets = Vec::new();
+        {
+            let mut guard = self.relays.lock().unwrap();
+            for (_, relay) in guard.iter_mut() {
+                if relay.closed
+                    || policy
+                        .blocked_reason(&relay.app_packages, network, screen_off)
+                        .is_none()
+                {
+                    continue;
+                }
+                if let Some(rst) = relay.rst_to_client() {
+                    resets.push(rst);
+                }
+                relay.close();
+            }
+        }
+        for rst in resets {
+            self.write_raw(&rst);
+        }
+        {
+            let mut nat = self.udp_nat.lock().unwrap();
+            nat.retire_matching(|flow| {
+                policy
+                    .blocked_reason(&flow.app_packages, network, screen_off)
+                    .is_some()
+            });
+        }
+        // The forwarder owns relay and mapping descriptors; it has to run the
+        // removals and may be parked in poll() right now.
+        self.wake();
     }
 
     pub fn is_screen_off(&self) -> bool {
@@ -782,10 +937,12 @@ impl Core {
             return;
         }
         if pkt.is_syn {
-            if !self.start_tcp_relay(pkt, cfg, out) {
-                // No descriptor or no route: fail the client now instead of
-                // leaving it to a connect timeout.
-                self.reset_tcp(pkt);
+            match self.start_tcp_relay(pkt, cfg, out) {
+                RelayStart::Started => {}
+                // The app firewall refused this flow: say why instead of the
+                // generic "connection dropped" the other failures get.
+                RelayStart::Blocked(reason) => self.reset_tcp_with_reason(pkt, reason),
+                RelayStart::Failed => self.reset_tcp(pkt),
             }
         } else if !pkt.is_rst && !pkt.l4_payload().is_empty() {
             // Data for a flow that predates protection, or whose relay already
@@ -839,6 +996,16 @@ impl Core {
         // while it is built. The cap cannot fill up meanwhile: the table only
         // shrinks while unlocked.
         drop(nat);
+        let app_packages = if self.app_network_policy.read().unwrap().is_empty() {
+            Vec::new()
+        } else {
+            let packages = self.apps_for_udp(pkt);
+            if self.app_blocked_reason(&packages).is_some() {
+                self.stats.inc(&self.stats.udp_dropped);
+                return;
+            }
+            packages
+        };
         let Some(fd) = self.open_peer_socket(server, libc::SOCK_DGRAM) else {
             self.stats.inc(&self.stats.udp_dropped);
             return;
@@ -857,6 +1024,8 @@ impl Core {
             // is rewritten from (addresses and ports swapped).
             template: pkt.raw[..pkt.total_len.min(pkt.raw.len())].to_vec(),
             last_ms: now_ms(),
+            app_packages,
+            retire: false,
         });
         // The reply can only arrive on this descriptor, so the forwarder must
         // start watching it now rather than at its next cadence tick.
@@ -1047,13 +1216,24 @@ impl Core {
     /// filtering is armed and the destination hostname is known; every other
     /// flow is a transparent splice. The one exception is the app's own
     /// injection origin: it is answered locally, with no peer socket at all.
-    fn start_tcp_relay(&self, pkt: &Packet<'_>, cfg: &Config, out: &mut Vec<Vec<u8>>) -> bool {
+    fn start_tcp_relay(
+        &self,
+        pkt: &Packet<'_>,
+        cfg: &Config,
+        out: &mut Vec<Vec<u8>>,
+    ) -> RelayStart {
         let Some(client_ip) = pkt.src_ip() else {
-            return false;
+            return RelayStart::Failed;
         };
         let Some(dst) = pkt.dst_ip() else {
-            return false;
+            return RelayStart::Failed;
         };
+        // The per-app firewall decides before any socket is opened: a blocked
+        // app costs no upstream connection and gets a RST with a reason.
+        let app_packages = self.apps_for_packet(pkt);
+        if let Some(reason) = self.app_blocked_reason(&app_packages) {
+            return RelayStart::Blocked(reason);
+        }
         // The local injection origin: a reserved address (TEST-NET-1) that the
         // app answers out of the tunnel. Nothing is ever dialed for it — and
         // without TLS termination there is nothing to answer with, so a stray
@@ -1064,19 +1244,19 @@ impl Core {
             self.mitm_ready(cfg) && pkt.dst_port == self.mitm_port.load(Ordering::Relaxed);
         if local && !mitm_armed {
             crate::logbuf::push("relay: local origin asked without HTTPS filtering");
-            return false;
+            return RelayStart::Failed;
         }
         let (peer_fd, connecting) = if local {
             (-1, false)
         } else {
             let Some(peer_fd) = self.open_peer_socket(dst, libc::SOCK_STREAM) else {
-                return false;
+                return RelayStart::Failed;
             };
             let connect = connect_fd(peer_fd, dst, pkt.dst_port);
             if connect == Connect::Failed {
                 crate::logbuf::push("relay: connect() to the peer failed");
                 unsafe { libc::close(peer_fd) };
-                return false;
+                return RelayStart::Failed;
             }
             (peer_fd, connect == Connect::InProgress)
         };
@@ -1113,7 +1293,7 @@ impl Core {
                 }
                 Err(e) => {
                     crate::logbuf::push(&format!("open local session: {e}"));
-                    return false;
+                    return RelayStart::Failed;
                 }
             }
         } else if mitm_armed {
@@ -1140,7 +1320,7 @@ impl Core {
                     // Who the flow belongs to, resolved once at SYN time: the
                     // platform names the app the `$app=` rules are about, and
                     // the flow keeps that name for as long as it lives.
-                    proxy.set_apps(self.apps_for_packet(pkt));
+                    proxy.set_apps(app_packages.clone());
                     // Per-app HTTPS exclusions: decided once per flow, like
                     // the app name, and read before any byte reaches rustls.
                     let skip_apps = Arc::clone(&*self.https_skip_apps.read().unwrap());
@@ -1187,13 +1367,14 @@ impl Core {
         ) {
             Some(s) => s,
             // The relay drops here, which closes the peer descriptor.
-            None => return false,
+            None => return RelayStart::Failed,
         };
         // The handshake we just answered consumed one sequence number.
         relay.flow.up_bytes = 1;
         // The client's SYN also carried the scale its window fields use; all
         // later windows are relative to it (RFC 7323).
         relay.flow.client_window_scale = pkt.tcp_window_scale().unwrap_or(0);
+        relay.app_packages = app_packages;
 
         {
             let mut guard = self.relays.lock().unwrap();
@@ -1201,7 +1382,7 @@ impl Core {
                 // A finished relay for this port is waiting for the poller to
                 // reap it. Inserting now would swap it out from under a
                 // concurrent poll(), so let the client retransmit instead.
-                return false;
+                return RelayStart::Failed;
             }
             guard.insert(relay);
         }
@@ -1211,7 +1392,7 @@ impl Core {
         self.wake();
         out.push(syn_ack);
         self.stats.inc(&self.stats.tcp_relayed);
-        true
+        RelayStart::Started
     }
 
     /// Opens a non-blocking socket towards `dst` and asks the app to route it
@@ -1406,6 +1587,16 @@ impl Core {
     /// Kills a connection locally with a RST: the app fails on the spot instead
     /// of waiting for a connect timeout, and no traffic was ever spent.
     fn reset_tcp(&self, pkt: &Packet<'_>) {
+        self.reset_tcp_inner(pkt, None);
+    }
+
+    /// Same reset, but the log names the per-app firewall rule that refused
+    /// the flow.
+    fn reset_tcp_with_reason(&self, pkt: &Packet<'_>, reason: &'static str) {
+        self.reset_tcp_inner(pkt, Some(reason));
+    }
+
+    fn reset_tcp_inner(&self, pkt: &Packet<'_>, reason: Option<&'static str>) {
         let Some(reply) = packet::build_rst(pkt) else {
             return;
         };
@@ -1418,11 +1609,13 @@ impl Core {
         let host = self
             .host_for_ip(pkt.dst_ip())
             .unwrap_or_else(|| pkt.dst_ip_text());
-        let rule = if host.parse::<std::net::IpAddr>().is_ok() {
-            // A bare address only gets here from the encrypted-DNS lists.
-            "connection to encrypted DNS blocked"
-        } else {
-            "connection dropped"
+        let rule = match reason {
+            Some(reason) => reason,
+            None if host.parse::<std::net::IpAddr>().is_ok() => {
+                // A bare address only gets here from the encrypted-DNS lists.
+                "connection to encrypted DNS blocked"
+            }
+            None => "connection dropped",
         };
         let category = if rule.contains("DNS") {
             crate::filter::CAT_TRACKER
@@ -1457,6 +1650,32 @@ impl Core {
         }
 
         let host = query.qname.as_str();
+        // The app firewall runs before the lists: an app barred from this
+        // network must not even get a filtered answer (a cached NXDOMAIN or a
+        // sinkhole IP would still tell it whether a host exists).
+        if !self.app_network_policy.read().unwrap().is_empty() {
+            let packages = self.apps_for_udp(pkt);
+            if let Some(reason) = self.app_blocked_reason(&packages) {
+                self.stats.inc(&self.stats.dns_blocked);
+                let saved = BYTES_PER_BLOCKED_REQUEST;
+                self.stats.add(&self.stats.bytes_saved, saved);
+                if let Some(reply) = dns::synthesize_reply(pkt, &query, cfg.block_mode) {
+                    out.push(reply);
+                }
+                self.log_event(events::block_event(
+                    events::ACTION_BLOCK,
+                    host,
+                    &pkt.dst_ip_text(),
+                    reason,
+                    "App firewall",
+                    crate::filter::CAT_AD,
+                    0,
+                    saved as u32,
+                    pkt.version == 6,
+                ));
+                return;
+            }
+        }
         let t0 = now_ns();
         let verdict = self.filter.check_host(host);
         let decision_ns = now_ns() - t0;
@@ -1951,7 +2170,8 @@ impl Core {
     /// flow, not of the request, and asking later would race with the first
     /// request of the same connection.
     fn apps_for_packet(&self, pkt: &Packet<'_>) -> Vec<String> {
-        let need_apps = self.filter.has_app_rules()
+        let need_apps = !self.app_network_policy.read().unwrap().is_empty()
+            || self.filter.has_app_rules()
             || !self.https_skip_apps.read().unwrap().is_empty();
         if !need_apps {
             return Vec::new();
@@ -1973,6 +2193,29 @@ impl Core {
             // real process.
             None => self.uidmap.lock().unwrap().lookup_tcp(pkt.src_port),
         };
+        self.packages_for_uid(uid)
+    }
+
+    /// Packages owning one UDP datagram. The platform callback answers on
+    /// Android 14+; older releases fall back to the kernel's socket table.
+    fn apps_for_udp(&self, pkt: &Packet<'_>) -> Vec<String> {
+        let lookup = self.uid_lookup.read().unwrap().clone();
+        let uid = match lookup {
+            Some(lookup) => lookup
+                .owner_uid(
+                    PROTO_UDP,
+                    pkt.src_ip_text(),
+                    pkt.src_port,
+                    pkt.dst_ip_text(),
+                    pkt.dst_port,
+                )
+                .unwrap_or(0),
+            None => self.uidmap.lock().unwrap().lookup(pkt.src_port),
+        };
+        self.packages_for_uid(uid)
+    }
+
+    fn packages_for_uid(&self, uid: u32) -> Vec<String> {
         if uid == 0 {
             return Vec::new();
         }
@@ -3041,6 +3284,111 @@ mod tests {
             core.apps_for_packet(&pkt),
             vec!["com.example.news".to_string()],
             "the exclusion list alone must resolve the app"
+        );
+    }
+
+    /// The app firewall is evaluated before any peer socket is opened: the
+    /// same flow that is relayed on Wi-Fi is reset on cellular when its app is
+    /// barred from that network.
+    #[test]
+    fn app_policy_blocks_a_tcp_flow_on_the_wrong_network() {
+        let core = Core::new();
+        core.set_socket_protector(Arc::new(AllowAll));
+        core.set_uid_apps(vec![(10_123, vec!["com.example.news".to_string()])]);
+        core.pin_uid_for_port(40000, 10_123);
+        core.set_app_network_policy(
+            vec!["com.example.news".to_string()],
+            Vec::new(),
+            Vec::new(),
+        );
+
+        core.set_network_type(NETWORK_WIFI);
+        core.handle_packet(&tcp_syn(40000, [93, 184, 216, 34], 80));
+        assert_eq!(core.relay_count(), 1, "Wi-Fi is allowed by this policy");
+
+        let other = Core::new();
+        other.set_socket_protector(Arc::new(AllowAll));
+        other.set_uid_apps(vec![(10_123, vec!["com.example.news".to_string()])]);
+        other.pin_uid_for_port(40000, 10_123);
+        other.set_app_network_policy(
+            vec!["com.example.news".to_string()],
+            Vec::new(),
+            Vec::new(),
+        );
+        other.set_network_type(NETWORK_CELLULAR);
+        other.handle_packet(&tcp_syn(40000, [93, 184, 216, 34], 80));
+        assert_eq!(other.relay_count(), 0, "no peer socket may be opened");
+        let reset = other.take_outbox();
+        assert_eq!(reset.len(), 1, "the client gets one segment back");
+        // IPv4 + TCP headers: the flags byte is 13 bytes into the TCP header.
+        assert_eq!(reset[0][33] & 0x04, 0x04, "and it is a RST");
+    }
+
+    /// Turning the screen off cuts an open flow belonging to an app that is
+    /// configured to stay offline, without waiting for a reconnect.
+    #[test]
+    fn screen_off_cuts_open_flows_of_restricted_apps() {
+        let core = Core::new();
+        core.set_socket_protector(Arc::new(AllowAll));
+        core.set_uid_apps(vec![(10_123, vec!["com.example.news".to_string()])]);
+        core.pin_uid_for_port(40000, 10_123);
+        core.set_app_network_policy(Vec::new(), Vec::new(), vec!["com.example.news".to_string()]);
+        core.set_network_type(NETWORK_WIFI);
+        core.handle_packet(&tcp_syn(40000, [93, 184, 216, 34], 80));
+        assert_eq!(core.relay_count(), 1);
+
+        core.set_screen_off(true);
+        {
+            let guard = core.relays.lock().unwrap();
+            assert!(
+                guard.get(40000).map(|r| r.closed).unwrap_or(false),
+                "the relay is marked closed so the forwarder can reap it safely"
+            );
+        }
+        core.prune_relays();
+        assert_eq!(core.relay_count(), 0);
+    }
+
+    /// DNS queries from a restricted app are refused before the filter lists
+    /// run: a filtered answer would still leak whether a host exists.
+    #[test]
+    fn app_policy_blocks_dns_before_the_lists() {
+        struct FixedUid(u32);
+        impl crate::api::ConnectionUidLookup for FixedUid {
+            fn owner_uid(
+                &self,
+                _protocol: u8,
+                _local_ip: String,
+                _local_port: u16,
+                _remote_ip: String,
+                _remote_port: u16,
+            ) -> Option<u32> {
+                Some(self.0)
+            }
+        }
+
+        let core = Core::new();
+        core.set_uid_lookup(Arc::new(FixedUid(10_123)));
+        core.set_uid_apps(vec![(10_123, vec!["com.example.news".to_string()])]);
+        core.set_network_type(NETWORK_CELLULAR);
+        core.set_app_network_policy(
+            vec!["com.example.news".to_string()],
+            Vec::new(),
+            Vec::new(),
+        );
+
+        assert_eq!(dns_reply_rcode(&core, "example.test"), Some(3));
+        assert_eq!(
+            core.snapshot().dns_queries,
+            0,
+            "the blocked query never reaches the upstream resolver"
+        );
+
+        core.set_app_network_policy(Vec::new(), Vec::new(), Vec::new());
+        assert_ne!(
+            dns_reply_rcode(&core, "example.test"),
+            Some(3),
+            "clearing the policy restores forwarding"
         );
     }
 

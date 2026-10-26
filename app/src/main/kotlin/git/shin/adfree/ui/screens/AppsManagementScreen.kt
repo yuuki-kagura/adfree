@@ -706,8 +706,9 @@ fun AppDetailsFirewallSheet(
             color = AdGuardTextMuted,
         )
         Text(
-            text = "Bản dựng này chưa chặn lưu lượng theo loại mạng; " +
-                "các công tắc Wi-Fi/di động lưu lựa chọn cho giai đoạn tiếp theo.",
+            text = "Các công tắc bên dưới do VPN thực thi cho kết nối mới và cả " +
+                "kết nối đang mở. App đang \"Bỏ qua lọc\" không đi qua VPN nên " +
+                "không bị chặn theo mạng.",
             fontSize = 10.sp,
             color = AdGuardOrangeWarning,
         )
@@ -790,6 +791,18 @@ fun AppDetailsFirewallSheet(
                     )
                 }
             }
+        }
+
+        if (!app.isFilterRouted &&
+            (!app.isCellularAllowed || !app.isWifiAllowed || app.blockWhenScreenOff)
+        ) {
+            Spacer(modifier = Modifier.height(10.dp))
+            Text(
+                text = "App này đang bỏ qua VPN: các giới hạn mạng ở trên không " +
+                    "có tác dụng cho tới khi bật lại lọc.",
+                fontSize = 10.sp,
+                color = AdGuardOrangeWarning,
+            )
         }
 
         Spacer(modifier = Modifier.height(16.dp))

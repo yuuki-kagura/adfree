@@ -1832,6 +1832,14 @@ class AdGuardRepository(
         engine.setHttpsSkipApps(
             rules.filterNot { it.isHttpsFiltered }.map { it.packageName }
         )
+        // The network/screen-off restrictions are enforced by the core: apps
+        // outside the tunnel are not seen there, but the lists are harmless
+        // for them and keep the mapping in one place.
+        engine.setAppNetworkPolicy(
+            cellularBlocked = rules.filterNot { it.isCellularAllowed }.map { it.packageName },
+            wifiBlocked = rules.filterNot { it.isWifiAllowed }.map { it.packageName },
+            screenOffBlocked = rules.filter { it.blockWhenScreenOff }.map { it.packageName },
+        )
     }
 
     /** Apps kept out of the tunnel (read by VpnService during establish). */

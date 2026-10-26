@@ -83,6 +83,9 @@ pub struct Relay {
     /// The client sent its FIN while bytes were still queued for the peer: the
     /// half-close waits until the queue is empty (writes are refused after).
     pub shutdown_after_flush: bool,
+    /// Packages owning this flow, resolved once at SYN time. The app firewall
+    /// reevaluates them when the network or screen state changes.
+    pub app_packages: Vec<String>,
 }
 
 impl Relay {
@@ -113,6 +116,7 @@ impl Relay {
             fin_after_flush: false,
             flushing: false,
             shutdown_after_flush: false,
+            app_packages: Vec::new(),
         }
     }
 
@@ -142,6 +146,7 @@ impl Relay {
             fin_after_flush: false,
             flushing: false,
             shutdown_after_flush: false,
+            app_packages: Vec::new(),
         }
     }
 

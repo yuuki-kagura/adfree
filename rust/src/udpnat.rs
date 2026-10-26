@@ -41,6 +41,12 @@ pub struct UdpFlow {
     /// from (addresses and ports swapped, checksums recomputed).
     pub template: Vec<u8>,
     pub last_ms: u64,
+    /// Packages that own the mapping, resolved once when it opens. The app
+    /// firewall reevaluates them when the network or screen state changes.
+    pub app_packages: Vec<String>,
+    /// Set by a policy change from another thread; the forwarder drops the
+    /// mapping on its next pass, so its descriptor is never closed under poll.
+    pub retire: bool,
 }
 
 impl Drop for UdpFlow {
@@ -99,19 +105,36 @@ impl UdpNat {
         self.flows.clear();
     }
 
-    /// Frees mappings that have been silent for too long; their descriptors
-    /// are closed by [`UdpFlow`]'s drop.
+    /// Marks mappings matching `retire` for removal. The descriptors are owned
+    /// by the forwarder thread, so this only flags them; [`Self::expire`]
+    /// performs the actual drop on that thread.
+    pub fn retire_matching(&mut self, retire: impl Fn(&UdpFlow) -> bool) {
+        for flow in self.flows.values_mut() {
+            if retire(flow) {
+                flow.retire = true;
+            }
+        }
+    }
+
+    /// Frees mappings that have been silent for too long or were retired by a
+    /// policy change; their descriptors are closed by [`UdpFlow`]'s drop.
     pub fn expire(&mut self, now: u64) -> usize {
         let before = self.flows.len();
-        self.flows
-            .retain(|_, f| now.saturating_sub(f.last_ms) < UDP_FLOW_IDLE_MS);
+        self.flows.retain(|_, f| {
+            !f.retire && now.saturating_sub(f.last_ms) < UDP_FLOW_IDLE_MS
+        });
         before - self.flows.len()
     }
 
     /// The descriptors to poll, each paired with the key that identifies its
-    /// mapping when a reply comes in.
+    /// mapping when a reply comes in. Retired mappings are left out: they will
+    /// be dropped on the next housekeeping pass.
     pub fn poll_snapshot(&self) -> Vec<(UdpKey, RawFd)> {
-        self.flows.values().map(|f| (f.key, f.fd)).collect()
+        self.flows
+            .values()
+            .filter(|f| !f.retire)
+            .map(|f| (f.key, f.fd))
+            .collect()
     }
 }
 
@@ -136,6 +159,8 @@ mod tests {
             key: key(5000),
             template: Vec::new(),
             last_ms: 1000,
+            app_packages: Vec::new(),
+            retire: false,
         });
         assert_eq!(nat.len(), 1);
         assert!(nat.get_mut(&key(5000)).is_some());
@@ -150,6 +175,8 @@ mod tests {
             key: key(5000),
             template: Vec::new(),
             last_ms: 1000,
+            app_packages: Vec::new(),
+            retire: false,
         });
         // Still fresh just under the threshold...
         assert_eq!(nat.expire(1000 + UDP_FLOW_IDLE_MS - 1), 0);
@@ -166,6 +193,8 @@ mod tests {
             key: key(5000),
             template: Vec::new(),
             last_ms: 1000,
+            app_packages: Vec::new(),
+            retire: false,
         });
         let snapshot = nat.poll_snapshot();
         assert_eq!(snapshot.len(), 1);

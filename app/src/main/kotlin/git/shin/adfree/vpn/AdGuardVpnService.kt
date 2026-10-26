@@ -7,6 +7,10 @@ import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
+import android.net.ConnectivityManager
+import android.net.Network
+import android.net.NetworkCapabilities
+import android.net.NetworkRequest
 import android.net.VpnService
 import android.os.Build
 import android.os.ParcelFileDescriptor
@@ -14,12 +18,14 @@ import android.util.Log
 import androidx.core.app.NotificationCompat
 import git.shin.adfree.AdGuardApplication
 import git.shin.adfree.BuildConfig
+import git.shin.adfree.core.CoreEngine
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
 import java.io.File
+import java.util.concurrent.ConcurrentHashMap
 
 /**
  * A real VpnService: build the TUN, `protect()` the DNS sockets, hand the fd
@@ -72,6 +78,40 @@ class AdGuardVpnService : VpnService() {
         }
     }
 
+    /**
+     * The TUN hides which physical network carries a flow, so the per-app
+     * Wi-Fi/cellular switches need the transports below the VPN. While the
+     * tunnel is the default network, `activeNetwork` is the VPN itself and its
+     * capabilities do not name the underlying transport; the request below
+     * asks for every validated non-VPN network instead.
+     */
+    private val activeTransports = ConcurrentHashMap<Network, NetworkCapabilities>()
+    private val connectivity by lazy { getSystemService(ConnectivityManager::class.java) }
+    private val networkCallback = object : ConnectivityManager.NetworkCallback() {
+        override fun onCapabilitiesChanged(network: Network, caps: NetworkCapabilities) {
+            activeTransports[network] = caps
+            pushNetworkType()
+        }
+
+        override fun onLost(network: Network) {
+            activeTransports.remove(network)
+            pushNetworkType()
+        }
+    }
+
+    private fun pushNetworkType() {
+        val caps = activeTransports.values
+        val kind = when {
+            caps.any { it.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) } ->
+                CoreEngine.NETWORK_WIFI
+            caps.any { it.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR) } ->
+                CoreEngine.NETWORK_CELLULAR
+            caps.isEmpty() -> CoreEngine.NETWORK_UNKNOWN
+            else -> CoreEngine.NETWORK_OTHER
+        }
+        container.coreEngine.setNetworkType(kind)
+    }
+
     override fun onCreate() {
         super.onCreate()
         registerReceiver(
@@ -90,6 +130,14 @@ class AdGuardVpnService : VpnService() {
                 addDataScheme("package")
             },
         )
+        val request = NetworkRequest.Builder()
+            .addCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
+            .addCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED)
+            .addCapability(NetworkCapabilities.NET_CAPABILITY_NOT_VPN)
+            .build()
+        runCatching {
+            connectivity?.registerNetworkCallback(request, networkCallback)
+        }.onFailure { Log.w(TAG, "network callback registration failed", it) }
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -207,6 +255,9 @@ class AdGuardVpnService : VpnService() {
         // The framework answers that for the flows this tunnel carries, which
         // is the only source Android leaves to apps.
         container.coreEngine.setConnectionUidLookup(this)
+        // The per-app network switches read this classification; set it before
+        // the first packet so a blocked app never slips through on startup.
+        pushNetworkType()
         container.coreEngine.start(fd)
         container.vpnController.onVpnStarted()
         Log.i(TAG, "TUN up (fd=$fd), dns=${dns.address}")
@@ -243,6 +294,8 @@ class AdGuardVpnService : VpnService() {
         serviceScope.cancel()
         runCatching { unregisterReceiver(screenReceiver) }
         runCatching { unregisterReceiver(packageReceiver) }
+        runCatching { connectivity?.unregisterNetworkCallback(networkCallback) }
+        activeTransports.clear()
         stopVpn()
         super.onDestroy()
     }

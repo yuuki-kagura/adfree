@@ -171,6 +171,32 @@ class CoreEngine {
             .onFailure { Log.w(tag, "setHttpsSkipApps failed", it) }
     }
 
+    /**
+     * Per-app firewall: packages barred from a network or from going online
+     * while the screen is off. The core cuts open flows of an app that becomes
+     * restricted, so no tunnel restart is needed.
+     */
+    fun setAppNetworkPolicy(
+        cellularBlocked: List<String>,
+        wifiBlocked: List<String>,
+        screenOffBlocked: List<String>,
+    ) {
+        runCatching {
+            git.shin.adfree.core.coreSetAppNetworkPolicy(
+                cellularBlocked = cellularBlocked,
+                wifiBlocked = wifiBlocked,
+                screenOffBlocked = screenOffBlocked,
+            )
+        }.onFailure { Log.w(tag, "setAppNetworkPolicy failed", it) }
+    }
+
+    /** The default network, classified by the VPN service's network callback. */
+    fun setNetworkType(kind: Int) {
+        runCatching {
+            git.shin.adfree.core.coreSetNetworkType(kind.coerceIn(0, 3).toByte().toUByte())
+        }.onFailure { Log.w(tag, "setNetworkType failed", it) }
+    }
+
     // --------------------------------------------------------------- filters
 
     /**
@@ -577,6 +603,12 @@ class CoreEngine {
         private const val TAG = "AdFreeCore"
         private const val SOCKET_COUNT = 4
         private var pendingStart = true
+
+        /** Must match `NETWORK_*` in `rust/src/engine.rs`. */
+        const val NETWORK_UNKNOWN = 0
+        const val NETWORK_WIFI = 1
+        const val NETWORK_CELLULAR = 2
+        const val NETWORK_OTHER = 3
 
         @Volatile
         var screenOffFlag = false

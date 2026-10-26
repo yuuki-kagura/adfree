@@ -787,6 +787,8 @@ internal object IntegrityCheckingUniffiLib {
     ): Int
     external fun uniffi_adfree_core_checksum_func_core_script_text(
     ): Int
+    external fun uniffi_adfree_core_checksum_func_core_set_app_network_policy(
+    ): Int
     external fun uniffi_adfree_core_checksum_func_core_set_data_root(
     ): Int
     external fun uniffi_adfree_core_checksum_func_core_set_doh_ranges(
@@ -796,6 +798,8 @@ internal object IntegrityCheckingUniffiLib {
     external fun uniffi_adfree_core_checksum_func_core_set_lists(
     ): Int
     external fun uniffi_adfree_core_checksum_func_core_set_lists_async(
+    ): Int
+    external fun uniffi_adfree_core_checksum_func_core_set_network_type(
     ): Int
     external fun uniffi_adfree_core_checksum_func_core_set_resolver(
     ): Int
@@ -935,6 +939,8 @@ internal object UniffiLib {
     ): RustBuffer.ByValue
     external fun uniffi_adfree_core_fn_func_core_script_text(`id`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
+    external fun uniffi_adfree_core_fn_func_core_set_app_network_policy(`cellularBlocked`: RustBuffer.ByValue,`wifiBlocked`: RustBuffer.ByValue,`screenOffBlocked`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    ): Unit
     external fun uniffi_adfree_core_fn_func_core_set_data_root(`path`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): Byte
     external fun uniffi_adfree_core_fn_func_core_set_doh_ranges(`ranges`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
@@ -945,6 +951,8 @@ internal object UniffiLib {
     ): Byte
     external fun uniffi_adfree_core_fn_func_core_set_lists_async(`lists`: RustBuffer.ByValue,`userRules`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): Byte
+    external fun uniffi_adfree_core_fn_func_core_set_network_type(`kind`: Byte,uniffi_out_err: UniffiRustCallStatus, 
+    ): Unit
     external fun uniffi_adfree_core_fn_func_core_set_resolver(`host`: RustBuffer.ByValue,`port`: Short,uniffi_out_err: UniffiRustCallStatus, 
     ): Unit
     external fun uniffi_adfree_core_fn_func_core_set_screen_off(`screenOff`: Byte,uniffi_out_err: UniffiRustCallStatus, 
@@ -1194,6 +1202,9 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
     if ((lib.uniffi_adfree_core_checksum_func_core_script_text() and 0xFFFF) != 46210) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
+    if ((lib.uniffi_adfree_core_checksum_func_core_set_app_network_policy() and 0xFFFF) != 8237) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
     if ((lib.uniffi_adfree_core_checksum_func_core_set_data_root() and 0xFFFF) != 27462) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
@@ -1207,6 +1218,9 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if ((lib.uniffi_adfree_core_checksum_func_core_set_lists_async() and 0xFFFF) != 27928) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if ((lib.uniffi_adfree_core_checksum_func_core_set_network_type() and 0xFFFF) != 22213) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if ((lib.uniffi_adfree_core_checksum_func_core_set_resolver() and 0xFFFF) != 2771) {
@@ -4008,6 +4022,24 @@ public object FfiConverterSequenceTypeUidApps: FfiConverterRustBuffer<List<UidAp
     
 
         /**
+         * Replaces the per-app network firewall. `cellular_blocked` and
+         * `wifi_blocked` name packages that must not use that network;
+         * `screen_off_blocked` names packages that must stay offline while the screen
+         * is off. Open flows belonging to a newly restricted app are cut immediately.
+         */ fun `coreSetAppNetworkPolicy`(`cellularBlocked`: List<kotlin.String>, `wifiBlocked`: List<kotlin.String>, `screenOffBlocked`: List<kotlin.String>)
+        = 
+    uniffiRustCall() { _status ->
+    UniffiLib.uniffi_adfree_core_fn_func_core_set_app_network_policy(
+    
+        
+        FfiConverterSequenceString.lower(`cellularBlocked`),
+        FfiConverterSequenceString.lower(`wifiBlocked`),
+        FfiConverterSequenceString.lower(`screenOffBlocked`),_status)
+}
+    
+    
+
+        /**
          * Hands the core the directory it owns: filter bodies, script bodies, the CA
          * and the database all live under it. The platform calls this once with the
          * app's files directory; later calls are a no-op, so a reconnect never
@@ -4082,6 +4114,20 @@ public object FfiConverterSequenceTypeUidApps: FfiConverterRustBuffer<List<UidAp
 }
     )
     }
+    
+
+        /**
+         * The platform's classification of the default network: 0 unknown, 1 Wi-Fi,
+         * 2 cellular, 3 anything else (Ethernet, VPN over another transport...).
+         */ fun `coreSetNetworkType`(`kind`: kotlin.UByte)
+        = 
+    uniffiRustCall() { _status ->
+    UniffiLib.uniffi_adfree_core_fn_func_core_set_network_type(
+    
+        
+        FfiConverterUByte.lower(`kind`),_status)
+}
+    
     
 
         /**
