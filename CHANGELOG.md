@@ -1,3 +1,10 @@
+## [1.1.1](https://github.com/tachibana-shin/adfree/compare/v1.1.0...v1.1.1) (2026-10-26)
+
+
+### Bug Fixes
+
+* **android:** preserve JNA classes in release ([b6b7b59](https://github.com/tachibana-shin/adfree/commit/b6b7b59e33282223f7ccd5c0003f119b620eb67a))
+
 # [1.1.0](https://github.com/tachibana-shin/adfree/compare/v1.0.0...v1.1.0) (2026-10-26)
 
 
