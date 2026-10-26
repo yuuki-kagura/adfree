@@ -1838,13 +1838,15 @@ class AdGuardRepository(
         engine.setHttpsSkipApps(
             rules.filterNot { it.isHttpsFiltered }.map { it.packageName }
         )
-        // The network/screen-off restrictions are enforced by the core: apps
-        // outside the tunnel are not seen there, but the lists are harmless
-        // for them and keep the mapping in one place.
+        // The network/screen-off restrictions are the firewall module: with it
+        // off the core gets empty lists, which it already treats as "no
+        // restrictions". Tunnel routing and HTTPS filtering are separate
+        // switches and keep working.
+        val restricted = if (_settings.value.isFirewallEnabled) rules else emptyList<AppFirewallRule>()
         engine.setAppNetworkPolicy(
-            cellularBlocked = rules.filterNot { it.isCellularAllowed }.map { it.packageName },
-            wifiBlocked = rules.filterNot { it.isWifiAllowed }.map { it.packageName },
-            screenOffBlocked = rules.filter { it.blockWhenScreenOff }.map { it.packageName },
+            cellularBlocked = restricted.filterNot { it.isCellularAllowed }.map { it.packageName },
+            wifiBlocked = restricted.filterNot { it.isWifiAllowed }.map { it.packageName },
+            screenOffBlocked = restricted.filter { it.blockWhenScreenOff }.map { it.packageName },
         )
     }
 

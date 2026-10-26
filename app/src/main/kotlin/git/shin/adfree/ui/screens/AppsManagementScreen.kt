@@ -121,9 +121,13 @@ fun AppsManagementScreen(
                     color = AdGuardTextPrimary
                 )
                 Text(
-                    text = "${state.appFirewallRules.size} ứng dụng • chọn app nào được lọc",
+                    text = if (state.settings.isFirewallEnabled) {
+                        "${state.appFirewallRules.size} ứng dụng • chọn app nào được lọc"
+                    } else {
+                        "Tường lửa đang tắt — giới hạn mạng theo app chưa áp dụng"
+                    },
                     fontSize = 12.sp,
-                    color = AdGuardTextMuted
+                    color = if (state.settings.isFirewallEnabled) AdGuardTextMuted else AdGuardOrangeWarning
                 )
             }
         }

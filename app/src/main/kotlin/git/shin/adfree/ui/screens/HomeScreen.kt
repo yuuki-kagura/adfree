@@ -172,6 +172,17 @@ fun HomeScreen(
             ModuleRow()
 
             ModuleToggleCard(
+                title = "Tường lửa",
+                subtitle = "Giới hạn Wi-Fi, dữ liệu di động và tắt màn hình theo ứng dụng",
+                icon = Icons.Default.Shield,
+                isChecked = state.settings.isFirewallEnabled,
+                onCheckedChange = { viewModel.onIntent(AdGuardIntent.ToggleFirewall) },
+                accentColor = AdGuardGreenPrimary
+            )
+
+            ModuleRow()
+
+            ModuleToggleCard(
                 title = "Chế độ tiết kiệm",
                 subtitle = "Giảm số lần đánh thức CPU để tăng thời lượng pin",
                 icon = Icons.Default.BatteryChargingFull,

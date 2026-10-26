@@ -718,6 +718,17 @@ pub const MODULE_TRACKING: u8 = 1 << 1;
 pub const MODULE_DNS: u8 = 1 << 2;
 pub const MODULES_ALL: u8 = MODULE_ADS | MODULE_TRACKING | MODULE_DNS;
 
+/// Whether a rule/list of `category` belongs to a module that is on. Malware
+/// and the user's own rules belong to neither module, and DNS has no
+/// categories of its own, so both always pass.
+fn category_enabled_by(flags: u8, category: u8) -> bool {
+    match category {
+        CAT_AD | CAT_ANNOYANCE => flags & MODULE_ADS != 0,
+        CAT_TRACKER | CAT_ANALYTICS | CAT_SOCIAL => flags & MODULE_TRACKING != 0,
+        _ => true,
+    }
+}
+
 /// Everything needed to (re)build and identify one subscription.
 #[derive(Clone, Debug)]
 pub struct FilterListInfo {
@@ -1063,9 +1074,15 @@ pub struct FilterEngine {
     /// Total time spent building engines (diagnostics).
     build_ns: AtomicU64,
     pending_builds: AtomicUsize,
+    /// Monotonic id of the newest build started. A build that finishes after
+    /// a newer one started must not publish: the newest list snapshot (and
+    /// module switch) is the one that wins.
+    build_seq: AtomicU64,
     generation: AtomicU64,
-    /// Enabled ad/tracking/DNS modules, read on every decision so a switch
-    /// takes effect without rebuilding the compiled filter.
+    /// Enabled ad/tracking/DNS modules. Network decisions read them live, so
+    /// flipping a switch gates matching rules without a rebuild; cosmetics
+    /// have no per-rule category, so the core recompiles when a module flips
+    /// and [`Self::rebuild`] leaves out the lists of the module that is off.
     module_flags: AtomicU8,
     /// Lists whose body could not be read in the last build, keyed by list id.
     /// The platform turns these into the row's "last error" so an enabled
@@ -1102,6 +1119,7 @@ impl FilterEngine {
             cache: RwLock::new(DecisionCache::new(1 << 15)),
             build_ns: AtomicU64::new(0),
             pending_builds: AtomicUsize::new(0),
+            build_seq: AtomicU64::new(0),
             generation: AtomicU64::new(0),
             module_flags: AtomicU8::new(MODULES_ALL),
             build_errors: Mutex::new(Vec::new()),
@@ -1114,8 +1132,11 @@ impl FilterEngine {
         self.build_errors.lock().unwrap().clone()
     }
 
-    /// Applies the three protection switches. No rebuild is needed: the flags
-    /// are consulted after a rule matches, so the compiled index stays warm.
+    /// Applies the three protection switches. Network decisions need no
+    /// rebuild: the flags are consulted after a rule matches, so the compiled
+    /// index stays warm. Cosmetics and scriptlets have no per-rule category,
+    /// so the core recompiles its lists when ads or tracking flips; the next
+    /// build leaves out the lists belonging to the module that is off.
     pub fn set_module_flags(&self, ads: bool, tracking: bool, dns: bool) {
         let mut flags = 0u8;
         if ads {
@@ -1131,14 +1152,7 @@ impl FilterEngine {
     }
 
     fn category_enabled(&self, category: u8) -> bool {
-        let flags = self.module_flags.load(Ordering::Relaxed);
-        match category {
-            CAT_AD | CAT_ANNOYANCE => flags & MODULE_ADS != 0,
-            CAT_TRACKER | CAT_ANALYTICS | CAT_SOCIAL => flags & MODULE_TRACKING != 0,
-            // Malware/security and the user's own rules are not tied to either
-            // module; a match there still blocks on its own.
-            _ => true,
-        }
+        category_enabled_by(self.module_flags.load(Ordering::Relaxed), category)
     }
 
     fn gate_url(&self, verdict: UrlVerdict) -> UrlVerdict {
@@ -1153,6 +1167,12 @@ impl FilterEngine {
     /// Returns the new generation.
     pub fn rebuild(&self, lists: &[FilterListInfo], user_rules: &[String]) -> u64 {
         let build_started = std::time::Instant::now();
+        // Newest build wins: a slow one must not overwrite the list snapshot
+        // or module switches a newer build already published.
+        let build_seq = self.build_seq.fetch_add(1, Ordering::SeqCst) + 1;
+        // One snapshot for the whole build: a switch flipped mid-compile must
+        // not include half of a module's lists.
+        let build_flags = self.module_flags.load(Ordering::Relaxed);
         let mut set = FilterSet::new(true);
         let mut sources: Vec<SourceMapEntry> = Vec::with_capacity(lists.len() + 1);
         let mut rule_count = 0u64;
@@ -1170,8 +1190,15 @@ impl FilterEngine {
         // Rules the reference keeps for trusted lists, seen in a list that is
         // not one (see [`scrub_untrusted`]).
         let mut untrusted_dropped = 0u32;
+        // Lists whose module is off: cosmetics carry no category of their own,
+        // so leaving the whole list out is what makes hiding stop with it.
+        let mut module_skipped = 0u32;
 
         for list in lists.iter().filter(|l| l.enabled) {
+            if !category_enabled_by(build_flags, list.category) {
+                module_skipped += 1;
+                continue;
+            }
             let Some(path) = &list.local_path else {
                 continue;
             };
@@ -1296,11 +1323,23 @@ impl FilterEngine {
                 .chain(redirect_resources().iter())
                 .cloned(),
         );
+        // A newer build started while this one compiled: it owns the answer,
+        // and publishing here would undo the module switch or list edit that
+        // arrived after this snapshot.
+        if self.build_seq.load(Ordering::SeqCst) != build_seq {
+            self.pending_builds.fetch_sub(1, Ordering::SeqCst);
+            return self.generation.load(Ordering::SeqCst);
+        }
         let memory_bytes = engine.serialize().len();
         let generation = self.generation.fetch_add(1, Ordering::SeqCst) + 1;
         if untrusted_dropped > 0 {
             crate::logbuf::push(&format!(
                 "filter: {untrusted_dropped} rules dropped from untrusted lists"
+            ));
+        }
+        if module_skipped > 0 {
+            crate::logbuf::push(&format!(
+                "filter: {module_skipped} lists left out (their protection module is off)"
             ));
         }
         let js_rules = build_js_rules(js_scan);
@@ -6425,6 +6464,54 @@ mod tests {
 
         fe.set_module_flags(true, true, true);
         assert!(fe.check_host("ads.module.test").blocked);
+    }
+
+    #[test]
+    fn module_switches_drop_the_cosmetics_of_their_lists() {
+        let mut ads = temp_list(
+            "ads-cosmetics-module.txt",
+            "example.com##.ad-hide\nexample.com#%#//scriptlet('set-constant', 'ads', '1')\n",
+            ListFormat::Standard,
+            21,
+        );
+        ads.category = CAT_AD;
+        let mut tracking = temp_list(
+            "tracking-cosmetics-module.txt",
+            "example.com##.track-hide\n",
+            ListFormat::Standard,
+            22,
+        );
+        tracking.category = CAT_TRACKER;
+        let mut malware = temp_list(
+            "malware-cosmetics-module.txt",
+            "example.com##.malware-hide\n",
+            ListFormat::Standard,
+            23,
+        );
+        malware.category = CAT_MALWARE;
+        let lists = vec![ads, tracking, malware];
+
+        // Cosmetics carry no category of their own: a switched-off module's
+        // lists must not enter the build at all.
+        let fe = FilterEngine::new();
+        fe.set_module_flags(false, true, true);
+        fe.rebuild(&lists, &[]);
+        let res = fe.cosmetic_resources("https://example.com/");
+        assert!(
+            !res.hide_selectors.iter().any(|s| s == ".ad-hide"),
+            "{:?}",
+            res.hide_selectors
+        );
+        assert!(res.hide_selectors.iter().any(|s| s == ".track-hide"));
+        assert!(res.hide_selectors.iter().any(|s| s == ".malware-hide"));
+        assert!(res.scriptlets.is_empty(), "{:?}", res.scriptlets);
+
+        // Switching it back on recompiles the same lists into the page again.
+        fe.set_module_flags(true, true, true);
+        fe.rebuild(&lists, &[]);
+        let res = fe.cosmetic_resources("https://example.com/");
+        assert!(res.hide_selectors.iter().any(|s| s == ".ad-hide"));
+        assert!(!res.scriptlets.is_empty());
     }
 
     #[test]

@@ -367,6 +367,12 @@ pub struct Core {
     /// Packages whose TLS is spliced untouched (per-app HTTPS filtering off).
     /// Replaced as a whole, so a running session keeps the set it opened with.
     https_skip_apps: RwLock<Arc<HashSet<String>>>,
+    /// Packages whose TLS client rejected the forged certificate mid-handshake
+    /// (`CertificateUnknown` and friends). Learned from the alert the client
+    /// sends, so the next connection of that app is spliced instead of failing
+    /// the same way. Kept for the life of the core: a trust decision does not
+    /// change because a page was reloaded.
+    ca_rejecting_apps: RwLock<HashSet<String>>,
     /// Per-app network/screen-off restrictions, replaced as a whole.
     app_network_policy: RwLock<Arc<AppNetworkPolicy>>,
     /// The active default network, classified by the platform.
@@ -466,6 +472,7 @@ impl Core {
             ech_hosts: Arc::new(crate::mitm::ech::EchHosts::new()),
             https_hosts: RwLock::new(HttpsHosts::default()),
             https_skip_apps: RwLock::new(Arc::new(HashSet::new())),
+            ca_rejecting_apps: RwLock::new(HashSet::new()),
             app_network_policy: RwLock::new(Arc::new(AppNetworkPolicy::default())),
             network_type: AtomicU8::new(NETWORK_UNKNOWN),
             #[cfg(test)]
@@ -579,6 +586,14 @@ impl Core {
     // ---------------------------------------------------------------- config
 
     pub fn set_config(&self, cfg: Config) {
+        // Cosmetics and scriptlets have no per-rule category, so an ads or
+        // tracking switch changes which lists belong in the build as well as
+        // the live category gate below.
+        let lists_changed = {
+            let old = self.cfg.read().unwrap();
+            old.ad_blocking != cfg.ad_blocking
+                || old.tracking_protection != cfg.tracking_protection
+        };
         // The filter engine owns the hot-path copy so a module switch takes
         // effect on the next packet without recompiling the lists.
         self.filter.set_module_flags(
@@ -597,6 +612,17 @@ impl Core {
             only_mode: cfg.https_only_mode,
         };
         *self.cfg.write().unwrap() = cfg;
+        if lists_changed {
+            // Recompile off the caller's thread: the previous engine keeps
+            // serving (with the new live category gate) until this one is
+            // published. Without a build the cosmetics of the module that was
+            // just switched off would keep hiding elements.
+            let lists = self.lists.read().unwrap().clone();
+            if !lists.is_empty() {
+                let rules = self.user_rules.read().unwrap().clone();
+                self.rebuild_async(lists, rules);
+            }
+        }
     }
 
     pub fn config(&self) -> Config {
@@ -1152,6 +1178,10 @@ impl Core {
                             .and_then(|s| s.captured_sni())
                             .unwrap_or_else(|| "?".to_string());
                         crate::logbuf::push(&format!("relay client step: {e} ({host})"));
+                        // A client that does not trust the AdFree CA would
+                        // lose every HTTPS page; the next flow of that app is
+                        // spliced instead of decrypted.
+                        self.note_client_cert_rejection(&e, &relay.app_packages, &host);
                         if let Some(rst) = relay.rst_to_client() {
                             out.push(rst);
                         }
@@ -1371,8 +1401,7 @@ impl Core {
                     proxy.set_apps(app_packages.clone());
                     // Per-app HTTPS exclusions: decided once per flow, like
                     // the app name, and read before any byte reaches rustls.
-                    let skip_apps = Arc::clone(&*self.https_skip_apps.read().unwrap());
-                    proxy.set_https_skip_apps(skip_apps);
+                    proxy.set_https_skip_apps(self.effective_https_skip_apps());
                     // ECH: which hosts had their ECHConfig rewritten away, so
                     // a refusal from one of them can be learned as "requires
                     // ECH" (see `mitm::ech`).
@@ -2298,6 +2327,56 @@ impl Core {
         *self.https_skip_apps.write().unwrap() = Arc::new(apps.into_iter().collect());
     }
 
+    /// The splice set a new connection opens with: the user's exclusions plus
+    /// the apps that turned out to reject the AdFree CA. Learned entries are
+    /// per app, not per host: the alert says the client's trust store refused
+    /// us, and every later connection of that app would fail the same way.
+    fn effective_https_skip_apps(&self) -> Arc<HashSet<String>> {
+        let configured = self.https_skip_apps.read().unwrap();
+        let learned = self.ca_rejecting_apps.read().unwrap();
+        if learned.is_empty() {
+            return Arc::clone(&configured);
+        }
+        let mut merged = (**configured).clone();
+        merged.extend(learned.iter().cloned());
+        Arc::new(merged)
+    }
+
+    /// True when `err` is the client's own TLS stack refusing our certificate.
+    /// The origin-facing feed is prefixed `client process_new_packets` and its
+    /// alerts must not condemn the app, so those never match.
+    fn client_rejected_certificate(err: &str) -> bool {
+        const ALERTS: [&str; 5] = [
+            "UnknownCA",
+            "CertificateUnknown",
+            "BadCertificate",
+            "CertificateExpired",
+            "CertificateRevoked",
+        ];
+        err.contains("received fatal alert")
+            && !err.contains("client process_new_packets")
+            && ALERTS.iter().any(|alert| err.contains(alert))
+    }
+
+    /// The client-facing half just received a certificate alert: the app does
+    /// not trust the AdFree CA. Remember the owner so its next connection is
+    /// handed to the origin untouched — DNS filtering and `$app=` rules still
+    /// apply, the TLS payload just stays encrypted. Logged once per app.
+    fn note_client_cert_rejection(&self, err: &str, apps: &[String], host: &str) {
+        if apps.is_empty() || !Self::client_rejected_certificate(err) {
+            return;
+        }
+        let mut learned = self.ca_rejecting_apps.write().unwrap();
+        for app in apps {
+            if learned.insert(app.clone()) {
+                crate::logbuf::push(&format!(
+                    "mitm {host}: {app} rejected the AdFree certificate, \
+                     splicing its HTTPS verbatim from now on"
+                ));
+            }
+        }
+    }
+
     /// Installs the platform connection-to-app lookup (Android's
     /// `ConnectivityManager`). Without it the kernel's `/proc` table is read.
     pub fn set_uid_lookup(&self, lookup: Arc<dyn crate::api::ConnectionUidLookup>) {
@@ -2318,6 +2397,9 @@ impl Core {
         let need_apps = !self.app_network_policy.read().unwrap().is_empty()
             || self.filter.has_app_rules()
             || !self.https_skip_apps.read().unwrap().is_empty()
+            // An app already known to reject the CA is spliced, and that
+            // decision needs its name on every new flow.
+            || !self.ca_rejecting_apps.read().unwrap().is_empty()
             // The HTTPS path logs the app on every request it blocks, so an
             // intercepted flow needs its name even without `$app=` rules —
             // unless the eco mode is dropping those events anyway.
@@ -3612,6 +3694,76 @@ mod tests {
         );
     }
 
+    /// A client that refuses the forged certificate (`CertificateUnknown`)
+    /// must not keep losing every HTTPS connection: the app is learned, its
+    /// future flows are attributed even with no rule asking, and the splice
+    /// set a new session opens with carries its package.
+    #[test]
+    fn an_app_that_rejects_the_ca_is_spliced_from_then_on() {
+        let core = Core::new();
+        core.set_uid_apps(vec![(
+            10_123,
+            vec!["com.google.android.googlequicksearchbox".to_string()],
+        )]);
+        core.pin_uid_for_port(40000, 10_123);
+        let raw = tcp_syn(40000, [142, 250, 80, 46], 443);
+        let pkt = Packet::parse(&raw).expect("packet");
+        let off = Config::default();
+
+        assert!(
+            core.apps_for_packet(&pkt, &off).is_empty(),
+            "nothing asks for attribution yet"
+        );
+        assert!(!core
+            .effective_https_skip_apps()
+            .contains("com.google.android.googlequicksearchbox"));
+
+        // The origin-facing feed's alerts say nothing about the client.
+        core.note_client_cert_rejection(
+            "client process_new_packets: received fatal alert: CertificateUnknown",
+            &["com.google.android.googlequicksearchbox".to_string()],
+            "android.apis.google.com",
+        );
+        assert!(core.effective_https_skip_apps().is_empty(), "not learned");
+
+        core.note_client_cert_rejection(
+            "process_new_packets: received fatal alert: CertificateUnknown",
+            &["com.google.android.googlequicksearchbox".to_string()],
+            "android.apis.google.com",
+        );
+        assert_eq!(
+            core.apps_for_packet(&pkt, &off),
+            vec!["com.google.android.googlequicksearchbox".to_string()],
+            "a learned app is attributed even with no rule asking"
+        );
+        assert!(core
+            .effective_https_skip_apps()
+            .contains("com.google.android.googlequicksearchbox"));
+    }
+
+    /// Unattributed flows teach nothing, and non-certificate alerts (a broken
+    /// handshake, say) must not quietly disable filtering for an app.
+    #[test]
+    fn only_a_certificate_alert_from_a_named_app_is_learned() {
+        let core = Core::new();
+        core.note_client_cert_rejection(
+            "process_new_packets: received fatal alert: CertificateUnknown",
+            &[],
+            "example.com",
+        );
+        core.note_client_cert_rejection(
+            "process_new_packets: received fatal alert: HandshakeFailure",
+            &["com.example.news".to_string()],
+            "example.com",
+        );
+        core.note_client_cert_rejection(
+            "process_new_packets: peer sent no certificates",
+            &["com.example.news".to_string()],
+            "example.com",
+        );
+        assert!(core.effective_https_skip_apps().is_empty());
+    }
+
     /// The app firewall is evaluated before any peer socket is opened: the
     /// same flow that is relayed on Wi-Fi is reset on cellular when its app is
     /// barred from that network.
@@ -4016,5 +4168,73 @@ mod tests {
         // A relay that already finished is not resurrected.
         core.relays.lock().unwrap().get_mut(40001).unwrap().closed = true;
         assert!(!core.restart_peer_socket(40001));
+    }
+
+    /// Cosmetics have no per-rule category, so a module switch must recompile
+    /// the lists: the ads list drops out of the build and its hiding stops,
+    /// while the tracking list keeps hiding.
+    #[test]
+    fn switching_a_module_off_recompiles_cosmetics() {
+        let dir = std::env::temp_dir().join("adfree-engine-modules");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("temp dir");
+        let ads = dir.join("ads-cosmetics.txt");
+        std::fs::write(&ads, "example.com##.ad-hide\n").expect("write ads");
+        let tracker = dir.join("track-cosmetics.txt");
+        std::fs::write(&tracker, "example.com##.track-hide\n").expect("write tracker");
+        let list = |id: u16, name: &str, path: std::path::PathBuf, category: u8| {
+            FilterListInfo {
+                id,
+                name: name.to_string(),
+                url: String::new(),
+                enabled: true,
+                local_path: Some(path),
+                format: crate::filter::ListFormat::Standard,
+                category,
+                trusted: true,
+                rule_count: 0,
+                last_error: None,
+            }
+        };
+        let core = Core::new();
+        core.set_lists(
+            vec![
+                list(1, "ads", ads, crate::filter::CAT_AD),
+                list(2, "tracking", tracker, crate::filter::CAT_TRACKER),
+            ],
+            Vec::new(),
+        );
+        let engine = core.filter_engine();
+        let before = engine.generation();
+        assert!(engine
+            .cosmetic_resources("https://example.com/")
+            .hide_selectors
+            .iter()
+            .any(|s| s == ".ad-hide"));
+        assert!(engine
+            .cosmetic_resources("https://example.com/")
+            .hide_selectors
+            .iter()
+            .any(|s| s == ".track-hide"));
+
+        core.set_config(Config {
+            ad_blocking: false,
+            ..Config::default()
+        });
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        while engine.generation() == before && std::time::Instant::now() < deadline {
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        assert!(
+            engine.generation() > before,
+            "the module switch never recompiled the lists"
+        );
+        let res = engine.cosmetic_resources("https://example.com/");
+        assert!(
+            !res.hide_selectors.iter().any(|s| s == ".ad-hide"),
+            "{:?}",
+            res.hide_selectors
+        );
+        assert!(res.hide_selectors.iter().any(|s| s == ".track-hide"));
     }
 }

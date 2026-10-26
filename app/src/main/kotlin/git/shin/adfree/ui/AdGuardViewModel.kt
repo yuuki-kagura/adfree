@@ -261,8 +261,11 @@ class AdGuardViewModel(
             is AdGuardIntent.ToggleHttps ->
                 repository.toggleHttpsFiltering(!uiState.value.settings.isHttpsFilteringEnabled)
 
-            is AdGuardIntent.ToggleFirewall ->
+            is AdGuardIntent.ToggleFirewall -> {
                 repository.toggleFirewall(!uiState.value.settings.isFirewallEnabled)
+                // Enforcement lives in the core policy, not in the setting.
+                repository.pushAppRouting()
+            }
 
             is AdGuardIntent.ToggleEcoMode -> {
                 repository.toggleEcoBatteryMode(!uiState.value.settings.isEcoBatteryModeEnabled)
