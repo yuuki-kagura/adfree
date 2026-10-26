@@ -23,6 +23,8 @@ data class AdGuardUiState(
     val logTotal: Long = 0L,
     val filterLists: List<FilterList> = emptyList(),
     val appFirewallRules: List<AppFirewallRule> = emptyList(),
+    /** package -> display name for every installed app, regardless of the Apps tab filter. */
+    val appNames: Map<String, String> = emptyMap(),
     val dnsProviders: List<DnsProvider> = emptyList(),
     val isVpnActive: Boolean = false,
     val inspectedLog: NetworkRequestLog? = null,

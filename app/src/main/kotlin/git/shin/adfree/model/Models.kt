@@ -47,6 +47,8 @@ data class NetworkRequestLog(
     val category: RequestCategory,
     val matchedRule: String?,
     val filterListName: String?,
+    /** Package that owned the flow; null when the core could not attribute it. */
+    val appPackage: String?,
     val latencyMicros: Long,
     val dataSavedBytes: Long,
 ) {
@@ -77,6 +79,7 @@ data class NetworkRequestLog(
                 category = RequestCategory.fromIndex(event.category),
                 matchedRule = event.rule.ifBlank { null },
                 filterListName = event.listName.ifBlank { null },
+                appPackage = event.app.ifBlank { null },
                 latencyMicros = latencyMicros,
                 dataSavedBytes = event.bytesSaved.toLong(),
             )

@@ -17,10 +17,11 @@
 //! 12      ip_len         u8
 //! 13      rule_len       u8
 //! 14      list_len       u8
-//! 15      reserved       u8
+//! 15      app_len        u8
 //! 16..20  latency_ns     u32
 //! 20..24  bytes_saved    u32
 //! 24..    domain[domain_len] ip[ip_len] rule[rule_len] list[list_len]
+//!         app[app_len]
 //! ```
 
 pub const ACTION_ALLOW: u8 = 0;
@@ -33,6 +34,9 @@ pub const MAX_DOMAIN: usize = 96;
 pub const MAX_IP: usize = 40;
 pub const MAX_RULE: usize = 72;
 pub const MAX_LIST: usize = 24;
+/// Package name of the app that owned the flow. A uid can resolve to several
+/// packages; the log keeps the first, which is what attribution reports.
+pub const MAX_APP: usize = 96;
 const RECORD_HEADER: usize = 24;
 const CAPACITY: usize = 4_096;
 
@@ -52,6 +56,8 @@ pub struct Event {
     pub rule_len: u8,
     pub list: [u8; MAX_LIST],
     pub list_len: u8,
+    pub app: [u8; MAX_APP],
+    pub app_len: u8,
 }
 
 impl Event {
@@ -71,6 +77,8 @@ impl Event {
             rule_len: 0,
             list: [0; MAX_LIST],
             list_len: 0,
+            app: [0; MAX_APP],
+            app_len: 0,
         }
     }
 
@@ -88,6 +96,10 @@ impl Event {
 
     pub fn list(&self) -> &str {
         std::str::from_utf8(&self.list[..self.list_len as usize]).unwrap_or("")
+    }
+
+    pub fn app(&self) -> &str {
+        std::str::from_utf8(&self.app[..self.app_len as usize]).unwrap_or("")
     }
 }
 
@@ -197,7 +209,8 @@ fn encode(ev: &Event, out: &mut Vec<u8>) -> bool {
     let ilen = ev.ip_len as usize;
     let rlen = ev.rule_len as usize;
     let llen = ev.list_len as usize;
-    if dlen > MAX_DOMAIN || ilen > MAX_IP || rlen > MAX_RULE || llen > MAX_LIST {
+    let alen = ev.app_len as usize;
+    if dlen > MAX_DOMAIN || ilen > MAX_IP || rlen > MAX_RULE || llen > MAX_LIST || alen > MAX_APP {
         return false;
     }
     out.extend_from_slice(&ev.ts_ms.to_le_bytes());
@@ -208,15 +221,26 @@ fn encode(ev: &Event, out: &mut Vec<u8>) -> bool {
     out.push(ilen as u8);
     out.push(rlen as u8);
     out.push(llen as u8);
-    out.push(0);
+    out.push(alen as u8);
     out.extend_from_slice(&ev.latency_ns.to_le_bytes());
     out.extend_from_slice(&ev.bytes_saved.to_le_bytes());
     out.extend_from_slice(&ev.domain[..dlen]);
     out.extend_from_slice(&ev.ip[..ilen]);
     out.extend_from_slice(&ev.rule[..rlen]);
     out.extend_from_slice(&ev.list[..llen]);
-    debug_assert_eq!(out.len() - start, RECORD_HEADER + dlen + ilen + rlen + llen);
+    out.extend_from_slice(&ev.app[..alen]);
+    debug_assert_eq!(
+        out.len() - start,
+        RECORD_HEADER + dlen + ilen + rlen + llen + alen
+    );
     true
+}
+
+/// Names the app a decision belongs to. Kept separate from the constructors so
+/// call sites that already resolved the flow's packages just attach the result.
+pub fn with_app(mut event: Event, app: &str) -> Event {
+    put_str(&mut event.app[..], &mut event.app_len, app);
+    event
 }
 
 /// Factory helpers so callers never build an `Event` by hand.
@@ -303,15 +327,16 @@ mod tests {
             let ilen = out[idx + 12] as usize;
             let rlen = out[idx + 13] as usize;
             let llen = out[idx + 14] as usize;
+            let alen = out[idx + 15] as usize;
             let ts = u64::from_le_bytes(out[idx..idx + 8].try_into().unwrap());
             let latency = u32::from_le_bytes(out[idx + 16..idx + 20].try_into().unwrap());
             let d_start = idx + RECORD_HEADER;
             let domain = std::str::from_utf8(&out[d_start..d_start + dlen]).unwrap().to_string();
             let saved = u32::from_le_bytes(out[idx + 20..idx + 24].try_into().unwrap());
             assert_eq!(saved, 0);
-            assert_eq!(rlen + llen, 0);
+            assert_eq!(rlen + llen + alen, 0);
             domains.push((domain, ts, latency));
-            idx += RECORD_HEADER + dlen + ilen + rlen + llen;
+            idx += RECORD_HEADER + dlen + ilen + rlen + llen + alen;
         }
         assert_eq!(domains[0].0, "host0.test");
         assert_eq!(domains[4].0, "host4.test");
@@ -352,5 +377,35 @@ mod tests {
         assert_eq!(ev.domain_len, MAX_DOMAIN as u8);
         assert_eq!(ev.rule_len, MAX_RULE as u8);
         assert_eq!(ev.list_len, MAX_LIST as u8);
+    }
+
+    #[test]
+    fn the_app_travels_with_the_event() {
+        let ev = with_app(allow_event("host.test", "1.2.3.4", 7), "com.example.browser");
+        assert_eq!(ev.app(), "com.example.browser");
+        assert_eq!(ev.domain(), "host.test");
+
+        // The wire format carries it after the list name, so a reader that
+        // already parses the older fields keeps the same offsets.
+        let mut log = EventLog::new(4);
+        log.push(ev);
+        let mut out = Vec::new();
+        assert_eq!(log.drain_into(&mut out, 4), 1);
+        let dlen = out[11] as usize;
+        let ilen = out[12] as usize;
+        let rlen = out[13] as usize;
+        let llen = out[14] as usize;
+        let alen = out[15] as usize;
+        let start = RECORD_HEADER + dlen + ilen + rlen + llen;
+        assert_eq!(&out[start..start + alen], b"com.example.browser");
+        assert_eq!(out.len(), start + alen);
+    }
+
+    #[test]
+    fn a_long_app_name_is_truncated_like_the_other_fields() {
+        let long = "a".repeat(200);
+        let ev = with_app(allow_event("host.test", "", 0), &long);
+        assert_eq!(ev.app_len, MAX_APP as u8);
+        assert_eq!(ev.app(), &long[..MAX_APP]);
     }
 }

@@ -137,14 +137,26 @@ class AdGuardViewModel(
             },
         ) { d, extras -> d.plusExtras(extras) },
     ) { a, b, c, c2, d ->
+        // The picker knows packages; a log row knows the package the core
+        // attributed. A name may also arrive from a deep link, so resolve it.
+        val selectedPackage = d.selectedApp?.let { selected ->
+            b.apps.firstOrNull {
+                it.packageName.equals(selected, true) || it.appName.equals(selected, true)
+            }?.packageName ?: selected
+        }
         val logs = a.logs.filter { log ->
             val query = a.query
             val matchesQuery = query.isBlank() ||
                 log.domain.contains(query, true) ||
                 log.matchedRule?.contains(query, true) == true ||
-                log.filterListName?.contains(query, true) == true
+                log.filterListName?.contains(query, true) == true ||
+                log.appPackage?.contains(query, true) == true
             val matchesStatus = b.status == null || log.status == b.status
-            val matchesApp = d.selectedApp == null || log.matchedRule?.contains(d.selectedApp, true) == true
+            // Rows stored before attribution existed (or carried over from an
+            // older database) still match through their `$app=` rule text.
+            val matchesApp = selectedPackage == null ||
+                log.appPackage.equals(selectedPackage, true) ||
+                log.matchedRule?.contains(selectedPackage, true) == true
             matchesQuery && matchesStatus && matchesApp
         }
 
@@ -171,6 +183,9 @@ class AdGuardViewModel(
             logTotal = a.logTotal,
             filterLists = b.filters,
             appFirewallRules = apps,
+            // The log pane names a row's owner even when the Apps tab is
+            // filtered down to something else.
+            appNames = b.apps.associate { it.packageName to it.appName },
             dnsProviders = b.dns,
             isVpnActive = b.isVpnActive,
             inspectedLog = c.inspected,

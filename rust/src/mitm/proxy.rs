@@ -129,6 +129,8 @@ pub struct MitmBlock<'a> {
     pub rule: Option<&'a str>,
     pub list_name: Option<&'a str>,
     pub category: u8,
+    /// The packages owning the flow, so the log can name the app.
+    pub apps: &'a [String],
 }
 
 /// Where the HTTPS path reports what it blocked.
@@ -1395,6 +1397,7 @@ impl ProxySession {
                                     rule: Some(&rules),
                                     list_name: None,
                                     category: 0,
+                                    apps,
                                 });
                             }
                             return Ok(RequestPlan::default());
@@ -1491,6 +1494,7 @@ impl ProxySession {
                 rule: verdict.rule_text.as_deref(),
                 list_name: verdict.list_name.as_deref(),
                 category: verdict.category,
+                apps,
             });
         }
         Ok(RequestPlan::default())

@@ -2842,7 +2842,7 @@ fn a_platform_lookup_that_cannot_answer_leaves_the_flow_unattributed() {
 }
 
 #[test]
-fn the_platform_is_not_asked_when_no_app_rule_is_loaded() {
+fn an_intercepted_flow_is_attributed_without_app_rules() {
     let origin = start_origin(HTML);
     let (core, ca_der) = setup_core_with_list(&origin, "app-platform-idle", PLAIN_LIST);
     let lookup = Arc::new(PlatformLookup {
@@ -2858,8 +2858,9 @@ fn the_platform_is_not_asked_when_no_app_rule_is_loaded() {
     assert!(head.starts_with("HTTP/1.1 200"), "{head}");
     assert_eq!(
         lookup.calls.load(Ordering::SeqCst),
-        0,
-        "no `$app=` rule is loaded, so nothing is asked of the platform"
+        1,
+        "the HTTPS path logs the app on a blocked request, so an intercepted \
+         flow is attributed even with no `$app=` rule loaded"
     );
 }
 

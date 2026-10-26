@@ -239,13 +239,24 @@ fn migrate(conn: &Connection) -> Result<(), String> {
         )
         .map_err(|e| format!("migrate schema to v2: {e}"))?;
     }
+    if version < 3 {
+        // v3: every log row can name the app the flow belonged to. Rows from
+        // older builds keep an empty name rather than a wrong one.
+        conn.execute_batch(
+            "BEGIN;
+             ALTER TABLE log_events ADD COLUMN app TEXT NOT NULL DEFAULT '';
+             PRAGMA user_version = 3;
+             COMMIT;",
+        )
+        .map_err(|e| format!("migrate schema to v3: {e}"))?;
+    }
     Ok(())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::events::{allow_event, block_event, ACTION_BLOCK};
+    use crate::events::{allow_event, block_event, with_app, ACTION_BLOCK};
 
     /// Store in a fresh directory; the process id keeps parallel test
     /// binaries from colliding.
@@ -279,6 +290,7 @@ mod tests {
             567,
             false,
         );
+        ev = with_app(ev, "com.example.browser");
         ev.ts_ms = 1_000;
         assert!(store.log_enqueue(&ev));
         store.log_enqueue(&allow_event("ok.example", "10.0.0.2", 42));
@@ -296,6 +308,60 @@ mod tests {
         assert_eq!(rows[1].action, i64::from(ACTION_BLOCK));
         assert_eq!(rows[1].ts_ms, 1_000);
         assert!(!rows[1].ipv6);
+        assert_eq!(rows[1].app, "com.example.browser");
+        assert_eq!(rows[0].app, "", "unattributed rows stay empty, not guessed");
+    }
+
+    /// A database written by an older build has no `app` column; opening it
+    /// must add the column and leave the existing rows readable.
+    #[test]
+    fn a_v2_log_opens_with_an_empty_app_column() {
+        let dir = std::env::temp_dir().join(format!("adfree-store-{}-v2", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        {
+            let conn = Connection::open(dir.join("adfree.db")).unwrap();
+            conn.execute_batch(
+                "CREATE TABLE settings (
+                     id         INTEGER PRIMARY KEY,
+                     json       TEXT NOT NULL,
+                     updated_ms INTEGER NOT NULL
+                 );
+                 CREATE TABLE log_events (
+                     id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                     ts_ms       INTEGER NOT NULL,
+                     action      INTEGER NOT NULL,
+                     category    INTEGER NOT NULL,
+                     domain      TEXT NOT NULL,
+                     ip          TEXT NOT NULL,
+                     rule        TEXT NOT NULL,
+                     list_name   TEXT NOT NULL,
+                     latency_ns  INTEGER NOT NULL DEFAULT 0,
+                     bytes_saved INTEGER NOT NULL DEFAULT 0,
+                     ipv6        INTEGER NOT NULL DEFAULT 0
+                 );
+                 INSERT INTO log_events
+                     (ts_ms, action, category, domain, ip, rule, list_name)
+                     VALUES (1234, 1, 0, 'old.example', '10.0.0.1', '||old.example^', 'Old list');
+                 PRAGMA user_version = 2;",
+            )
+            .unwrap();
+        }
+
+        let store = Store::open(&dir).expect("v2 store opens");
+        let rows = store.log_page(0, 10);
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].domain, "old.example");
+        assert_eq!(rows[0].app, "", "no app was recorded before v3");
+        // The migrated table accepts new rows with an app.
+        store.log_enqueue(&with_app(
+            allow_event("new.example", "10.0.0.2", 1),
+            "com.example.app",
+        ));
+        store.log_flush();
+        assert_eq!(store.log_page(0, 1)[0].app, "com.example.app");
+        drop(store);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

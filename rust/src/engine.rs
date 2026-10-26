@@ -395,19 +395,29 @@ pub fn core() -> &'static Core {
 pub(crate) fn log_mitm_block(block: &crate::mitm::proxy::MitmBlock<'_>) {
     let core = core();
     let saved = BYTES_PER_BLOCKED_REQUEST as u32;
-    core.log_event(events::block_event(
-        events::ACTION_BLOCK,
-        block.host,
-        "",
-        block.rule.unwrap_or(""),
-        block.list_name.unwrap_or(""),
-        block.category,
-        0,
-        saved,
-        false,
-    ));
+    let event = events::with_app(
+        events::block_event(
+            events::ACTION_BLOCK,
+            block.host,
+            "",
+            block.rule.unwrap_or(""),
+            block.list_name.unwrap_or(""),
+            block.category,
+            0,
+            saved,
+            false,
+        ),
+        first_app(block.apps),
+    );
+    core.log_event(event);
     core.stats
         .add(&core.stats.bytes_saved, u64::from(saved));
+}
+
+/// A uid can resolve to several packages (shared uid); the log names the first
+/// one, which is what the platform's attribution reported.
+fn first_app(packages: &[String]) -> &str {
+    packages.first().map(String::as_str).unwrap_or("")
 }
 
 impl Default for Core {
@@ -1246,7 +1256,7 @@ impl Core {
         };
         // The per-app firewall decides before any socket is opened: a blocked
         // app costs no upstream connection and gets a RST with a reason.
-        let app_packages = self.apps_for_packet(pkt);
+        let app_packages = self.apps_for_packet(pkt, cfg);
         if let Some(reason) = self.app_blocked_reason(&app_packages) {
             return RelayStart::Blocked(reason);
         }
@@ -1691,17 +1701,26 @@ impl Core {
         } else {
             crate::filter::CAT_AD
         };
-        self.log_event(events::block_event(
-            events::ACTION_TCP_RESET,
-            &host,
-            &pkt.dst_ip_text(),
-            rule,
-            "Protection",
-            category,
-            0,
-            saved as u32,
-            pkt.version == 6,
-        ));
+        let app_packages = if self.logging_live() {
+            self.resolve_tcp_apps(pkt)
+        } else {
+            Vec::new()
+        };
+        let event = events::with_app(
+            events::block_event(
+                events::ACTION_TCP_RESET,
+                &host,
+                &pkt.dst_ip_text(),
+                rule,
+                "Protection",
+                category,
+                0,
+                saved as u32,
+                pkt.version == 6,
+            ),
+            first_app(&app_packages),
+        );
+        self.log_event(event);
     }
 
     fn handle_dns(&self, pkt: &Packet<'_>, cfg: &Config, out: &mut Vec<Vec<u8>>) {
@@ -1719,6 +1738,10 @@ impl Core {
         }
 
         let host = query.qname.as_str();
+        // Attribution is resolved at most once per query: the app firewall may
+        // already have needed it, and the log needs it for whatever event this
+        // query produces.
+        let mut app_packages: Option<Vec<String>> = None;
         // The app firewall runs before the lists: an app barred from this
         // network must not even get a filtered answer (a cached NXDOMAIN or a
         // sinkhole IP would still tell it whether a host exists).
@@ -1731,19 +1754,24 @@ impl Core {
                 if let Some(reply) = dns::synthesize_reply(pkt, &query, cfg.block_mode) {
                     out.push(reply);
                 }
-                self.log_event(events::block_event(
-                    events::ACTION_BLOCK,
-                    host,
-                    &pkt.dst_ip_text(),
-                    reason,
-                    "App firewall",
-                    crate::filter::CAT_AD,
-                    0,
-                    saved as u32,
-                    pkt.version == 6,
-                ));
+                let event = events::with_app(
+                    events::block_event(
+                        events::ACTION_BLOCK,
+                        host,
+                        &pkt.dst_ip_text(),
+                        reason,
+                        "App firewall",
+                        crate::filter::CAT_AD,
+                        0,
+                        saved as u32,
+                        pkt.version == 6,
+                    ),
+                    first_app(&packages),
+                );
+                self.log_event(event);
                 return;
             }
+            app_packages = Some(packages);
         }
         let t0 = now_ns();
         let verdict = self.filter.check_host(host);
@@ -1769,22 +1797,38 @@ impl Core {
             if let Some(reply) = dns::synthesize_reply(pkt, &query, cfg.block_mode) {
                 out.push(reply);
             }
-            self.log_event(events::block_event(
-                events::ACTION_BLOCK,
-                host,
-                &pkt.dst_ip_text(),
-                verdict.rule_text.as_deref().unwrap_or(""),
-                verdict.list_name.as_deref().unwrap_or(""),
-                verdict.category,
-                latency_ns,
-                saved as u32,
-                pkt.version == 6,
-            ));
+            let packages = app_packages.unwrap_or_else(|| {
+                if self.logging_live() {
+                    self.apps_for_udp(pkt)
+                } else {
+                    Vec::new()
+                }
+            });
+            let event = events::with_app(
+                events::block_event(
+                    events::ACTION_BLOCK,
+                    host,
+                    &pkt.dst_ip_text(),
+                    verdict.rule_text.as_deref().unwrap_or(""),
+                    verdict.list_name.as_deref().unwrap_or(""),
+                    verdict.category,
+                    latency_ns,
+                    saved as u32,
+                    pkt.version == 6,
+                ),
+                first_app(&packages),
+            );
+            self.log_event(event);
         } else {
             self.stats.inc(&self.stats.dns_allowed);
             self.forward_query(pkt, Some(&query));
-            if cfg.log_allowed {
-                self.log_event(events::allow_event(host, &pkt.dst_ip_text(), latency_ns));
+            if cfg.log_allowed && self.logging_live() {
+                let packages = app_packages.unwrap_or_else(|| self.apps_for_udp(pkt));
+                let event = events::with_app(
+                    events::allow_event(host, &pkt.dst_ip_text(), latency_ns),
+                    first_app(&packages),
+                );
+                self.log_event(event);
             }
         }
     }
@@ -2100,6 +2144,12 @@ impl Core {
         log.push(event);
     }
 
+    /// Mirrors the drop rule in [`Self::log_event`], so a caller does not pay
+    /// for attribution (a platform round-trip) the eco mode will discard.
+    fn logging_live(&self) -> bool {
+        !(self.is_screen_off() && self.cfg.read().unwrap().eco_mode)
+    }
+
     pub fn drain_events(&self, out: &mut Vec<u8>, max: usize) -> usize {
         match self.events.try_lock() {
             Ok(mut log) => log.drain_into(out, max),
@@ -2231,20 +2281,32 @@ impl Core {
 
     /// The package names behind the app that owns the TCP flow `pkt` opens,
     /// for the `$app=` rules. Empty when the flow is unattributed, when the
-    /// platform has not pushed the table yet, or when neither the loaded lists
-    /// nor the per-app HTTPS exclusions need it (nothing is then asked of the
-    /// platform or of the kernel).
+    /// platform has not pushed the table yet, or when nothing needs it
+    /// (nothing is then asked of the platform or of the kernel).
     ///
     /// One lookup per connection, at SYN time: the app is a property of the
     /// flow, not of the request, and asking later would race with the first
     /// request of the same connection.
-    fn apps_for_packet(&self, pkt: &Packet<'_>) -> Vec<String> {
+    fn apps_for_packet(&self, pkt: &Packet<'_>, cfg: &Config) -> Vec<String> {
+        let intercepted =
+            self.mitm_ready(cfg) && pkt.dst_port == self.mitm_port.load(Ordering::Relaxed);
         let need_apps = !self.app_network_policy.read().unwrap().is_empty()
             || self.filter.has_app_rules()
-            || !self.https_skip_apps.read().unwrap().is_empty();
+            || !self.https_skip_apps.read().unwrap().is_empty()
+            // The HTTPS path logs the app on every request it blocks, so an
+            // intercepted flow needs its name even without `$app=` rules —
+            // unless the eco mode is dropping those events anyway.
+            || (intercepted && self.logging_live());
         if !need_apps {
             return Vec::new();
         }
+        self.resolve_tcp_apps(pkt)
+    }
+
+    /// Same lookup without the "is any rule asking?" shortcut, for callers
+    /// that always need the name: the request log names the app on every
+    /// entry, so a reset whose flows match no `$app=` rule still gets one.
+    fn resolve_tcp_apps(&self, pkt: &Packet<'_>) -> Vec<String> {
         let lookup = self.uid_lookup.read().unwrap().clone();
         let uid = match lookup {
             Some(lookup) => lookup
@@ -3362,6 +3424,23 @@ mod tests {
         }
     }
 
+    /// Answers every flow lookup with one uid, the way Android's
+    /// `getConnectionOwnerUid` does for a real process.
+    struct FixedUid(u32);
+
+    impl crate::api::ConnectionUidLookup for FixedUid {
+        fn owner_uid(
+            &self,
+            _protocol: u8,
+            _local_ip: String,
+            _local_port: u16,
+            _remote_ip: String,
+            _remote_port: u16,
+        ) -> Option<u32> {
+            Some(self.0)
+        }
+    }
+
     #[test]
     fn udp_without_a_protector_is_dropped_not_relayed() {
         let core = Core::new();
@@ -3419,16 +3498,34 @@ mod tests {
         core.pin_uid_for_port(40000, 10_123);
         let raw = tcp_syn(40000, [93, 184, 216, 34], 443);
         let pkt = Packet::parse(&raw).expect("packet");
+        let off = Config::default();
+        let on = Config {
+            mitm_enabled: true,
+            ..Config::default()
+        };
 
         assert!(
-            core.apps_for_packet(&pkt).is_empty(),
+            core.apps_for_packet(&pkt, &off).is_empty(),
             "nothing asks for attribution yet"
         );
         core.set_https_skip_apps(vec!["com.example.news".to_string()]);
         assert_eq!(
-            core.apps_for_packet(&pkt),
+            core.apps_for_packet(&pkt, &off),
             vec!["com.example.news".to_string()],
             "the exclusion list alone must resolve the app"
+        );
+
+        // With HTTPS filtering armed the proxy names the app on every request
+        // it blocks, so an intercepted flow is attributed even with no rule
+        // asking for it.
+        core.set_https_skip_apps(Vec::new());
+        assert!(core.apps_for_packet(&pkt, &on).is_empty(), "no CA yet");
+        core.set_mitm_ca(Arc::new(
+            crate::mitm::ca::CertificateAuthority::generate().expect("ca"),
+        ));
+        assert_eq!(
+            core.apps_for_packet(&pkt, &on),
+            vec!["com.example.news".to_string()]
         );
     }
 
@@ -3498,20 +3595,6 @@ mod tests {
     /// run: a filtered answer would still leak whether a host exists.
     #[test]
     fn app_policy_blocks_dns_before_the_lists() {
-        struct FixedUid(u32);
-        impl crate::api::ConnectionUidLookup for FixedUid {
-            fn owner_uid(
-                &self,
-                _protocol: u8,
-                _local_ip: String,
-                _local_port: u16,
-                _remote_ip: String,
-                _remote_port: u16,
-            ) -> Option<u32> {
-                Some(self.0)
-            }
-        }
-
         let core = Core::new();
         core.set_uid_lookup(Arc::new(FixedUid(10_123)));
         core.set_uid_apps(vec![(10_123, vec!["com.example.news".to_string()])]);
@@ -3535,6 +3618,94 @@ mod tests {
             Some(3),
             "clearing the policy restores forwarding"
         );
+    }
+
+    /// The log names the app: a query the lists block carries the package of
+    /// the flow that asked, so the UI can group a domain by its owner.
+    #[test]
+    fn a_blocked_query_names_the_app_in_the_log() {
+        let dir = std::env::temp_dir().join("adfree-engine-app-log");
+        std::fs::create_dir_all(&dir).expect("temp dir");
+        let path = dir.join("app-list.txt");
+        std::fs::write(&path, "||ads.test^\n").expect("write list");
+        let lists = vec![FilterListInfo {
+            id: 1,
+            name: "app-list".to_string(),
+            url: String::new(),
+            enabled: true,
+            local_path: Some(path),
+            format: crate::filter::ListFormat::Standard,
+            category: 0,
+            trusted: true,
+            rule_count: 0,
+            last_error: None,
+        }];
+
+        let core = Core::new();
+        core.set_socket_protector(Arc::new(AllowAll));
+        core.set_uid_lookup(Arc::new(FixedUid(10_123)));
+        core.set_uid_apps(vec![(10_123, vec!["com.example.news".to_string()])]);
+        core.set_lists(lists, Vec::new());
+
+        assert_eq!(dns_reply_rcode(&core, "ads.test"), Some(3));
+        let events = core.take_events(8);
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].domain(), "ads.test");
+        assert_eq!(events[0].app(), "com.example.news");
+    }
+
+    /// The same attribution on the allowed path — but only when the user asked
+    /// for allowed requests in the log; otherwise nothing extra is looked up.
+    #[test]
+    fn an_allowed_query_names_the_app_only_when_logged() {
+        let core = Core::new();
+        core.set_socket_protector(Arc::new(AllowAll));
+        core.set_uid_lookup(Arc::new(FixedUid(10_123)));
+        core.set_uid_apps(vec![(10_123, vec!["com.example.news".to_string()])]);
+
+        dns_reply_rcode(&core, "example.test");
+        assert!(core.take_events(8).is_empty());
+
+        core.set_config(Config {
+            log_allowed: true,
+            ..Config::default()
+        });
+        dns_reply_rcode(&core, "example.test");
+        let events = core.take_events(8);
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].app(), "com.example.news");
+    }
+
+    /// A TCP reset issued by the app firewall names the app too, even though
+    /// no `$app=` rule asked for attribution.
+    #[test]
+    fn a_firewall_reset_names_the_app_in_the_log() {
+        use std::os::unix::io::IntoRawFd;
+
+        let core = Core::new();
+        core.set_socket_protector(Arc::new(AllowAll));
+        // A reset only enters the log once it actually reached the device; a
+        // real descriptor is what makes `write_raw` succeed in a test.
+        let tun = std::fs::OpenOptions::new()
+            .write(true)
+            .open("/dev/null")
+            .expect("write end")
+            .into_raw_fd();
+        core.set_tun_fd_for_test(tun);
+        core.set_uid_lookup(Arc::new(FixedUid(10_123)));
+        core.set_uid_apps(vec![(10_123, vec!["com.example.news".to_string()])]);
+        core.set_network_type(NETWORK_CELLULAR);
+        core.set_app_network_policy(
+            vec!["com.example.news".to_string()],
+            Vec::new(),
+            Vec::new(),
+        );
+
+        core.handle_packet(&tcp_syn(40000, [93, 184, 216, 34], 80));
+        let events = core.take_events(8);
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].action, crate::events::ACTION_TCP_RESET);
+        assert_eq!(events[0].app(), "com.example.news");
     }
 
     #[test]

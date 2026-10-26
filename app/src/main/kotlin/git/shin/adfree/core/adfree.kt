@@ -2870,6 +2870,11 @@ data class LogEvent (
     var `bytesSaved`: kotlin.Int
     , 
     var `ipv6`: kotlin.Boolean
+    , 
+    /**
+     * Package of the app that owned the flow; empty when unattributed.
+     */
+    var `app`: kotlin.String
     
 ){
     
@@ -2897,6 +2902,7 @@ public object FfiConverterTypeLogEvent: FfiConverterRustBuffer<LogEvent> {
             FfiConverterInt.read(buf),
             FfiConverterInt.read(buf),
             FfiConverterBoolean.read(buf),
+            FfiConverterString.read(buf),
         )
     }
 
@@ -2911,7 +2917,8 @@ public object FfiConverterTypeLogEvent: FfiConverterRustBuffer<LogEvent> {
             FfiConverterString.allocationSize(value.`listName`) +
             FfiConverterInt.allocationSize(value.`latencyNs`) +
             FfiConverterInt.allocationSize(value.`bytesSaved`) +
-            FfiConverterBoolean.allocationSize(value.`ipv6`)
+            FfiConverterBoolean.allocationSize(value.`ipv6`) +
+            FfiConverterString.allocationSize(value.`app`)
     )
 
     override fun write(value: LogEvent, buf: ByteBuffer) {
@@ -2926,6 +2933,7 @@ public object FfiConverterTypeLogEvent: FfiConverterRustBuffer<LogEvent> {
             FfiConverterInt.write(value.`latencyNs`, buf)
             FfiConverterInt.write(value.`bytesSaved`, buf)
             FfiConverterBoolean.write(value.`ipv6`, buf)
+            FfiConverterString.write(value.`app`, buf)
     }
 }
 

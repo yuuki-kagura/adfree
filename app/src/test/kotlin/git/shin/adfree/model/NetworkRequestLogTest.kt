@@ -18,6 +18,7 @@ class NetworkRequestLogTest {
         latencyNs: Int = 12_000,
         bytesSaved: Int = 48_000,
         id: Long = 1L,
+        app: String = "",
     ) = LogEvent(
         id = id,
         tsMs = 1_700_000_000_000L,
@@ -30,6 +31,7 @@ class NetworkRequestLogTest {
         latencyNs = latencyNs,
         bytesSaved = bytesSaved,
         ipv6 = false,
+        app = app,
     )
 
     @Test
@@ -83,5 +85,14 @@ class NetworkRequestLogTest {
     fun `database row id becomes the list key`() {
         val log = NetworkRequestLog.from(event(CoreActions.BLOCKED.toInt(), id = 42L))
         assertEquals(42L, log.id)
+    }
+
+    @Test
+    fun `an attributed event carries the package and a blank one is null`() {
+        val owned = NetworkRequestLog.from(
+            event(CoreActions.BLOCKED.toInt(), app = "com.example.browser"),
+        )
+        assertEquals("com.example.browser", owned.appPackage)
+        assertNull(NetworkRequestLog.from(event(CoreActions.BLOCKED.toInt())).appPackage)
     }
 }

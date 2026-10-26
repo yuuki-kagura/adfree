@@ -82,6 +82,13 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 
+/**
+ * The label to show for a log row's package: the installed app's name when
+ * the package is still installed, the raw package otherwise.
+ */
+private fun appLabelFor(appNames: Map<String, String>, packageName: String?): String? =
+    packageName?.let { pkg -> appNames[pkg] ?: pkg }
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun FilteringLogScreen(
@@ -218,10 +225,8 @@ fun FilteringLogScreen(
 
         // Active App Filter Banner
         if (state.selectedAppFilter != null) {
-            val appRule = state.appFirewallRules.find {
-                it.packageName == state.selectedAppFilter || it.appName == state.selectedAppFilter
-            }
-            val appDisplayName = appRule?.appName ?: state.selectedAppFilter ?: ""
+            val selected = state.selectedAppFilter
+            val appDisplayName = selected?.let { state.appNames[it] ?: it } ?: ""
 
             Card(
                 modifier = Modifier
@@ -315,6 +320,7 @@ fun FilteringLogScreen(
                 items(state.filteredLogs, key = { it.id }) { log ->
                     LogItemCard(
                         log = log,
+                        appLabel = appLabelFor(state.appNames, log.appPackage),
                         onClick = { viewModel.onIntent(AdGuardIntent.InspectLog(log)) }
                     )
                 }
@@ -358,6 +364,7 @@ fun FilteringLogScreen(
 
     // Modal Bottom Sheet for Log Details Inspection
     if (state.inspectedLog != null) {
+        val inspected = state.inspectedLog!!
         val sheetState = rememberModalBottomSheetState()
         ModalBottomSheet(
             onDismissRequest = { viewModel.onIntent(AdGuardIntent.InspectLog(null)) },
@@ -366,7 +373,8 @@ fun FilteringLogScreen(
             contentColor = AdGuardTextPrimary
         ) {
             PacketInspectionSheetContent(
-                log = state.inspectedLog!!,
+                log = inspected,
+                appLabel = appLabelFor(state.appNames, inspected.appPackage),
                 onAddToWhitelist = { viewModel.onIntent(AdGuardIntent.AddToWhitelist(it)) },
                 onAddToBlacklist = { viewModel.onIntent(AdGuardIntent.AddToBlacklist(it)) },
                 onAnalyzeWithAi = { domain ->
@@ -383,6 +391,7 @@ fun FilteringLogScreen(
 @Composable
 fun LogItemCard(
     log: NetworkRequestLog,
+    appLabel: String? = null,
     onClick: () -> Unit
 ) {
     val statusColor = when (log.status) {
@@ -454,6 +463,21 @@ fun LogItemCard(
                             color = AdGuardTextSecondary
                         )
                     }
+                    if (appLabel != null) {
+                        Text(
+                            text = "•",
+                            fontSize = 11.sp,
+                            color = AdGuardTextMuted
+                        )
+                        Text(
+                            text = appLabel,
+                            fontSize = 11.sp,
+                            color = AdGuardTextSecondary,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.weight(1f, fill = false)
+                        )
+                    }
                     if (log.matchedRule != null) {
                         Text(
                             text = "•",
@@ -499,6 +523,7 @@ fun LogItemCard(
 @Composable
 fun PacketInspectionSheetContent(
     log: NetworkRequestLog,
+    appLabel: String? = null,
     onAddToWhitelist: (String) -> Unit,
     onAddToBlacklist: (String) -> Unit,
     onAnalyzeWithAi: (String) -> Unit,
@@ -570,6 +595,7 @@ fun PacketInspectionSheetContent(
                 }
             )
             DetailRow(label = "Phân loại", value = log.category.label)
+            DetailRow(label = "Ứng dụng", value = appLabel ?: "Không xác định")
             if (log.matchedRule != null) {
                 DetailRow(label = "Quy tắc kích hoạt", value = log.matchedRule)
             }

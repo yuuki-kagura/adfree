@@ -866,12 +866,12 @@ fun AppDetailsFirewallSheet(
             )
         }
 
-        // Recent Requests made by this specific app.
-        // LogEvent has no app column yet: the only reliable link is the
-        // package name inside a `$app=` rule, so use the same predicate as the
-        // ViewModel's app filter instead of comparing a domain to a package.
+        // Recent Requests made by this specific app. Log rows carry the
+        // attributed package now; rows written before that (or by a core that
+        // could not attribute the flow) still match through a `$app=` rule.
         val appLogs = logs.filter {
-            it.matchedRule?.contains(app.packageName, true) == true
+            it.appPackage.equals(app.packageName, true) ||
+                it.matchedRule?.contains(app.packageName, true) == true
         }.take(4)
         if (appLogs.isNotEmpty()) {
             Spacer(modifier = Modifier.height(16.dp))

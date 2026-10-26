@@ -199,6 +199,8 @@ pub struct LogEvent {
     pub latency_ns: i32,
     pub bytes_saved: i32,
     pub ipv6: bool,
+    /// Package of the app that owned the flow; empty when unattributed.
+    pub app: String,
 }
 
 impl From<&events::Event> for LogEvent {
@@ -215,6 +217,7 @@ impl From<&events::Event> for LogEvent {
             latency_ns: e.latency_ns as i32,
             bytes_saved: e.bytes_saved as i32,
             ipv6: e.flags & 0b01 != 0,
+            app: e.app().to_string(),
         }
     }
 }
@@ -233,6 +236,7 @@ impl From<&crate::store::LogRow> for LogEvent {
             latency_ns: r.latency_ns as i32,
             bytes_saved: r.bytes_saved as i32,
             ipv6: r.ipv6,
+            app: r.app.clone(),
         }
     }
 }

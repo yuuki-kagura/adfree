@@ -99,6 +99,8 @@ pub struct LogRow {
     pub latency_ns: i64,
     pub bytes_saved: i64,
     pub ipv6: bool,
+    /// Package that owned the flow, empty when it could not be attributed.
+    pub app: String,
 }
 
 impl From<&Event> for LogRow {
@@ -116,6 +118,7 @@ impl From<&Event> for LogRow {
             latency_ns: e.latency_ns as i64,
             bytes_saved: e.bytes_saved as i64,
             ipv6: e.flags & 0b01 != 0,
+            app: e.app().to_string(),
         }
     }
 }
@@ -193,7 +196,8 @@ fn write_batch(db: &Db, rows: &[LogRow]) -> rusqlite::Result<()> {
                 r.list_name,
                 r.latency_ns,
                 r.bytes_saved,
-                r.ipv6
+                r.ipv6,
+                r.app
             ])?;
         }
     }
@@ -201,11 +205,11 @@ fn write_batch(db: &Db, rows: &[LogRow]) -> rusqlite::Result<()> {
 }
 
 const COLUMNS: &str = "id, ts_ms, action, category, domain, ip, rule, list_name, \
-                       latency_ns, bytes_saved, ipv6";
+                       latency_ns, bytes_saved, ipv6, app";
 
 const INSERT_SQL: &str = "INSERT INTO log_events \
-     (ts_ms, action, category, domain, ip, rule, list_name, latency_ns, bytes_saved, ipv6) \
-     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)";
+     (ts_ms, action, category, domain, ip, rule, list_name, latency_ns, bytes_saved, ipv6, app) \
+     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)";
 
 /// Newest first: `offset` skips that many of the newest rows.
 pub(super) fn page(db: &Db, offset: u32, limit: u32) -> rusqlite::Result<Vec<LogRow>> {
@@ -225,6 +229,7 @@ pub(super) fn page(db: &Db, offset: u32, limit: u32) -> rusqlite::Result<Vec<Log
             latency_ns: r.get(8)?,
             bytes_saved: r.get(9)?,
             ipv6: r.get(10)?,
+            app: r.get(11)?,
         })
     })?;
     rows.collect()
