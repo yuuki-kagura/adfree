@@ -1,3 +1,15 @@
+# [1.1.0](https://github.com/tachibana-shin/adfree/compare/v1.0.0...v1.1.0) (2026-10-26)
+
+
+### Features
+
+* **apps:** enforce per-app network and screen-off rules ([9f03494](https://github.com/tachibana-shin/adfree/commit/9f0349488c088417247a4175274eb1e4089c2155))
+* **filters:** add a help link and a store first-page control ([83f0053](https://github.com/tachibana-shin/adfree/commit/83f0053c79a80c1766576685d4977e7f27445099))
+* **filters:** serve the deferred redirect resources ([4326eac](https://github.com/tachibana-shin/adfree/commit/4326eac21ca335d47338de6d4089bb072a5e0fb1))
+* **filters:** split the tab into a filtering hub ([050cab3](https://github.com/tachibana-shin/adfree/commit/050cab34cbdc6be428ce884ad273f1e4d98e9b9f))
+* **log:** attribute each request to the app that made it ([a85758b](https://github.com/tachibana-shin/adfree/commit/a85758b13716a39ef63d12fb9bd53990fe937296))
+* **proxy:** route tcp flows through a socks5 endpoint ([802ebe9](https://github.com/tachibana-shin/adfree/commit/802ebe9eb0eb8404625668a0e2a2462185070741))
+
 # 1.0.0 (2026-10-25)
 
 
