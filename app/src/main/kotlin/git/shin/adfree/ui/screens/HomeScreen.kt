@@ -34,10 +34,12 @@ import androidx.compose.material.icons.filled.Dns
 import androidx.compose.material.icons.filled.PowerSettingsNew
 import androidx.compose.material.icons.filled.Shield
 import androidx.compose.material.icons.filled.TrackChanges
+import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Switch
 import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
@@ -50,14 +52,18 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LifecycleEventEffect
 import git.shin.adfree.model.ProtectionStats
 import git.shin.adfree.ui.AdGuardIntent
 import git.shin.adfree.ui.AdGuardTab
 import git.shin.adfree.ui.AdGuardViewModel
+import git.shin.adfree.vpn.PrivateDns
 import git.shin.adfree.ui.theme.AdGuardBlueDns
 import git.shin.adfree.ui.theme.AdGuardDarkBg
 import git.shin.adfree.ui.theme.AdGuardDarkOutline
@@ -84,6 +90,12 @@ fun HomeScreen(
     modifier: Modifier = Modifier
 ) {
     val state by viewModel.uiState.collectAsState()
+    val privateDnsOn by viewModel.privateDnsOn.collectAsState()
+    val context = LocalContext.current
+
+    // The switch lives in the system settings, so re-read it on every return;
+    // the same call re-pushes the effective DoT policy to the core.
+    LifecycleEventEffect(Lifecycle.Event.ON_RESUME) { viewModel.refreshPrivateDnsState() }
 
     Column(
         modifier = modifier
@@ -105,6 +117,13 @@ fun HomeScreen(
                 isActive = state.isVpnActive,
                 onToggle = { viewModel.onIntent(AdGuardIntent.ToggleProtection) }
             )
+
+            if (privateDnsOn) {
+                Spacer(modifier = Modifier.height(16.dp))
+                PrivateDnsWarningCard(
+                    onOpenSettings = { PrivateDns.openSettings(context) }
+                )
+            }
 
             Spacer(modifier = Modifier.height(16.dp))
 
@@ -211,6 +230,56 @@ private fun StatusChip(isActive: Boolean) {
             fontWeight = FontWeight.Bold,
             color = tint
         )
+    }
+}
+
+/**
+ * Shown while Android's Private DNS is on. The core stops resetting port 853
+ * in that mode (otherwise strict mode loses all resolution), which means DNS
+ * filtering cannot see those lookups; the user gets the trade and a shortcut
+ * to the system switch instead of a silently weaker app.
+ */
+@Composable
+private fun PrivateDnsWarningCard(onOpenSettings: () -> Unit) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(14.dp),
+        colors = CardDefaults.cardColors(
+            containerColor = AdGuardOrangeWarning.copy(alpha = 0.12f),
+        ),
+    ) {
+        Column(modifier = Modifier.padding(14.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(
+                    imageVector = Icons.Default.Warning,
+                    contentDescription = null,
+                    tint = AdGuardOrangeWarning,
+                    modifier = Modifier.size(18.dp),
+                )
+                Spacer(modifier = Modifier.width(8.dp))
+                Text(
+                    text = "Private DNS đang bật",
+                    fontSize = 13.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = AdGuardTextPrimary,
+                )
+            }
+            Spacer(modifier = Modifier.height(6.dp))
+            Text(
+                text = "Truy vấn DNS đi thẳng tới máy chủ riêng nên bỏ qua bộ lọc " +
+                    "của AdFree. Đã tạm ngừng chặn DoT để mạng vẫn hoạt động; " +
+                    "tắt Private DNS để lọc đầy đủ.",
+                fontSize = 11.sp,
+                color = AdGuardTextSecondary,
+            )
+            Spacer(modifier = Modifier.height(8.dp))
+            OutlinedButton(
+                onClick = onOpenSettings,
+                shape = RoundedCornerShape(8.dp),
+            ) {
+                Text("Mở cài đặt Private DNS", fontSize = 11.sp)
+            }
+        }
     }
 }
 

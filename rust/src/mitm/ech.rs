@@ -26,25 +26,40 @@
 //! * `advertised` — every host whose ECHConfig the DNS half rewrote away. What
 //!   the TLS half may learn a refusal from: a bare `502`/`421` means something
 //!   on a host that advertises ECH, and nothing on the rest of the web.
-//! * `exempt` — hosts learned to require ECH anyway. The DNS half leaves their
-//!   ECHConfig alone from then on, so the browser can actually use ECH.
-//! * `public_names` — the names the ECHConfigs expose (`cloudflare-ech.com`),
-//!   read out of the HTTPS answers. Browsers attach a GREASE
-//!   `encrypted_client_hello` extension to ordinary connections too — Chrome
-//!   149 offered one on *every* host measured on 19/10/2026 — so "the hello
+//! * `exempt` — hosts learned to require ECH, **with an expiry**. The DNS half
+//!   leaves their ECHConfig alone until then, so the browser can actually use
+//!   ECH, and hellos carrying it are spliced by public name. The window has to
+//!   end because the evidence can be wrong: a transient bare `502` from a
+//!   healthy host must not cost filtering for the rest of the engine's life.
+//! * `evidence` / `confirmed` — how a host earns that exemption. `421` is
+//!   definitive and exempts at once; a bare `502` needs two within
+//!   [`REFUSAL_WINDOW_MS`], because a single one can be any edge failure. A
+//!   host confirmed once needs only one more refusal to re-earn the exemption
+//!   after it lapses.
+//! * `host_public` — the public name each host's ECHConfig exposes
+//!   (`cloudflare-ech.com`), read out of the HTTPS answers. This mapping is
+//!   what makes an exemption actionable: a real ECH hello names the *public
+//!   name*, never the host inside, so `exempt(host)` alone can never match the
+//!   SNI on the wire. Browsers also attach a GREASE
+//!   `encrypted_client_hello` extension to ordinary connections — Chrome 149
+//!   offered one on *every* host measured on 19/10/2026 — so "the hello
 //!   offers ECH" cannot be the splice condition by itself. A hello whose SNI
-//!   is a public name is only spliced when the user opted into full ECH:
-//!   otherwise terminating it makes the browser retry in the clear, which
-//!   keeps the page filterable. An exempt host is still spliced without that
-//!   switch, because the origin has already refused every plain handshake.
+//!   is a public name is spliced only when the user opted into full ECH or the
+//!   name belongs to a host currently exempt; otherwise terminating it makes
+//!   the browser retry in the clear, which keeps the page filterable.
+//!   Exempting a host does **not** splice plain hellos that name it: those are
+//!   still terminated, and the upstream half's own ECH offer keeps them
+//!   filterable.
 //! * `configs` — the raw ECHConfigList per host, refreshed by every HTTPS
-//!   answer. Answers whose parameter was stripped are clamped to
-//!   [`ANSWER_TTL_SECS`], so the copy cannot get far out of date.
+//!   answer. Answers whose parameter was stripped, and answers kept for an
+//!   exempt host, are clamped to [`ANSWER_TTL_SECS`], so the copy cannot get
+//!   far out of date and a lapsed exemption takes effect within a minute.
 //! * `rejected` — hosts whose upstream refused the offered config, until when
 //!   the cooldown ends.
 //!
 //! Nothing is persisted: the sets are rebuilt by their own traffic, and a
-//! false `exempt` only costs filtering for one host — the side to err on.
+//! false `exempt` only costs filtering for the hosts behind that public name,
+//! for the exemption's window — the side to err on.
 
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::Mutex;
@@ -53,8 +68,9 @@ use std::sync::Mutex;
 /// only long after a browser that asked about it would have asked again.
 const ADVERTISED_CAP: usize = 512;
 
-/// How many ECH public names to remember. One per provider in practice.
-const PUBLIC_NAME_CAP: usize = 64;
+/// How many host → public-name pairs to keep. One per HTTPS host contacted
+/// through the proxy.
+const HOST_PUBLIC_CAP: usize = 512;
 
 /// How many host configs to keep. One per HTTPS host contacted through the
 /// proxy; the eviction scan only runs when the window is full.
@@ -64,6 +80,17 @@ const CONFIG_CAP: usize = 256;
 /// (`defo.ie` served 194 across three configs); anything far past that is not
 /// worth carrying around.
 const CONFIG_MAX_BYTES: usize = 2048;
+
+/// How many exemptions to keep. Entries expire on their own; the cap only
+/// bounds a burst of never-repeating hosts.
+const EXEMPT_CAP: usize = 256;
+
+/// How many hosts to remember as ever confirmed ECH-required.
+const CONFIRMED_CAP: usize = 256;
+
+/// How many pending single refusals to keep. The cap only bounds a burst of
+/// hosts that each sent one bare `502`.
+const EVIDENCE_CAP: usize = 256;
 
 /// How many host cooldowns to keep. Entries expire on their own; the cap only
 /// bounds a burst of never-repeating hosts.
@@ -77,11 +104,40 @@ const REJECTED_CAP: usize = 256;
 /// being deployed or withdrawn from oscillating per connection.
 pub const ECH_COOLDOWN_MS: u64 = 10 * 60 * 1000;
 
+/// How long an ECH-required exemption lasts before the host must earn it
+/// again.
+///
+/// The evidence behind an exemption is a refusal on a plain connection, and a
+/// bare `502` can come from an ordinary edge failure. Without an expiry such a
+/// false positive would turn filtering off for that host's public name for the
+/// rest of the engine's life. Six hours keeps a genuinely required host usable
+/// (one refusal re-earns the window) while a mistaken one heals the same day.
+pub const EXEMPT_TTL_MS: u64 = 6 * 60 * 60 * 1000;
+
+/// The window in which two bare `502`s count as one confirmation. Separate
+/// refusals further apart than this say nothing about the host as it is now.
+pub const REFUSAL_WINDOW_MS: u64 = 10 * 60 * 1000;
+
+/// How many bare `502`s within [`REFUSAL_WINDOW_MS`] confirm an ECH-required
+/// host. `421` confirms at once; `502` is also what a downed edge sends.
+const EXEMPT_CONFIRMATIONS: u32 = 2;
+
 /// The TTL an answer is clamped to when the DNS half rewrote its ECHConfig
-/// away. The answer is no longer the origin's, so it must not be cached as if
-/// it were — and the client only re-reads the record, and can only then pick
-/// the ECHConfig back up, when what it holds expires.
+/// away, or kept it for an exempt host. Such an answer is not what the origin
+/// would have sent — the client only re-reads the record, and can only then
+/// pick a change back up, when what it holds expires.
 pub const ANSWER_TTL_SECS: u32 = 60;
+
+/// What a bare `502` did to a host's exemption state.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BareRefusal {
+    /// The host is already exempt; the window was extended quietly.
+    Known,
+    /// One refusal seen. Another within [`REFUSAL_WINDOW_MS`] confirms it.
+    Suspected,
+    /// This refusal confirmed the host (or re-confirmed it after a lapse).
+    Confirmed,
+}
 
 /// One host's ECHConfigList, as last learned from DNS.
 struct StoredConfig {
@@ -91,12 +147,20 @@ struct StoredConfig {
     seen_ms: u64,
 }
 
+/// One host's unconfirmed bare refusals.
+struct Evidence {
+    count: u32,
+    first_ms: u64,
+}
+
 /// The ECH knowledge of one running engine.
 #[derive(Default)]
 pub struct EchHosts {
     advertised: Mutex<VecDeque<String>>,
-    exempt: Mutex<HashSet<String>>,
-    public_names: Mutex<VecDeque<String>>,
+    exempt: Mutex<HashMap<String, u64>>,
+    confirmed: Mutex<HashSet<String>>,
+    evidence: Mutex<HashMap<String, Evidence>>,
+    host_public: Mutex<VecDeque<(String, String)>>,
     configs: Mutex<HashMap<String, StoredConfig>>,
     rejected: Mutex<HashMap<String, u64>>,
 }
@@ -124,52 +188,165 @@ impl EchHosts {
         self.advertised.lock().unwrap().iter().any(|h| h == host)
     }
 
-    /// Is this host known to refuse connections that do not use ECH?
-    pub fn exempt(&self, host: &str) -> bool {
-        self.exempt.lock().unwrap().contains(host)
+    /// Is this host currently exempt from termination?
+    pub fn exempt(&self, host: &str, now_ms: u64) -> bool {
+        self.exempt
+            .lock()
+            .unwrap()
+            .get(host)
+            .is_some_and(|until| *until > now_ms)
     }
 
-    /// A host that advertises ECH refused a plain connection: from now on it
-    /// is left its ECHConfig and its TLS is not terminated. Returns whether
-    /// this is news.
-    pub fn note_refusal(&self, host: &str) -> bool {
-        self.exempt.lock().unwrap().insert(host.to_string())
+    /// Drop an expired exemption and report it, so the caller can log the
+    /// return to filtering once.
+    pub fn lapsed(&self, host: &str, now_ms: u64) -> bool {
+        let mut exempt = self.exempt.lock().unwrap();
+        match exempt.get(host) {
+            Some(until) if *until <= now_ms => {
+                exempt.remove(host);
+                true
+            }
+            _ => false,
+        }
     }
 
-    /// The DNS half handed this ECHConfig out, so a hello wrapped with it can
-    /// reach this name on the wire.
-    ///
-    /// Called for every HTTPS answer that carries a readable config, stripped
-    /// or not: a client that cached one before the proxy started (or through
-    /// another resolver) still opens a real ECH hello, and its outer SNI is
-    /// the only name visible on the wire. Those flows must be spliced, not
-    /// terminated, or the page fails.
-    pub fn note_public_name(&self, name: &str) {
-        let mut names = self.public_names.lock().unwrap();
-        if names.iter().any(|n| n == name) {
+    /// A host that advertises ECH refused a plain connection in a way only an
+    /// ECH-required origin sends (`421`): exempt it from termination for
+    /// [`EXEMPT_TTL_MS`], and remember it as confirmed so a later refusal
+    /// after the window lapses needs no second proof. Returns whether this is
+    /// news.
+    pub fn note_refusal(&self, host: &str, now_ms: u64) -> bool {
+        let news = !self.exempt(host, now_ms);
+        {
+            let mut exempt = self.exempt.lock().unwrap();
+            if exempt.len() >= EXEMPT_CAP && !exempt.contains_key(host) {
+                exempt.retain(|_, until| *until > now_ms);
+                if exempt.len() >= EXEMPT_CAP {
+                    exempt.clear();
+                }
+            }
+            exempt.insert(host.to_string(), now_ms.saturating_add(EXEMPT_TTL_MS));
+        }
+        self.evidence.lock().unwrap().remove(host);
+        let mut confirmed = self.confirmed.lock().unwrap();
+        if confirmed.len() >= CONFIRMED_CAP && !confirmed.contains(host) {
+            confirmed.clear();
+        }
+        confirmed.insert(host.to_string());
+        news
+    }
+
+    /// A host that advertises ECH answered a plain connection with a bare
+    /// `502` (no `Server` header). That is weaker evidence than `421`, so the
+    /// first one only counts and the second within [`REFUSAL_WINDOW_MS`]
+    /// confirms. A host confirmed before re-earns its exemption on one hit.
+    pub fn note_bare_refusal(&self, host: &str, now_ms: u64) -> BareRefusal {
+        if self.exempt(host, now_ms) {
+            self.note_refusal(host, now_ms);
+            return BareRefusal::Known;
+        }
+        if self.confirmed.lock().unwrap().contains(host) {
+            self.note_refusal(host, now_ms);
+            return BareRefusal::Confirmed;
+        }
+        let confirmed = {
+            let mut evidence = self.evidence.lock().unwrap();
+            if evidence.len() >= EVIDENCE_CAP && !evidence.contains_key(host) {
+                evidence.retain(|_, seen| {
+                    now_ms.saturating_sub(seen.first_ms) <= REFUSAL_WINDOW_MS
+                });
+                if evidence.len() >= EVIDENCE_CAP {
+                    evidence.clear();
+                }
+            }
+            let seen = evidence.entry(host.to_string()).or_insert(Evidence {
+                count: 0,
+                first_ms: now_ms,
+            });
+            if now_ms.saturating_sub(seen.first_ms) > REFUSAL_WINDOW_MS {
+                seen.count = 1;
+                seen.first_ms = now_ms;
+            } else {
+                seen.count += 1;
+            }
+            seen.count >= EXEMPT_CONFIRMATIONS
+        };
+        if confirmed {
+            self.note_refusal(host, now_ms);
+            BareRefusal::Confirmed
+        } else {
+            BareRefusal::Suspected
+        }
+    }
+
+    /// An HTTPS answer for `host` carried this public name in its ECHConfig:
+    /// remember which host a hello naming it may belong to.
+    pub fn note_public_name(&self, host: &str, name: &str) {
+        let mut pairs = self.host_public.lock().unwrap();
+        if let Some(pair) = pairs.iter_mut().find(|(known, _)| known == host) {
+            pair.1 = name.to_string();
             return;
         }
-        if names.len() >= PUBLIC_NAME_CAP {
-            names.pop_front();
+        if pairs.len() >= HOST_PUBLIC_CAP {
+            pairs.pop_front();
         }
-        names.push_back(name.to_string());
+        pairs.push_back((host.to_string(), name.to_string()));
+    }
+
+    /// Is `name` a public name read out of any HTTPS answer?
+    pub fn public_name(&self, name: &str) -> bool {
+        self.host_public
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|(_, public)| public == name)
+    }
+
+    /// The public name last read out of `host`'s HTTPS answer.
+    pub fn public_name_for(&self, host: &str) -> Option<String> {
+        self.host_public
+            .lock()
+            .unwrap()
+            .iter()
+            .find(|(known, _)| known == host)
+            .map(|(_, name)| name.clone())
+    }
+
+    /// Why should a hello whose SNI is `name` be spliced?
+    ///
+    /// A real ECH hello exposes only its config's public name, so this is the
+    /// name that can be matched: an active exemption for a host behind it, or
+    /// the user's full-ECH opt-in for any public name. Plain hellos that name
+    /// an exempt host are deliberately not matched — they are terminated, and
+    /// the upstream half's own ECH offer keeps them filterable.
+    pub fn splice_reason(&self, name: &str, full_ech: bool, now_ms: u64) -> Option<&'static str> {
+        if self.exempt_public(name, now_ms) {
+            Some("its origin requires ECH")
+        } else if full_ech && self.public_name(name) {
+            Some("full ECH is on")
+        } else {
+            None
+        }
     }
 
     /// Should a first flight whose SNI is `name` be spliced?
-    ///
-    /// An exempt host is always spliced: the origin refused the proxy's own
-    /// plaintext handshake, so terminating it would only fail again. A public
-    /// name is spliced only when `full_ech` is on. With the switch off, a
-    /// browser that cached an ECHConfig elsewhere gets a failed handshake and
-    /// retries in the clear; the retry is terminated and filtered. Splicing it
-    /// instead would silently drop filtering for a host the lists still name.
-    pub fn splices(&self, name: &str, full_ech: bool) -> bool {
-        self.exempt(name) || (full_ech && self.public_name(name))
+    pub fn splices(&self, name: &str, full_ech: bool, now_ms: u64) -> bool {
+        self.splice_reason(name, full_ech, now_ms).is_some()
     }
 
-    /// Was `name` read as an ECHConfig public name in an HTTPS answer?
-    pub fn public_name(&self, name: &str) -> bool {
-        self.public_names.lock().unwrap().iter().any(|n| n == name)
+    /// Does any currently exempt host publish `name` as its ECH public name?
+    fn exempt_public(&self, name: &str, now_ms: u64) -> bool {
+        let pairs = self.host_public.lock().unwrap();
+        if pairs.is_empty() {
+            return false;
+        }
+        let exempt = self.exempt.lock().unwrap();
+        if exempt.is_empty() {
+            return false;
+        }
+        pairs.iter().any(|(host, public)| {
+            public == name && exempt.get(host).is_some_and(|until| *until > now_ms)
+        })
     }
 
     /// The HTTPS answer for `host` carried this ECHConfigList: remember it for
@@ -259,46 +436,138 @@ mod tests {
     }
 
     #[test]
-    fn a_refusal_exempts_a_host_once() {
+    fn an_exemption_lapses_and_is_reported_once() {
         let ech = EchHosts::new();
-        assert!(ech.note_refusal("crypto.test"));
-        assert!(!ech.note_refusal("crypto.test"), "the second time is not news");
-        assert!(ech.exempt("crypto.test"));
-        assert!(!ech.exempt("other.test"));
+        assert!(ech.note_refusal("crypto.test", 1_000));
+        assert!(
+            !ech.note_refusal("crypto.test", 2_000),
+            "the second time is not news"
+        );
+        assert!(ech.exempt("crypto.test", 2_000));
+        assert!(ech.exempt("crypto.test", 2_000 + EXEMPT_TTL_MS - 1));
+        assert!(
+            !ech.exempt("crypto.test", 2_000 + EXEMPT_TTL_MS),
+            "the window must end"
+        );
+        assert!(
+            ech.lapsed("crypto.test", 2_000 + EXEMPT_TTL_MS),
+            "the lapse is reported"
+        );
+        assert!(
+            !ech.lapsed("crypto.test", 2_000 + EXEMPT_TTL_MS),
+            "and only once"
+        );
+        assert!(!ech.exempt("crypto.test", 2_000 + EXEMPT_TTL_MS));
+        assert!(!ech.exempt("other.test", 2_000));
     }
 
     #[test]
-    fn a_grease_hello_is_terminated_but_a_public_name_is_not() {
+    fn a_single_bare_refusal_does_not_exempt() {
         let ech = EchHosts::new();
-        assert!(
-            !ech.splices("shop.test", false),
-            "a normal host stays terminated"
+        assert_eq!(
+            ech.note_bare_refusal("crypto.test", 1_000),
+            BareRefusal::Suspected
         );
-        ech.note_public_name("cloudflare-ech.test");
+        assert!(!ech.exempt("crypto.test", 1_000));
+        assert_eq!(
+            ech.note_bare_refusal("crypto.test", 2_000),
+            BareRefusal::Confirmed
+        );
+        assert!(ech.exempt("crypto.test", 2_000));
+        assert_eq!(
+            ech.note_bare_refusal("crypto.test", 3_000),
+            BareRefusal::Known,
+            "a refusal while exempt only extends the window"
+        );
+        assert!(ech.exempt("crypto.test", 3_000 + EXEMPT_TTL_MS - 1));
+    }
+
+    #[test]
+    fn bare_refusals_further_apart_than_the_window_do_not_confirm() {
+        let ech = EchHosts::new();
+        assert_eq!(
+            ech.note_bare_refusal("crypto.test", 1_000),
+            BareRefusal::Suspected
+        );
+        let late = 1_000 + REFUSAL_WINDOW_MS + 1;
+        assert_eq!(
+            ech.note_bare_refusal("crypto.test", late),
+            BareRefusal::Suspected,
+            "the old refusal is stale evidence"
+        );
+        assert!(!ech.exempt("crypto.test", late));
+    }
+
+    #[test]
+    fn a_confirmed_host_re_earns_the_exemption_on_one_refusal() {
+        let ech = EchHosts::new();
+        assert_eq!(
+            ech.note_bare_refusal("crypto.test", 0),
+            BareRefusal::Suspected
+        );
+        assert_eq!(
+            ech.note_bare_refusal("crypto.test", 1),
+            BareRefusal::Confirmed
+        );
+        let after = 1 + EXEMPT_TTL_MS;
+        assert!(!ech.exempt("crypto.test", after), "the window has ended");
+        assert_eq!(
+            ech.note_bare_refusal("crypto.test", after),
+            BareRefusal::Confirmed,
+            "a host already confirmed needs no second proof"
+        );
+        assert!(ech.exempt("crypto.test", after));
+    }
+
+    #[test]
+    fn only_an_exempt_hosts_public_name_is_spliced() {
+        let ech = EchHosts::new();
+        ech.note_public_name("shop.test", "cloudflare-ech.test");
+        ech.note_public_name("other.test", "other-ech.test");
+
+        assert!(!ech.splices("shop.test", false, 1_000), "a plain host stays terminated");
         assert!(
-            !ech.splices("cloudflare-ech.test", false),
-            "a public name is not spliced with full ECH off"
+            !ech.splices("cloudflare-ech.test", false, 1_000),
+            "no exemption yet"
         );
         assert!(
-            ech.splices("cloudflare-ech.test", true),
+            ech.splices("cloudflare-ech.test", true, 1_000),
             "full ECH is the opt-in that splices a public name"
         );
-        assert!(!ech.splices("shop.test", true));
-        ech.note_refusal("crypto.test");
+        assert!(!ech.splices("shop.test", true, 1_000));
+
+        ech.note_refusal("shop.test", 1_000);
+        assert_eq!(
+            ech.splice_reason("cloudflare-ech.test", false, 1_000),
+            Some("its origin requires ECH")
+        );
         assert!(
-            ech.splices("crypto.test", false),
-            "an exempt host is spliced even without full ECH"
+            !ech.splices("other-ech.test", false, 1_000),
+            "another host's public name is unaffected"
+        );
+        assert!(
+            !ech.splices("shop.test", false, 1_000),
+            "a plain hello naming the exempt host is still terminated"
+        );
+        assert!(
+            !ech.splices("cloudflare-ech.test", false, 1_000 + EXEMPT_TTL_MS),
+            "the splice ends with the exemption"
         );
     }
 
     #[test]
-    fn the_public_name_window_stays_bounded() {
+    fn the_host_public_window_stays_bounded() {
         let ech = EchHosts::new();
-        for i in 0..(PUBLIC_NAME_CAP + 4) {
-            ech.note_public_name(&format!("ech{i}.test"));
+        for i in 0..(HOST_PUBLIC_CAP + 4) {
+            ech.note_public_name(&format!("host{i}.test"), &format!("ech{i}.test"));
         }
-        assert!(!ech.splices("ech0.test", true), "the window must slide");
-        assert!(ech.splices(&format!("ech{}.test", PUBLIC_NAME_CAP + 3), true));
+        assert!(!ech.public_name("ech0.test"), "the window must slide");
+        assert!(ech.public_name(&format!("ech{}.test", HOST_PUBLIC_CAP + 3)));
+        assert_eq!(ech.public_name_for("host0.test"), None);
+        assert_eq!(
+            ech.public_name_for(&format!("host{}.test", HOST_PUBLIC_CAP + 3)),
+            Some(format!("ech{}.test", HOST_PUBLIC_CAP + 3))
+        );
     }
 
     #[test]

@@ -447,22 +447,23 @@ fn a_host_that_requires_ech_keeps_its_config() {
     // whose outer SNI is this name. With full ECH off the hello is terminated
     // so the browser retries in the clear and the page stays filterable; only
     // the full-ECH opt-in hands it through untouched.
+    let now = adfree_core::util::now_ms();
     assert!(
-        !core.ech_hosts.splices("cloudflare-ech.com", false),
+        !core.ech_hosts.splices("cloudflare-ech.com", false, now),
         "a cached public name is not spliced while full ECH is off"
     );
     assert!(
-        core.ech_hosts.splices("cloudflare-ech.com", true),
+        core.ech_hosts.splices("cloudflare-ech.com", true, now),
         "the public name is still learned for the full-ECH path"
     );
     assert!(
-        !core.ech_hosts.splices("required-ech.test", false),
+        !core.ech_hosts.splices("required-ech.test", false, now),
         "the host itself is not spliced until it refuses"
     );
 
     // 2. The host answered a plain connection with the refusal, so it is known
     //    to require ECH. Its config now reaches the client, untouched.
-    assert!(core.ech_hosts.note_refusal("required-ech.test"));
+    assert!(core.ech_hosts.note_refusal("required-ech.test", now));
     let answer = ask_https_message(core, tun_r, "required-ech.test", 0x6102);
     assert!(
         https_param_keys(&answer).contains(&5),
@@ -471,14 +472,17 @@ fn a_host_that_requires_ech_keeps_its_config() {
     );
     assert_eq!(
         first_answer_ttl(&answer),
-        300,
-        "an answer left alone keeps the origin's TTL"
+        60,
+        "a kept answer is clamped so a lapsed exemption takes effect quickly"
     );
     assert!(
-        !core.ech_hosts.splices("cloudflare-ech.com", false),
-        "full ECH is still off: the public name is not spliced"
+        core.ech_hosts.splices("cloudflare-ech.com", false, now),
+        "once the origin requires ECH, its cached public name is spliced"
     );
-    assert!(core.ech_hosts.splices("required-ech.test", false));
+    assert!(
+        !core.ech_hosts.splices("required-ech.test", false, now),
+        "a plain hello to the host itself is still terminated"
+    );
 
     core.set_config(Config::default());
     unsafe { libc::close(tun_w) };
@@ -555,12 +559,13 @@ fn full_ech_keeps_the_config_for_the_client() {
         core.ech_hosts.advertised("full-ech.test"),
         "the refusal fallback stays armed for clients that do not use ECH"
     );
+    let now = adfree_core::util::now_ms();
     assert!(
-        core.ech_hosts.splices("cloudflare-ech.com", true),
+        core.ech_hosts.splices("cloudflare-ech.com", true, now),
         "the public name is learned so a real ECH hello is spliced"
     );
     assert!(
-        !core.ech_hosts.splices("full-ech.test", true),
+        !core.ech_hosts.splices("full-ech.test", true, now),
         "the host itself is only spliced if its hello uses ECH"
     );
     assert_eq!(

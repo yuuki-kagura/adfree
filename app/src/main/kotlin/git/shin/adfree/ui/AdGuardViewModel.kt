@@ -24,6 +24,7 @@ import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
@@ -50,6 +51,8 @@ class AdGuardViewModel(
     private val coreEngine: CoreEngine,
     /** Callback that pushes settings down to the Rust core; supplied by DI. */
     private val onConfigChanged: () -> Unit = {},
+    /** Reads Android's strict Private DNS setting; supplied by DI. */
+    private val isPrivateDnsStrict: () -> Boolean = { false },
 ) : ViewModel() {
 
     // ---------------------------------------------------------------- local UI
@@ -72,6 +75,14 @@ class AdGuardViewModel(
     private val _selectedAppFilter = MutableStateFlow<String?>(null)
     private val _aiLabState = MutableStateFlow<AiLabUiState>(AiLabUiState.Idle)
     private val _showVpnPermissionPrompt = MutableStateFlow(false)
+
+    /**
+     * Android's Private DNS sends lookups past the tunnel resolver. The Home
+     * banner explains the reduced filtering; a resume re-reads the system
+     * setting because it can only be changed outside the app.
+     */
+    private val _privateDnsOn = MutableStateFlow(false)
+    val privateDnsOn: StateFlow<Boolean> = _privateDnsOn.asStateFlow()
 
     private val _effect = MutableSharedFlow<AdGuardEffect>(
         replay = 0,
@@ -217,6 +228,7 @@ class AdGuardViewModel(
     )
 
     init {
+        _privateDnsOn.value = isPrivateDnsStrict()
         repository.loadInstalledApps()
         // Protection that was on when the app last ran comes back by itself;
         // a first run has nothing saved and waits for the user. The consent
@@ -502,6 +514,16 @@ class AdGuardViewModel(
     /** After each intent, push the configuration down to the core. */
     private fun syncConfig() {
         onConfigChanged()
+    }
+
+    /**
+     * Re-reads the system Private DNS switch and re-pushes the config: turning
+     * it on has to stop the DoT reset right away, not at the next unrelated
+     * settings change.
+     */
+    fun refreshPrivateDnsState() {
+        _privateDnsOn.value = isPrivateDnsStrict()
+        syncConfig()
     }
 
 

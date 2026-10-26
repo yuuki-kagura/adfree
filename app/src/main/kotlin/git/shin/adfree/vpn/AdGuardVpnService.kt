@@ -7,12 +7,15 @@ import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
+import android.database.ContentObserver
 import android.net.ConnectivityManager
 import android.net.Network
 import android.net.NetworkCapabilities
 import android.net.NetworkRequest
 import android.net.VpnService
 import android.os.Build
+import android.os.Handler
+import android.os.Looper
 import android.os.ParcelFileDescriptor
 import android.util.Log
 import androidx.core.app.NotificationCompat
@@ -91,11 +94,15 @@ class AdGuardVpnService : VpnService() {
         override fun onCapabilitiesChanged(network: Network, caps: NetworkCapabilities) {
             activeTransports[network] = caps
             pushNetworkType()
+            // Private DNS can be switched on while the tunnel is up; the
+            // effective DoT policy is part of the core config.
+            container.syncConfigToEngine()
         }
 
         override fun onLost(network: Network) {
             activeTransports.remove(network)
             pushNetworkType()
+            container.syncConfigToEngine()
         }
     }
 
@@ -112,8 +119,23 @@ class AdGuardVpnService : VpnService() {
         container.coreEngine.setNetworkType(kind)
     }
 
+    /**
+     * Private DNS can be switched on while the tunnel runs, and the DoT reset
+     * has to follow before the system resolver retries: strict mode has no
+     * fallback, so a config that still resets 853 leaves the device without
+     * resolution until the user happens to open the app again.
+     */
+    private val privateDnsObserver = object : ContentObserver(Handler(Looper.getMainLooper())) {
+        override fun onChange(selfChange: Boolean) {
+            container.syncConfigToEngine()
+        }
+    }
+
     override fun onCreate() {
         super.onCreate()
+        runCatching {
+            contentResolver.registerContentObserver(PrivateDns.modeUri, false, privateDnsObserver)
+        }.onFailure { Log.w(TAG, "private DNS observer registration failed", it) }
         registerReceiver(
             screenReceiver,
             IntentFilter().apply {
@@ -292,6 +314,7 @@ class AdGuardVpnService : VpnService() {
 
     override fun onDestroy() {
         serviceScope.cancel()
+        runCatching { contentResolver.unregisterContentObserver(privateDnsObserver) }
         runCatching { unregisterReceiver(screenReceiver) }
         runCatching { unregisterReceiver(packageReceiver) }
         runCatching { connectivity?.unregisterNetworkCallback(networkCallback) }

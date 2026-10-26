@@ -2949,36 +2949,69 @@ fn a_grease_hello_is_still_terminated() {
 }
 
 /// A host learned to require ECH keeps its config: the browser comes back with
-/// a real ECH hello, and that one has to go through untouched — the proxy
-/// cannot serve a certificate for a host it cannot see.
+/// a real ECH hello, whose SNI is the config's public name. That connection has
+/// to go through untouched — the proxy cannot serve a certificate for a host it
+/// cannot see.
 #[test]
-fn a_learned_host_is_spliced_verbatim() {
+fn an_exempt_hosts_public_name_is_spliced_verbatim() {
     let (port, seen) = recording_listener();
     let origin = raw_origin(port);
     let (core, _) = setup_core_named(&origin, "e2e-ech-splice");
-    core.ech_hosts.note_refusal("shop.test");
+    core.ech_hosts
+        .note_public_name("shop.test", "cloudflare-ech.test");
+    core.ech_hosts
+        .note_refusal("shop.test", crate::util::now_ms());
 
     let mut tcp = Client::connect(core.clone(), port);
-    let hello = tls::with_fake_ech(&client_first_flight("shop.test")).expect("patchable hello");
+    let hello =
+        tls::with_fake_ech(&client_first_flight("cloudflare-ech.test")).expect("patchable hello");
     tcp.send(&hello);
 
     let forwarded = await_listener(&mut tcp, &seen);
     assert_eq!(
         forwarded, hello,
-        "a learned host's hello must reach the origin byte for byte"
+        "the exempt host's public name must reach the origin byte for byte"
+    );
+}
+
+/// The same exemption does not splice a plain hello that names the host
+/// itself: terminating it lets the upstream half offer ECH, which keeps the
+/// page filterable.
+#[test]
+fn a_plain_hello_to_an_exempt_host_is_still_terminated() {
+    let (port, seen) = recording_listener();
+    let origin = raw_origin(port);
+    let (core, _) = setup_core_named(&origin, "e2e-ech-exempt-plain");
+    core.ech_hosts
+        .note_public_name("shop.test", "cloudflare-ech.test");
+    core.ech_hosts
+        .note_refusal("shop.test", crate::util::now_ms());
+
+    let mut tcp = Client::connect(core.clone(), port);
+    let hello = tls::with_fake_ech(&client_first_flight("shop.test")).expect("patchable hello");
+    tcp.send(&hello);
+
+    let answer = tcp.read_some(Duration::from_secs(10));
+    assert!(!answer.is_empty(), "the proxy must answer the hello");
+    assert_eq!(answer[0], 0x16, "a TLS handshake record, not a splice");
+    assert!(
+        seen.try_recv().is_err(),
+        "a plain hello is not spliced by the exemption"
     );
 }
 
 /// A real ECH hello names the ECHConfig's public name, not the host it is
-/// reaching for. Without full ECH the client's cached config is not followed
-/// through to a splice: the hello is terminated (and fails once), so the
-/// browser retries in the clear and the page stays filterable.
+/// reaching for. Without full ECH or an exemption for a host behind that name,
+/// the client's cached config is not followed through to a splice: the hello is
+/// terminated (and fails once), so the browser retries in the clear and the
+/// page stays filterable.
 #[test]
 fn an_ech_public_name_is_terminated_without_full_ech() {
     let (port, seen) = recording_listener();
     let origin = raw_origin(port);
     let (core, _) = setup_core_named(&origin, "e2e-ech-public-name-off");
-    core.ech_hosts.note_public_name("cloudflare-ech.test");
+    core.ech_hosts
+        .note_public_name("shop.test", "cloudflare-ech.test");
 
     let mut tcp = Client::connect(core.clone(), port);
     let hello =
@@ -3004,7 +3037,8 @@ fn full_ech_splices_an_ech_public_name_verbatim() {
     let mut cfg = core.config();
     cfg.full_ech = true;
     core.set_config(cfg);
-    core.ech_hosts.note_public_name("cloudflare-ech.test");
+    core.ech_hosts
+        .note_public_name("shop.test", "cloudflare-ech.test");
 
     let mut tcp = Client::connect(core.clone(), port);
     let hello =
@@ -3042,35 +3076,48 @@ fn a_client_without_ech_is_still_terminated() {
     );
 }
 
-/// A host that advertises ECH and refuses a plain connection with the answer
-/// only an ECH-required origin sends is learned from that answer alone; an
-/// ordinary 502 — one that names its server — teaches nothing.
+/// A host that advertises ECH needs two bare refusals within the window before
+/// it is exempted; an ordinary 502 — one that names its server — teaches
+/// nothing, and neither does a single bare one. Once confirmed, the public
+/// name its browser will wrap in ECH is what gets spliced.
 #[test]
-fn an_ech_required_refusal_is_learned_from_the_answer_alone() {
+fn an_ech_required_refusal_needs_two_bare_502s() {
     let origin = start_origin(HTML);
     let (core, ca_der) = setup_core_named(&origin, "e2e-ech-refusal");
-    // The DNS half has already told this client the host advertises ECH.
+    // The DNS half has already told this client the host advertises ECH, and
+    // what public name its config exposes.
     core.ech_hosts.note_advertised("shop.test");
+    core.ech_hosts
+        .note_public_name("shop.test", "cloudflare-ech.test");
 
     let mut tcp = Client::connect(core.clone(), origin.port);
     let mut conn = handshake(&mut tcp, client_config(ca_der));
 
     let (head, _) = request(&mut tcp, &mut conn, "/unlucky");
     assert!(head.starts_with("HTTP/1.1 502"), "{head}");
+    let (head, _) = request(&mut tcp, &mut conn, "/ech-required");
+    assert!(head.starts_with("HTTP/1.1 502"), "{head}");
+    let now = crate::util::now_ms();
     assert!(
-        !core.ech_hosts.exempt("shop.test"),
-        "a 502 that names its server is an ordinary failure"
+        !core.ech_hosts.exempt("shop.test", now),
+        "a 502 that names its server is an ordinary failure, and one bare 502 is not proof"
     );
 
     let (head, _) = request(&mut tcp, &mut conn, "/ech-required");
     assert!(head.starts_with("HTTP/1.1 502"), "{head}");
     assert!(
-        core.ech_hosts.exempt("shop.test"),
-        "the bare refusal must be learned"
+        core.ech_hosts.exempt("shop.test", now),
+        "the second bare refusal must confirm the host"
+    );
+    assert!(
+        core.ech_hosts
+            .splices("cloudflare-ech.test", false, now),
+        "and the public name its config exposes is what gets spliced"
     );
 }
 
-/// `421 Misdirected Request` is the same refusal told by the status.
+/// `421 Misdirected Request` is the same refusal told by the status, and one of
+/// them is definitive.
 #[test]
 fn a_misdirected_request_is_a_refusal_too() {
     let origin = start_origin(HTML);
@@ -3081,7 +3128,7 @@ fn a_misdirected_request_is_a_refusal_too() {
     let mut conn = handshake(&mut tcp, client_config(ca_der));
     let (head, _) = request(&mut tcp, &mut conn, "/misdirected");
     assert!(head.starts_with("HTTP/1.1 421"), "{head}");
-    assert!(core.ech_hosts.exempt("shop.test"));
+    assert!(core.ech_hosts.exempt("shop.test", crate::util::now_ms()));
 }
 
 /// Only a host whose ECHConfig was rewritten away can be learned from: a bare
@@ -3095,8 +3142,10 @@ fn a_bare_502_from_a_host_without_ech_teaches_nothing() {
     let mut conn = handshake(&mut tcp, client_config(ca_der));
     let (head, _) = request(&mut tcp, &mut conn, "/ech-required");
     assert!(head.starts_with("HTTP/1.1 502"), "{head}");
+    let (head, _) = request(&mut tcp, &mut conn, "/ech-required");
+    assert!(head.starts_with("HTTP/1.1 502"), "{head}");
     assert!(
-        !core.ech_hosts.exempt("shop.test"),
+        !core.ech_hosts.exempt("shop.test", crate::util::now_ms()),
         "a host that never advertised ECH must not be exempted"
     );
 }

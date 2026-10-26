@@ -1637,7 +1637,10 @@ impl Core {
         if cfg.block_dot && pkt.dst_port == 853 {
             return true;
         }
-        if cfg.block_doh && self.is_encrypted_dns_elsewhere(dst) {
+        // DoH is HTTPS. The provider ranges also carry plain DNS and DoT
+        // endpoints (1.1.1.1:853, 8.8.8.8:53); matching every port there would
+        // break Private DNS in strict mode, which has no UDP fallback.
+        if cfg.block_doh && pkt.dst_port == 443 && self.is_encrypted_dns_elsewhere(dst) {
             return true;
         }
         let conn = self.conntrack.lock().unwrap();
@@ -1656,7 +1659,9 @@ impl Core {
         let Some(dst) = pkt.dst_ip() else {
             return false;
         };
-        if cfg.block_doh && self.is_encrypted_dns_elsewhere(dst) {
+        // DoH3 runs on UDP 443. The same provider ranges answer plain DNS on
+        // port 53, which the filter has to be able to inspect itself.
+        if cfg.block_doh && pkt.dst_port == 443 && self.is_encrypted_dns_elsewhere(dst) {
             return true;
         }
         let conn = self.conntrack.lock().unwrap();
@@ -1934,7 +1939,8 @@ impl Core {
         // requires ECH stays filterable. Only if the origin refuses that too
         // does the host become the exception — learned from the refusal the
         // terminator sees (`proxy::note_plain_refusal`) — after which its
-        // ECHConfig is left in place and its flows are spliced instead.
+        // ECHConfig is left in place for a bounded window and hellos carrying
+        // it are spliced by the public name they expose.
         let (mitm, full_ech) = {
             let cfg = self.cfg.read().unwrap();
             (self.mitm_ready(&cfg), cfg.full_ech)
@@ -1952,9 +1958,17 @@ impl Core {
             ),
             None => (None, false),
         };
+        let now_ms = crate::util::now_ms();
+        if let Some(host) = host.as_deref() {
+            if self.ech_hosts.lapsed(host, now_ms) {
+                crate::logbuf::push(&format!(
+                    "dns: ECH exemption for {host} lapsed, its config is stripped again"
+                ));
+            }
+        }
         let exempt = host
             .as_deref()
-            .is_some_and(|host| self.ech_hosts.exempt(host));
+            .is_some_and(|host| self.ech_hosts.exempt(host, now_ms));
         // Read before the strip below rewrites the parameter away: the raw
         // config is what the upstream half offers, and the public name is what
         // a real ECH hello will expose on the wire. Only an HTTPS query can
@@ -1974,8 +1988,19 @@ impl Core {
                 // can read it. It is learned only for the hosts whose config
                 // is actually handed out: an ECH hello can only reach one of
                 // those, and every other flow stays terminated (`mitm::ech`).
-                if let Some(name) = public_name {
-                    self.ech_hosts.note_public_name(&name);
+                if let Some(name) = public_name.as_deref() {
+                    self.ech_hosts.note_public_name(host, name);
+                }
+                // The kept answer is clamped like the stripped one: a lapsed
+                // exemption must take effect within a minute, and the client
+                // re-reads the record only when what it holds expires.
+                let clamped =
+                    dns::clamp_answer_ttl(&mut message, crate::mitm::ech::ANSWER_TTL_SECS);
+                if clamped > 0 {
+                    crate::logbuf::push(&format!(
+                        "dns: ECH answer for {host} clamped to {}s",
+                        crate::mitm::ech::ANSWER_TTL_SECS
+                    ));
                 }
             }
         } else if mitm && full_ech {
@@ -1996,8 +2021,8 @@ impl Core {
                 // splices it, which is a trade this mode already accepts.
                 self.ech_hosts.note_advertised(host);
             }
-            if let Some(name) = public_name {
-                self.ech_hosts.note_public_name(&name);
+            if let (Some(host), Some(name)) = (host.as_deref(), public_name.as_deref()) {
+                self.ech_hosts.note_public_name(host, name);
             }
         } else if mitm {
             // The client half must not see the parameter ([`dns::strip_ech`]),
@@ -2016,11 +2041,11 @@ impl Core {
                             .note_config(host, list, crate::util::now_ms());
                     }
                 }
-                if let Some(name) = public_name {
+                if let (Some(host), Some(name)) = (host.as_deref(), public_name.as_deref()) {
                     // A client that cached the config before the proxy was
                     // running still opens a real ECH hello, whose outer SNI is
                     // this name; those flows are spliced, never terminated.
-                    self.ech_hosts.note_public_name(&name);
+                    self.ech_hosts.note_public_name(host, name);
                 }
                 // The answer is not the origin's any more, so it may not be
                 // cached as if it were: a short TTL also keeps the way back
@@ -3222,6 +3247,64 @@ mod tests {
         let core = Core::new();
         assert!(core.handle_packet(&[]).is_empty());
         assert!(core.handle_packet(&[0u8; 5]).is_empty());
+    }
+
+    /// Minimal IPv4 TCP SYN; only the fields `Packet::parse` reads matter.
+    fn tcp_packet(dst: [u8; 4], dst_port: u16) -> Vec<u8> {
+        let total = 20 + 20;
+        let mut p = Vec::with_capacity(total);
+        p.extend_from_slice(&[0x45, 0x00]);
+        p.extend_from_slice(&(total as u16).to_be_bytes());
+        p.extend_from_slice(&[0x00, 0x00, 0x00, 0x00, 64, 6, 0x00, 0x00]);
+        p.extend_from_slice(&[10, 0, 2, 15]);
+        p.extend_from_slice(&dst);
+        p.extend_from_slice(&40000u16.to_be_bytes());
+        p.extend_from_slice(&dst_port.to_be_bytes());
+        p.extend_from_slice(&0u32.to_be_bytes()); // seq
+        p.extend_from_slice(&0u32.to_be_bytes()); // ack
+        p.extend_from_slice(&[0x50, 0x02]); // data offset 5, SYN
+        p.extend_from_slice(&0xffffu16.to_be_bytes()); // window
+        p.extend_from_slice(&[0x00, 0x00, 0x00, 0x00]); // checksum, urgent
+        crate::packet::fix_ipv4_checksum(&mut p);
+        p
+    }
+
+    /// The provider ranges include plain DNS and DoT endpoints next to their
+    /// DoH one. Blocking every port there resets the strict Private DNS
+    /// connection (1.1.1.1:853), which has no fallback and leaves the device
+    /// with no resolution at all.
+    #[test]
+    fn encrypted_dns_ranges_only_block_https() {
+        let core = Core::new();
+        let cfg = Config {
+            block_dot: false,
+            ..Config::default()
+        };
+
+        let dot_raw = tcp_packet([1, 1, 1, 1], 853);
+        let dot = Packet::parse(&dot_raw).expect("dot syn");
+        assert!(
+            !core.tcp_blocked(&dot, &cfg),
+            "DoT to a DoH provider must survive while its RST is off"
+        );
+
+        let doh_raw = tcp_packet([1, 1, 1, 1], 443);
+        let doh = Packet::parse(&doh_raw).expect("doh syn");
+        assert!(
+            core.tcp_blocked(&doh, &cfg),
+            "DoH on 443 is still blocked"
+        );
+
+        let plain_raw = udp_packet(40000, [1, 1, 1, 1], 53);
+        let plain = Packet::parse(&plain_raw).expect("dns datagram");
+        assert!(
+            !core.udp_blocked(&plain, &cfg),
+            "plain DNS on a DoH provider range reaches the filter"
+        );
+
+        let doh3_raw = udp_packet(40000, [1, 1, 1, 1], 443);
+        let doh3 = Packet::parse(&doh3_raw).expect("doh3 datagram");
+        assert!(core.udp_blocked(&doh3, &cfg), "DoH3 on 443 is still blocked");
     }
 
     #[test]

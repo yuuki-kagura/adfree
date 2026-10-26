@@ -11,6 +11,7 @@
 use crate::filter::{
     CookiePlan, FilterEngine, HeaderEdit, HlsPlan, HtmlPlan, JsonprunePlan, Replace,
 };
+use crate::mitm::ech::BareRefusal;
 use crate::mitm::http;
 use crate::mitm::tls::{
     self, feed_client, feed_client_wire, feed_server, send_to_client, FlowResolver, TlsSession,
@@ -519,6 +520,19 @@ fn head_has_server(head: &[u8]) -> bool {
     })
 }
 
+/// What a new exemption changes for the log: the public name the browser will
+/// now be allowed to wrap in ECH, or the fact that none was learned — in which
+/// case the origin still refuses plain requests and the page keeps failing.
+fn exemption_effect(ech: &crate::mitm::ech::EchHosts, host: &str) -> String {
+    match ech.public_name_for(host) {
+        Some(name) => format!(
+            "splicing public name {name} for up to {} min",
+            crate::mitm::ech::EXEMPT_TTL_MS / 60_000
+        ),
+        None => "no ECH public name learned, the page may still fail".to_string(),
+    }
+}
+
 /// How the body of the response being collected is framed.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum Framing {
@@ -891,37 +905,35 @@ impl ProxySession {
                 return Ok(self.splice_pending_verbatim());
             }
             if let Some(ech_len) = ech_len {
-                let public_ech = self
-                    .ech_hosts
-                    .as_deref()
-                    .is_some_and(|ech| ech.public_name(name));
-                if self
-                    .ech_hosts
-                    .as_deref()
-                    .is_some_and(|ech| ech.splices(name, self.full_ech))
-                {
+                let ech = self.ech_hosts.as_deref();
+                let reason = ech.and_then(|ech| {
+                    ech.splice_reason(name, self.full_ech, crate::util::now_ms())
+                });
+                if let Some(reason) = reason {
                     // A real ECH hello exposes only the config's public name:
                     // the host inside is encrypted, and terminating this TLS
                     // could only serve the wrong certificate for the wrong
                     // host, so the connection is handed over untouched
-                    // (`mitm::ech`). The extension length is in the log
-                    // because that is what tells a real offer from the GREASE
-                    // one browsers attach everywhere.
+                    // (`mitm::ech`). The reason names the policy that allowed
+                    // it — an active ECH-required exemption, or full ECH. The
+                    // extension length is in the log because that is what
+                    // tells a real offer from the GREASE one browsers attach
+                    // everywhere.
                     crate::logbuf::push(&format!(
                         "mitm {name}: client offered ECH ({ech_len} byte extension), \
-                         splicing verbatim"
+                         splicing verbatim ({reason})"
                     ));
                     return Ok(self.splice_pending_verbatim());
                 }
-                if public_ech {
+                if ech.is_some_and(|ech| ech.public_name(name)) {
                     // The client cached this ECHConfig outside the DNS half,
-                    // and full ECH is off. Refusing the wrapped hello costs one
-                    // failed handshake; the retry is in the clear and stays
-                    // filterable. Splicing instead would quietly drop
+                    // and no exemption covers it. Refusing the wrapped hello
+                    // costs one failed handshake; the retry is in the clear and
+                    // stays filterable. Splicing instead would quietly drop
                     // filtering for the page.
                     crate::logbuf::push(&format!(
                         "mitm {name}: client offered ECH ({ech_len} byte extension), \
-                         full ECH is off, terminating for filtering"
+                         no exemption for this public name, terminating for filtering"
                     ));
                 }
                 // Otherwise this is a GREASE extension — browsers put one on
@@ -1734,6 +1746,11 @@ impl ProxySession {
     /// `crypto.cloudflare.com` answered exactly that way while ECH was in use
     /// (its outage of 20/10/2026), and learning "requires ECH" from it would
     /// throw away the filtering R18 just gained.
+    ///
+    /// `421` is definitive and exempts at once. A bare `502` is also what an
+    /// ordinary edge failure sends, so it takes two within
+    /// [`crate::mitm::ech::REFUSAL_WINDOW_MS`]; that is what keeps a transient
+    /// error from turning filtering off for the host's public name.
     fn note_plain_refusal(&self, info: &http::ResponseHead, head: &[u8]) {
         let Some(ech) = self.ech_hosts.as_deref() else {
             return;
@@ -1753,15 +1770,26 @@ impl ProxySession {
         if ech_accepted {
             return;
         }
-        if ech.note_refusal(host) {
-            let what = if info.status == 421 {
-                format!("{} Misdirected Request", info.status)
-            } else {
-                format!("{} Bad Gateway without a Server header", info.status)
-            };
-            crate::logbuf::push(&format!(
-                "mitm {host}: ECH-required refusal ({what}), DNS keeps its ECHConfig"
-            ));
+        let now_ms = crate::util::now_ms();
+        if info.status == 421 {
+            if ech.note_refusal(host, now_ms) {
+                crate::logbuf::push(&format!(
+                    "mitm {host}: ECH-required refusal (421 Misdirected Request), {}",
+                    exemption_effect(ech, host)
+                ));
+            }
+            return;
+        }
+        match ech.note_bare_refusal(host, now_ms) {
+            BareRefusal::Suspected => crate::logbuf::push(&format!(
+                "mitm {host}: bare 502 from an ECH host, waiting for a second before exempting it"
+            )),
+            BareRefusal::Confirmed => crate::logbuf::push(&format!(
+                "mitm {host}: ECH-required refusal confirmed (502 Bad Gateway without a \
+                 Server header), {}",
+                exemption_effect(ech, host)
+            )),
+            BareRefusal::Known => {}
         }
     }
 

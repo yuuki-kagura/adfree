@@ -8,6 +8,7 @@ import git.shin.adfree.data.AdGuardRepository
 import git.shin.adfree.model.parseDnsEndpoint
 import git.shin.adfree.security.ThreatAnalyzer
 import git.shin.adfree.ui.AdGuardViewModel
+import git.shin.adfree.vpn.PrivateDns
 import git.shin.adfree.vpn.VpnController
 
 /**
@@ -34,6 +35,17 @@ class AdGuardAppContainer(private val context: Context) {
     /** Offline threat analysis via heuristics plus the filter engine; no API key. */
     val threatAnalyzer: ThreatAnalyzer by lazy { ThreatAnalyzer(repository, coreEngine) }
 
+    /**
+     * True while Private DNS is in strict ("provider hostname") mode.
+     *
+     * Automatic mode is intentionally excluded: there the resolver falls back
+     * to plain UDP:53 after our DoT reset, so the filter still sees lookups.
+     * Strict mode has no fallback, and RSTing port 853 would leave the device
+     * with no resolution at all.
+     */
+    val privateDnsStrict: Boolean
+        get() = PrivateDns.mode(context) == PrivateDns.Mode.STRICT
+
     fun provideViewModelFactory(): ViewModelProvider.Factory {
         return object : ViewModelProvider.Factory {
             @Suppress("UNCHECKED_CAST")
@@ -45,6 +57,7 @@ class AdGuardAppContainer(private val context: Context) {
                         threatAnalyzer = threatAnalyzer,
                         coreEngine = coreEngine,
                         onConfigChanged = { syncConfigToEngine() },
+                        isPrivateDnsStrict = { privateDnsStrict },
                     ) as T
                 }
                 throw IllegalArgumentException("Unknown ViewModel: ${modelClass.name}")
@@ -55,12 +68,18 @@ class AdGuardAppContainer(private val context: Context) {
     /** Push the current UI configuration down to the core. */
     fun syncConfigToEngine() {
         val settings = repository.settings.value
+        // Android's strict Private DNS (DoT to a named provider) goes straight
+        // to an outside resolver, so it never reaches the tunnel's DNS filter.
+        // RSTing port 853 while the system resolver depends on it leaves the
+        // device without any resolution — the user asked for Private DNS, so
+        // let it through and let the UI explain that filtering is weaker.
+        val privateDns = privateDnsStrict
         coreEngine.configure(
             mitmEnabled = settings.isHttpsFilteringEnabled,
             fullEch = settings.isFullEchEnabled,
             blockQuic = settings.blockQuic,
             blockDoh = settings.blockDoh,
-            blockDot = settings.blockDot,
+            blockDot = settings.blockDot && !privateDns,
             adBlocking = settings.isAdBlockingEnabled,
             trackingProtection = settings.isTrackingProtectionEnabled,
             dnsProtection = settings.isDnsProtectionEnabled,
