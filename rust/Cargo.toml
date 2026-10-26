@@ -33,6 +33,9 @@ rustls = { version = "0.23", default-features = false, features = ["ring", "std"
 rustls-pemfile = "2"
 # rcgen needs a wall-clock type for validity windows.
 time = { version = "0.3", default-features = false, features = ["std"] }
+# OpenSSL's `subject_hash_old` names Android's system CA files; the hash is
+# MD5 over the DER subject, and no MD5 comes with ring.
+md-5 = "0.10"
 # Cosmetic payloads (per-page CSS/JS rules) travel as JSON into the HTML.
 serde_json = { version = "1", features = ["preserve_order"] }
 # `$replace` rule payloads (the crate refuses the modifier): the patterns are

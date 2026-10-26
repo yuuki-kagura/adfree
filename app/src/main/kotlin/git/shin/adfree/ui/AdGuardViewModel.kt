@@ -543,6 +543,34 @@ class AdGuardViewModel(
         return coreEngine.mitmStatus()
     }
 
+    /** Root-mode state; reads the store and looks for su without elevating. */
+    fun rootTrustStatus(): git.shin.adfree.core.RootTrustBinding? =
+        coreEngine.rootTrustStatus()
+
+    /**
+     * Installs the CA into the system store so apps that ignore user CAs
+     * (Cronet and friends) trust it too. Elevation can sit on a consent dialog,
+     * so the call runs off the main thread.
+     */
+    fun installRootCa(onDone: (git.shin.adfree.core.RootTrustBinding?) -> Unit) {
+        viewModelScope.launch {
+            val result = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                coreEngine.installRootCa()
+            }
+            onDone(result)
+        }
+    }
+
+    /** Removes the CA from the system store. Blocking work, off the main thread. */
+    fun removeRootCa(onDone: (git.shin.adfree.core.RootTrustBinding?) -> Unit) {
+        viewModelScope.launch {
+            val result = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                coreEngine.removeRootCa()
+            }
+            onDone(result)
+        }
+    }
+
     /** True when the CA is present in the device trust store. */
     fun isCaTrusted(): Boolean = coreEngine.isCaTrusted()
 

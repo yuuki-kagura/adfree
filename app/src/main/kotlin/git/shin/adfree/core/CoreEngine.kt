@@ -501,6 +501,25 @@ class CoreEngine {
     fun mitmStatus(): git.shin.adfree.core.MitmStatus? =
         runCatching { git.shin.adfree.core.coreMitmStatus() }.getOrNull()
 
+    /**
+     * Root-mode state: whether su/root exists and whether the CA already sits
+     * in the system store. Never elevates, so it is safe to call on resume.
+     */
+    fun rootTrustStatus(): git.shin.adfree.core.RootTrustBinding? =
+        runCatching { git.shin.adfree.core.coreRootTrustStatus() }.getOrNull()
+
+    /**
+     * Installs the CA into the OS system trust store. Blocking: on Android the
+     * first call may wait on the su consent dialog, so call it off the main
+     * thread.
+     */
+    fun installRootCa(): git.shin.adfree.core.RootTrustBinding? =
+        runCatching { git.shin.adfree.core.coreInstallRootCa() }.getOrNull()
+
+    /** Removes the CA from the OS system trust store. Blocking, like install. */
+    fun removeRootCa(): git.shin.adfree.core.RootTrustBinding? =
+        runCatching { git.shin.adfree.core.coreRemoveRootCa() }.getOrNull()
+
     /** Replaces the user script list plus the master switch. */
     fun setScripts(scripts: List<ScriptBinding>, enabled: Boolean) {
         runCatching { git.shin.adfree.core.coreSetScripts(scripts, enabled) }

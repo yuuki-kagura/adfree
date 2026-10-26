@@ -757,6 +757,8 @@ internal object IntegrityCheckingUniffiLib {
     ): Int
     external fun uniffi_adfree_core_checksum_func_core_install_builtin_scripts(
     ): Int
+    external fun uniffi_adfree_core_checksum_func_core_install_root_ca(
+    ): Int
     external fun uniffi_adfree_core_checksum_func_core_is_running(
     ): Int
     external fun uniffi_adfree_core_checksum_func_core_log_clear(
@@ -771,11 +773,15 @@ internal object IntegrityCheckingUniffiLib {
     ): Int
     external fun uniffi_adfree_core_checksum_func_core_relay_count(
     ): Int
+    external fun uniffi_adfree_core_checksum_func_core_remove_root_ca(
+    ): Int
     external fun uniffi_adfree_core_checksum_func_core_reset_ca(
     ): Int
     external fun uniffi_adfree_core_checksum_func_core_reset_stats(
     ): Int
     external fun uniffi_adfree_core_checksum_func_core_restore_ca(
+    ): Int
+    external fun uniffi_adfree_core_checksum_func_core_root_trust_status(
     ): Int
     external fun uniffi_adfree_core_checksum_func_core_script_fetch(
     ): Int
@@ -909,6 +915,8 @@ internal object UniffiLib {
     ): RustBuffer.ByValue
     external fun uniffi_adfree_core_fn_func_core_install_builtin_scripts(uniffi_out_err: UniffiRustCallStatus, 
     ): Int
+    external fun uniffi_adfree_core_fn_func_core_install_root_ca(uniffi_out_err: UniffiRustCallStatus, 
+    ): RustBuffer.ByValue
     external fun uniffi_adfree_core_fn_func_core_is_running(uniffi_out_err: UniffiRustCallStatus, 
     ): Byte
     external fun uniffi_adfree_core_fn_func_core_log_clear(uniffi_out_err: UniffiRustCallStatus, 
@@ -923,12 +931,16 @@ internal object UniffiLib {
     ): Unit
     external fun uniffi_adfree_core_fn_func_core_relay_count(uniffi_out_err: UniffiRustCallStatus, 
     ): Int
+    external fun uniffi_adfree_core_fn_func_core_remove_root_ca(uniffi_out_err: UniffiRustCallStatus, 
+    ): RustBuffer.ByValue
     external fun uniffi_adfree_core_fn_func_core_reset_ca(uniffi_out_err: UniffiRustCallStatus, 
     ): Unit
     external fun uniffi_adfree_core_fn_func_core_reset_stats(uniffi_out_err: UniffiRustCallStatus, 
     ): Unit
     external fun uniffi_adfree_core_fn_func_core_restore_ca(`certPem`: RustBuffer.ByValue,`keyPem`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): Byte
+    external fun uniffi_adfree_core_fn_func_core_root_trust_status(uniffi_out_err: UniffiRustCallStatus, 
+    ): RustBuffer.ByValue
     external fun uniffi_adfree_core_fn_func_core_script_fetch(`id`: RustBuffer.ByValue,`url`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
     external fun uniffi_adfree_core_fn_func_core_script_remove(`id`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
@@ -1157,6 +1169,9 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
     if ((lib.uniffi_adfree_core_checksum_func_core_install_builtin_scripts() and 0xFFFF) != 36332) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
+    if ((lib.uniffi_adfree_core_checksum_func_core_install_root_ca() and 0xFFFF) != 37100) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
     if ((lib.uniffi_adfree_core_checksum_func_core_is_running() and 0xFFFF) != 16453) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
@@ -1178,6 +1193,9 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
     if ((lib.uniffi_adfree_core_checksum_func_core_relay_count() and 0xFFFF) != 38928) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
+    if ((lib.uniffi_adfree_core_checksum_func_core_remove_root_ca() and 0xFFFF) != 20351) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
     if ((lib.uniffi_adfree_core_checksum_func_core_reset_ca() and 0xFFFF) != 56744) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
@@ -1185,6 +1203,9 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if ((lib.uniffi_adfree_core_checksum_func_core_restore_ca() and 0xFFFF) != 62634) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if ((lib.uniffi_adfree_core_checksum_func_core_root_trust_status() and 0xFFFF) != 45730) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if ((lib.uniffi_adfree_core_checksum_func_core_script_fetch() and 0xFFFF) != 37467) {
@@ -3018,6 +3039,77 @@ public object FfiConverterTypeMitmStatus: FfiConverterRustBuffer<MitmStatus> {
 
 
 /**
+ * Root-mode state for the UI, mirroring [`crate::trust::RootTrust`].
+ */
+data class RootTrustBinding (
+    /**
+     * A `su` binary exists (Android), or root/passwordless sudo (Linux).
+     */
+    var `suPresent`: kotlin.Boolean
+    , 
+    /**
+     * The last elevation attempt succeeded.
+     */
+    var `rootGranted`: kotlin.Boolean
+    , 
+    /**
+     * Our CA is in the active system store right now.
+     */
+    var `installed`: kotlin.Boolean
+    , 
+    /**
+     * It becomes active after a reboot (Magisk module just written).
+     */
+    var `needsReboot`: kotlin.Boolean
+    , 
+    /**
+     * User-facing explanation.
+     */
+    var `detail`: kotlin.String
+    
+){
+    
+
+    
+
+    
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeRootTrustBinding: FfiConverterRustBuffer<RootTrustBinding> {
+    override fun read(buf: ByteBuffer): RootTrustBinding {
+        return RootTrustBinding(
+            FfiConverterBoolean.read(buf),
+            FfiConverterBoolean.read(buf),
+            FfiConverterBoolean.read(buf),
+            FfiConverterBoolean.read(buf),
+            FfiConverterString.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: RootTrustBinding) = (
+            FfiConverterBoolean.allocationSize(value.`suPresent`) +
+            FfiConverterBoolean.allocationSize(value.`rootGranted`) +
+            FfiConverterBoolean.allocationSize(value.`installed`) +
+            FfiConverterBoolean.allocationSize(value.`needsReboot`) +
+            FfiConverterString.allocationSize(value.`detail`)
+    )
+
+    override fun write(value: RootTrustBinding, buf: ByteBuffer) {
+            FfiConverterBoolean.write(value.`suPresent`, buf)
+            FfiConverterBoolean.write(value.`rootGranted`, buf)
+            FfiConverterBoolean.write(value.`installed`, buf)
+            FfiConverterBoolean.write(value.`needsReboot`, buf)
+            FfiConverterString.write(value.`detail`, buf)
+    }
+}
+
+
+
+/**
  * One user script, as the UI holds it.
  */
 data class ScriptBinding (
@@ -3853,6 +3945,19 @@ public object FfiConverterSequenceTypeUidApps: FfiConverterRustBuffer<List<UidAp
     )
     }
     
+
+        /**
+         * Installs the loaded CA into the OS system trust store, elevating if needed.
+         */ fun `coreInstallRootCa`(): RootTrustBinding {
+            return FfiConverterTypeRootTrustBinding.lift(
+    uniffiRustCall() { _status ->
+    UniffiLib.uniffi_adfree_core_fn_func_core_install_root_ca(
+    
+        _status)
+}
+    )
+    }
+    
  fun `coreIsRunning`(): kotlin.Boolean {
             return FfiConverterBoolean.lift(
     uniffiRustCall() { _status ->
@@ -3947,6 +4052,19 @@ public object FfiConverterSequenceTypeUidApps: FfiConverterRustBuffer<List<UidAp
     
 
         /**
+         * Removes the CA from the OS system trust store.
+         */ fun `coreRemoveRootCa`(): RootTrustBinding {
+            return FfiConverterTypeRootTrustBinding.lift(
+    uniffiRustCall() { _status ->
+    UniffiLib.uniffi_adfree_core_fn_func_core_remove_root_ca(
+    
+        _status)
+}
+    )
+    }
+    
+
+        /**
          * Drops the persisted CA pair; the next `core_ensure_ca` mints a fresh one.
          */ fun `coreResetCa`()
         = 
@@ -3977,6 +4095,22 @@ public object FfiConverterSequenceTypeUidApps: FfiConverterRustBuffer<List<UidAp
         
         FfiConverterString.lower(`certPem`),
         FfiConverterString.lower(`keyPem`),_status)
+}
+    )
+    }
+    
+
+        /**
+         * Reports whether the system store is reachable and holds our CA.
+         *
+         * Never elevates: on Android this only looks for a `su` binary, so a plain
+         * screen resume cannot pop a consent dialog.
+         */ fun `coreRootTrustStatus`(): RootTrustBinding {
+            return FfiConverterTypeRootTrustBinding.lift(
+    uniffiRustCall() { _status ->
+    UniffiLib.uniffi_adfree_core_fn_func_core_root_trust_status(
+    
+        _status)
 }
     )
     }

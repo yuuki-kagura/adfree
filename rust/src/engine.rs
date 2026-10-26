@@ -2524,8 +2524,31 @@ impl Core {
     /// loaded) would keep signing leaves with the previous — possibly
     /// placeholder — key.
     pub fn set_mitm_ca(&self, ca: Arc<crate::mitm::ca::CertificateAuthority>) {
+        // `ensure_ca` re-loads the same pair on every UI refresh; only a real
+        // key change invalidates what the apps learned about the old one.
+        let changed = {
+            let current = self.mitm_ca.read().unwrap();
+            current.cert_der() != ca.cert_der()
+        };
         *self.mitm_ca.write().unwrap() = ca;
         *self.mitm_resolver.write().unwrap() = None;
+        if changed {
+            self.clear_ca_rejections();
+        }
+    }
+
+    /// Forgets every app that rejected the current CA, so its next connection
+    /// is decrypted again. Returns how many entries were dropped.
+    pub fn clear_ca_rejections(&self) -> usize {
+        let mut learned = self.ca_rejecting_apps.write().unwrap();
+        let count = learned.len();
+        if count > 0 {
+            learned.clear();
+            crate::logbuf::push(&format!(
+                "mitm: retrying HTTPS decryption for {count} app(s) after the CA change"
+            ));
+        }
+        count
     }
 
     pub fn resolver_addr(&self) -> SocketAddr {
@@ -3739,6 +3762,38 @@ mod tests {
         assert!(core
             .effective_https_skip_apps()
             .contains("com.google.android.googlequicksearchbox"));
+    }
+
+    /// `ensure_ca` re-loads the persisted pair on every UI refresh: that must
+    /// not undo what the apps taught, while a genuinely new CA should.
+    #[test]
+    fn reloading_the_same_ca_keeps_rejections_but_a_new_ca_clears_them() {
+        let core = Core::new();
+        let ca = Arc::new(
+            crate::mitm::ca::CertificateAuthority::generate().expect("first CA"),
+        );
+        core.set_mitm_ca(Arc::clone(&ca));
+        core.note_client_cert_rejection(
+            "process_new_packets: received fatal alert: CertificateUnknown",
+            &["com.example.news".to_string()],
+            "example.com",
+        );
+        assert!(core.effective_https_skip_apps().contains("com.example.news"));
+
+        core.set_mitm_ca(Arc::clone(&ca));
+        assert!(
+            core.effective_https_skip_apps().contains("com.example.news"),
+            "the same certificate is not a reason to retry"
+        );
+
+        let fresh = Arc::new(
+            crate::mitm::ca::CertificateAuthority::generate().expect("second CA"),
+        );
+        core.set_mitm_ca(fresh);
+        assert!(
+            core.effective_https_skip_apps().is_empty(),
+            "a new key invalidates what the apps learned about the old one"
+        );
     }
 
     /// Unattributed flows teach nothing, and non-certificate alerts (a broken

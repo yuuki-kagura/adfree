@@ -35,6 +35,7 @@ pub mod smart;
 pub mod socks5;
 pub mod stats;
 pub mod store;
+pub mod trust;
 pub mod udpnat;
 pub mod uidmap;
 pub mod upstream;

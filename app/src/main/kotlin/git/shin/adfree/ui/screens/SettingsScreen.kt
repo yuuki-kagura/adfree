@@ -440,6 +440,12 @@ internal fun HttpsFilterSection(
     // Live view of the trust store: installing the CA while the app sits in
     // the background must flip this without a restart.
     var caTrusted by remember { mutableStateOf(viewModel.isCaTrusted()) }
+    // Root mode: whether su is available and whether the system store already
+    // carries the CA. Loading it never elevates.
+    var rootTrust by remember {
+        mutableStateOf<git.shin.adfree.core.RootTrustBinding?>(null)
+    }
+    var rootBusy by remember { mutableStateOf(false) }
     // The CA is installed by hand, outside the app: its expiry is the only
     // warning the user gets before every TLS connection starts failing.
     val caExpiryMs = remember(status?.caPem) { status?.caPem?.let(::caNotAfterMs) }
@@ -456,6 +462,7 @@ internal fun HttpsFilterSection(
     androidx.compose.runtime.LaunchedEffect(Unit) {
         status = viewModel.readMitmStatus()
         caTrusted = viewModel.isCaTrusted()
+        rootTrust = viewModel.rootTrustStatus()
     }
 
     // The system certificate installer lives in another activity: re-check the
@@ -463,6 +470,7 @@ internal fun HttpsFilterSection(
     LifecycleEventEffect(Lifecycle.Event.ON_RESUME) {
         status = viewModel.readMitmStatus()
         caTrusted = viewModel.isCaTrusted()
+        rootTrust = viewModel.rootTrustStatus()
         if (pendingEnable && caTrusted && !httpsEnabled) {
             pendingEnable = false
             httpsEnabled = true
@@ -591,7 +599,13 @@ internal fun HttpsFilterSection(
                         }
                     }
                     OutlinedButton(
-                        onClick = { viewModel.createCa { status = it } },
+                        onClick = {
+                            viewModel.createCa { fresh ->
+                                status = fresh
+                                caTrusted = viewModel.isCaTrusted()
+                                rootTrust = viewModel.rootTrustStatus()
+                            }
+                        },
                         shape = RoundedCornerShape(8.dp),
                     ) {
                         Text(if (status?.hasCa == true) "Tạo lại" else "Tạo CA", fontSize = 11.sp)
@@ -617,6 +631,72 @@ internal fun HttpsFilterSection(
                             shape = RoundedCornerShape(8.dp),
                         ) {
                             Text("Xem PEM", fontSize = 11.sp)
+                        }
+                    }
+
+                    // Root mode: the user store is ignored by apps targeting
+                    // API 24+ (Cronet in Google apps is the visible case), so
+                    // offering the system store is the only way to filter
+                    // them without splicing their traffic verbatim.
+                    Spacer(modifier = Modifier.height(10.dp))
+                    Text(
+                        text = if (rootBusy) "Đang xử lý…"
+                        else rootTrust?.detail ?: "Đang kiểm tra quyền root…",
+                        fontSize = 10.sp,
+                        color = when {
+                            rootBusy -> AdGuardTextMuted
+                            rootTrust?.installed == true -> AdGuardGreenLight
+                            rootTrust?.needsReboot == true -> AdGuardOrangeWarning
+                            else -> AdGuardTextMuted
+                        },
+                    )
+                    rootTrust?.let { trust ->
+                        if (trust.suPresent || trust.installed) {
+                            Row(
+                                modifier = Modifier.padding(top = 6.dp),
+                                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            ) {
+                                OutlinedButton(
+                                    enabled = !rootBusy,
+                                    onClick = {
+                                        rootBusy = true
+                                        viewModel.installRootCa { result ->
+                                            rootBusy = false
+                                            rootTrust = result
+                                            caTrusted = viewModel.isCaTrusted()
+                                            result?.detail?.let {
+                                                Toast.makeText(context, it, Toast.LENGTH_LONG).show()
+                                            }
+                                        }
+                                    },
+                                    shape = RoundedCornerShape(8.dp),
+                                ) {
+                                    Text(
+                                        if (trust.installed) "Cài lại CA hệ thống"
+                                        else "Cài CA hệ thống (root)",
+                                        fontSize = 11.sp,
+                                    )
+                                }
+                                if (trust.installed) {
+                                    OutlinedButton(
+                                        enabled = !rootBusy,
+                                        onClick = {
+                                            rootBusy = true
+                                            viewModel.removeRootCa { result ->
+                                                rootBusy = false
+                                                rootTrust = result
+                                                caTrusted = viewModel.isCaTrusted()
+                                                result?.detail?.let {
+                                                    Toast.makeText(context, it, Toast.LENGTH_LONG).show()
+                                                }
+                                            }
+                                        },
+                                        shape = RoundedCornerShape(8.dp),
+                                    ) {
+                                        Text("Gỡ CA hệ thống", fontSize = 11.sp)
+                                    }
+                                }
+                            }
                         }
                     }
                 }

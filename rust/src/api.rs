@@ -1043,6 +1043,87 @@ pub fn core_ca_pem() -> String {
     })
 }
 
+/// Root-mode state for the UI, mirroring [`crate::trust::RootTrust`].
+#[derive(uniffi::Record, Clone, Debug, Default)]
+pub struct RootTrustBinding {
+    /// A `su` binary exists (Android), or root/passwordless sudo (Linux).
+    pub su_present: bool,
+    /// The last elevation attempt succeeded.
+    pub root_granted: bool,
+    /// Our CA is in the active system store right now.
+    pub installed: bool,
+    /// It becomes active after a reboot (Magisk module just written).
+    pub needs_reboot: bool,
+    /// User-facing explanation.
+    pub detail: String,
+}
+
+impl From<crate::trust::RootTrust> for RootTrustBinding {
+    fn from(value: crate::trust::RootTrust) -> Self {
+        Self {
+            su_present: value.su_present,
+            root_granted: value.root_granted,
+            installed: value.installed,
+            needs_reboot: value.needs_reboot,
+            detail: value.detail,
+        }
+    }
+}
+
+fn root_ca_der() -> Vec<u8> {
+    let ca = crate::core().mitm_ca.read().unwrap();
+    if ca.has_ca() { ca.cert_der() } else { Vec::new() }
+}
+
+/// Reports whether the system store is reachable and holds our CA.
+///
+/// Never elevates: on Android this only looks for a `su` binary, so a plain
+/// screen resume cannot pop a consent dialog.
+#[uniffi::export]
+pub fn core_root_trust_status() -> RootTrustBinding {
+    guard(RootTrustBinding::default(), || {
+        let der = root_ca_der();
+        let status = crate::trust::status(if der.is_empty() { None } else { Some(&der) });
+        status.into()
+    })
+}
+
+/// Installs the loaded CA into the OS system trust store, elevating if needed.
+#[uniffi::export]
+pub fn core_install_root_ca() -> RootTrustBinding {
+    guard(RootTrustBinding::default(), || {
+        let der = root_ca_der();
+        if der.is_empty() {
+            return RootTrustBinding {
+                detail: "Chưa có CA — hãy tạo CA trước khi cài vào hệ thống.".to_string(),
+                ..RootTrustBinding::default()
+            };
+        }
+        let result: RootTrustBinding = crate::trust::install(&der).into();
+        if result.installed {
+            // Apps that rejected the user CA deserve a fresh attempt now that
+            // the certificate is trusted system-wide.
+            crate::core().clear_ca_rejections();
+        }
+        result
+    })
+}
+
+/// Removes the CA from the OS system trust store.
+#[uniffi::export]
+pub fn core_remove_root_ca() -> RootTrustBinding {
+    guard(RootTrustBinding::default(), || {
+        let der = root_ca_der();
+        if der.is_empty() {
+            return RootTrustBinding {
+                detail: "Chưa có CA để gỡ.".to_string(),
+                ..RootTrustBinding::default()
+            };
+        }
+        crate::trust::remove(&der).into()
+    })
+}
+
 /// PEM of the CA private key.
 ///
 /// Only used to re-load the CA on the next launch, so the user installs the
