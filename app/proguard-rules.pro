@@ -19,3 +19,12 @@
 # If you keep the line number information, uncomment this to
 # hide the original source file name.
 #-renamesourcefileattribute SourceFile
+
+# UniFFI binds libadfree_core through JNA's reflective direct mapping. R8 cannot
+# infer those reflective references, so preserve JNA and every generated JNA
+# structure/callback used by the binding in release builds.
+-dontwarn java.awt.*
+-keep class com.sun.jna.** { *; }
+-keep class * extends com.sun.jna.** { *; }
+-keepclassmembers class * extends com.sun.jna.** { public *; }
+-keep class * implements com.sun.jna.Callback { *; }
