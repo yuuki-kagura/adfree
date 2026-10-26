@@ -387,6 +387,8 @@ data class ProtectionSettings(
     val httpsOnlyHosts: List<String> = emptyList(),
     /** Decrypt only [httpsOnlyHosts] instead of everything but [httpsSkipHosts]. */
     val httpsOnlyMode: Boolean = false,
+    /** Routing mode: send new TCP flows through a SOCKS5 proxy instead of direct. */
+    val proxy: ProxySettings = ProxySettings(),
 )
 
 /** Result of scanning one domain on the Security Lab screen (no AI/API key). */

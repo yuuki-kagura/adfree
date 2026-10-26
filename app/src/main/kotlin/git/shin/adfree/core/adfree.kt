@@ -2538,6 +2538,20 @@ data class EngineConfig (
     var `httpsOnlyHosts`: List<kotlin.String>
     , 
     var `httpsOnlyMode`: kotlin.Boolean
+    , 
+    /**
+     * Route new TCP flows through a SOCKS5 proxy. `proxy_host` is a literal
+     * IPv4/IPv6 address: resolving a name on the packet loop would block it.
+     */
+    var `proxyEnabled`: kotlin.Boolean
+    , 
+    var `proxyHost`: kotlin.String
+    , 
+    var `proxyPort`: kotlin.UShort
+    , 
+    var `proxyUsername`: kotlin.String
+    , 
+    var `proxyPassword`: kotlin.String
     
 ){
     
@@ -2569,6 +2583,11 @@ public object FfiConverterTypeEngineConfig: FfiConverterRustBuffer<EngineConfig>
             FfiConverterSequenceString.read(buf),
             FfiConverterSequenceString.read(buf),
             FfiConverterBoolean.read(buf),
+            FfiConverterBoolean.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterUShort.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterString.read(buf),
         )
     }
 
@@ -2587,7 +2606,12 @@ public object FfiConverterTypeEngineConfig: FfiConverterRustBuffer<EngineConfig>
             FfiConverterBoolean.allocationSize(value.`ecoMode`) +
             FfiConverterSequenceString.allocationSize(value.`httpsSkipHosts`) +
             FfiConverterSequenceString.allocationSize(value.`httpsOnlyHosts`) +
-            FfiConverterBoolean.allocationSize(value.`httpsOnlyMode`)
+            FfiConverterBoolean.allocationSize(value.`httpsOnlyMode`) +
+            FfiConverterBoolean.allocationSize(value.`proxyEnabled`) +
+            FfiConverterString.allocationSize(value.`proxyHost`) +
+            FfiConverterUShort.allocationSize(value.`proxyPort`) +
+            FfiConverterString.allocationSize(value.`proxyUsername`) +
+            FfiConverterString.allocationSize(value.`proxyPassword`)
     )
 
     override fun write(value: EngineConfig, buf: ByteBuffer) {
@@ -2606,6 +2630,11 @@ public object FfiConverterTypeEngineConfig: FfiConverterRustBuffer<EngineConfig>
             FfiConverterSequenceString.write(value.`httpsSkipHosts`, buf)
             FfiConverterSequenceString.write(value.`httpsOnlyHosts`, buf)
             FfiConverterBoolean.write(value.`httpsOnlyMode`, buf)
+            FfiConverterBoolean.write(value.`proxyEnabled`, buf)
+            FfiConverterString.write(value.`proxyHost`, buf)
+            FfiConverterUShort.write(value.`proxyPort`, buf)
+            FfiConverterString.write(value.`proxyUsername`, buf)
+            FfiConverterString.write(value.`proxyPassword`, buf)
     }
 }
 

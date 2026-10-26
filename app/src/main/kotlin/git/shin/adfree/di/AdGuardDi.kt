@@ -71,6 +71,11 @@ class AdGuardAppContainer(private val context: Context) {
             httpsSkipHosts = settings.httpsSkipHosts,
             httpsOnlyHosts = settings.httpsOnlyHosts,
             httpsOnlyMode = settings.httpsOnlyMode,
+            proxyEnabled = settings.proxy.enabled,
+            proxyHost = settings.proxy.host,
+            proxyPort = settings.proxy.port,
+            proxyUsername = settings.proxy.username,
+            proxyPassword = settings.proxy.password,
         )
         val provider = repository.dnsProviders.value
             .firstOrNull { it.id == settings.selectedDnsProviderId }

@@ -6,6 +6,7 @@ import git.shin.adfree.model.DnsBlockMode
 import git.shin.adfree.model.DnsProvider
 import git.shin.adfree.model.ProtectionSettings
 import git.shin.adfree.model.ProtocolType
+import git.shin.adfree.model.ProxySettings
 import org.json.JSONObject
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -85,6 +86,13 @@ class SettingsPreferencesTest {
             httpsSkipHosts = listOf("bank.example", "*.internal.test"),
             httpsOnlyHosts = listOf("shop.example"),
             httpsOnlyMode = true,
+            proxy = ProxySettings(
+                enabled = true,
+                host = "192.168.1.10",
+                port = 1081,
+                username = "user",
+                password = "secret",
+            ),
         )
         prefs().save(saved)
         // A fresh instance, as after a restart.
@@ -106,6 +114,11 @@ class SettingsPreferencesTest {
         assertEquals(defaults.httpsSkipHosts, loaded.httpsSkipHosts)
         assertEquals(defaults.httpsOnlyHosts, loaded.httpsOnlyHosts)
         assertEquals(defaults.httpsOnlyMode, loaded.httpsOnlyMode)
+        assertEquals(
+            "an old blob must not route traffic through a proxy",
+            defaults.proxy,
+            loaded.proxy,
+        )
         assertEquals(
             "auto-update defaults to one day, not off",
             24,

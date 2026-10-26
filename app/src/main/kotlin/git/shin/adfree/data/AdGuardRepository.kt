@@ -30,6 +30,7 @@ import git.shin.adfree.model.UserScriptStoreState
 import git.shin.adfree.model.NetworkRequestLog
 import git.shin.adfree.model.ProtectionStats
 import git.shin.adfree.model.ProtectionSettings
+import git.shin.adfree.model.ProxySettings
 import git.shin.adfree.model.ProtocolType
 import java.io.IOException
 import java.net.URLEncoder
@@ -362,6 +363,11 @@ class AdGuardRepository(
     /** Inverts HTTPS filtering: decrypt only the hosts in the blocklist. */
     fun setHttpsOnlyMode(enabled: Boolean) {
         _settings.update { it.copy(httpsOnlyMode = enabled) }
+    }
+
+    /** Routing mode: outbound SOCKS5 for new TCP flows, or direct. */
+    fun updateProxy(proxy: ProxySettings) {
+        _settings.update { it.copy(proxy = proxy) }
     }
 
     fun toggleFirewall(enabled: Boolean) = _settings.update { it.copy(isFirewallEnabled = enabled) }

@@ -11,6 +11,7 @@ import git.shin.adfree.model.FilterStatus
 import git.shin.adfree.model.NetworkRequestLog
 import git.shin.adfree.model.ProtectionSettings
 import git.shin.adfree.model.ProtectionStats
+import git.shin.adfree.model.ProxySettings
 import git.shin.adfree.model.ThreatAnalysisResult
 import git.shin.adfree.model.UserScriptInfo
 import git.shin.adfree.model.UserScriptStoreState
@@ -553,6 +554,15 @@ class AdGuardViewModel(
 
     fun setHttpsOnlyMode(enabled: Boolean) {
         repository.setHttpsOnlyMode(enabled)
+        syncConfig()
+    }
+
+    /**
+     * Routing mode: SOCKS5 for new TCP flows or direct. The core reads the
+     * binding per SYN, so a change never rewrites a flow that is already up.
+     */
+    fun setProxy(proxy: ProxySettings) {
+        repository.updateProxy(proxy)
         syncConfig()
     }
 

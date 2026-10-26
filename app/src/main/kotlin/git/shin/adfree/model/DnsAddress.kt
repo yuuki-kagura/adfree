@@ -52,7 +52,18 @@ fun parseDnsEndpoint(raw: String): DnsEndpoint? {
     return DnsEndpoint(host, port)
 }
 
-private fun isIpLiteral(host: String): Boolean {
+/**
+ * The SOCKS5 host the core can dial: an IPv4/IPv6 literal, never a name.
+ *
+ * Brackets from `[::1]` are stripped so the value is exactly what the core
+ * parses. `null` means the text is not an address.
+ */
+fun normalizeProxyHost(raw: String): String? {
+    val host = raw.trim().removeSurrounding("[", "]")
+    return host.takeIf(::isIpLiteral)
+}
+
+internal fun isIpLiteral(host: String): Boolean {
     val v4 = host.matches(Regex("^\\d{1,3}(\\.\\d{1,3}){3}$")) &&
         host.split('.').all { it.toIntOrNull()?.let { octet -> octet in 0..255 } == true }
     if (v4) return true

@@ -265,10 +265,18 @@ pub struct EngineConfig {
     /// HTTPS website blocklist: with `https_only_mode`, only these are decrypted.
     pub https_only_hosts: Vec<String>,
     pub https_only_mode: bool,
+    /// Route new TCP flows through a SOCKS5 proxy. `proxy_host` is a literal
+    /// IPv4/IPv6 address: resolving a name on the packet loop would block it.
+    pub proxy_enabled: bool,
+    pub proxy_host: String,
+    pub proxy_port: u16,
+    pub proxy_username: String,
+    pub proxy_password: String,
 }
 
 impl From<EngineConfig> for Config {
     fn from(c: EngineConfig) -> Self {
+        let proxy = proxy_endpoint(&c);
         Config {
             mitm_enabled: c.mitm_enabled,
             full_ech: c.full_ech,
@@ -285,6 +293,36 @@ impl From<EngineConfig> for Config {
             https_skip_hosts: c.https_skip_hosts,
             https_only_hosts: c.https_only_hosts,
             https_only_mode: c.https_only_mode,
+            proxy,
+        }
+    }
+}
+
+/// Validates the proxy binding once per config push. A name that fails to
+/// parse as an IP leaves direct connections in place instead of blocking the
+/// packet loop on a resolver.
+fn proxy_endpoint(c: &EngineConfig) -> Option<Arc<crate::socks5::ProxyEndpoint>> {
+    if !c.proxy_enabled {
+        return None;
+    }
+    let host = c.proxy_host.trim();
+    let addr = host
+        .parse::<std::net::IpAddr>()
+        .ok()
+        .map(crate::packet::ip_key_from);
+    match addr {
+        Some(addr) if c.proxy_port != 0 => Some(Arc::new(crate::socks5::ProxyEndpoint {
+            addr,
+            port: c.proxy_port,
+            username: c.proxy_username.clone(),
+            password: c.proxy_password.clone(),
+        })),
+        _ => {
+            crate::logbuf::push(
+                "proxy: host must be an IPv4/IPv6 literal and the port non-zero; \
+                 using direct connections",
+            );
+            None
         }
     }
 }
@@ -1062,6 +1100,11 @@ mod tests {
             https_skip_hosts: vec!["bank.example".to_string()],
             https_only_hosts: vec!["shop.example".to_string()],
             https_only_mode: true,
+            proxy_enabled: false,
+            proxy_host: String::new(),
+            proxy_port: 0,
+            proxy_username: String::new(),
+            proxy_password: String::new(),
         };
         let native: Config = cfg.into();
         assert!(!native.mitm_enabled, "MITM must stay off until asked");
@@ -1076,6 +1119,56 @@ mod tests {
         assert!(native.dns_protection);
         assert!(native.smart_filtering);
         assert!(matches!(native.block_mode, crate::dns::BlockMode::ZeroIp));
+    }
+
+    fn config_with_proxy(host: &str, port: u16) -> EngineConfig {
+        EngineConfig {
+            mitm_enabled: false,
+            full_ech: false,
+            block_quic: true,
+            block_doh: true,
+            block_dot: true,
+            ad_blocking: true,
+            tracking_protection: true,
+            dns_protection: true,
+            smart_filtering: true,
+            block_mode: 0,
+            log_allowed: false,
+            eco_mode: true,
+            https_skip_hosts: Vec::new(),
+            https_only_hosts: Vec::new(),
+            https_only_mode: false,
+            proxy_enabled: true,
+            proxy_host: host.to_string(),
+            proxy_port: port,
+            proxy_username: "u".to_string(),
+            proxy_password: "p".to_string(),
+        }
+    }
+
+    #[test]
+    fn a_proxy_binding_needs_a_literal_address() {
+        let endpoint = proxy_endpoint(&config_with_proxy("127.0.0.1", 1080))
+            .expect("a literal IPv4 must be accepted");
+        assert_eq!(endpoint.addr, crate::packet::IpKey::V4(0x7f00_0001));
+        assert_eq!(endpoint.port, 1080);
+        assert_eq!(
+            endpoint.credentials(),
+            Some(("u".to_string(), "p".to_string()))
+        );
+
+        assert!(
+            proxy_endpoint(&config_with_proxy("proxy.example", 1080)).is_none(),
+            "a name would need a resolver on the packet loop"
+        );
+        assert!(
+            proxy_endpoint(&config_with_proxy("127.0.0.1", 0)).is_none(),
+            "port zero is not a proxy"
+        );
+        assert!(matches!(
+            proxy_endpoint(&config_with_proxy("::1", 1080)).map(|e| e.addr),
+            Some(crate::packet::IpKey::V6(_))
+        ));
     }
 
     #[test]

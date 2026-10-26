@@ -137,6 +137,11 @@ class CoreEngine {
         httpsSkipHosts: List<String> = emptyList(),
         httpsOnlyHosts: List<String> = emptyList(),
         httpsOnlyMode: Boolean = false,
+        proxyEnabled: Boolean = false,
+        proxyHost: String = "",
+        proxyPort: Int = 0,
+        proxyUsername: String = "",
+        proxyPassword: String = "",
     ) {
         val config = git.shin.adfree.core.EngineConfig(
             mitmEnabled = mitmEnabled,
@@ -154,6 +159,11 @@ class CoreEngine {
             httpsSkipHosts = httpsSkipHosts,
             httpsOnlyHosts = httpsOnlyHosts,
             httpsOnlyMode = httpsOnlyMode,
+            proxyEnabled = proxyEnabled,
+            proxyHost = proxyHost,
+            proxyPort = proxyPort.coerceIn(0, 65535).toUShort(),
+            proxyUsername = proxyUsername,
+            proxyPassword = proxyPassword,
         )
         runCatching { git.shin.adfree.core.coreConfigure(config) }
             .onFailure { Log.w(tag, "configure failed", it) }

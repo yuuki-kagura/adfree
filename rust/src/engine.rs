@@ -30,6 +30,7 @@ use crate::events::{self, Event, EventLog};
 use crate::filter::{FilterEngine, FilterListInfo, HostVerdict};
 use crate::fxhash::{hash_str, FxHashMap};
 use crate::packet::{self, IpKey, Packet, PROTO_TCP, PROTO_UDP};
+use crate::socks5::Socks5Handshake;
 use crate::stats::{self, Stats};
 use crate::udpnat::{UdpFlow, UdpKey, UdpNat, UDP_MAX_FLOWS};
 use crate::uidmap::UidMap;
@@ -138,6 +139,9 @@ pub struct Config {
     pub https_only_hosts: Vec<String>,
     /// Invert the model: decrypt only `https_only_hosts`.
     pub https_only_mode: bool,
+    /// SOCKS5 proxy new TCP flows are sent through instead of dialing the
+    /// destination directly. UDP and the engine's own DNS sockets stay direct.
+    pub proxy: Option<Arc<crate::socks5::ProxyEndpoint>>,
 }
 
 impl Default for Config {
@@ -158,6 +162,7 @@ impl Default for Config {
             https_skip_hosts: Vec::new(),
             https_only_hosts: Vec::new(),
             https_only_mode: false,
+            proxy: None,
         }
     }
 }
@@ -224,6 +229,17 @@ enum RelayStart {
     Blocked(&'static str),
     /// No descriptor or no route: fail the client now.
     Failed,
+}
+
+/// What a relay's peer socket delivered.
+enum PeerInput {
+    /// Ordinary origin bytes.
+    Data,
+    /// The SOCKS5 handshake consumed them; the vector carries any origin bytes
+    /// that were coalesced behind the final reply.
+    Handshake(Vec<u8>),
+    /// The handshake failed and the flow must be reset.
+    ProxyFailed(&'static str),
 }
 
 /// The HTTPS website lists, parsed once per config change.
@@ -1246,15 +1262,37 @@ impl Core {
             crate::logbuf::push("relay: local origin asked without HTTPS filtering");
             return RelayStart::Failed;
         }
+        // In proxy mode every flow dials the SOCKS5 endpoint; the destination
+        // moves into the CONNECT request instead of the socket address. The
+        // local injection origin never leaves the device, so it stays direct.
+        let proxy = if local { None } else { cfg.proxy.clone() };
+        let handshake = match &proxy {
+            Some(p) => match Socks5Handshake::new(dst, pkt.dst_port, p.credentials()) {
+                Ok(h) => Some(h),
+                Err(e) => {
+                    crate::logbuf::push(&format!("relay: {e}"));
+                    return RelayStart::Failed;
+                }
+            },
+            None => None,
+        };
+        let (dial_addr, dial_port) = match &proxy {
+            Some(p) => (p.addr, p.port),
+            None => (dst, pkt.dst_port),
+        };
         let (peer_fd, connecting) = if local {
             (-1, false)
         } else {
-            let Some(peer_fd) = self.open_peer_socket(dst, libc::SOCK_STREAM) else {
+            let Some(peer_fd) = self.open_peer_socket(dial_addr, libc::SOCK_STREAM) else {
                 return RelayStart::Failed;
             };
-            let connect = connect_fd(peer_fd, dst, pkt.dst_port);
+            let connect = connect_fd(peer_fd, dial_addr, dial_port);
             if connect == Connect::Failed {
-                crate::logbuf::push("relay: connect() to the peer failed");
+                crate::logbuf::push(if proxy.is_some() {
+                    "relay: connect() to the SOCKS5 proxy failed"
+                } else {
+                    "relay: connect() to the peer failed"
+                });
                 unsafe { libc::close(peer_fd) };
                 return RelayStart::Failed;
             }
@@ -1375,6 +1413,8 @@ impl Core {
         // later windows are relative to it (RFC 7323).
         relay.flow.client_window_scale = pkt.tcp_window_scale().unwrap_or(0);
         relay.app_packages = app_packages;
+        relay.proxy = proxy;
+        relay.handshake = handshake;
 
         {
             let mut guard = self.relays.lock().unwrap();
@@ -1485,20 +1525,37 @@ impl Core {
 
     /// Drains a relay's queued client bytes towards its peer socket.
     ///
+    /// While a SOCKS5 handshake runs, only its own bytes go out: application
+    /// data waits so a proxy reply can never be mistaken for origin data.
     /// Only one thread is ever inside `send()` for a relay (`flushing`), so the
     /// byte stream order the client produced is preserved.
     fn flush_peer(&self, client_port: u16) {
         loop {
-            let (fd, chunk) = {
+            let (fd, chunk, handshake) = {
                 let mut guard = self.relays.lock().unwrap();
                 let Some(relay) = guard.get_mut(client_port) else {
                     return;
                 };
-                if relay.connecting || relay.flushing || relay.pending_to_peer.is_empty() {
+                if relay.connecting || relay.flushing {
                     return;
                 }
-                relay.flushing = true;
-                (relay.peer_fd, std::mem::take(&mut relay.pending_to_peer))
+                match relay.handshake.as_mut() {
+                    Some(hs) if !hs.is_done() => {
+                        let out = hs.take_output();
+                        if out.is_empty() {
+                            return; // waiting for the proxy's next reply
+                        }
+                        relay.flushing = true;
+                        (relay.peer_fd, out, true)
+                    }
+                    _ => {
+                        if relay.pending_to_peer.is_empty() {
+                            return;
+                        }
+                        relay.flushing = true;
+                        (relay.peer_fd, std::mem::take(&mut relay.pending_to_peer), false)
+                    }
+                }
             };
             let written = self.write_some(fd, &chunk);
             let (more, half_close) = {
@@ -1510,18 +1567,30 @@ impl Core {
                 if written < chunk.len() {
                     // Prepend the unwritten remainder: anything queued while we
                     // were writing came later in the stream.
-                    let mut rest = chunk[written..].to_vec();
-                    rest.extend_from_slice(&relay.pending_to_peer);
-                    relay.pending_to_peer = rest;
+                    if handshake {
+                        if let Some(hs) = relay.handshake.as_mut() {
+                            hs.requeue_output(&chunk[written..]);
+                        }
+                    } else {
+                        let mut rest = chunk[written..].to_vec();
+                        rest.extend_from_slice(&relay.pending_to_peer);
+                        relay.pending_to_peer = rest;
+                    }
                 }
-                let drained = relay.pending_to_peer.is_empty();
-                // A FIN that surfaced while we were writing is owed now that
-                // the queue is empty.
-                let half_close = drained && relay.shutdown_after_flush;
-                if half_close {
-                    relay.shutdown_after_flush = false;
+                if handshake {
+                    // Handshake output has no FIN semantics; a writable wake
+                    // returns if the proxy has not answered yet.
+                    (false, false)
+                } else {
+                    let drained = relay.pending_to_peer.is_empty();
+                    // A FIN that surfaced while we were writing is owed now
+                    // that the queue is empty.
+                    let half_close = drained && relay.shutdown_after_flush;
+                    if half_close {
+                        relay.shutdown_after_flush = false;
+                    }
+                    (!drained, half_close)
                 }
-                (!drained, half_close)
             };
             if half_close {
                 unsafe {
@@ -2574,8 +2643,15 @@ impl Core {
                 break;
             }
             if read == 0 {
-                // Orderly shutdown: FIN back to the client.
-                self.close_relay_from_peer(client_port, false);
+                // A proxy that hangs up before replying is a failure, not an
+                // orderly origin shutdown: reset instead of sending a FIN.
+                let mid_handshake = self
+                    .relays
+                    .lock()
+                    .unwrap()
+                    .get(client_port)
+                    .is_some_and(|r| r.proxy_handshaking());
+                self.close_relay_from_peer(client_port, mid_handshake);
                 break;
             }
             if self.relay_peer_bytes(client_port, &buf[..read as usize]) {
@@ -2636,7 +2712,7 @@ impl Core {
     /// so a success here is invisible to the app. Returns true when the
     /// relay is back in business.
     fn retry_peer_connect(&self, client_port: u16) -> bool {
-        let (dst, dport, old_fd) = {
+        let (dst, dport, old_fd, proxy) = {
             let mut guard = self.relays.lock().unwrap();
             let Some(relay) = guard.get_mut(client_port) else {
                 return false;
@@ -2650,16 +2726,31 @@ impl Core {
             let Some(dst) = pkt.dst_ip() else {
                 return false;
             };
-            (dst, pkt.dst_port, relay.peer_fd)
+            (dst, pkt.dst_port, relay.peer_fd, relay.proxy.clone())
         };
-        let Some(new_fd) = self.open_peer_socket(dst, libc::SOCK_STREAM) else {
+        let (dial_addr, dial_port) = match &proxy {
+            Some(p) => (p.addr, p.port),
+            None => (dst, dport),
+        };
+        let Some(new_fd) = self.open_peer_socket(dial_addr, libc::SOCK_STREAM) else {
             return false;
         };
-        let connect = connect_fd(new_fd, dst, dport);
+        let connect = connect_fd(new_fd, dial_addr, dial_port);
         if connect == Connect::Failed {
             unsafe { libc::close(new_fd) };
             return false;
         }
+        let handshake = match &proxy {
+            Some(p) => match Socks5Handshake::new(dst, dport, p.credentials()) {
+                Ok(h) => Some(h),
+                Err(e) => {
+                    crate::logbuf::push(&format!("relay: {e}"));
+                    unsafe { libc::close(new_fd) };
+                    return false;
+                }
+            },
+            None => None,
+        };
         let swapped = {
             let mut guard = self.relays.lock().unwrap();
             match guard.get_mut(client_port) {
@@ -2667,6 +2758,7 @@ impl Core {
                     relay.peer_fd = new_fd;
                     relay.connecting = connect == Connect::InProgress;
                     relay.connect_retries += 1;
+                    relay.handshake = handshake;
                     true
                 }
                 _ => false,
@@ -2695,7 +2787,7 @@ impl Core {
     /// queue is dropped with it, and the new ClientHello follows on the new
     /// socket. The client-facing half is untouched.
     fn restart_peer_socket(&self, client_port: u16) -> bool {
-        let (dst, dport, old_fd) = {
+        let (dst, dport, old_fd, proxy) = {
             let mut guard = self.relays.lock().unwrap();
             let Some(relay) = guard.get_mut(client_port) else {
                 return false;
@@ -2709,16 +2801,31 @@ impl Core {
             let Some(dst) = pkt.dst_ip() else {
                 return false;
             };
-            (dst, pkt.dst_port, relay.peer_fd)
+            (dst, pkt.dst_port, relay.peer_fd, relay.proxy.clone())
         };
-        let Some(new_fd) = self.open_peer_socket(dst, libc::SOCK_STREAM) else {
+        let (dial_addr, dial_port) = match &proxy {
+            Some(p) => (p.addr, p.port),
+            None => (dst, dport),
+        };
+        let Some(new_fd) = self.open_peer_socket(dial_addr, libc::SOCK_STREAM) else {
             return false;
         };
-        let connect = connect_fd(new_fd, dst, dport);
+        let connect = connect_fd(new_fd, dial_addr, dial_port);
         if connect == Connect::Failed {
             unsafe { libc::close(new_fd) };
             return false;
         }
+        let handshake = match &proxy {
+            Some(p) => match Socks5Handshake::new(dst, dport, p.credentials()) {
+                Ok(h) => Some(h),
+                Err(e) => {
+                    crate::logbuf::push(&format!("relay: {e}"));
+                    unsafe { libc::close(new_fd) };
+                    return false;
+                }
+            },
+            None => None,
+        };
         let swapped = {
             let mut guard = self.relays.lock().unwrap();
             match guard.get_mut(client_port) {
@@ -2726,6 +2833,7 @@ impl Core {
                     relay.pending_to_peer.clear();
                     relay.peer_fd = new_fd;
                     relay.connecting = connect == Connect::InProgress;
+                    relay.handshake = handshake;
                     true
                 }
                 _ => false,
@@ -2769,42 +2877,79 @@ impl Core {
     /// client-facing backlog reached its cap, the relay is gone, or the socket
     /// was replaced and the current descriptor is stale.
     fn relay_peer_bytes(&self, client_port: u16, bytes: &[u8]) -> bool {
-        let (segments, to_peer, restart, paused) = {
+        // While SOCKS5 negotiates, the peer is the proxy: its bytes are
+        // protocol replies, not origin data.
+        let input = {
             let mut guard = self.relays.lock().unwrap();
             let Some(relay) = guard.get_mut(client_port) else {
                 return true;
             };
-            match relay.on_peer_data(bytes) {
-                // The upstream half may want bytes on its own socket (its
-                // protocol handshake finishing, a buffered request): those
-                // must reach the peer or the flow deadlocks.
-                Ok((to_peer, outbound, restart)) => {
-                    let segments = if outbound.is_empty() {
-                        Vec::new()
-                    } else {
-                        relay.segments_for_client(&outbound)
-                    };
-                    (segments, to_peer, restart, relay.client_paused())
-                }
-                Err(e) => {
-                    crate::logbuf::push(&format!("relay peer step: {e}"));
-                    return true;
-                }
+            match relay.handshake.as_mut() {
+                Some(hs) if !hs.is_done() => match hs.on_bytes(bytes) {
+                    Ok(rest) => PeerInput::Handshake(rest),
+                    Err(reason) => PeerInput::ProxyFailed(reason),
+                },
+                _ => PeerInput::Data,
             }
         };
-        if restart {
-            if !self.restart_peer_socket(client_port) {
-                crate::logbuf::push("relay: no fresh peer socket for the plain ECH retry");
+        match input {
+            PeerInput::ProxyFailed(reason) => {
+                crate::logbuf::push(&format!("relay: SOCKS5 {reason}"));
+                self.close_relay_from_peer(client_port, true);
+                true
             }
-            return true;
+            PeerInput::Handshake(rest) => {
+                // The reply may have queued the CONNECT request, or released
+                // application bytes that waited behind the handshake.
+                self.flush_peer(client_port);
+                if rest.is_empty() {
+                    false
+                } else {
+                    self.relay_peer_bytes(client_port, &rest)
+                }
+            }
+            PeerInput::Data => {
+                let (segments, to_peer, restart, paused) = {
+                    let mut guard = self.relays.lock().unwrap();
+                    let Some(relay) = guard.get_mut(client_port) else {
+                        return true;
+                    };
+                    match relay.on_peer_data(bytes) {
+                        // The upstream half may want bytes on its own socket
+                        // (its protocol handshake finishing, a buffered
+                        // request): those must reach the peer or the flow
+                        // deadlocks.
+                        Ok((to_peer, outbound, restart)) => {
+                            let segments = if outbound.is_empty() {
+                                Vec::new()
+                            } else {
+                                relay.segments_for_client(&outbound)
+                            };
+                            (segments, to_peer, restart, relay.client_paused())
+                        }
+                        Err(e) => {
+                            crate::logbuf::push(&format!("relay peer step: {e}"));
+                            return true;
+                        }
+                    }
+                };
+                if restart {
+                    if !self.restart_peer_socket(client_port) {
+                        crate::logbuf::push(
+                            "relay: no fresh peer socket for the plain ECH retry",
+                        );
+                    }
+                    return true;
+                }
+                for segment in segments {
+                    self.write_raw(&segment);
+                }
+                if !to_peer.is_empty() {
+                    self.push_to_peer(client_port, &to_peer);
+                }
+                paused
+            }
         }
-        for segment in segments {
-            self.write_raw(&segment);
-        }
-        if !to_peer.is_empty() {
-            self.push_to_peer(client_port, &to_peer);
-        }
-        paused
     }
 }
 
@@ -3442,6 +3587,123 @@ mod tests {
         // Only one retry: a second failure is left to the client's own retry.
         core.relays.lock().unwrap().get_mut(40000).unwrap().connecting = true;
         assert!(!core.retry_peer_connect(40000));
+    }
+
+    /// Through a SOCKS5 endpoint the proxy speaks first: application bytes
+    /// stay queued until its CONNECT reply, so a status byte can never be
+    /// spliced to the origin and origin bytes can never be read as a reply.
+    #[test]
+    fn proxy_handshake_gates_client_bytes_until_the_tunnel_is_open() {
+        use std::io::{Read, Write};
+        use std::os::fd::IntoRawFd;
+
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("proxy listener");
+        let proxy_port = listener.local_addr().expect("addr").port();
+        // The proxy holds the connection open past the echo so the relay is
+        // still in the table when the test inspects it.
+        let (hold, wait) = std::sync::mpsc::channel::<()>();
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().expect("proxy accepts");
+            stream
+                .set_read_timeout(Some(std::time::Duration::from_secs(5)))
+                .expect("timeout");
+
+            let mut greeting = [0u8; 3];
+            stream.read_exact(&mut greeting).expect("greeting");
+            assert_eq!(greeting, [5, 1, 0], "one unauthenticated method offered");
+            stream.write_all(&[5, 0]).expect("method reply");
+
+            let mut connect = [0u8; 10];
+            stream.read_exact(&mut connect).expect("connect request");
+            assert_eq!(
+                connect,
+                [5, 1, 0, 1, 93, 184, 216, 34, 0, 80],
+                "CONNECT names the destination, not the proxy"
+            );
+
+            // Anything readable before the reply is application data that
+            // escaped the gate.
+            stream
+                .set_read_timeout(Some(std::time::Duration::from_millis(150)))
+                .expect("timeout");
+            let mut probe = [0u8; 1];
+            let early = match stream.read(&mut probe) {
+                Ok(n) => {
+                    assert_eq!(n, 0, "the engine wrote {n} bytes before the CONNECT reply");
+                    true
+                }
+                Err(e)
+                    if matches!(
+                        e.kind(),
+                        std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
+                    ) =>
+                {
+                    false
+                }
+                Err(e) => panic!("proxy read failed: {e}"),
+            };
+
+            stream
+                .write_all(&[5, 0, 0, 1, 0, 0, 0, 0, 0, 0])
+                .expect("connect reply");
+            let mut hello = [0u8; 5];
+            stream.read_exact(&mut hello).expect("application bytes");
+            assert_eq!(&hello, b"hello", "the queued bytes follow the handshake");
+            stream.write_all(b"world").expect("origin echo");
+            let _ = wait.recv_timeout(std::time::Duration::from_secs(5));
+            early
+        });
+
+        let core = Core::new();
+        core.set_socket_protector(Arc::new(AllowAll));
+        let peer = std::net::TcpStream::connect(("127.0.0.1", proxy_port)).expect("connect");
+        let dst = crate::packet::IpKey::V4(u32::from_be_bytes([93, 184, 216, 34]));
+        let flow = crate::mitm::tcp::Flow::new(
+            crate::packet::IpKey::V4(u32::from_be_bytes([10, 0, 2, 15])),
+            40000,
+            80,
+            7,
+            7000,
+        );
+        let mut relay = crate::mitm::relay::Relay::new_plain(
+            flow,
+            peer.into_raw_fd(),
+            tcp_syn(40000, [93, 184, 216, 34], 80),
+            crate::mitm::relay::DEFAULT_MSS,
+            false,
+        );
+        relay.handshake =
+            Some(crate::socks5::Socks5Handshake::new(dst, 80, None).expect("handshake"));
+        core.relays.lock().unwrap().insert(relay);
+
+        // The same queue the TCP path feeds. It must not reach the proxy until
+        // the CONNECT reply has been read.
+        core.push_to_peer(40000, b"hello");
+
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        let mut echoed = Vec::new();
+        while echoed.is_empty() && std::time::Instant::now() < deadline {
+            core.pump_once(20);
+            for raw in core.take_outbox() {
+                if raw.ends_with(b"world") {
+                    echoed.extend_from_slice(b"world");
+                }
+            }
+        }
+        assert_eq!(echoed, b"world", "the origin echo reached the client");
+        assert!(
+            core.relays
+                .lock()
+                .unwrap()
+                .get(40000)
+                .is_some_and(|r| r.handshake.as_ref().is_some_and(|h| h.is_done())),
+            "the negotiation completed before data flowed"
+        );
+        drop(hold);
+        assert!(
+            !server.join().expect("proxy thread"),
+            "application bytes arrived before CONNECT succeeded"
+        );
     }
 
     /// The plain retry after an ECH rejection needs a *fresh* peer socket: the

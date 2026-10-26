@@ -10,9 +10,11 @@
 
 use crate::mitm::proxy::ProxySession;
 use crate::mitm::tcp::{Flow, FlowState};
+use crate::socks5::{ProxyEndpoint, Socks5Handshake};
 use crate::util::now_ms;
 use std::collections::VecDeque;
 use std::os::unix::io::RawFd;
+use std::sync::Arc;
 
 /// Port we intercept for TLS termination. Everything else keeps flowing.
 pub const MITM_PORT: u16 = 443;
@@ -86,6 +88,11 @@ pub struct Relay {
     /// Packages owning this flow, resolved once at SYN time. The app firewall
     /// reevaluates them when the network or screen state changes.
     pub app_packages: Vec<String>,
+    /// The SOCKS5 proxy this flow dials instead of the destination, fixed when
+    /// the flow opens so a settings change never rewrites a live connection.
+    pub proxy: Option<Arc<ProxyEndpoint>>,
+    /// SOCKS5 negotiation for this flow; `None` on direct connections.
+    pub handshake: Option<Socks5Handshake>,
 }
 
 impl Relay {
@@ -117,6 +124,8 @@ impl Relay {
             flushing: false,
             shutdown_after_flush: false,
             app_packages: Vec::new(),
+            proxy: None,
+            handshake: None,
         }
     }
 
@@ -147,7 +156,15 @@ impl Relay {
             flushing: false,
             shutdown_after_flush: false,
             app_packages: Vec::new(),
+            proxy: None,
+            handshake: None,
         }
+    }
+
+    /// True while SOCKS5 negotiation still owns the peer socket: application
+    /// bytes must wait, and a writable peer means handshake output, not data.
+    pub fn proxy_handshaking(&self) -> bool {
+        self.handshake.as_ref().is_some_and(|h| !h.is_done())
     }
 
     /// Buffers client bytes until the peer connection is writable.
@@ -493,11 +510,19 @@ impl RelayTable {
             .values()
             .filter(|r| !r.closed)
             .map(|r| {
+                // During SOCKS5 negotiation only handshake output deserves a
+                // writable wake: asking for POLLOUT because app bytes are
+                // queued would spin until the proxy has answered.
+                let want_write = if r.proxy_handshaking() {
+                    r.handshake.as_ref().is_some_and(|h| h.wants_write())
+                } else {
+                    !r.pending_to_peer.is_empty()
+                };
                 (
                     r.flow.client_port,
                     r.peer_fd,
                     r.connecting,
-                    !r.connecting && !r.pending_to_peer.is_empty(),
+                    !r.connecting && want_write,
                     r.client_paused,
                 )
             })

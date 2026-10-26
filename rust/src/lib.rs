@@ -32,6 +32,7 @@ pub mod logbuf;
 pub mod packet;
 pub mod pathmask;
 pub mod smart;
+pub mod socks5;
 pub mod stats;
 pub mod store;
 pub mod udpnat;

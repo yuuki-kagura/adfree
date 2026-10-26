@@ -189,6 +189,13 @@ class SettingsPreferences(
                 optStringList(json, "httpsOnlyHosts") ?: defaults.httpsOnlyHosts,
             httpsOnlyMode =
                 json.optBoolean("httpsOnlyMode", defaults.httpsOnlyMode),
+            proxy = defaults.proxy.copy(
+                enabled = json.optBoolean("proxyEnabled", defaults.proxy.enabled),
+                host = json.optString("proxyHost", defaults.proxy.host),
+                port = json.optInt("proxyPort", defaults.proxy.port),
+                username = json.optString("proxyUsername", defaults.proxy.username),
+                password = json.optString("proxyPassword", defaults.proxy.password),
+            ),
         )
     }.getOrNull()
 
@@ -225,6 +232,11 @@ class SettingsPreferences(
             .put("httpsSkipHosts", JSONArray(settings.httpsSkipHosts))
             .put("httpsOnlyHosts", JSONArray(settings.httpsOnlyHosts))
             .put("httpsOnlyMode", settings.httpsOnlyMode)
+            .put("proxyEnabled", settings.proxy.enabled)
+            .put("proxyHost", settings.proxy.host)
+            .put("proxyPort", settings.proxy.port)
+            .put("proxyUsername", settings.proxy.username)
+            .put("proxyPassword", settings.proxy.password)
     }
 
     private fun currentJson(): JSONObject? {
