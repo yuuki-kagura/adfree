@@ -297,6 +297,8 @@ class AdGuardViewModel(
             is AdGuardIntent.ToggleBlockDoh -> repository.toggleBlockDoh(intent.enabled)
             is AdGuardIntent.ToggleBlockDot -> repository.toggleBlockDot(intent.enabled)
             is AdGuardIntent.ToggleSafeSearch -> repository.toggleSafeSearch(intent.enabled)
+            is AdGuardIntent.ToggleCosmeticFiltering ->
+                repository.toggleCosmeticFiltering(intent.enabled)
             is AdGuardIntent.SetFilterAutoUpdate ->
                 repository.setFilterAutoUpdate(intent.hours)
             is AdGuardIntent.ToggleAutoStart ->

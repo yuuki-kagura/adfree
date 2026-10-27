@@ -75,6 +75,8 @@ sealed interface AdGuardIntent {
     data class ToggleBlockDot(val enabled: Boolean) : AdGuardIntent
     data class ToggleSafeSearch(val enabled: Boolean) : AdGuardIntent
     data class ToggleSmartFiltering(val enabled: Boolean) : AdGuardIntent
+    /** Element hiding and scriptlets; only takes effect with HTTPS filtering. */
+    data class ToggleCosmeticFiltering(val enabled: Boolean) : AdGuardIntent
     /** Restore protection after a reboot; requires the user's opt-in. */
     data class ToggleAutoStart(val enabled: Boolean) : AdGuardIntent
     /** Subscription refresh interval in hours; 0 turns it off. */

@@ -656,6 +656,10 @@
     <string name="settings_language_system">System default</string>
     <string name="settings_language_english">English</string>
     <string name="settings_language_vietnamese">Tiếng Việt</string>
+    <string name="settings_theme_title">Theme</string>
+    <string name="settings_theme_system">System</string>
+    <string name="settings_theme_light">Light</string>
+    <string name="settings_theme_dark">Dark</string>
     <string name="settings_log_allowed_title">Log allowed requests too</string>
     <string name="settings_log_allowed_subtitle">Turn off to save CPU: only blocked requests are recorded</string>
     <string name="settings_smart_filtering_title">Smart filtering</string>
@@ -699,6 +703,8 @@
     <string name="settings_https_body">Self-signed certificate to read and inject scripts into HTTPS pages. Requires installing the CA certificate in the system store.</string>
     <string name="settings_https_enable_title">Enable HTTPS filtering</string>
     <string name="settings_https_enable_subtitle">Decrypt HTTPS to filter ads and inject scripts</string>
+    <string name="settings_cosmetic_title">Cosmetic filtering</string>
+    <string name="settings_cosmetic_subtitle">Hide leftover ad placeholders on pages; requires HTTPS filtering</string>
     <string name="settings_ech_title">Full ECH</string>
     <string name="settings_ech_subtitle">Let the browser encrypt ECH end-to-end. Hosts that use ECH are connected directly and cannot be filtered.</string>
     <string name="settings_ca_created">CA created</string>

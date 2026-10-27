@@ -42,6 +42,7 @@ import git.shin.adfree.model.ProtectionSettings
 import git.shin.adfree.model.ProxySettings
 import git.shin.adfree.model.ProtocolType
 import git.shin.adfree.ui.CoreText
+import git.shin.adfree.ui.Localization
 import git.shin.adfree.ui.UiText
 import git.shin.adfree.work.FilterUpdateScheduler
 import java.io.IOException
@@ -372,6 +373,10 @@ class AdGuardRepository(
 
     fun toggleHttpsFiltering(enabled: Boolean) =
         updateSettings { it.copy(isHttpsFilteringEnabled = enabled) }
+
+    /** Element hiding, scriptlets and the page runtime; rides HTTPS filtering. */
+    fun toggleCosmeticFiltering(enabled: Boolean) =
+        updateSettings { it.copy(cosmeticFiltering = enabled) }
 
     fun toggleFullEch(enabled: Boolean) =
         updateSettings { it.copy(isFullEchEnabled = enabled) }
@@ -818,7 +823,10 @@ class AdGuardRepository(
      * row, so a broken subscription never looks healthy.
      */
     private fun applyFailure(listId: String, message: UiText) {
-        val text = message.resolve(context).ifBlank { context.getString(R.string.filter_download_failed) }
+        // The row keeps this text until the next update, so it must follow the
+        // in-app language even though the repository outlives the Activity.
+        val ui = Localization.wrap(context, _settings.value.appLanguage)
+        val text = message.resolve(ui).ifBlank { ui.getString(R.string.filter_download_failed) }
         _filterLists.update { current ->
             current.map {
                 if (it.id == listId) {
@@ -1368,12 +1376,13 @@ class AdGuardRepository(
             }
             val errors = withContext(Dispatchers.IO) { engine.filterBuildErrors() }
             if (errors.isEmpty()) return@launch
+            val ui = Localization.wrap(context, _settings.value.appLanguage)
             _filterLists.update { lists ->
                 lists.map { list ->
                     val message = errors[list.stableId()] ?: return@map list
                     list.copy(
-                lastError = context.getString(R.string.filter_file_unreadable_detail, message),
-            )
+                        lastError = ui.getString(R.string.filter_file_unreadable_detail, message),
+                    )
                 }
             }
         }

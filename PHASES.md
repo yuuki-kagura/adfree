@@ -11,7 +11,7 @@ tiếp, không phải kế hoạch parity mạng trong `plan.md`.
 | 42 | Phase 4: Stealth features end-to-end | ✅ xong (`f1cbdfb`) |
 | 43 | Phase 5: Advanced DNS (DoH/DoT, rewrites, SafeSearch, probe) | ✅ xong (`e622cb0` + `fb82872`) |
 | 44 | Phase 6: Background updates, notification, tile, autostart | ✅ xong (`2cfd659`) |
-| 45 | Phase 7: Theme, language selector, cosmetic filtering | ◐ language xong (`7f2f203`), còn theme + cosmetic |
+| 45 | Phase 7: Theme, language selector, cosmetic filtering | ✅ xong (`7f2f203` + commit này) |
 | 46 | Phase 8: Full verification and commits | ⏳ chưa |
 
 ## Phase 4 — Stealth end-to-end
@@ -84,6 +84,25 @@ Giới hạn:
 
 - Chưa kiểm tra trên thiết bị vì không có emulator/adb; đã chạy unit test
   Kotlin, `lintDebug` và `assembleDebug`.
+
+## Phase 7 — Giao diện, chọn ngôn ngữ, lọc cosmetic
+
+Đã xong:
+
+- **Theme**: `Theme.kt` có `LightColorScheme` thật (nền/surface/chữ sáng, xanh
+  đậm hơn) bên cạnh bảng tối; `MainActivity` chọn theo `ThemeMode` (System
+  theo `isSystemInDarkTheme()`), thanh trạng thái/điều hướng đổi độ sáng icon
+  tương ứng. Chọn ở Settings > Giao diện, lưu trong `ProtectionState.theme_mode`.
+- **Ngôn ngữ**: đã xong trước đó (`7f2f203`) — AppCompat per-app locales, lưu
+  trong Rust, áp lại khi khởi động; service/tile/thông báo tự `wrap()` context.
+- **Lọc cosmetic**: `Config.cosmetic_filtering` trước đây chỉ được lưu mà
+  không ai đọc. Nay nó gate `proxy.set_cosmetic(...)` ở cả hai nhánh MITM, nên
+  tắt là trang không còn stylesheet ẩn, scriptlet, runtime — script của người
+  dùng vẫn được chèn. Công tắc nằm trong thẻ Lọc HTTPS (cosmetic đi cùng đường
+  giải mã HTTPS), chuỗi EN + VI.
+
+Test: `turning_cosmetics_off_leaves_the_page_without_them` (Rust, e2e MITM)
+xác nhận bật/tắt thật; test Rust và 731 key mỗi ngôn ngữ đều xanh.
 
 ## Ghi chú
 

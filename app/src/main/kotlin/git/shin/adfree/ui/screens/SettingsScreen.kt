@@ -34,6 +34,7 @@ import androidx.compose.material.icons.filled.Dns
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Science
 import androidx.compose.material.icons.filled.Visibility
+import androidx.compose.material.icons.filled.VisibilityOff
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
@@ -79,6 +80,7 @@ import git.shin.adfree.model.DnsProvider
 import git.shin.adfree.model.DnsRewriteRule
 import git.shin.adfree.model.ProtectionSettings
 import git.shin.adfree.model.ProtocolType
+import git.shin.adfree.model.ThemeMode
 import git.shin.adfree.model.caNotAfterMs
 import git.shin.adfree.model.normalizeHttpsHost
 import git.shin.adfree.ui.AdGuardTab
@@ -160,6 +162,13 @@ fun SettingsScreen(
             LanguageSection(
                 selected = state.settings.appLanguage,
                 onSelect = { viewModel.onIntent(AdGuardIntent.SetAppLanguage(it)) },
+            )
+
+            Spacer(modifier = Modifier.height(18.dp))
+
+            ThemeSection(
+                selected = state.settings.themeMode,
+                onSelect = { viewModel.onIntent(AdGuardIntent.SetThemeMode(it)) },
             )
 
             Spacer(modifier = Modifier.height(18.dp))
@@ -412,6 +421,48 @@ private fun appLanguageLabel(language: AppLanguage): String = stringResource(
     }
 )
 
+@Composable
+private fun ThemeSection(
+    selected: ThemeMode,
+    onSelect: (ThemeMode) -> Unit,
+) {
+    Text(
+        text = stringResource(R.string.settings_theme_title),
+        fontSize = 12.sp,
+        fontWeight = FontWeight.Bold,
+        color = AdGuardTextSecondary,
+        modifier = Modifier.padding(bottom = 6.dp),
+    )
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .horizontalScroll(rememberScrollState())
+            .testTag("settings_theme_chips"),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        ThemeMode.entries.forEach { mode ->
+            FilterChip(
+                selected = selected == mode,
+                onClick = { onSelect(mode) },
+                label = { Text(themeModeLabel(mode), fontSize = 11.sp) },
+                colors = FilterChipDefaults.filterChipColors(
+                    selectedContainerColor = AdGuardGreenPrimary,
+                    selectedLabelColor = AdGuardOnAccent,
+                ),
+            )
+        }
+    }
+}
+
+@Composable
+private fun themeModeLabel(mode: ThemeMode): String = stringResource(
+    when (mode) {
+        ThemeMode.SYSTEM -> R.string.settings_theme_system
+        ThemeMode.LIGHT -> R.string.settings_theme_light
+        ThemeMode.DARK -> R.string.settings_theme_dark
+    }
+)
+
 /** Export/restore the two core blobs without including device-local scripts. */@Composable
 private fun BackupSection(
     onExport: () -> Unit,
@@ -610,6 +661,18 @@ internal fun HttpsFilterSection(
                     httpsEnabled = enabled
                     viewModel.setHttpsFiltering(enabled) { status = it }
                 }
+            }
+        )
+
+        Spacer(modifier = Modifier.height(10.dp))
+
+        SettingsSwitch(
+            icon = Icons.Default.VisibilityOff,
+            title = stringResource(R.string.settings_cosmetic_title),
+            subtitle = stringResource(R.string.settings_cosmetic_subtitle),
+            checked = ui.settings.cosmeticFiltering,
+            onCheckedChange = {
+                viewModel.onIntent(AdGuardIntent.ToggleCosmeticFiltering(it))
             }
         )
 

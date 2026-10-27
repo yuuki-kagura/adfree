@@ -656,6 +656,10 @@
     <string name="settings_language_system">Theo hệ thống</string>
     <string name="settings_language_english">English</string>
     <string name="settings_language_vietnamese">Tiếng Việt</string>
+    <string name="settings_theme_title">Giao diện</string>
+    <string name="settings_theme_system">Theo hệ thống</string>
+    <string name="settings_theme_light">Sáng</string>
+    <string name="settings_theme_dark">Tối</string>
     <string name="settings_log_allowed_title">Ghi log cả request hợp lệ</string>
     <string name="settings_log_allowed_subtitle">Tắt để tiết kiệm CPU: chỉ ghi lại những gì bị chặn</string>
     <string name="settings_smart_filtering_title">Lọc thông minh</string>
@@ -699,6 +703,8 @@
     <string name="settings_https_body">Tự ký chứng chỉ để đọc và chèn script vào trang HTTPS. Cần cài chứng chỉ CA vào hệ thống.</string>
     <string name="settings_https_enable_title">Bật lọc HTTPS</string>
     <string name="settings_https_enable_subtitle">Giải mã HTTPS để lọc quảng cáo và chèn script</string>
+    <string name="settings_cosmetic_title">Lọc giao diện</string>
+    <string name="settings_cosmetic_subtitle">Ẩn khung quảng cáo còn sót trên trang; cần bật lọc HTTPS</string>
     <string name="settings_ech_title">ECH đầy đủ</string>
     <string name="settings_ech_subtitle">Cho trình duyệt tự mã hoá ECH end-to-end. Host dùng ECH sẽ được nối thẳng, không lọc được.</string>
     <string name="settings_ca_created">CA đã tạo</string>

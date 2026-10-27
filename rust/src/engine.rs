@@ -202,6 +202,9 @@ pub struct Config {
     /// Stealth-mode effects: UTM stripping, WebRTC blocking, third-party
     /// cookies and the disguised user agent.
     pub stealth: StealthConfig,
+    /// Inject element-hiding rules, scriptlets and the page runtime. Requires
+    /// `mitm_enabled`: cosmetics ride the decrypted HTTPS path.
+    pub cosmetic_filtering: bool,
     /// Send search-engine queries to their family-filtered host and answer the
     /// original name with the filtered addresses (see [`crate::safesearch`]).
     pub safe_search: bool,
@@ -227,6 +230,7 @@ impl Default for Config {
             https_only_mode: false,
             proxy: None,
             stealth: StealthConfig::default(),
+            cosmetic_filtering: true,
             safe_search: false,
         }
     }
@@ -1651,7 +1655,9 @@ impl Core {
                 script_body,
             ) {
                 Ok(mut proxy) => {
-                    proxy.set_cosmetic(self.filter.clone());
+                    if cfg.cosmetic_filtering {
+                        proxy.set_cosmetic(self.filter.clone());
+                    }
                     proxy.set_stats(Arc::clone(&self.stats));
                     Some(proxy)
                 }
@@ -1673,8 +1679,11 @@ impl Core {
             ) {
                 Ok(mut proxy) => {
                     // Cosmetic filtering rides along with HTTPS filtering:
-                    // same opt-in, same CA gate, nothing extra to configure.
-                    proxy.set_cosmetic(self.filter.clone());
+                    // same opt-in, same CA gate, and the user can turn the
+                    // element hiding off without disabling the TLS rewrite.
+                    if cfg.cosmetic_filtering {
+                        proxy.set_cosmetic(self.filter.clone());
+                    }
                     // Stealth request edits (UTM, cookies, user agent) are
                     // decided per flow, like cosmetics.
                     proxy.set_stealth(cfg.stealth);

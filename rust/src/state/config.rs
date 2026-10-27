@@ -109,6 +109,7 @@ pub fn build(snapshot: &StateSnapshot, private_dns_strict: bool) -> Plan {
             disguise_user_agent: protection.disguise_user_agent,
             block_third_party_cookies: protection.block_third_party_cookies,
         },
+        cosmetic_filtering: protection.cosmetic_filtering,
         safe_search: protection.safe_search,
     };
 

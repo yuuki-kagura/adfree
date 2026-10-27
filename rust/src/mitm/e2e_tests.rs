@@ -1029,6 +1029,42 @@ fn cosmetic_filtering_rides_the_packet_path() {
     tcp.close();
 }
 
+/// Cosmetic filtering is a real switch, not a persisted flag with no reader:
+/// off ships the page without the hiding stylesheet, the payload or the
+/// runtime, while the user's own script keeps its tag.
+#[test]
+fn turning_cosmetics_off_leaves_the_page_without_them() {
+    let origin = start_origin(HTML);
+    let (core, ca_der) = setup_core(&origin);
+    core.set_config(Config {
+        cosmetic_filtering: false,
+        ..core.config()
+    });
+
+    let mut tcp = Client::connect(core.clone(), origin.port);
+    let mut conn = handshake(&mut tcp, client_config(ca_der));
+    assert!(!conn.is_handshaking(), "the MITM handshake must complete");
+
+    let (head, body) = request(&mut tcp, &mut conn, "/");
+    assert!(head.starts_with("HTTP/1.1 200"), "{head}");
+    let page = page_text(&head, &body);
+    assert!(
+        !page.contains("adfree-hide"),
+        "no hiding stylesheet: {page}"
+    );
+    assert!(!page.contains("adfree-page.js"), "no runtime: {page}");
+    assert!(
+        !page.contains("window.__adfree_page="),
+        "no payload: {page}"
+    );
+    assert!(
+        page.contains("/adfree-user.js"),
+        "user scripts are not cosmetic rules: {page}"
+    );
+    assert!(page.contains("Sponsored content"), "the page is intact");
+    tcp.close();
+}
+
 /// A generic style injection (`#$#sel { css }`, no domain — how the lists undo
 /// a bait hiding) rides the page payload from our own scan: the crate reads
 /// these rules as plain hides and drops the action, so nothing else would carry
