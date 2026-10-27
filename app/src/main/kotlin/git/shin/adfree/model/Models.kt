@@ -283,6 +283,31 @@ data class UserScriptStoreState(
     val error: String? = null,
 )
 
+/**
+ * Stable codes stored in [AppFirewallRule.category]. The category comes from
+ * PackageManager at read time, so the UI localizes the code instead of
+ * receiving a display string.
+ */
+object AppCategory {
+    const val BROWSER = "browser"
+    const val GAME = "game"
+    const val SOCIAL = "social"
+    const val VIDEO = "video"
+    const val AUDIO = "audio"
+    const val NEWS = "news"
+    const val MAPS = "maps"
+    const val PRODUCTIVITY = "productivity"
+    const val IMAGE = "image"
+    const val OTHER = "other"
+}
+
+/** App-list chip filters that are not [AppCategory] values. */
+object AppCategoryFilter {
+    const val BLOCKED = "blocked"
+    const val FILTERED = "filtered"
+    const val UNFILTERED = "unfiltered"
+}
+
 data class AppFirewallRule(
     val packageName: String,
     val appName: String,
@@ -296,7 +321,7 @@ data class AppFirewallRule(
      */
     val isHttpsFiltered: Boolean = true,
     val blockWhenScreenOff: Boolean = false,
-    val category: String = "Ứng dụng cài đặt",
+    val category: String = AppCategory.OTHER,
     val blockedRequestsToday: Int = 0,
     val dataTransferredBytes: Long = 0L,
 )

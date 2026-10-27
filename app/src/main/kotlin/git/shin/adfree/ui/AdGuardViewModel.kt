@@ -7,6 +7,8 @@ import git.shin.adfree.R
 import git.shin.adfree.core.ConfigWarning
 import git.shin.adfree.core.CoreEngine
 import git.shin.adfree.data.AdGuardRepository
+import git.shin.adfree.model.AppCategory
+import git.shin.adfree.model.AppCategoryFilter
 import git.shin.adfree.model.AppFirewallRule
 import git.shin.adfree.model.DnsBlockMode
 import git.shin.adfree.model.FilterStatus
@@ -180,10 +182,10 @@ class AdGuardViewModel(
                 app.appName.contains(d.appSearch, true) ||
                 app.packageName.contains(d.appSearch, true)
             val matchesCat = when (d.appCategoryFilter) {
-                null, "Tất cả" -> true
-                "Đang chặn" -> !app.isCellularAllowed || !app.isWifiAllowed
-                "Được lọc" -> app.isFilterRouted
-                "Bỏ qua lọc" -> !app.isFilterRouted
+                null -> true
+                AppCategoryFilter.BLOCKED -> !app.isCellularAllowed || !app.isWifiAllowed
+                AppCategoryFilter.FILTERED -> app.isFilterRouted
+                AppCategoryFilter.UNFILTERED -> !app.isFilterRouted
                 else -> app.category == d.appCategoryFilter
             }
             matchesSearch && matchesCat

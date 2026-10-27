@@ -18,6 +18,7 @@ import git.shin.adfree.core.ScriptBinding
 import git.shin.adfree.core.ScriptRecord
 import git.shin.adfree.core.ScriptState
 import git.shin.adfree.core.StatsSnapshot
+import git.shin.adfree.model.AppCategory
 import git.shin.adfree.model.AppFirewallRule
 import git.shin.adfree.model.DnsBlockMode
 import git.shin.adfree.model.DnsProvider
@@ -1321,6 +1322,9 @@ class AdGuardRepository(
     }
 
     private fun appCategory(info: ApplicationInfo): String {
+        // PackageManager has no browser category; without this list the
+        // "Browsers" chip could never match anything.
+        if (info.packageName in BROWSER_PACKAGES) return AppCategory.BROWSER
         val pm = context.packageManager
         return try {
             val category = if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
@@ -1329,18 +1333,18 @@ class AdGuardRepository(
                 ApplicationInfo.CATEGORY_UNDEFINED
             }
             when (category) {
-                ApplicationInfo.CATEGORY_GAME -> "Trò chơi"
-                ApplicationInfo.CATEGORY_SOCIAL -> "Mạng xã hội"
-                ApplicationInfo.CATEGORY_VIDEO -> "Đa phương tiện"
-                ApplicationInfo.CATEGORY_AUDIO -> "Âm thanh"
-                ApplicationInfo.CATEGORY_NEWS -> "Tin tức"
-                ApplicationInfo.CATEGORY_MAPS -> "Bản đồ"
-                ApplicationInfo.CATEGORY_PRODUCTIVITY -> "Năng suất"
-                ApplicationInfo.CATEGORY_IMAGE -> "Hình ảnh"
-                else -> "Ứng dụng cài đặt"
+                ApplicationInfo.CATEGORY_GAME -> AppCategory.GAME
+                ApplicationInfo.CATEGORY_SOCIAL -> AppCategory.SOCIAL
+                ApplicationInfo.CATEGORY_VIDEO -> AppCategory.VIDEO
+                ApplicationInfo.CATEGORY_AUDIO -> AppCategory.AUDIO
+                ApplicationInfo.CATEGORY_NEWS -> AppCategory.NEWS
+                ApplicationInfo.CATEGORY_MAPS -> AppCategory.MAPS
+                ApplicationInfo.CATEGORY_PRODUCTIVITY -> AppCategory.PRODUCTIVITY
+                ApplicationInfo.CATEGORY_IMAGE -> AppCategory.IMAGE
+                else -> AppCategory.OTHER
             }
         } catch (_: Exception) {
-            "Ứng dụng cài đặt"
+            AppCategory.OTHER
         }
     }
 
@@ -1919,6 +1923,28 @@ class AdGuardRepository(
         private const val MAX_LOG_ROWS = 2_000
         private const val MAX_APPS_SHOWN = 250
         private const val BUILTIN_CUSTOM = "builtin_custom"
+
+        /** Known browser packages; Android exposes no browser category. */
+        private val BROWSER_PACKAGES = setOf(
+            "com.android.chrome",
+            "com.chrome.beta",
+            "com.chrome.dev",
+            "com.chrome.canary",
+            "org.chromium.chrome",
+            "com.google.android.apps.chrome",
+            "org.mozilla.firefox",
+            "org.mozilla.firefox_beta",
+            "org.mozilla.fennec_fdroid",
+            "com.brave.browser",
+            "com.sec.android.app.sbrowser",
+            "com.opera.browser",
+            "com.opera.mini.native",
+            "com.microsoft.emmx",
+            "com.duckduckgo.mobile.android",
+            "com.vivaldi.browser",
+            "com.kiwibrowser.browser",
+            "io.github.ungoogled_software.ungoogled_chromium",
+        )
 
         /** A few starter rules so the user sees how they work. */
         private val starterRules = listOf(

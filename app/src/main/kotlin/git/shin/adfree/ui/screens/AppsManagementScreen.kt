@@ -68,11 +68,15 @@ import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import git.shin.adfree.R
+import git.shin.adfree.model.AppCategory
+import git.shin.adfree.model.AppCategoryFilter
 import git.shin.adfree.model.AppFirewallRule
 import git.shin.adfree.ui.AdGuardIntent
 import git.shin.adfree.ui.AdGuardViewModel
@@ -92,6 +96,17 @@ import git.shin.adfree.ui.theme.AdGuardTextPrimary
 import git.shin.adfree.ui.theme.AdGuardOnAccent
 import git.shin.adfree.ui.theme.AdGuardTextSecondary
 
+/** Chip code (null = all) paired with its label. */
+private val appCategoryChips: List<Pair<String?, Int>> = listOf(
+    null to R.string.apps_cat_all,
+    AppCategoryFilter.BLOCKED to R.string.apps_cat_blocked,
+    AppCategoryFilter.FILTERED to R.string.apps_cat_filtered,
+    AppCategoryFilter.UNFILTERED to R.string.apps_cat_unfiltered,
+    AppCategory.BROWSER to R.string.apps_cat_browser,
+    AppCategory.SOCIAL to R.string.apps_cat_social,
+    AppCategory.VIDEO to R.string.apps_cat_media,
+)
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun AppsManagementScreen(
@@ -99,8 +114,6 @@ fun AppsManagementScreen(
     modifier: Modifier = Modifier
 ) {
     val state by viewModel.uiState.collectAsState()
-
-    val categories = listOf("Tất cả", "Đang chặn", "Được lọc", "Bỏ qua lọc", "Trình duyệt", "Mạng xã hội", "Đa phương tiện")
 
     Column(
         modifier = modifier
@@ -116,16 +129,16 @@ fun AppsManagementScreen(
         ) {
             Column {
                 Text(
-                    text = "Ứng dụng",
+                    text = stringResource(R.string.apps_title),
                     fontSize = 19.sp,
                     fontWeight = FontWeight.Bold,
                     color = AdGuardTextPrimary
                 )
                 Text(
                     text = if (state.settings.isFirewallEnabled) {
-                        "${state.appFirewallRules.size} ứng dụng • chọn app nào được lọc"
+                        stringResource(R.string.apps_subtitle, state.appFirewallRules.size)
                     } else {
-                        "Tường lửa đang tắt — giới hạn mạng theo app chưa áp dụng"
+                        stringResource(R.string.apps_firewall_off)
                     },
                     fontSize = 12.sp,
                     color = if (state.settings.isFirewallEnabled) AdGuardTextMuted else AdGuardOrangeWarning
@@ -139,12 +152,12 @@ fun AppsManagementScreen(
         OutlinedTextField(
             value = state.appSearchQuery,
             onValueChange = { viewModel.onIntent(AdGuardIntent.AppSearchQueryChanged(it)) },
-            placeholder = { Text("Tìm ứng dụng theo tên hoặc gói (package)...", color = AdGuardTextMuted, fontSize = 13.sp) },
+            placeholder = { Text(stringResource(R.string.apps_search_hint), color = AdGuardTextMuted, fontSize = 13.sp) },
             leadingIcon = { Icon(Icons.Default.Search, contentDescription = null, tint = AdGuardTextMuted) },
             trailingIcon = {
                 if (state.appSearchQuery.isNotEmpty()) {
                     IconButton(onClick = { viewModel.onIntent(AdGuardIntent.AppSearchQueryChanged("")) }) {
-                        Icon(Icons.Default.Clear, contentDescription = "Clear", tint = AdGuardTextMuted)
+                        Icon(Icons.Default.Clear, contentDescription = stringResource(R.string.apps_clear_search), tint = AdGuardTextMuted)
                     }
                 }
             },
@@ -175,14 +188,13 @@ fun AppsManagementScreen(
                 .horizontalScroll(rememberScrollState()),
             horizontalArrangement = Arrangement.spacedBy(6.dp)
         ) {
-            categories.forEach { cat ->
-                val isSelected = (state.appCategoryFilter == null && cat == "Tất cả") || (state.appCategoryFilter == cat)
+            appCategoryChips.forEach { (code, labelRes) ->
                 FilterChip(
-                    selected = isSelected,
+                    selected = state.appCategoryFilter == code,
                     onClick = {
-                        viewModel.onIntent(AdGuardIntent.AppCategoryFilterChanged(if (cat == "Tất cả") null else cat))
+                        viewModel.onIntent(AdGuardIntent.AppCategoryFilterChanged(code))
                     },
-                    label = { Text(cat, fontSize = 11.sp) },
+                    label = { Text(stringResource(labelRes), fontSize = 11.sp) },
                     colors = FilterChipDefaults.filterChipColors(
                         selectedContainerColor = AdGuardGreenPrimary,
                         selectedLabelColor = AdGuardOnAccent,
@@ -215,21 +227,21 @@ fun AppsManagementScreen(
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Icon(Icons.Default.CellTower, contentDescription = null, tint = AdGuardGreenLight, modifier = Modifier.size(14.dp))
                         Spacer(modifier = Modifier.width(4.dp))
-                        Text("Di động", fontSize = 11.sp, color = AdGuardTextSecondary)
+                        Text(stringResource(R.string.apps_legend_cellular), fontSize = 11.sp, color = AdGuardTextSecondary)
                     }
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Icon(Icons.Default.Wifi, contentDescription = null, tint = AdGuardGreenLight, modifier = Modifier.size(14.dp))
                         Spacer(modifier = Modifier.width(4.dp))
-                        Text("Wi-Fi", fontSize = 11.sp, color = AdGuardTextSecondary)
+                        Text(stringResource(R.string.apps_legend_wifi), fontSize = 11.sp, color = AdGuardTextSecondary)
                     }
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Icon(Icons.Default.Shield, contentDescription = null, tint = AdGuardGreenPrimary, modifier = Modifier.size(14.dp))
                         Spacer(modifier = Modifier.width(4.dp))
-                        Text("Lọc AdGuard", fontSize = 11.sp, color = AdGuardTextSecondary)
+                        Text(stringResource(R.string.apps_legend_filter), fontSize = 11.sp, color = AdGuardTextSecondary)
                     }
                 }
                 Text(
-                    "Chạm thẻ để mở chi tiết",
+                    stringResource(R.string.apps_legend_tap),
                     fontSize = 10.sp,
                     color = AdGuardTextMuted,
                     modifier = Modifier
@@ -364,7 +376,7 @@ fun AppFirewallCard(
                     )
                     Spacer(modifier = Modifier.height(2.dp))
                     Text(
-                        text = app.category,
+                        text = appCategoryLabel(app.category),
                         fontSize = 11.sp,
                         color = AdGuardTextSecondary,
                         maxLines = 1,
@@ -372,7 +384,11 @@ fun AppFirewallCard(
                     )
                     Spacer(modifier = Modifier.height(2.dp))
                     Text(
-                        text = "${app.blockedRequestsToday} chặn • ${app.dataTransferredBytes / (1024 * 1024)} MB",
+                        text = stringResource(
+                            R.string.apps_card_meta,
+                            app.blockedRequestsToday,
+                            app.dataTransferredBytes / (1024 * 1024)
+                        ),
                         fontSize = 11.sp,
                         fontFamily = FontFamily.Monospace,
                         color = AdGuardTextMuted,
@@ -385,11 +401,10 @@ fun AppFirewallCard(
 
                 AppQuickAction(
                     icon = Icons.Default.Shield,
-                    description = if (app.isFilterRouted) {
-                        "Tắt lọc AdGuard cho ${app.appName}"
-                    } else {
-                        "Bật lọc AdGuard cho ${app.appName}"
-                    },
+                    description = stringResource(
+                        if (app.isFilterRouted) R.string.apps_action_filter_off else R.string.apps_action_filter_on,
+                        app.appName
+                    ),
                     tint = if (app.isFilterRouted) AdGuardGreenPrimary else AdGuardOrangeWarning,
                     background = if (app.isFilterRouted) Color(0x2200D06C) else Color(0x22FF9800),
                     onClick = onToggleFiltered,
@@ -410,7 +425,7 @@ fun AppFirewallCard(
             ) {
                 AppQuickAction(
                     icon = Icons.Default.FilterList,
-                    description = "Xem nhật ký của ${app.appName}",
+                    description = stringResource(R.string.apps_action_logs, app.appName),
                     tint = AdGuardGreenLight,
                     background = AdGuardDarkSurfaceVariant,
                     onClick = onViewLogs,
@@ -421,7 +436,7 @@ fun AppFirewallCard(
                 )
                 AppQuickAction(
                     icon = Icons.Default.CellTower,
-                    description = "Chuyển Di động",
+                    description = stringResource(R.string.apps_action_cellular),
                     tint = if (app.isCellularAllowed) AdGuardGreenLight else AdGuardRedBlocked,
                     background = if (app.isCellularAllowed) Color(0x2200D06C) else Color(0x22FF435A),
                     onClick = onToggleCellular,
@@ -432,7 +447,7 @@ fun AppFirewallCard(
                 )
                 AppQuickAction(
                     icon = Icons.Default.Wifi,
-                    description = "Chuyển Wi-Fi",
+                    description = stringResource(R.string.apps_action_wifi),
                     tint = if (app.isWifiAllowed) AdGuardGreenLight else AdGuardRedBlocked,
                     background = if (app.isWifiAllowed) Color(0x2200D06C) else Color(0x22FF435A),
                     onClick = onToggleWifi,
@@ -444,6 +459,21 @@ fun AppFirewallCard(
             }
         }
     }
+}
+
+/** Localized label for the stable category code stored on a rule. */
+@Composable
+private fun appCategoryLabel(code: String): String = when (code) {
+    AppCategory.BROWSER -> stringResource(R.string.apps_category_browser)
+    AppCategory.GAME -> stringResource(R.string.apps_category_game)
+    AppCategory.SOCIAL -> stringResource(R.string.apps_category_social)
+    AppCategory.VIDEO -> stringResource(R.string.apps_category_video)
+    AppCategory.AUDIO -> stringResource(R.string.apps_category_audio)
+    AppCategory.NEWS -> stringResource(R.string.apps_category_news)
+    AppCategory.MAPS -> stringResource(R.string.apps_category_maps)
+    AppCategory.PRODUCTIVITY -> stringResource(R.string.apps_category_productivity)
+    AppCategory.IMAGE -> stringResource(R.string.apps_category_image)
+    else -> stringResource(R.string.apps_category_other)
 }
 
 /** One compact, centre-aligned icon button of an app row. */
@@ -562,7 +592,7 @@ fun AppDetailsFirewallSheet(
             }
 
             IconButton(onClick = onClose) {
-                Icon(Icons.Default.Close, contentDescription = "Đóng", tint = AdGuardTextSecondary)
+                Icon(Icons.Default.Close, contentDescription = stringResource(R.string.apps_detail_close), tint = AdGuardTextSecondary)
             }
         }
 
@@ -588,13 +618,15 @@ fun AppDetailsFirewallSheet(
             ) {
                 Column(modifier = Modifier.weight(1f)) {
                     Text(
-                        text = "Bảo vệ AdGuard cho ứng dụng này",
+                        text = stringResource(R.string.apps_detail_protect_title),
                         fontSize = 14.sp,
                         fontWeight = FontWeight.Bold,
                         color = AdGuardTextPrimary
                     )
                     Text(
-                        text = if (app.isFilterRouted) "Lưu lượng được kiểm tra và chặn quảng cáo/tracker" else "Bỏ qua bộ lọc: Kết nối thẳng trực tiếp ra internet",
+                        text = stringResource(
+                            if (app.isFilterRouted) R.string.apps_detail_protect_on else R.string.apps_detail_protect_off
+                        ),
                         fontSize = 11.sp,
                         color = if (app.isFilterRouted) AdGuardGreenLight else AdGuardOrangeWarning
                     )
@@ -628,20 +660,20 @@ fun AppDetailsFirewallSheet(
                 Icon(Icons.Default.PowerSettingsNew, contentDescription = null, modifier = Modifier.size(16.dp))
                 Spacer(modifier = Modifier.width(8.dp))
                 Text(
-                    text = "Khởi động lại VPN để áp dụng",
+                    text = stringResource(R.string.apps_detail_restart_vpn),
                     fontSize = 12.sp,
                     fontWeight = FontWeight.SemiBold
                 )
             }
             Spacer(modifier = Modifier.height(4.dp))
             Text(
-                text = "VPN đang chạy giữ danh sách app được lọc từ lúc bật; khởi động lại để thay đổi có hiệu lực.",
+                text = stringResource(R.string.apps_detail_vpn_running),
                 fontSize = 11.sp,
                 color = AdGuardTextMuted
             )
         } else {
             Text(
-                text = "Thay đổi sẽ được áp dụng ở lần bật VPN kế tiếp.",
+                text = stringResource(R.string.apps_detail_vpn_next),
                 fontSize = 11.sp,
                 color = AdGuardTextMuted
             )
@@ -651,17 +683,15 @@ fun AppDetailsFirewallSheet(
 
         // The only per-app switch with a live effect on the tunnel today.
         Text(
-            text = "LỌC HTTPS",
+            text = stringResource(R.string.apps_detail_https_header),
             fontSize = 11.sp,
             fontWeight = FontWeight.Bold,
             color = AdGuardTextMuted,
         )
         Text(
-            text = if (httpsFilteringEnabled) {
-                "Áp dụng cho kết nối mới của ứng dụng này."
-            } else {
-                "Lọc HTTPS đang tắt trong Cài đặt — công tắc này có hiệu lực khi bật lại."
-            },
+            text = stringResource(
+                if (httpsFilteringEnabled) R.string.apps_detail_https_on else R.string.apps_detail_https_off
+            ),
             fontSize = 11.sp,
             color = if (httpsFilteringEnabled) AdGuardTextMuted else AdGuardOrangeWarning,
         )
@@ -681,17 +711,15 @@ fun AppDetailsFirewallSheet(
             ) {
                 Column(modifier = Modifier.weight(1f)) {
                     Text(
-                        text = "Giải mã HTTPS để lọc nội dung",
+                        text = stringResource(R.string.apps_detail_decrypt_title),
                         fontSize = 13.sp,
                         fontWeight = FontWeight.SemiBold,
                         color = AdGuardTextPrimary
                     )
                     Text(
-                        text = if (app.isHttpsFiltered) {
-                            "Chặn quảng cáo và tracker trong lưu lượng HTTPS của ứng dụng."
-                        } else {
-                            "Splice TLS: DNS vẫn được lọc, còn nội dung HTTPS thì không bị chặn."
-                        },
+                        text = stringResource(
+                            if (app.isHttpsFiltered) R.string.apps_detail_decrypt_on else R.string.apps_detail_decrypt_off
+                        ),
                         fontSize = 11.sp,
                         color = if (app.isHttpsFiltered) AdGuardTextSecondary else AdGuardOrangeWarning
                     )
@@ -716,15 +744,13 @@ fun AppDetailsFirewallSheet(
 
         // Section: Firewall Rules
         Text(
-            text = "LỌC THEO ỨNG DỤNG",
+            text = stringResource(R.string.apps_detail_firewall_header),
             fontSize = 11.sp,
             fontWeight = FontWeight.Bold,
             color = AdGuardTextMuted,
         )
         Text(
-            text = "Các công tắc bên dưới do VPN thực thi cho kết nối mới và cả " +
-                "kết nối đang mở. App đang \"Bỏ qua lọc\" không đi qua VPN nên " +
-                "không bị chặn theo mạng.",
+            text = stringResource(R.string.apps_detail_firewall_body),
             fontSize = 11.sp,
             color = AdGuardOrangeWarning,
         )
@@ -744,8 +770,8 @@ fun AppDetailsFirewallSheet(
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Column(modifier = Modifier.weight(1f)) {
-                        Text("Cho phép Dữ liệu di động (Cellular)", fontSize = 13.sp, fontWeight = FontWeight.SemiBold, color = AdGuardTextPrimary)
-                        Text("Bật/tắt truy cập mạng 4G/5G cho ứng dụng này", fontSize = 11.sp, color = AdGuardTextSecondary)
+                        Text(stringResource(R.string.apps_detail_cellular_title), fontSize = 13.sp, fontWeight = FontWeight.SemiBold, color = AdGuardTextPrimary)
+                        Text(stringResource(R.string.apps_detail_cellular_body), fontSize = 11.sp, color = AdGuardTextSecondary)
                     }
                     Switch(
                         checked = app.isCellularAllowed,
@@ -768,8 +794,8 @@ fun AppDetailsFirewallSheet(
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Column(modifier = Modifier.weight(1f)) {
-                        Text("Cho phép mạng Wi-Fi", fontSize = 13.sp, fontWeight = FontWeight.SemiBold, color = AdGuardTextPrimary)
-                        Text("Bật/tắt truy cập Wi-Fi cho ứng dụng này", fontSize = 11.sp, color = AdGuardTextSecondary)
+                        Text(stringResource(R.string.apps_detail_wifi_title), fontSize = 13.sp, fontWeight = FontWeight.SemiBold, color = AdGuardTextPrimary)
+                        Text(stringResource(R.string.apps_detail_wifi_body), fontSize = 11.sp, color = AdGuardTextSecondary)
                     }
                     Switch(
                         checked = app.isWifiAllowed,
@@ -792,8 +818,8 @@ fun AppDetailsFirewallSheet(
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Column(modifier = Modifier.weight(1f)) {
-                        Text("Chặn khi màn hình tắt (Tiết kiệm pin)", fontSize = 13.sp, fontWeight = FontWeight.SemiBold, color = AdGuardTextPrimary)
-                        Text("Không cho phép ứng dụng chạy ngầm tải dữ liệu khi khóa máy", fontSize = 11.sp, color = AdGuardTextSecondary)
+                        Text(stringResource(R.string.apps_detail_screen_off_title), fontSize = 13.sp, fontWeight = FontWeight.SemiBold, color = AdGuardTextPrimary)
+                        Text(stringResource(R.string.apps_detail_screen_off_body), fontSize = 11.sp, color = AdGuardTextSecondary)
                     }
                     Switch(
                         checked = app.blockWhenScreenOff,
@@ -814,8 +840,7 @@ fun AppDetailsFirewallSheet(
         ) {
             Spacer(modifier = Modifier.height(10.dp))
             Text(
-                text = "App này đang bỏ qua VPN: các giới hạn mạng ở trên không " +
-                    "có tác dụng cho tới khi bật lại lọc.",
+                text = stringResource(R.string.apps_detail_bypass_warning),
                 fontSize = 11.sp,
                 color = AdGuardOrangeWarning,
             )
@@ -836,9 +861,14 @@ fun AppDetailsFirewallSheet(
                     .padding(12.dp)
             ) {
                 Column {
-                    Text("Dữ liệu hôm nay", fontSize = 11.sp, color = AdGuardTextSecondary)
+                    Text(stringResource(R.string.apps_detail_data_today), fontSize = 11.sp, color = AdGuardTextSecondary)
                     Spacer(modifier = Modifier.height(2.dp))
-                    Text("${app.dataTransferredBytes / (1024 * 1024)} MB", fontSize = 16.sp, fontWeight = FontWeight.Bold, color = AdGuardTextPrimary)
+                    Text(
+                        stringResource(R.string.apps_detail_data_value, app.dataTransferredBytes / (1024 * 1024)),
+                        fontSize = 16.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = AdGuardTextPrimary
+                    )
                 }
             }
 
@@ -850,7 +880,7 @@ fun AppDetailsFirewallSheet(
                     .padding(12.dp)
             ) {
                 Column {
-                    Text("Truy vấn đã chặn", fontSize = 11.sp, color = AdGuardTextSecondary)
+                    Text(stringResource(R.string.apps_detail_blocked_queries), fontSize = 11.sp, color = AdGuardTextSecondary)
                     Spacer(modifier = Modifier.height(2.dp))
                     Text("${app.blockedRequestsToday}", fontSize = 16.sp, fontWeight = FontWeight.Bold, color = AdGuardRedBlocked)
                 }
@@ -875,7 +905,7 @@ fun AppDetailsFirewallSheet(
             Icon(Icons.Default.FilterList, contentDescription = null, tint = AdGuardOnAccent)
             Spacer(modifier = Modifier.width(8.dp))
             Text(
-                text = "Xem nhật ký lọc của ${app.appName}",
+                text = stringResource(R.string.apps_detail_view_logs, app.appName),
                 color = AdGuardOnAccent,
                 fontWeight = FontWeight.Bold,
                 fontSize = 13.sp
@@ -892,7 +922,7 @@ fun AppDetailsFirewallSheet(
         if (appLogs.isNotEmpty()) {
             Spacer(modifier = Modifier.height(16.dp))
             Text(
-                text = "Truy vấn mạng gần đây",
+                text = stringResource(R.string.apps_detail_recent),
                 fontSize = 11.sp,
                 fontWeight = FontWeight.Bold,
                 color = AdGuardTextMuted
@@ -938,7 +968,10 @@ fun AppDetailsFirewallSheet(
                                 .padding(horizontal = 6.dp, vertical = 2.dp)
                         ) {
                             Text(
-                                text = if (logItem.status == FilterStatus.BLOCKED) "ĐÃ CHẶN" else "CHO PHÉP",
+                                text = stringResource(
+                                    if (logItem.status == FilterStatus.BLOCKED) R.string.apps_log_status_blocked
+                                    else R.string.apps_log_status_allowed
+                                ),
                                 fontSize = 10.sp,
                                 fontWeight = FontWeight.Bold,
                                 color = if (logItem.status == FilterStatus.BLOCKED) AdGuardRedBlocked else AdGuardGreenLight
@@ -961,7 +994,7 @@ fun AppDetailsFirewallSheet(
                 modifier = Modifier.weight(1f),
                 shape = RoundedCornerShape(8.dp)
             ) {
-                Text("Bỏ lọc & mở mạng", fontSize = 11.sp, color = AdGuardOrangeWarning)
+                Text(stringResource(R.string.apps_preset_open), fontSize = 11.sp, color = AdGuardOrangeWarning)
             }
 
             Button(
@@ -970,7 +1003,7 @@ fun AppDetailsFirewallSheet(
                 colors = ButtonDefaults.buttonColors(containerColor = AdGuardDarkSurfaceVariant),
                 shape = RoundedCornerShape(8.dp)
             ) {
-                Text("Bật lọc mặc định", fontSize = 11.sp, color = AdGuardGreenLight, fontWeight = FontWeight.Bold)
+                Text(stringResource(R.string.apps_preset_default), fontSize = 11.sp, color = AdGuardGreenLight, fontWeight = FontWeight.Bold)
             }
         }
 
