@@ -103,6 +103,41 @@ fn default_doh_cidrs() -> CidrSet {
     set
 }
 
+/// What the stealth switches hide. Every effect is gated by [`Self::enabled`]:
+/// the sub-switches remember what the user chose while the mode is off, the
+/// same way the UI keeps them.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct StealthConfig {
+    /// The master switch: when off, none of the effects below run.
+    pub enabled: bool,
+    /// Drop `utm_*`/`fbclid`-style parameters from HTTPS requests.
+    pub strip_utm: bool,
+    /// Drop STUN/TURN traffic, which is how WebRTC discovers the real IP.
+    pub block_web_rtc: bool,
+    /// Replace `User-Agent` and the client hints that repeat it.
+    pub disguise_user_agent: bool,
+    /// Drop cookies that belong to another site than the one being visited.
+    pub block_third_party_cookies: bool,
+}
+
+impl StealthConfig {
+    pub fn strips_utm(self) -> bool {
+        self.enabled && self.strip_utm
+    }
+
+    pub fn blocks_web_rtc(self) -> bool {
+        self.enabled && self.block_web_rtc
+    }
+
+    pub fn disguises_user_agent(self) -> bool {
+        self.enabled && self.disguise_user_agent
+    }
+
+    pub fn blocks_third_party_cookies(self) -> bool {
+        self.enabled && self.block_third_party_cookies
+    }
+}
+
 #[derive(Clone)]
 pub struct Config {
     /// Terminate TLS for intercepted connections and inject user scripts.
@@ -142,6 +177,9 @@ pub struct Config {
     /// SOCKS5 proxy new TCP flows are sent through instead of dialing the
     /// destination directly. UDP and the engine's own DNS sockets stay direct.
     pub proxy: Option<Arc<crate::socks5::ProxyEndpoint>>,
+    /// Stealth-mode effects: UTM stripping, WebRTC blocking, third-party
+    /// cookies and the disguised user agent.
+    pub stealth: StealthConfig,
 }
 
 impl Default for Config {
@@ -163,6 +201,7 @@ impl Default for Config {
             https_only_hosts: Vec::new(),
             https_only_mode: false,
             proxy: None,
+            stealth: StealthConfig::default(),
         }
     }
 }
@@ -948,6 +987,15 @@ impl Core {
             self.stats.inc(&self.stats.quic_dropped);
         } else if pkt.proto == PROTO_UDP && pkt.dst_port == 853 && cfg.block_dot {
             self.stats.inc(&self.stats.udp_dropped);
+        } else if pkt.proto == PROTO_UDP
+            && cfg.stealth.blocks_web_rtc()
+            && (crate::mitm::stealth::is_webrtc_port(pkt.dst_port)
+                || crate::mitm::stealth::is_stun_datagram(pkt.l4_payload()))
+        {
+            // STUN binding requests are how a page learns the address the
+            // carrier gave the phone; TURN then relays media through it.
+            // Nothing else on these ports is useful to a browser.
+            self.stats.inc(&self.stats.udp_dropped);
         } else if pkt.proto == PROTO_UDP {
             if self.udp_blocked(&pkt, &cfg) {
                 self.stats.inc(&self.stats.udp_dropped);
@@ -1374,6 +1422,9 @@ impl Core {
                     // Cosmetic filtering rides along with HTTPS filtering:
                     // same opt-in, same CA gate, nothing extra to configure.
                     proxy.set_cosmetic(self.filter.clone());
+                    // Stealth request edits (UTM, cookies, user agent) are
+                    // decided per flow, like cosmetics.
+                    proxy.set_stealth(cfg.stealth);
                     // Timing counters (TLS cost, rewrite cost) land in the same
                     // snapshot the UI already polls once a second.
                     proxy.set_stats(Arc::clone(&self.stats));
@@ -1651,6 +1702,10 @@ impl Core {
         let Some(dst) = pkt.dst_ip() else {
             return false;
         };
+        // TURN over TCP/TLS rides the same signalling ports as the UDP half.
+        if cfg.stealth.blocks_web_rtc() && crate::mitm::stealth::is_webrtc_port(pkt.dst_port) {
+            return true;
+        }
         // DoT over TCP bypasses the DNS filter exactly like the UDP port does.
         if cfg.block_dot && pkt.dst_port == 853 {
             return true;

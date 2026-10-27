@@ -7,7 +7,7 @@
 
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 
-use crate::engine::{Config, Core};
+use crate::engine::{Config, Core, StealthConfig};
 
 use super::model::*;
 use super::StateStore;
@@ -95,6 +95,13 @@ pub fn build(snapshot: &StateSnapshot, private_dns_strict: bool) -> Plan {
         https_only_hosts: protection.https_only_hosts.clone(),
         https_only_mode: protection.https_only_mode,
         proxy,
+        stealth: StealthConfig {
+            enabled: protection.is_stealth_mode_enabled,
+            strip_utm: protection.strip_utm_tracking,
+            block_web_rtc: protection.block_web_rtc_leaks,
+            disguise_user_agent: protection.disguise_user_agent,
+            block_third_party_cookies: protection.block_third_party_cookies,
+        },
     };
 
     Plan {
@@ -263,6 +270,24 @@ mod tests {
         assert_eq!(plan.resolver.tunnel_dns, "94.140.14.14");
         assert!(plan.config.dns_protection);
         assert!(!plan.config.mitm_enabled);
+    }
+
+    #[test]
+    fn stealth_effects_need_the_master_switch() {
+        let mut s = snapshot();
+        s.protection.is_stealth_mode_enabled = false;
+        s.protection.strip_utm_tracking = true;
+        s.protection.block_web_rtc_leaks = true;
+        let off = build(&s, false);
+        assert!(!off.config.stealth.strips_utm());
+        assert!(!off.config.stealth.blocks_web_rtc());
+
+        s.protection.is_stealth_mode_enabled = true;
+        let on = build(&s, false);
+        assert!(on.config.stealth.strips_utm());
+        assert!(on.config.stealth.blocks_web_rtc());
+        assert!(on.config.stealth.blocks_third_party_cookies());
+        assert!(!on.config.stealth.disguises_user_agent());
     }
 
     #[test]

@@ -419,7 +419,8 @@ data class ProtectionSettings(
     val isFullEchEnabled: Boolean = false,
     val isFirewallEnabled: Boolean = true,
     val isEcoBatteryModeEnabled: Boolean = true,
-    val isStealthModeEnabled: Boolean = true,
+    // Stealth effects are opt-in; the sub-switches remember the choice.
+    val isStealthModeEnabled: Boolean = false,
     val blockQuic: Boolean = true,
     val blockDoh: Boolean = true,
     val blockDot: Boolean = true,
@@ -432,7 +433,7 @@ data class ProtectionSettings(
     val logAllowedRequests: Boolean = false,
     val blockMode: DnsBlockMode = DnsBlockMode.NXDOMAIN,
     val stripUtmTracking: Boolean = true,
-    val blockWebRtcLeaks: Boolean = true,
+    val blockWebRtcLeaks: Boolean = false,
     val disguiseUserAgent: Boolean = false,
     val blockThirdPartyCookies: Boolean = true,
     val selectedDnsProviderId: String = "adguard_default",

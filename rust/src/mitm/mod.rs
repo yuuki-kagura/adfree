@@ -17,6 +17,7 @@ pub mod proxy;
 pub mod relay;
 pub mod script;
 pub mod segment;
+pub mod stealth;
 pub mod tcp;
 pub mod tls;
 

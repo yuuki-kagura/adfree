@@ -8,7 +8,7 @@
 //! a wrong sequence number, a handshake byte stuck behind the window, an
 //! injection that never reaches the client.
 
-use crate::engine::{Config, Core};
+use crate::engine::{Config, Core, StealthConfig};
 use crate::filter::{FilterListInfo, ListFormat};
 use crate::mitm::ca::CertificateAuthority;
 use crate::mitm::proxy::local_asset;
@@ -1644,6 +1644,67 @@ fn cookie_rules_read_the_head_a_url_rewrite_installed() {
     assert!(
         lower.contains("set-cookie: keepme=3") && !lower.contains("set-cookie: dropme"),
         "the plan still reaches the answer: {head}"
+    );
+
+    tcp.close();
+}
+
+/// Stealth mode edits the request and its answer: the tracking parameters go,
+/// a cross-site request loses its cookies, the user agent is replaced, and the
+/// answer may not set a third-party cookie either.
+#[test]
+fn stealth_edits_both_halves_of_the_https_exchange() {
+    let origin = start_origin(HTML);
+    let (core, ca_der) = setup_core_with_list(&origin, "stealth", "");
+    core.set_config(Config {
+        mitm_enabled: true,
+        stealth: StealthConfig {
+            enabled: true,
+            strip_utm: true,
+            block_web_rtc: false,
+            disguise_user_agent: true,
+            block_third_party_cookies: true,
+        },
+        ..core.config()
+    });
+
+    let mut tcp = Client::connect(core.clone(), origin.port);
+    let mut conn = handshake(&mut tcp, client_config(ca_der));
+    assert!(!conn.is_handshaking(), "the MITM handshake must complete");
+
+    let (head, body) = request_with(
+        &mut tcp,
+        &mut conn,
+        "/cookies?utm_source=news&fbclid=abc",
+        "Sec-Fetch-Dest: document\r\nSec-Fetch-Site: cross-site\r\n\
+         Referer: https://other.test/\r\nCookie: sid=1\r\n\
+         User-Agent: real-browser\r\nSec-CH-UA: \"Chromium\";v=\"124\"\r\n",
+    );
+    assert!(head.starts_with("HTTP/1.1 200"), "{head}");
+    assert_eq!(body, b"ok", "the body must come through untouched");
+    {
+        let seen = origin.requests.lock().expect("requests");
+        let sent = seen.last().expect("the request reached the origin");
+        assert!(
+            sent.starts_with("GET /cookies HTTP/1.1"),
+            "the tracking parameters must be gone: {sent:?}"
+        );
+        assert!(
+            !sent.to_lowercase().contains("cookie:"),
+            "a cross-site request must not carry cookies: {sent:?}"
+        );
+        assert!(
+            sent.contains(crate::mitm::stealth::DISGUISED_USER_AGENT),
+            "the disguised user agent must go out: {sent:?}"
+        );
+        assert!(
+            !sent.to_lowercase().contains("sec-ch-ua"),
+            "the client hints must go with the real user agent: {sent:?}"
+        );
+    }
+    assert!(
+        !head.to_lowercase().contains("set-cookie:"),
+        "a cross-site answer may not set cookies: {head}"
     );
 
     tcp.close();

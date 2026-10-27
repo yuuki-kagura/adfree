@@ -637,10 +637,14 @@
     <string name="settings_auto_update_off">Off</string>
     <string name="settings_auto_update_hours">%1$d h</string>
     <string name="settings_stealth_title">Stealth mode</string>
+    <string name="settings_stealth_master_title">Enable stealth mode</string>
+    <string name="settings_stealth_master_subtitle">Apply the options below to filtered HTTPS traffic</string>
     <string name="settings_stealth_utm_title">Strip tracking parameters (utm_*, fbclid)</string>
     <string name="settings_stealth_utm_subtitle">Only applies while HTTPS filtering is on</string>
     <string name="settings_stealth_webrtc_title">Block WebRTC leaks</string>
     <string name="settings_stealth_webrtc_subtitle">Keep WebRTC from exposing your real IP</string>
+    <string name="settings_stealth_ua_title">Disguise User-Agent</string>
+    <string name="settings_stealth_ua_subtitle">Hide the device model and browser version</string>
     <string name="settings_stealth_cookies_title">Block third-party cookies</string>
     <string name="settings_stealth_cookies_subtitle">Reduce cross-site tracking</string>
     <string name="settings_lab_title">Security lab</string>

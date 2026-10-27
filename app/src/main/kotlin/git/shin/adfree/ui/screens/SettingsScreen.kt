@@ -247,21 +247,37 @@ fun SettingsScreen(
             )
             Spacer(modifier = Modifier.height(10.dp))
             StealthToggleRow(
+                title = stringResource(R.string.settings_stealth_master_title),
+                subtitle = stringResource(R.string.settings_stealth_master_subtitle),
+                isChecked = state.settings.isStealthModeEnabled,
+                onCheckedChange = { viewModel.onIntent(AdGuardIntent.ToggleStealth) }
+            )
+            StealthToggleRow(
                 title = stringResource(R.string.settings_stealth_utm_title),
                 subtitle = stringResource(R.string.settings_stealth_utm_subtitle),
                 isChecked = state.settings.stripUtmTracking,
+                enabled = state.settings.isStealthModeEnabled,
                 onCheckedChange = { viewModel.onIntent(AdGuardIntent.UpdateStealth(stripUtm = it)) }
             )
             StealthToggleRow(
                 title = stringResource(R.string.settings_stealth_webrtc_title),
                 subtitle = stringResource(R.string.settings_stealth_webrtc_subtitle),
                 isChecked = state.settings.blockWebRtcLeaks,
+                enabled = state.settings.isStealthModeEnabled,
                 onCheckedChange = { viewModel.onIntent(AdGuardIntent.UpdateStealth(blockWebRtc = it)) }
+            )
+            StealthToggleRow(
+                title = stringResource(R.string.settings_stealth_ua_title),
+                subtitle = stringResource(R.string.settings_stealth_ua_subtitle),
+                isChecked = state.settings.disguiseUserAgent,
+                enabled = state.settings.isStealthModeEnabled,
+                onCheckedChange = { viewModel.onIntent(AdGuardIntent.UpdateStealth(disguiseUa = it)) }
             )
             StealthToggleRow(
                 title = stringResource(R.string.settings_stealth_cookies_title),
                 subtitle = stringResource(R.string.settings_stealth_cookies_subtitle),
                 isChecked = state.settings.blockThirdPartyCookies,
+                enabled = state.settings.isStealthModeEnabled,
                 onCheckedChange = { viewModel.onIntent(AdGuardIntent.UpdateStealth(blockCookies = it)) }
             )
 
@@ -1187,6 +1203,7 @@ fun StealthToggleRow(
     title: String,
     subtitle: String,
     isChecked: Boolean,
+    enabled: Boolean = true,
     onCheckedChange: (Boolean) -> Unit
 ) {
     Row(
@@ -1199,7 +1216,7 @@ fun StealthToggleRow(
                 text = title,
                 fontSize = 13.sp,
                 fontWeight = FontWeight.SemiBold,
-                color = AdGuardTextPrimary
+                color = if (enabled) AdGuardTextPrimary else AdGuardTextMuted
             )
             Text(
                 text = subtitle,
@@ -1211,6 +1228,7 @@ fun StealthToggleRow(
         Switch(
             checked = isChecked,
             onCheckedChange = onCheckedChange,
+            enabled = enabled,
             colors = SwitchDefaults.colors(
                 checkedThumbColor = Color.White,
                 checkedTrackColor = AdGuardGreenPrimary,

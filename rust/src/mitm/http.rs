@@ -832,6 +832,61 @@ pub fn drop_undecodable_encodings(buf: &[u8], force: bool) -> Option<Vec<u8>> {
     Some(out)
 }
 
+/// Replaces one header's value in a message head (`CRLFCRLF` included).
+///
+/// The name is compared case-insensitively and whole, and the line keeps the
+/// case it arrived with. A header that appears more than once keeps its first
+/// line (with the new value) and loses the rest; a head that did not carry it
+/// gains the line just before the blank one. `None` when the head is
+/// incomplete or already carries exactly this value, once.
+pub fn set_header_value(head: &[u8], name: &str, value: &str) -> Option<Vec<u8>> {
+    let end = head_end(head)?;
+    let head = &head[..end];
+    let mut out = Vec::with_capacity(head.len() + value.len() + 2);
+    let mut seen = false;
+    let mut changed = false;
+    for line in head.split_inclusive(|b| *b == b'\n') {
+        if line == b"\r\n" || line == b"\n" {
+            if !seen {
+                let ending = if line == b"\r\n" { "\r\n" } else { "\n" };
+                out.extend_from_slice(format!("{name}: {value}{ending}").as_bytes());
+                changed = true;
+            }
+            out.extend_from_slice(line);
+            continue;
+        }
+        let Some(name_end) = line.iter().position(|b| *b == b':') else {
+            out.extend_from_slice(line);
+            continue;
+        };
+        if !line[..name_end].eq_ignore_ascii_case(name.as_bytes()) {
+            out.extend_from_slice(line);
+            continue;
+        }
+        if seen {
+            // A repeated header: HTTP does not define a list for these, so
+            // keeping the first line is the only value that cannot be read
+            // twice.
+            changed = true;
+            continue;
+        }
+        seen = true;
+        if header_value(line, name).is_some_and(|current| current == value) {
+            out.extend_from_slice(line);
+            continue;
+        }
+        let original = String::from_utf8_lossy(&line[..name_end]);
+        let ending = if line.ends_with(b"\r\n") { "\r\n" } else { "\n" };
+        out.extend_from_slice(format!("{original}: {value}{ending}").as_bytes());
+        changed = true;
+    }
+    if changed {
+        Some(out)
+    } else {
+        None
+    }
+}
+
 /// Takes the named headers out of a message head (`CRLFCRLF` included).
 ///
 /// The name of a header is its part before the first `:`, compared
@@ -2624,6 +2679,39 @@ mod tests {
         assert_eq!(
             String::from_utf8(out).unwrap(),
             "HTTP/1.1 200 OK\r\nSet-Cookie: a=1\r\nX-Keep: 3\r\n\r\n"
+        );
+    }
+
+    #[test]
+    fn set_header_value_replaces_the_line_and_keeps_its_case() {
+        let head = b"GET / HTTP/1.1\r\nHost: a.test\r\nUser-Agent: old\r\n\r\n";
+        let out = set_header_value(head, "user-agent", "new").expect("the line changes");
+        assert_eq!(
+            String::from_utf8(out).unwrap(),
+            "GET / HTTP/1.1\r\nHost: a.test\r\nUser-Agent: new\r\n\r\n"
+        );
+    }
+
+    #[test]
+    fn set_header_value_adds_a_missing_line_before_the_blank_one() {
+        let head = b"GET / HTTP/1.1\r\nHost: a.test\r\n\r\n";
+        let out = set_header_value(head, "user-agent", "new").expect("the line is added");
+        assert_eq!(
+            String::from_utf8(out).unwrap(),
+            "GET / HTTP/1.1\r\nHost: a.test\r\nuser-agent: new\r\n\r\n"
+        );
+        assert!(set_header_value(head, "user-agent", "new").is_some());
+    }
+
+    #[test]
+    fn set_header_value_is_none_when_nothing_would_change() {
+        let head = b"GET / HTTP/1.1\r\nuser-agent: new\r\n\r\n";
+        assert!(set_header_value(head, "user-agent", "new").is_none());
+        let duplicate = b"GET / HTTP/1.1\r\nUser-Agent: new\r\nUser-Agent: new\r\n\r\n";
+        let out = set_header_value(duplicate, "user-agent", "new").expect("the extra line goes");
+        assert_eq!(
+            String::from_utf8(out).unwrap(),
+            "GET / HTTP/1.1\r\nUser-Agent: new\r\n\r\n"
         );
     }
 

@@ -8,6 +8,7 @@
 //! Everything is non-blocking and returns the payloads to write back, so the
 //! packet loop stays in charge of TCP segmentation and never blocks a syscall.
 
+use crate::engine::StealthConfig;
 use crate::filter::{
     CookiePlan, FilterEngine, HeaderEdit, HlsPlan, HtmlPlan, JsonprunePlan, Replace,
 };
@@ -251,6 +252,10 @@ pub struct ProxySession {
     /// ECH: a server that rejects the offer gets one retry from these. `None`
     /// means the upstream is plain (or already retried once).
     upstream_plain: Option<Arc<tls::UpstreamTls>>,
+    /// Stealth effects this flow applies to its requests and responses,
+    /// snapshotted when the flow opened so a settings change never edits a
+    /// request halfway through.
+    stealth: StealthConfig,
 }
 
 /// Where a connection's response stream stands.
@@ -305,6 +310,9 @@ struct ResponseEdit {
     /// The `$cookie` rules the request matched: the response head loses the
     /// `set-cookie` headers they name.
     cookies: Option<Arc<CookiePlan>>,
+    /// Stealth mode: the request was cross-site, so every `set-cookie` on the
+    /// answer is third-party and must not reach the cookie jar.
+    block_cookies: bool,
     /// The `$jsonprune` rules the request matched: the response body loses
     /// the JSON items they name.
     jsonprune: Option<Arc<JsonprunePlan>>,
@@ -332,6 +340,9 @@ struct RequestPlan {
     /// they name now, and the response may not set them — the same plan
     /// answers both, so it rides along.
     cookies: Option<Arc<CookiePlan>>,
+    /// Stealth mode: the request is cross-site, so its `Cookie` header went
+    /// away and the answer may not set new ones.
+    block_cookies: bool,
     /// The `$jsonprune` rules the request matched: held until the response
     /// body arrives.
     jsonprune: Option<Arc<JsonprunePlan>>,
@@ -633,6 +644,7 @@ impl ProxySession {
             upstream_plain: None,
             client_discard: None,
             apps: Vec::new(),
+            stealth: StealthConfig::default(),
         }
     }
 
@@ -683,6 +695,7 @@ impl ProxySession {
             upstream_plain: None,
             client_discard: None,
             apps: Vec::new(),
+            stealth: StealthConfig::default(),
         })
     }
 
@@ -690,6 +703,12 @@ impl ProxySession {
     /// computed from `filter` and injected alongside the user scripts.
     pub fn set_cosmetic(&mut self, filter: Arc<FilterEngine>) {
         self.cosmetic = Some(filter);
+    }
+
+    /// Enables the stealth request edits for this flow. Decided once, when
+    /// the connection opens, like cosmetics and the app list.
+    pub fn set_stealth(&mut self, stealth: StealthConfig) {
+        self.stealth = stealth;
     }
 
     /// A session for the local injection origin.
@@ -732,6 +751,7 @@ impl ProxySession {
             upstream_plain: None,
             client_discard: None,
             apps: Vec::new(),
+            stealth: StealthConfig::default(),
         })
     }
 
@@ -1100,6 +1120,7 @@ impl ProxySession {
             self.stats.as_deref(),
             self.sink,
             &self.apps,
+            self.stealth,
             &mut self.head_requests,
             &mut outcome,
             &mut self.client_discard,
@@ -1126,6 +1147,7 @@ impl ProxySession {
         stats: Option<&Stats>,
         sink: Option<MitmSink>,
         apps: &[String],
+        stealth: StealthConfig,
         head_requests: &mut VecDeque<ResponseEdit>,
         outcome: &mut Outcome,
         discard: &mut Option<ClientDiscard>,
@@ -1164,6 +1186,10 @@ impl ProxySession {
                 )?;
             }
         }
+        // Stealth edits run after the list rules: a request the engine
+        // answered locally has no head left to edit, and one the rules
+        // rewrote keeps its new target as the base for the tracking strip.
+        Self::apply_stealth(buffer, &mut plan, session_host, stealth);
         // A buffer that starts with a method is a request head, not the tail of
         // a body; only those are safe to edit. Remember what the response will
         // look like (a HEAD has no body, an HTTP/1.0 client cannot take a
@@ -1180,6 +1206,7 @@ impl ProxySession {
                 replace: plan.replace,
                 headers: plan.headers,
                 cookies: plan.cookies,
+                block_cookies: plan.block_cookies,
                 jsonprune: plan.jsonprune,
                 hls: plan.hls,
                 html: plan.html,
@@ -1199,6 +1226,117 @@ impl ProxySession {
             record_tls(stats, started, handshaking);
         }
         Ok(())
+    }
+
+    /// Applies the stealth request edits to the head at the front of `buffer`.
+    ///
+    /// The edits are deliberately after the list rules: a request that was
+    /// answered or redirected here has no head left, and one the rules
+    /// rewrote is stripped on top of its new URL. Only HTTPS flows reach this
+    /// point (the engine terminates nothing else), which is why the UI says
+    /// the three request edits need HTTPS filtering.
+    fn apply_stealth(
+        buffer: &mut Vec<u8>,
+        plan: &mut RequestPlan,
+        session_host: Option<&str>,
+        stealth: StealthConfig,
+    ) {
+        if !(stealth.strips_utm()
+            || stealth.blocks_third_party_cookies()
+            || stealth.disguises_user_agent())
+        {
+            return;
+        }
+        let Some(mut head_end) = header_end(buffer) else {
+            return;
+        };
+        let Some(facts) = request_facts(&buffer[..head_end]) else {
+            return;
+        };
+        if !facts.target.starts_with('/')
+            && !facts.target.starts_with("http://")
+            && !facts.target.starts_with("https://")
+        {
+            return;
+        }
+        let Some(host) = session_host
+            .map(str::to_string)
+            .or_else(|| facts.authority.map(str::to_string))
+            .filter(|host| !host.is_empty())
+        else {
+            return;
+        };
+        // Everything below edits the buffer, so the parsed facts have to be
+        // copied out first.
+        let url = request_url(&facts, &host);
+        let method = facts.method.to_string();
+        let target = facts.target.to_string();
+        let referer = facts.referer.map(str::to_string);
+        let site = facts.site.map(str::to_string);
+
+        if stealth.strips_utm() && rewritable(&method) {
+            if let Some(stripped) = crate::mitm::stealth::strip_tracking_params(&url) {
+                if let Some(new_target) = origin_form(&stripped) {
+                    if new_target != target {
+                        let rebuilt = rebuilt_head(&buffer[..head_end], &new_target);
+                        let old_end = head_end;
+                        head_end = rebuilt.len();
+                        buffer.splice(..old_end, rebuilt);
+                        crate::logbuf::push(&format!(
+                            "mitm {host}: tracking parameters stripped"
+                        ));
+                    }
+                }
+            }
+        }
+
+        if stealth.blocks_third_party_cookies()
+            && crate::mitm::stealth::is_third_party(
+                &host,
+                referer.as_deref(),
+                site.as_deref(),
+            )
+        {
+            if let Some(fixed) = http::drop_headers(&buffer[..head_end], &["cookie".to_string()]) {
+                let old_end = head_end;
+                head_end = fixed.len();
+                buffer.splice(..old_end, fixed);
+                crate::logbuf::push(&format!("mitm {host}: third-party cookies stripped"));
+            }
+            // Even when the request carried none, the answer must not hand
+            // one to a third-party context.
+            plan.block_cookies = true;
+        }
+
+        if stealth.disguises_user_agent() {
+            if let Some(fixed) = http::set_header_value(
+                &buffer[..head_end],
+                "User-Agent",
+                crate::mitm::stealth::DISGUISED_USER_AGENT,
+            ) {
+                let old_end = head_end;
+                head_end = fixed.len();
+                buffer.splice(..old_end, fixed);
+            }
+            let hints: Vec<String> = [
+                "sec-ch-ua",
+                "sec-ch-ua-mobile",
+                "sec-ch-ua-platform",
+                "sec-ch-ua-platform-version",
+                "sec-ch-ua-arch",
+                "sec-ch-ua-bitness",
+                "sec-ch-ua-model",
+                "sec-ch-ua-full-version-list",
+                "sec-ch-ua-full-version",
+                "sec-ch-ua-wow64",
+            ]
+            .iter()
+            .map(|name| (*name).to_string())
+            .collect();
+            if let Some(fixed) = http::drop_headers(&buffer[..head_end], &hints) {
+                buffer.splice(..head_end, fixed);
+            }
+        }
     }
 
     /// Applies the URL-level network rules to the request head at the front of
@@ -1682,6 +1820,7 @@ impl ProxySession {
                 self.stats.as_deref(),
                 self.sink,
                 &self.apps,
+                self.stealth,
                 &mut self.head_requests,
                 &mut outcome,
                 &mut self.client_discard,
@@ -1898,6 +2037,20 @@ impl ProxySession {
                                     edit.rules.len(),
                                 ));
                             }
+                        }
+                    }
+                    // Stealth mode: a cross-site request went out without
+                    // its cookies, so the answer may not hand it new ones.
+                    // A `set-cookie` names one cookie, so the whole line goes.
+                    if req.block_cookies {
+                        if let Some(fixed) =
+                            http::drop_headers(&head, &["set-cookie".to_string()])
+                        {
+                            head = fixed;
+                            let host = self.captured.as_deref().unwrap_or("?");
+                            crate::logbuf::push(&format!(
+                                "mitm {host}: third-party set-cookie dropped"
+                            ));
                         }
                     }
                     // A response to HEAD advertises the length of the body it
@@ -3046,6 +3199,8 @@ pub(super) struct RequestFacts<'a> {
     pub(super) target: &'a str,
     pub(super) authority: Option<&'a str>,
     pub(super) referer: Option<&'a str>,
+    /// `Sec-Fetch-Site`, the browser's own first/third-party verdict.
+    pub(super) site: Option<&'a str>,
     /// `Sec-Fetch-Dest`, the only trustworthy word on what the request is for.
     pub(super) dest: Option<&'a str>,
     /// The body the head announced, when there is one and it said how to
@@ -3095,6 +3250,7 @@ pub(super) fn request_facts(head: &[u8]) -> Option<RequestFacts<'_>> {
         target,
         authority: None,
         referer: None,
+        site: None,
         dest: None,
         body: None,
         closes: false,
@@ -3111,6 +3267,7 @@ pub(super) fn request_facts(head: &[u8]) -> Option<RequestFacts<'_>> {
         match name.to_ascii_lowercase().as_str() {
             "host" => facts.authority = Some(value),
             "referer" => facts.referer = Some(value),
+            "sec-fetch-site" => facts.site = Some(value),
             "sec-fetch-dest" => facts.dest = Some(value),
             "connection" => connection = Some(value),
             "transfer-encoding" => {
@@ -3364,6 +3521,7 @@ mod tests {
             replace: None,
             headers: None,
             cookies: None,
+            block_cookies: false,
             jsonprune: Some(plan),
             hls: None,
             html: None,
@@ -3434,6 +3592,7 @@ mod tests {
             replace: None,
             headers: None,
             cookies: None,
+            block_cookies: false,
             jsonprune: None,
             hls: Some(plan),
             html: None,
@@ -3483,6 +3642,7 @@ mod tests {
             replace: None,
             headers: None,
             cookies: Some(plan),
+            block_cookies: false,
             jsonprune: None,
             hls: None,
             html: None,
@@ -3537,6 +3697,7 @@ mod tests {
                 replace: None,
                 headers: None,
                 cookies: Some(Arc::clone(&plan)),
+                block_cookies: false,
                 jsonprune: None,
                 hls: None,
                 html: None,
@@ -3590,6 +3751,7 @@ mod tests {
                 replace: None,
                 headers: None,
                 cookies: Some(Arc::clone(&plan)),
+                block_cookies: false,
                 jsonprune: None,
                 hls: None,
                 html: None,

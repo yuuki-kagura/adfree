@@ -637,10 +637,14 @@
     <string name="settings_auto_update_off">Tắt</string>
     <string name="settings_auto_update_hours">%1$d giờ</string>
     <string name="settings_stealth_title">Chế độ tàng hình</string>
+    <string name="settings_stealth_master_title">Bật chế độ tàng hình</string>
+    <string name="settings_stealth_master_subtitle">Áp dụng các tuỳ chọn bên dưới cho lưu lượng HTTPS đã lọc</string>
     <string name="settings_stealth_utm_title">Xoá tham số tracking (utm_*, fbclid)</string>
     <string name="settings_stealth_utm_subtitle">Chỉ áp dụng khi bật lọc HTTPS</string>
     <string name="settings_stealth_webrtc_title">Chặn rò rỉ WebRTC</string>
     <string name="settings_stealth_webrtc_subtitle">Ngăn WebRTC leak IP thật</string>
+    <string name="settings_stealth_ua_title">Giả User-Agent</string>
+    <string name="settings_stealth_ua_subtitle">Ẩn model máy và phiên bản trình duyệt</string>
     <string name="settings_stealth_cookies_title">Chặn cookie bên thứ ba</string>
     <string name="settings_stealth_cookies_subtitle">Giảm theo dõi chéo giữa các site</string>
     <string name="settings_lab_title">Phòng thí nghiệm bảo mật</string>
