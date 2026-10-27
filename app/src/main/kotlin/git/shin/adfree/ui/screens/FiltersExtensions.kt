@@ -57,11 +57,13 @@ import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import git.shin.adfree.R
 import git.shin.adfree.model.UserScriptInfo
 import git.shin.adfree.model.UserScriptStoreItem
 import git.shin.adfree.model.UserScriptStoreSort
@@ -126,7 +128,7 @@ fun ScriptTextEditorDialog(
             OutlinedTextField(
                 value = name,
                 onValueChange = { name = it },
-                label = { Text("Tên tiện ích", fontSize = 12.sp) },
+                label = { Text(stringResource(R.string.ext_editor_name_label), fontSize = 12.sp) },
                 singleLine = true,
                 modifier = Modifier.fillMaxWidth(),
                 shape = RoundedCornerShape(10.dp),
@@ -141,7 +143,7 @@ fun ScriptTextEditorDialog(
             OutlinedTextField(
                 value = text,
                 onValueChange = { text = it },
-                label = { Text("Mã nguồn (.user.js)", fontSize = 12.sp) },
+                label = { Text(stringResource(R.string.ext_editor_code_label), fontSize = 12.sp) },
                 modifier = Modifier
                     .fillMaxWidth()
                     .heightIn(min = 260.dp),
@@ -164,7 +166,7 @@ fun ScriptTextEditorDialog(
                     Text(confirmText, color = AdGuardOnAccent, fontWeight = FontWeight.Bold)
                 }
                 TextButton(onClick = onDismiss) {
-                    Text("Hủy", color = AdGuardTextSecondary)
+                    Text(stringResource(R.string.common_cancel), color = AdGuardTextSecondary)
                 }
             }
             Spacer(modifier = Modifier.height(24.dp))
@@ -217,9 +219,14 @@ fun ExtensionsSection(
                 }
                 Spacer(modifier = Modifier.width(12.dp))
                 Column(modifier = Modifier.weight(1f)) {
-                    Text("Tiện ích", fontSize = 13.sp, fontWeight = FontWeight.Bold, color = AdGuardTextPrimary)
                     Text(
-                        "Script theo phạm vi @match / @include",
+                        stringResource(R.string.hub_extensions_title),
+                        fontSize = 13.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = AdGuardTextPrimary,
+                    )
+                    Text(
+                        stringResource(R.string.ext_section_subtitle),
                         fontSize = 11.sp,
                         color = AdGuardTextMuted,
                     )
@@ -229,9 +236,13 @@ fun ExtensionsSection(
                     if (scripts.isNotEmpty()) {
                         Text(
                             text = if (masterEnabled) {
-                                "Bật: ${scripts.count { it.isEnabled }}/${scripts.size} script"
+                                stringResource(
+                                    R.string.ext_enabled_count,
+                                    scripts.count { it.isEnabled },
+                                    scripts.size,
+                                )
                             } else {
-                                "Tắt tổng — không script nào chạy"
+                                stringResource(R.string.hub_extensions_master_off)
                             },
                             fontSize = 11.sp,
                             color = AdGuardTextMuted,
@@ -254,7 +265,7 @@ fun ExtensionsSection(
 
             if (scripts.isEmpty()) {
                 Text(
-                    text = "Chưa có tiện ích nào. Thêm một userscript (.user.js) để bắt đầu.",
+                    text = stringResource(R.string.ext_empty),
                     fontSize = 11.sp,
                     color = AdGuardTextMuted,
                     modifier = Modifier.padding(horizontal = 14.dp, vertical = 12.dp),
@@ -280,7 +291,12 @@ fun ExtensionsSection(
                 ) {
                     Icon(Icons.Default.Add, contentDescription = null, tint = AdGuardGreenLight, modifier = Modifier.size(16.dp))
                     Spacer(modifier = Modifier.width(6.dp))
-                    Text("Thêm tiện ích", fontSize = 12.sp, fontWeight = FontWeight.Bold, color = AdGuardGreenLight)
+                    Text(
+                        stringResource(R.string.ext_add),
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = AdGuardGreenLight,
+                    )
                 }
                 TextButton(
                     onClick = onOpenStore,
@@ -288,7 +304,12 @@ fun ExtensionsSection(
                 ) {
                     Icon(Icons.Default.Search, contentDescription = null, tint = AdGuardBlueDns, modifier = Modifier.size(16.dp))
                     Spacer(modifier = Modifier.width(6.dp))
-                    Text("Kho tiện ích", fontSize = 12.sp, fontWeight = FontWeight.Bold, color = AdGuardBlueDns)
+                    Text(
+                        stringResource(R.string.ext_store),
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = AdGuardBlueDns,
+                    )
                 }
             }
         }
@@ -322,9 +343,14 @@ fun UserScriptStoreSheet(
             Icon(Icons.Default.Search, contentDescription = null, tint = AdGuardBlueDns, modifier = Modifier.size(22.dp))
             Spacer(modifier = Modifier.width(8.dp))
             Column {
-                Text("Kho tiện ích", fontSize = 17.sp, fontWeight = FontWeight.Bold, color = AdGuardTextPrimary)
                 Text(
-                    "Tìm trên Greasy Fork • script tự chạy theo @match",
+                    stringResource(R.string.ext_store),
+                    fontSize = 17.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = AdGuardTextPrimary,
+                )
+                Text(
+                    stringResource(R.string.ext_store_subtitle),
                     fontSize = 11.sp,
                     color = AdGuardTextMuted,
                 )
@@ -333,8 +359,7 @@ fun UserScriptStoreSheet(
 
         Spacer(modifier = Modifier.height(10.dp))
         Text(
-            "Script chạy mã của tác giả trong trang. Chỉ cài khi bạn tin tưởng nguồn; " +
-                "GM_xmlhttpRequest/GM_download vẫn theo CORS của trang, GM_setValue và @resource chưa hỗ trợ.",
+            stringResource(R.string.ext_store_note),
             fontSize = 11.sp,
             color = AdGuardTextMuted,
         )
@@ -343,7 +368,13 @@ fun UserScriptStoreSheet(
         OutlinedTextField(
             value = state.query,
             onValueChange = onQueryChange,
-            placeholder = { Text("Tìm script…", fontSize = 12.sp, color = AdGuardTextMuted) },
+            placeholder = {
+                Text(
+                    stringResource(R.string.ext_store_search_hint),
+                    fontSize = 12.sp,
+                    color = AdGuardTextMuted,
+                )
+            },
             leadingIcon = {
                 Icon(Icons.Default.Search, contentDescription = null, tint = AdGuardTextMuted, modifier = Modifier.size(18.dp))
             },
@@ -367,17 +398,17 @@ fun UserScriptStoreSheet(
             horizontalArrangement = Arrangement.spacedBy(6.dp),
         ) {
             listOf(
-                UserScriptStoreSort.RELEVANCE to "Mặc định",
-                UserScriptStoreSort.DAILY_INSTALLS to "Cài/ngày",
-                UserScriptStoreSort.TOTAL_INSTALLS to "Tổng cài",
-                UserScriptStoreSort.RATINGS to "Đánh giá",
-                UserScriptStoreSort.UPDATED to "Mới cập nhật",
-                UserScriptStoreSort.NAME to "Tên A-Z",
+                UserScriptStoreSort.RELEVANCE to R.string.ext_sort_relevance,
+                UserScriptStoreSort.DAILY_INSTALLS to R.string.ext_sort_daily,
+                UserScriptStoreSort.TOTAL_INSTALLS to R.string.ext_sort_total,
+                UserScriptStoreSort.RATINGS to R.string.ext_sort_ratings,
+                UserScriptStoreSort.UPDATED to R.string.ext_sort_updated,
+                UserScriptStoreSort.NAME to R.string.ext_sort_name,
             ).forEach { (sort, label) ->
                 FilterChip(
                     selected = state.sort == sort,
                     onClick = { onSortChange(sort) },
-                    label = { Text(label, fontSize = 10.sp) },
+                    label = { Text(stringResource(label), fontSize = 10.sp) },
                     colors = FilterChipDefaults.filterChipColors(
                         selectedContainerColor = AdGuardGreenPrimary,
                         selectedLabelColor = AdGuardOnAccent,
@@ -394,12 +425,20 @@ fun UserScriptStoreSheet(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.SpaceBetween,
             ) {
-                Text("Trang ${state.page}", fontSize = 10.sp, color = AdGuardTextMuted)
+                Text(
+                    stringResource(R.string.ext_store_page, state.page),
+                    fontSize = 10.sp,
+                    color = AdGuardTextMuted,
+                )
                 TextButton(
                     onClick = onFirstPage,
                     modifier = Modifier.testTag("script_store_first_page"),
                 ) {
-                    Text("Về trang 1", fontSize = 11.sp, color = AdGuardGreenLight)
+                    Text(
+                        stringResource(R.string.ext_store_first_page),
+                        fontSize = 11.sp,
+                        color = AdGuardGreenLight,
+                    )
                 }
             }
         }
@@ -425,13 +464,17 @@ fun UserScriptStoreSheet(
             state.error != null && state.items.isEmpty() -> {
                 Text(state.error, fontSize = 11.sp, color = AdGuardRedBlocked)
                 TextButton(onClick = onRetry) {
-                    Text("Thử lại", fontSize = 12.sp, color = AdGuardGreenLight)
+                    Text(
+                        stringResource(R.string.ext_retry),
+                        fontSize = 12.sp,
+                        color = AdGuardGreenLight,
+                    )
                 }
             }
 
             state.items.isEmpty() -> {
                 Text(
-                    "Không tìm thấy tiện ích phù hợp.",
+                    stringResource(R.string.ext_store_empty),
                     fontSize = 11.sp,
                     color = AdGuardTextMuted,
                     modifier = Modifier.padding(vertical = 16.dp),
@@ -485,7 +528,11 @@ fun UserScriptStoreSheet(
                                         onClick = onLoadMore,
                                         modifier = Modifier.testTag("script_store_load_more"),
                                     ) {
-                                        Text("Tải thêm", fontSize = 12.sp, color = AdGuardGreenLight)
+                                        Text(
+                                            stringResource(R.string.ext_load_more),
+                                            fontSize = 12.sp,
+                                            color = AdGuardGreenLight,
+                                        )
                                     }
                                 }
                             }
@@ -537,7 +584,12 @@ private fun StoreScriptRow(
                     Spacer(modifier = Modifier.height(5.dp))
                     val bits = buildList {
                         if (item.version.isNotBlank()) add("v${item.version}")
-                        if (item.totalInstalls > 0) add("${storeInstallsText(item.totalInstalls)} lượt cài")
+                        if (item.totalInstalls > 0) add(
+                            stringResource(
+                                R.string.ext_installs,
+                                storeInstallsText(item.totalInstalls),
+                            )
+                        )
                         if (item.codeSizeBytes > 0) add("${item.codeSizeBytes / 1024} KB")
                         if (item.license.isNotBlank()) add(item.license)
                     }
@@ -558,7 +610,12 @@ private fun StoreScriptRow(
                         colors = ButtonDefaults.buttonColors(containerColor = AdGuardGreenPrimary),
                         shape = RoundedCornerShape(8.dp),
                     ) {
-                        Text("Cài", color = AdGuardOnAccent, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                        Text(
+                            stringResource(R.string.ext_install),
+                            color = AdGuardOnAccent,
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.Bold,
+                        )
                     }
 
                     installed.isEnabled && installed.sizeBytes > 0 -> OutlinedButton(
@@ -566,7 +623,7 @@ private fun StoreScriptRow(
                         enabled = false,
                         shape = RoundedCornerShape(8.dp),
                     ) {
-                        Text("Đang bật", fontSize = 11.sp)
+                        Text(stringResource(R.string.ext_enabled), fontSize = 11.sp)
                     }
 
                     else -> OutlinedButton(
@@ -574,7 +631,8 @@ private fun StoreScriptRow(
                         shape = RoundedCornerShape(8.dp),
                     ) {
                         Text(
-                            if (installed.isEnabled) "Tải lại" else "Bật",
+                            if (installed.isEnabled) stringResource(R.string.ext_reload)
+                            else stringResource(R.string.ext_turn_on),
                             fontSize = 11.sp,
                             color = AdGuardGreenLight,
                         )
@@ -584,7 +642,7 @@ private fun StoreScriptRow(
             if (item.pageUrl.isNotBlank()) {
                 Spacer(modifier = Modifier.height(4.dp))
                 Text(
-                    text = "Nguồn Greasy Fork",
+                    text = stringResource(R.string.ext_store_source),
                     fontSize = 10.sp,
                     color = AdGuardBlueDns,
                     modifier = Modifier.clickable { onOpenPage() },
@@ -609,9 +667,16 @@ private fun ScriptRow(
     onClick: () -> Unit,
 ) {
     val meta = when {
-        script.isBuiltin -> "Cài sẵn trong ứng dụng • ${script.lastUpdatedText}"
-        script.sizeBytes > 0 -> "${script.sizeBytes / 1024} KB • ${script.lastUpdatedText}"
-        else -> "Chưa tải • Bật để tải về"
+        script.isBuiltin -> stringResource(
+            R.string.ext_builtin_meta,
+            script.lastUpdatedText,
+        )
+        script.sizeBytes > 0 -> stringResource(
+            R.string.ext_size_meta,
+            script.sizeBytes / 1024,
+            script.lastUpdatedText,
+        )
+        else -> stringResource(R.string.ext_not_downloaded_meta)
     }
 
     Row(
@@ -658,18 +723,18 @@ fun AddScriptDialog(
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Icon(Icons.Default.Extension, contentDescription = null, tint = AdGuardPurpleAI, modifier = Modifier.size(22.dp))
                 Spacer(modifier = Modifier.width(8.dp))
-                Text("Thêm tiện ích", fontSize = 17.sp, fontWeight = FontWeight.Bold, color = AdGuardTextPrimary)
+                Text(
+                    stringResource(R.string.ext_add),
+                    fontSize = 17.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = AdGuardTextPrimary,
+                )
             }
         },
         text = {
             Column {
                 Text(
-                    text = "Dán đường dẫn tới tệp userscript (.user.js). AdFree đọc @match, " +
-                        "@include, @exclude, @run-at, @noframes và tải @require khi cài từ URL " +
-                        "(tệp nhập tay giữ nguyên nội dung, @require không tự tải). " +
-                        "Hỗ trợ unsafeWindow, GM_addStyle, GM_log, GM_info, GM_xmlhttpRequest/" +
-                        "GM_download (theo CORS của trang), GM_openInTab, GM_notification, " +
-                        "GM_setClipboard, GM_addElement; GM_setValue và @resource chưa hỗ trợ.",
+                    text = stringResource(R.string.ext_add_body),
                     fontSize = 12.sp,
                     color = AdGuardTextSecondary,
                 )
@@ -685,8 +750,7 @@ fun AddScriptDialog(
                     )
                     Spacer(modifier = Modifier.width(6.dp))
                     Text(
-                        text = "Tiện ích đọc và sửa được nội dung trang nó chạy trên. " +
-                            "Chỉ cài từ nguồn bạn tin cậy.",
+                        text = stringResource(R.string.ext_security_warning),
                         fontSize = 11.sp,
                         color = AdGuardOrangeWarning,
                     )
@@ -695,7 +759,7 @@ fun AddScriptDialog(
                 OutlinedTextField(
                     value = name,
                     onValueChange = { name = it },
-                    label = { Text("Tên (không bắt buộc)", fontSize = 12.sp) },
+                    label = { Text(stringResource(R.string.ext_name_optional), fontSize = 12.sp) },
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth(),
                     shape = RoundedCornerShape(10.dp),
@@ -710,7 +774,7 @@ fun AddScriptDialog(
                 OutlinedTextField(
                     value = url,
                     onValueChange = { url = it },
-                    label = { Text("Đường dẫn (.user.js)", fontSize = 12.sp) },
+                    label = { Text(stringResource(R.string.ext_url_label), fontSize = 12.sp) },
                     placeholder = { Text("https://…", fontSize = 12.sp, color = AdGuardTextMuted) },
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth(),
@@ -725,14 +789,22 @@ fun AddScriptDialog(
                 Spacer(modifier = Modifier.height(8.dp))
                 Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                     OutlinedButton(onClick = onImportFile, shape = RoundedCornerShape(8.dp)) {
-                        Text("Chọn tệp", fontSize = 11.sp, color = AdGuardGreenLight)
+                        Text(
+                            stringResource(R.string.ext_pick_file),
+                            fontSize = 11.sp,
+                            color = AdGuardGreenLight,
+                        )
                     }
                     OutlinedButton(onClick = onCreate, shape = RoundedCornerShape(8.dp)) {
-                        Text("Tạo mới", fontSize = 11.sp, color = AdGuardBlueDns)
+                        Text(
+                            stringResource(R.string.ext_create_new),
+                            fontSize = 11.sp,
+                            color = AdGuardBlueDns,
+                        )
                     }
                 }
                 Text(
-                    "Lưu ý: tiện ích có thể truy cập dữ liệu trang — chỉ cài những script bạn hiểu và tin cậy.",
+                    stringResource(R.string.ext_add_footnote),
                     fontSize = 11.sp,
                     color = AdGuardTextMuted,
                 )
@@ -745,12 +817,16 @@ fun AddScriptDialog(
                 colors = ButtonDefaults.buttonColors(containerColor = AdGuardGreenPrimary),
                 shape = RoundedCornerShape(8.dp),
             ) {
-                Text("Thêm và tải", color = AdGuardOnAccent, fontWeight = FontWeight.Bold)
+                Text(
+                    stringResource(R.string.ext_add_download),
+                    color = AdGuardOnAccent,
+                    fontWeight = FontWeight.Bold,
+                )
             }
         },
         dismissButton = {
             OutlinedButton(onClick = onDismiss, shape = RoundedCornerShape(8.dp)) {
-                Text("Hủy", color = AdGuardTextSecondary)
+                Text(stringResource(R.string.common_cancel), color = AdGuardTextSecondary)
             }
         },
     )
@@ -782,14 +858,19 @@ fun ScriptDetailSheet(
 
         Row(verticalAlignment = Alignment.CenterVertically) {
             Column(modifier = Modifier.weight(1f)) {
-                Text("Bật tiện ích này", fontSize = 13.sp, fontWeight = FontWeight.Bold, color = AdGuardTextPrimary)
+                Text(
+                    stringResource(R.string.ext_detail_enable_title),
+                    fontSize = 13.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = AdGuardTextPrimary,
+                )
                 Text(
                     text = when {
                         // The master gate beats the per-script flag: say it
                         // out loud instead of "Đang chạy" with nothing running.
-                        !masterEnabled -> "Tiện ích bị tắt tổng — không script nào chạy"
-                        script.isEnabled -> "Đang chạy khi lọc HTTPS bật"
-                        else -> "Đang tắt"
+                        !masterEnabled -> stringResource(R.string.ext_detail_master_off)
+                        script.isEnabled -> stringResource(R.string.ext_detail_running)
+                        else -> stringResource(R.string.ext_detail_off)
                     },
                     fontSize = 11.sp,
                     color = AdGuardTextMuted,
@@ -805,31 +886,41 @@ fun ScriptDetailSheet(
 
         Spacer(modifier = Modifier.height(12.dp))
 
-        ScriptInfoRow("Kích thước", if (script.sizeBytes > 0) "${script.sizeBytes / 1024} KB" else "Chưa tải")
-        ScriptInfoRow("Cập nhật", script.lastUpdatedText)
+        ScriptInfoRow(
+            stringResource(R.string.ext_detail_size),
+            if (script.sizeBytes > 0) "${script.sizeBytes / 1024} KB"
+            else stringResource(R.string.filter_not_loaded),
+        )
+        ScriptInfoRow(stringResource(R.string.ext_detail_updated), script.lastUpdatedText)
 
         // Header fields are what tells a user whether a script touches more
         // than the page it was installed for. Show them only when present.
         if (script.metadata.version.isNotBlank()) {
-            ScriptInfoRow("Phiên bản", script.metadata.version)
+            ScriptInfoRow(stringResource(R.string.ext_detail_version), script.metadata.version)
         }
         if (script.metadata.runAt.isNotBlank()) {
-            ScriptInfoRow("Chạy ở", runAtLabel(script.metadata.runAt))
+            ScriptInfoRow(
+                stringResource(R.string.ext_detail_run_at),
+                runAtLabel(script.metadata.runAt),
+            )
         }
         if (script.metadata.patterns.isNotEmpty()) {
             val shown = script.metadata.patterns.take(3)
             val extra = script.metadata.patterns.size - shown.size
             ScriptInfoRow(
-                "Trang áp dụng",
+                stringResource(R.string.ext_detail_patterns),
                 buildString {
                     append(shown.joinToString("\n"))
-                    if (extra > 0) append("\n+$extra mẫu nữa")
+                    if (extra > 0) {
+                        append('\n')
+                        append(stringResource(R.string.ext_detail_more_patterns, extra))
+                    }
                 },
             )
         }
         val grants = script.metadata.grants.filter { it != "none" }
         if (grants.isNotEmpty()) {
-            ScriptInfoRow("Quyền", grants.joinToString(" · "))
+            ScriptInfoRow(stringResource(R.string.ext_detail_grants), grants.joinToString(" · "))
         }
         if (script.metadata.hasBroadAccess) {
             Spacer(modifier = Modifier.height(6.dp))
@@ -842,8 +933,7 @@ fun ScriptDetailSheet(
                 )
                 Spacer(modifier = Modifier.width(6.dp))
                 Text(
-                    text = "Script dùng API vượt phạm vi trang (GM_xmlhttpRequest, unsafeWindow…). " +
-                        "Chỉ nên bật khi bạn tin nguồn phát hành.",
+                    text = stringResource(R.string.ext_broad_warning),
                     fontSize = 11.sp,
                     color = AdGuardOrangeWarning,
                 )
@@ -853,7 +943,7 @@ fun ScriptDetailSheet(
         Spacer(modifier = Modifier.height(6.dp))
         if (script.isBuiltin) {
             Text(
-                text = "Đi kèm ứng dụng, cập nhật theo bản phát hành.",
+                text = stringResource(R.string.ext_bundled),
                 fontSize = 11.sp,
                 color = AdGuardTextMuted,
             )
@@ -875,19 +965,31 @@ fun ScriptDetailSheet(
                 OutlinedButton(onClick = onRefresh, shape = RoundedCornerShape(10.dp)) {
                     Icon(Icons.Default.Sync, contentDescription = null, tint = AdGuardGreenLight, modifier = Modifier.size(16.dp))
                     Spacer(modifier = Modifier.width(6.dp))
-                    Text("Cập nhật", fontSize = 12.sp, color = AdGuardGreenLight)
+                    Text(
+                        stringResource(R.string.ext_update),
+                        fontSize = 12.sp,
+                        color = AdGuardGreenLight,
+                    )
                 }
             }
             if (script.isUserAdded) {
                 OutlinedButton(onClick = onEdit, shape = RoundedCornerShape(10.dp)) {
                     Icon(Icons.Default.Edit, contentDescription = null, tint = AdGuardBlueDns, modifier = Modifier.size(16.dp))
                     Spacer(modifier = Modifier.width(6.dp))
-                    Text("Sửa mã", fontSize = 12.sp, color = AdGuardBlueDns)
+                    Text(
+                        stringResource(R.string.ext_edit_code),
+                        fontSize = 12.sp,
+                        color = AdGuardBlueDns,
+                    )
                 }
                 OutlinedButton(onClick = onDelete, shape = RoundedCornerShape(10.dp)) {
                     Icon(Icons.Default.Delete, contentDescription = null, tint = AdGuardRedBlocked, modifier = Modifier.size(16.dp))
                     Spacer(modifier = Modifier.width(6.dp))
-                    Text("Xóa", fontSize = 12.sp, color = AdGuardRedBlocked)
+                    Text(
+                        stringResource(R.string.ext_delete),
+                        fontSize = 12.sp,
+                        color = AdGuardRedBlocked,
+                    )
                 }
             }
         }
@@ -907,10 +1009,11 @@ private fun ScriptInfoRow(label: String, value: String) {
 }
 
 /** `@run-at` value → words a user can act on. */
+@Composable
 private fun runAtLabel(value: String): String = when (value.lowercase()) {
-    "document-start" -> "Trước khi trang tải"
-    "document-end" -> "Sau khi trang tải"
-    "document-idle" -> "Khi trang rảnh"
-    "document-body" -> "Khi trang có <body>"
+    "document-start" -> stringResource(R.string.ext_run_at_start)
+    "document-end" -> stringResource(R.string.ext_run_at_end)
+    "document-idle" -> stringResource(R.string.ext_run_at_idle)
+    "document-body" -> stringResource(R.string.ext_run_at_body)
     else -> value
 }

@@ -82,12 +82,14 @@ import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import git.shin.adfree.R
 import git.shin.adfree.data.FilterGroup
 import git.shin.adfree.data.ModuleGate
 import git.shin.adfree.data.moduleGate
@@ -183,31 +185,44 @@ fun FiltersScreen(
                     IconButton(onClick = it) {
                         Icon(
                             imageVector = Icons.AutoMirrored.Filled.ArrowBack,
-                            contentDescription = "Quay lại",
+                            contentDescription = stringResource(R.string.hub_back),
                             tint = AdGuardTextPrimary,
                         )
                     }
                 }
                 Column(modifier = Modifier.weight(1f)) {
                     Text(
-                        text = "Bộ lọc",
+                        text = stringResource(R.string.nav_filters),
                         fontSize = 19.sp,
                         fontWeight = FontWeight.Bold,
                         color = AdGuardTextPrimary,
                     )
                     Text(
-                        text = "$enabledCount bộ lọc đang bật • ${"%,d".format(totalRules)} quy tắc",
+                        text = stringResource(
+                            R.string.hub_filters_subtitle,
+                            enabledCount,
+                            "%,d".format(totalRules),
+                        ),
                         fontSize = 12.sp,
                         color = AdGuardTextMuted,
                     )
                 }
                 Box {
                     IconButton(onClick = { showOverflow = true }) {
-                        Icon(Icons.Default.MoreVert, contentDescription = "Tuỳ chọn", tint = AdGuardTextSecondary)
+                        Icon(
+                            Icons.Default.MoreVert,
+                            contentDescription = stringResource(R.string.filters_more_options),
+                            tint = AdGuardTextSecondary,
+                        )
                     }
                     DropdownMenu(expanded = showOverflow, onDismissRequest = { showOverflow = false }) {
                         DropdownMenuItem(
-                            text = { Text("Khôi phục mặc định", fontSize = 13.sp) },
+                            text = {
+                                Text(
+                                    stringResource(R.string.filters_restore_defaults),
+                                    fontSize = 13.sp,
+                                )
+                            },
                             onClick = {
                                 showOverflow = false
                                 showResetConfirm = true
@@ -217,7 +232,12 @@ fun FiltersScreen(
                             },
                         )
                         DropdownMenuItem(
-                            text = { Text("Trợ giúp & thiết kế", fontSize = 13.sp) },
+                            text = {
+                                Text(
+                                    stringResource(R.string.filters_help_design),
+                                    fontSize = 13.sp,
+                                )
+                            },
                             onClick = {
                                 showOverflow = false
                                 runCatching {
@@ -265,7 +285,7 @@ fun FiltersScreen(
                         ) {
                             Icon(
                                 Icons.Default.Close,
-                                contentDescription = "Đóng thông báo",
+                                contentDescription = stringResource(R.string.filters_dismiss_banner),
                                 tint = AdGuardTextMuted,
                                 modifier = Modifier.size(16.dp),
                             )
@@ -288,7 +308,12 @@ fun FiltersScreen(
                 ) {
                     Icon(Icons.Default.Add, contentDescription = null, tint = AdGuardBlueDns, modifier = Modifier.size(16.dp))
                     Spacer(modifier = Modifier.width(6.dp))
-                    Text("Thêm bộ lọc", fontSize = 12.sp, fontWeight = FontWeight.Bold, color = AdGuardTextPrimary)
+                    Text(
+                        stringResource(R.string.filters_add),
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = AdGuardTextPrimary,
+                    )
                 }
 
                 OutlinedButton(
@@ -300,13 +325,17 @@ fun FiltersScreen(
                 ) {
                     Icon(
                         imageVector = Icons.Default.Sync,
-                        contentDescription = "Cập nhật",
+                        contentDescription = stringResource(R.string.filters_refresh),
                         tint = AdGuardGreenLight,
                         modifier = Modifier.size(16.dp),
                     )
                     Spacer(modifier = Modifier.width(6.dp))
                     Text(
-                        text = if (state.loadingMessage == null) "Cập nhật" else "Đang tải…",
+                        text = if (state.loadingMessage == null) {
+                            stringResource(R.string.filters_refresh)
+                        } else {
+                            stringResource(R.string.filters_refreshing)
+                        },
                         fontSize = 12.sp,
                         fontWeight = FontWeight.Bold,
                         color = AdGuardGreenLight,
@@ -323,7 +352,13 @@ fun FiltersScreen(
                     .fillMaxWidth()
                     .testTag("filter_search_field"),
                 singleLine = true,
-                placeholder = { Text("Tìm bộ lọc theo tên, mô tả hoặc URL…", color = AdGuardTextMuted, fontSize = 13.sp) },
+                placeholder = {
+                    Text(
+                        stringResource(R.string.filters_search_hint),
+                        color = AdGuardTextMuted,
+                        fontSize = 13.sp,
+                    )
+                },
                 leadingIcon = { Icon(Icons.Default.Search, contentDescription = null, tint = AdGuardTextMuted, modifier = Modifier.size(18.dp)) },
                 trailingIcon = if (query.isBlank()) {
                     null
@@ -337,7 +372,7 @@ fun FiltersScreen(
                         ) {
                             Icon(
                                 Icons.Default.Close,
-                                contentDescription = "Xóa tìm kiếm",
+                                contentDescription = stringResource(R.string.filters_clear_search),
                                 tint = AdGuardTextMuted,
                                 modifier = Modifier.size(16.dp),
                             )
@@ -447,10 +482,17 @@ fun FiltersScreen(
             if (showDeleteConfirm) {
                 AlertDialog(
                     onDismissRequest = { showDeleteConfirm = false },
-                    title = { Text("Xóa bộ lọc?", fontSize = 17.sp, fontWeight = FontWeight.Bold, color = AdGuardTextPrimary) },
+                    title = {
+                        Text(
+                            stringResource(R.string.filters_delete_title),
+                            fontSize = 17.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = AdGuardTextPrimary,
+                        )
+                    },
                     text = {
                         Text(
-                            "Bộ lọc «${list.name}» và nội dung đã tải của nó bị xóa, không thể hoàn tác.",
+                            stringResource(R.string.filters_delete_body, list.name),
                             fontSize = 12.sp,
                             color = AdGuardTextSecondary,
                         )
@@ -461,12 +503,21 @@ fun FiltersScreen(
                             viewModel.onIntent(AdGuardIntent.DeleteFilterList(list.id))
                             viewModel.onIntent(AdGuardIntent.InspectFilter(null))
                         }) {
-                            Text("Xóa", fontSize = 13.sp, fontWeight = FontWeight.Bold, color = AdGuardRedBlocked)
+                            Text(
+                                stringResource(R.string.ext_delete),
+                                fontSize = 13.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = AdGuardRedBlocked,
+                            )
                         }
                     },
                     dismissButton = {
                         TextButton(onClick = { showDeleteConfirm = false }) {
-                            Text("Hủy", fontSize = 13.sp, color = AdGuardTextSecondary)
+                            Text(
+                                stringResource(R.string.common_cancel),
+                                fontSize = 13.sp,
+                                color = AdGuardTextSecondary,
+                            )
                         }
                     },
                 )
@@ -487,25 +538,32 @@ fun FiltersScreen(
     if (showResetConfirm) {
         AlertDialog(
             onDismissRequest = { showResetConfirm = false },
-            title = { Text("Khôi phục mặc định?", fontSize = 17.sp, fontWeight = FontWeight.Bold, color = AdGuardTextPrimary) },
+            title = {
+                Text(
+                    stringResource(R.string.filters_reset_title),
+                    fontSize = 17.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = AdGuardTextPrimary,
+                )
+            },
             text = {
                 Column {
                     // AdGuard lists the scope and the consequences before the
                     // destructive word; here the reset is honestly narrow.
                     Text(
-                        "Các danh sách catalogue sẽ bật/tắt về đúng cấu hình mặc định của ứng dụng.",
+                        stringResource(R.string.filters_reset_scope),
                         fontSize = 12.sp,
                         color = AdGuardTextSecondary,
                     )
                     Spacer(modifier = Modifier.height(6.dp))
                     Text(
-                        "Danh sách được bật lại sẽ tự tải về nếu máy chưa có nội dung.",
+                        stringResource(R.string.filters_reset_download),
                         fontSize = 12.sp,
                         color = AdGuardTextSecondary,
                     )
                     Spacer(modifier = Modifier.height(6.dp))
                     Text(
-                        "Bộ lọc tùy chỉnh, tiện ích và Quy tắc của bạn không bị thay đổi.",
+                        stringResource(R.string.filters_reset_keep),
                         fontSize = 12.sp,
                         color = AdGuardTextMuted,
                     )
@@ -516,12 +574,21 @@ fun FiltersScreen(
                     showResetConfirm = false
                     viewModel.onIntent(AdGuardIntent.RestoreDefaultFilters)
                 }) {
-                    Text("Khôi phục", fontSize = 13.sp, fontWeight = FontWeight.Bold, color = AdGuardRedBlocked)
+                    Text(
+                        stringResource(R.string.filters_reset_confirm),
+                        fontSize = 13.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = AdGuardRedBlocked,
+                    )
                 }
             },
             dismissButton = {
                 TextButton(onClick = { showResetConfirm = false }) {
-                    Text("Hủy", fontSize = 13.sp, color = AdGuardTextSecondary)
+                    Text(
+                        stringResource(R.string.common_cancel),
+                        fontSize = 13.sp,
+                        color = AdGuardTextSecondary,
+                    )
                 }
             },
         )
@@ -666,20 +733,28 @@ private fun FilterGroupCard(
                 ) {
                     Column(modifier = Modifier.weight(1f)) {
                         Text(
-                            "Không hoạt động",
+                            stringResource(R.string.filters_inactive_title),
                             fontSize = 12.sp,
                             fontWeight = FontWeight.Bold,
                             color = AdGuardRedBlocked,
                         )
                         Text(
-                            "«${group.title}» có bộ lọc đang bật nhưng module " +
-                                "«${gate?.title}» đang tắt — không req nào của nhóm này bị lọc",
+                            stringResource(
+                                R.string.filters_inactive_body,
+                                group.title,
+                                gate?.title.orEmpty(),
+                            ),
                             fontSize = 11.sp,
                             color = AdGuardTextMuted,
                         )
                     }
                     TextButton(onClick = onEnableModule) {
-                        Text("Bật", fontSize = 12.sp, fontWeight = FontWeight.Bold, color = AdGuardGreenLight)
+                        Text(
+                            stringResource(R.string.filters_enable_module),
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = AdGuardGreenLight,
+                        )
                     }
                 }
             }
@@ -721,7 +796,11 @@ private fun FilterRow(
                 overflow = TextOverflow.Ellipsis,
             )
             Text(
-                text = "${"%,d".format(list.ruleCount)} quy tắc • ${list.lastUpdatedText}",
+                text = stringResource(
+                    R.string.filters_row_meta,
+                    "%,d".format(list.ruleCount),
+                    list.lastUpdatedText,
+                ),
                 fontSize = 11.sp,
                 color = AdGuardTextMuted,
             )
@@ -730,7 +809,7 @@ private fun FilterRow(
             // before the first download, no more faked "standard").
             if (list.version.isNotBlank()) {
                 Text(
-                    text = "Phiên bản ${list.version}",
+                    text = stringResource(R.string.filters_row_version, list.version),
                     fontSize = 11.sp,
                     color = AdGuardTextMuted,
                     maxLines = 1,
@@ -742,7 +821,7 @@ private fun FilterRow(
             // inactive-filters banner.
             if (list.lastError.isNotBlank()) {
                 Text(
-                    text = "Lỗi: ${list.lastError}",
+                    text = stringResource(R.string.filters_row_error, list.lastError),
                     fontSize = 11.sp,
                     color = AdGuardRedBlocked,
                     maxLines = 2,
@@ -776,14 +855,14 @@ private fun SearchEmptyCard(
     ) {
         Column(modifier = Modifier.padding(16.dp)) {
             Text(
-                text = "Không tìm thấy bộ lọc",
+                text = stringResource(R.string.filters_search_empty_title),
                 fontSize = 13.sp,
                 fontWeight = FontWeight.Bold,
                 color = AdGuardTextPrimary,
             )
             Spacer(modifier = Modifier.height(2.dp))
             Text(
-                text = "Không có bộ lọc nào khớp «$query». Từ khóa được so với tên, mô tả và URL nguồn.",
+                text = stringResource(R.string.filters_search_empty_body, query),
                 fontSize = 11.sp,
                 color = AdGuardTextMuted,
             )
@@ -791,7 +870,12 @@ private fun SearchEmptyCard(
                 onClick = onClear,
                 modifier = Modifier.padding(top = 4.dp),
             ) {
-                Text("Xóa tìm kiếm", fontSize = 12.sp, fontWeight = FontWeight.Bold, color = AdGuardGreenLight)
+                Text(
+                    stringResource(R.string.filters_clear_search),
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = AdGuardGreenLight,
+                )
             }
         }
     }
@@ -830,9 +914,14 @@ private fun CustomFiltersCard(
                 }
                 Spacer(modifier = Modifier.width(12.dp))
                 Column(modifier = Modifier.weight(1f)) {
-                    Text("Bộ lọc tùy chỉnh", fontSize = 13.sp, fontWeight = FontWeight.Bold, color = AdGuardTextPrimary)
                     Text(
-                        "Danh sách bạn tự thêm từ URL hoặc tệp trong máy",
+                        stringResource(R.string.filters_custom_title),
+                        fontSize = 13.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = AdGuardTextPrimary,
+                    )
+                    Text(
+                        stringResource(R.string.filters_custom_subtitle),
                         fontSize = 11.sp,
                         color = AdGuardTextMuted,
                     )
@@ -841,7 +930,7 @@ private fun CustomFiltersCard(
 
             if (lists.isEmpty()) {
                 Text(
-                    text = "Chưa có bộ lọc tùy chỉnh nào.",
+                    text = stringResource(R.string.filters_custom_empty),
                     fontSize = 11.sp,
                     color = AdGuardTextMuted,
                     modifier = Modifier.padding(horizontal = 14.dp),
@@ -862,7 +951,12 @@ private fun CustomFiltersCard(
             ) {
                 Icon(Icons.Default.Add, contentDescription = null, tint = AdGuardBlueDns, modifier = Modifier.size(16.dp))
                 Spacer(modifier = Modifier.width(6.dp))
-                Text("Thêm bộ lọc", fontSize = 12.sp, fontWeight = FontWeight.Bold, color = AdGuardBlueDns)
+                Text(
+                    stringResource(R.string.filters_add),
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = AdGuardBlueDns,
+                )
             }
         }
     }
@@ -900,8 +994,17 @@ private fun UserRulesCard(
             }
             Spacer(modifier = Modifier.width(12.dp))
             Column(modifier = Modifier.weight(1f)) {
-                Text("Quy tắc của bạn", fontSize = 13.sp, fontWeight = FontWeight.Bold, color = AdGuardTextPrimary)
-                Text("$count quy tắc • $allowCount ngoại lệ", fontSize = 11.sp, color = AdGuardTextMuted)
+                Text(
+                    stringResource(R.string.filters_user_rules_title),
+                    fontSize = 13.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = AdGuardTextPrimary,
+                )
+                Text(
+                    stringResource(R.string.filters_user_rules_meta, count, allowCount),
+                    fontSize = 11.sp,
+                    color = AdGuardTextMuted,
+                )
             }
             Icon(Icons.Default.ChevronRight, contentDescription = null, tint = AdGuardTextMuted, modifier = Modifier.size(20.dp))
         }
@@ -925,20 +1028,29 @@ private fun AddFilterDialog(
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Icon(Icons.Default.Public, contentDescription = null, tint = AdGuardBlueDns, modifier = Modifier.size(22.dp))
                 Spacer(modifier = Modifier.width(8.dp))
-                Text("Thêm bộ lọc tùy chỉnh", fontSize = 17.sp, fontWeight = FontWeight.Bold, color = AdGuardTextPrimary)
+                Text(
+                    stringResource(R.string.filters_add_title),
+                    fontSize = 17.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = AdGuardTextPrimary,
+                )
             }
         },
         text = {
             Column {
                 Text(
-                    text = "Dán đường dẫn danh sách lọc (AdGuard, EasyList, hosts…) hoặc chọn tệp có sẵn trong máy.",
+                    text = stringResource(R.string.filters_add_body),
                     fontSize = 12.sp,
                     color = AdGuardTextSecondary,
                 )
 
                 Spacer(modifier = Modifier.height(12.dp))
 
-                Text("Gợi ý phổ biến (chạm để điền nhanh):", fontSize = 11.sp, color = AdGuardTextMuted)
+                Text(
+                    stringResource(R.string.filters_add_suggestions),
+                    fontSize = 11.sp,
+                    color = AdGuardTextMuted,
+                )
                 Spacer(modifier = Modifier.height(6.dp))
                 Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                     QuickSyntaxChip("ABPVN") {
@@ -960,7 +1072,7 @@ private fun AddFilterDialog(
                 OutlinedTextField(
                     value = name,
                     onValueChange = { name = it },
-                    label = { Text("Tên (không bắt buộc)", fontSize = 12.sp) },
+                    label = { Text(stringResource(R.string.ext_name_optional), fontSize = 12.sp) },
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth(),
                     shape = RoundedCornerShape(10.dp),
@@ -977,7 +1089,7 @@ private fun AddFilterDialog(
                 OutlinedTextField(
                     value = url,
                     onValueChange = { url = it },
-                    label = { Text("Đường dẫn (URL)", fontSize = 12.sp) },
+                    label = { Text(stringResource(R.string.filters_url_label), fontSize = 12.sp) },
                     placeholder = { Text("https://…", fontSize = 12.sp, color = AdGuardTextMuted) },
                     singleLine = true,
                     isError = url.isNotBlank() && filterUrlError(url) != null,
@@ -1007,7 +1119,11 @@ private fun AddFilterDialog(
                 TextButton(onClick = onPickFile) {
                     Icon(Icons.Default.UploadFile, contentDescription = null, tint = AdGuardGreenLight, modifier = Modifier.size(16.dp))
                     Spacer(modifier = Modifier.width(6.dp))
-                    Text("Chọn tệp từ máy", fontSize = 12.sp, color = AdGuardGreenLight)
+                    Text(
+                        stringResource(R.string.filters_pick_file),
+                        fontSize = 12.sp,
+                        color = AdGuardGreenLight,
+                    )
                 }
             }
         },
@@ -1018,12 +1134,16 @@ private fun AddFilterDialog(
                 colors = ButtonDefaults.buttonColors(containerColor = AdGuardBlueDns),
                 shape = RoundedCornerShape(8.dp),
             ) {
-                Text("Thêm", color = AdGuardOnAccent, fontWeight = FontWeight.Bold)
+                Text(
+                    stringResource(R.string.common_add),
+                    color = AdGuardOnAccent,
+                    fontWeight = FontWeight.Bold,
+                )
             }
         },
         dismissButton = {
             OutlinedButton(onClick = onDismiss, shape = RoundedCornerShape(8.dp)) {
-                Text("Hủy", color = AdGuardTextSecondary)
+                Text(stringResource(R.string.common_cancel), color = AdGuardTextSecondary)
             }
         },
     )
@@ -1044,13 +1164,20 @@ private fun EditCustomFilterDialog(
 
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("Sửa bộ lọc", fontSize = 17.sp, fontWeight = FontWeight.Bold, color = AdGuardTextPrimary) },
+        title = {
+            Text(
+                stringResource(R.string.filters_edit_title),
+                fontSize = 17.sp,
+                fontWeight = FontWeight.Bold,
+                color = AdGuardTextPrimary,
+            )
+        },
         text = {
             Column {
                 OutlinedTextField(
                     value = name,
                     onValueChange = { name = it },
-                    label = { Text("Tên", fontSize = 12.sp) },
+                    label = { Text(stringResource(R.string.filters_name_label), fontSize = 12.sp) },
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth(),
                     shape = RoundedCornerShape(10.dp),
@@ -1065,7 +1192,7 @@ private fun EditCustomFilterDialog(
                 OutlinedTextField(
                     value = url,
                     onValueChange = { url = it },
-                    label = { Text("Đường dẫn (URL)", fontSize = 12.sp) },
+                    label = { Text(stringResource(R.string.filters_url_label), fontSize = 12.sp) },
                     placeholder = { Text("https://…", fontSize = 12.sp, color = AdGuardTextMuted) },
                     singleLine = true,
                     isError = urlError != null,
@@ -1088,7 +1215,7 @@ private fun EditCustomFilterDialog(
                 }
                 Spacer(modifier = Modifier.height(8.dp))
                 Text(
-                    "Đổi URL sẽ tải lại nội dung của bộ lọc.",
+                    stringResource(R.string.filters_edit_reload),
                     fontSize = 11.sp,
                     color = AdGuardTextMuted,
                 )
@@ -1101,12 +1228,20 @@ private fun EditCustomFilterDialog(
                 colors = ButtonDefaults.buttonColors(containerColor = AdGuardBlueDns),
                 shape = RoundedCornerShape(8.dp),
             ) {
-                Text("Lưu", color = AdGuardOnAccent, fontWeight = FontWeight.Bold)
+                Text(
+                    stringResource(R.string.filters_save),
+                    color = AdGuardOnAccent,
+                    fontWeight = FontWeight.Bold,
+                )
             }
         },
         dismissButton = {
             TextButton(onClick = onDismiss) {
-                Text("Hủy", fontSize = 13.sp, color = AdGuardTextSecondary)
+                Text(
+                    stringResource(R.string.common_cancel),
+                    fontSize = 13.sp,
+                    color = AdGuardTextSecondary,
+                )
             }
         },
     )
@@ -1144,15 +1279,20 @@ fun FilterDetailSheet(
 
         Row(verticalAlignment = Alignment.CenterVertically) {
             Column(modifier = Modifier.weight(1f)) {
-                Text("Bật bộ lọc này", fontSize = 13.sp, fontWeight = FontWeight.Bold, color = AdGuardTextPrimary)
+                Text(
+                    stringResource(R.string.filters_detail_enable_title),
+                    fontSize = 13.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = AdGuardTextPrimary,
+                )
                 Text(
                     text = when {
                         // The switch follows the engine, so an in-flight compile
                         // has to be said out loud or the user wonders why a
                         // freshly enabled list is not filtering yet.
-                        isBuilding -> "Đang biên dịch quy tắc…"
-                        list.isEnabled -> "Đang lọc"
-                        else -> "Đang tắt"
+                        isBuilding -> stringResource(R.string.filters_detail_building)
+                        list.isEnabled -> stringResource(R.string.home_status_filtering)
+                        else -> stringResource(R.string.ext_detail_off)
                     },
                     fontSize = 11.sp,
                     color = AdGuardTextMuted,
@@ -1169,11 +1309,14 @@ fun FilterDetailSheet(
             Spacer(modifier = Modifier.height(12.dp))
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Column(modifier = Modifier.weight(1f)) {
-                    Text("Bộ lọc tin cậy", fontSize = 13.sp, fontWeight = FontWeight.Bold, color = AdGuardTextPrimary)
                     Text(
-                        text = "Cho phép list chạy JavaScript rule, scriptlet và các modifier " +
-                            "(\$removeparam, \$replace, \$urltransform, \$hls, \$removeheader) — " +
-                            "chỉ bật khi bạn tin nguồn list",
+                        stringResource(R.string.filters_trusted_title),
+                        fontSize = 13.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = AdGuardTextPrimary,
+                    )
+                    Text(
+                        text = stringResource(R.string.filters_trusted_body),
                         fontSize = 11.sp,
                         color = AdGuardTextMuted,
                     )
@@ -1188,18 +1331,29 @@ fun FilterDetailSheet(
 
         Spacer(modifier = Modifier.height(12.dp))
 
-        InfoRow("Nhóm", FilterGroup.fromId(list.groupId)?.title ?: "Tùy chỉnh")
-        InfoRow("Định dạng", if (list.format.equals("hosts", ignoreCase = true)) "Hosts" else "AdGuard / EasyList")
-        InfoRow("Quy tắc", "%,d".format(list.ruleCount))
+        InfoRow(
+            stringResource(R.string.filters_info_group),
+            FilterGroup.fromId(list.groupId)?.title
+                ?: stringResource(R.string.filters_info_custom_group),
+        )
+        InfoRow(
+            stringResource(R.string.filters_info_format),
+            if (list.format.equals("hosts", ignoreCase = true)) "Hosts" else "AdGuard / EasyList",
+        )
+        InfoRow(stringResource(R.string.filters_info_rules), "%,d".format(list.ruleCount))
         if (list.sizeBytes > 0L) {
-            InfoRow("Dung lượng", assetSizeLabel(list.sizeBytes))
+            InfoRow(stringResource(R.string.filters_info_size), assetSizeLabel(list.sizeBytes))
         }
-        InfoRow("Cập nhật", list.lastUpdatedText)
+        InfoRow(stringResource(R.string.ext_detail_updated), list.lastUpdatedText)
         if (list.version.isNotBlank()) {
-            InfoRow("Phiên bản", list.version.take(24))
+            InfoRow(stringResource(R.string.ext_detail_version), list.version.take(24))
         }
         if (list.lastError.isNotBlank()) {
-            InfoRow("Lỗi", list.lastError.take(160), AdGuardRedBlocked)
+            InfoRow(
+                stringResource(R.string.filters_info_error),
+                list.lastError.take(160),
+                AdGuardRedBlocked,
+            )
         }
 
         if (!list.subscriptionUrl.isNullOrBlank()) {
@@ -1218,13 +1372,17 @@ fun FilterDetailSheet(
                 IconButton(
                     onClick = {
                         clipboard.setText(AnnotatedString(url))
-                        Toast.makeText(context, "Đã sao chép URL", Toast.LENGTH_SHORT).show()
+                        Toast.makeText(
+                            context,
+                            context.getString(R.string.filters_copy_url),
+                            Toast.LENGTH_SHORT,
+                        ).show()
                     },
                     modifier = Modifier.size(32.dp),
                 ) {
                     Icon(
                         Icons.Default.ContentCopy,
-                        contentDescription = "Sao chép nguồn",
+                        contentDescription = stringResource(R.string.filters_copy_source),
                         tint = AdGuardTextSecondary,
                         modifier = Modifier.size(16.dp),
                     )
@@ -1235,7 +1393,7 @@ fun FilterDetailSheet(
                 ) {
                     Icon(
                         Icons.Default.OpenInBrowser,
-                        contentDescription = "Mở nguồn",
+                        contentDescription = stringResource(R.string.filters_open_source),
                         tint = AdGuardTextSecondary,
                         modifier = Modifier.size(16.dp),
                     )
@@ -1243,7 +1401,10 @@ fun FilterDetailSheet(
             }
         } else if (list.ruleCount > 0) {
             Spacer(modifier = Modifier.height(8.dp))
-            InfoRow("Nguồn", "Nội dung cục bộ")
+            InfoRow(
+                stringResource(R.string.filters_info_source),
+                stringResource(R.string.filters_source_local),
+            )
         }
 
         Spacer(modifier = Modifier.height(16.dp))
@@ -1253,26 +1414,26 @@ fun FilterDetailSheet(
                 OutlinedButton(onClick = onRefresh, shape = RoundedCornerShape(10.dp)) {
                     Icon(Icons.Default.Sync, contentDescription = null, tint = AdGuardGreenLight, modifier = Modifier.size(16.dp))
                     Spacer(modifier = Modifier.width(6.dp))
-                    Text("Cập nhật", fontSize = 12.sp, color = AdGuardGreenLight)
+                    Text(stringResource(R.string.ext_update), fontSize = 12.sp, color = AdGuardGreenLight)
                 }
             }
             if (list.isUserAdded) {
                 OutlinedButton(onClick = onEdit, shape = RoundedCornerShape(10.dp)) {
                     Icon(Icons.Default.Edit, contentDescription = null, tint = AdGuardGreenLight, modifier = Modifier.size(16.dp))
                     Spacer(modifier = Modifier.width(6.dp))
-                    Text("Sửa", fontSize = 12.sp, color = AdGuardGreenLight)
+                    Text(stringResource(R.string.filters_edit), fontSize = 12.sp, color = AdGuardGreenLight)
                 }
                 OutlinedButton(onClick = onDelete, shape = RoundedCornerShape(10.dp)) {
                     Icon(Icons.Default.Delete, contentDescription = null, tint = AdGuardRedBlocked, modifier = Modifier.size(16.dp))
                     Spacer(modifier = Modifier.width(6.dp))
-                    Text("Xóa", fontSize = 12.sp, color = AdGuardRedBlocked)
+                    Text(stringResource(R.string.ext_delete), fontSize = 12.sp, color = AdGuardRedBlocked)
                 }
             }
             if (!list.homepage.isNullOrBlank()) {
                 OutlinedButton(onClick = { onOpenHomepage(list.homepage) }, shape = RoundedCornerShape(10.dp)) {
                     Icon(Icons.Default.Public, contentDescription = null, tint = AdGuardBlueDns, modifier = Modifier.size(16.dp))
                     Spacer(modifier = Modifier.width(6.dp))
-                    Text("Trang chủ", fontSize = 12.sp, color = AdGuardBlueDns)
+                    Text(stringResource(R.string.filters_homepage), fontSize = 12.sp, color = AdGuardBlueDns)
                 }
             }
         }
