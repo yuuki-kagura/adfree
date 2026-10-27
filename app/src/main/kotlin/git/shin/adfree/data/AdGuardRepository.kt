@@ -527,7 +527,9 @@ class AdGuardRepository(
                 lists += FilterList(
                     id = entry.listId ?: "cat_${entry.id}",
                     name = entry.name,
-                    description = entry.description,
+                    description = "",
+                    nameRes = entry.nameRes,
+                    descriptionRes = entry.descriptionRes,
                     ruleCount = 0,
                     isEnabled = enabled,
                     category = entry.group.id,
@@ -1403,7 +1405,9 @@ class AdGuardRepository(
                 scripts += UserScriptInfo(
                     id = entry.id,
                     name = entry.name,
-                    description = entry.description,
+                    description = "",
+                    nameRes = entry.nameRes,
+                    descriptionRes = entry.descriptionRes,
                     url = entry.url,
                     // Built-in scripts run unless the user turned them off;
                     // catalogue downloads wait to be asked for.

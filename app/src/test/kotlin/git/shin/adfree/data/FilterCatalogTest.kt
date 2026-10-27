@@ -24,7 +24,7 @@ class FilterCatalogTest {
     fun everyEntryHasDownloadableMetadata() {
         for (filter in FilterCatalog.filters) {
             assertTrue("${filter.id}: name", filter.name.isNotBlank())
-            assertTrue("${filter.id}: description", filter.description.isNotBlank())
+            assertTrue("${filter.id}: description", filter.descriptionRes != 0)
             assertTrue("${filter.id}: https url", filter.url.startsWith("https://"))
             assertTrue(
                 "${filter.id}: format",

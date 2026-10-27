@@ -251,7 +251,7 @@ class AdGuardVpnService : VpnService() {
             }
 
         val descriptor = builder.establish() ?: run {
-            Log.e(TAG, "establish() returned null — quyền VPN chưa được cấp")
+            Log.e(TAG, "establish() returned null — VPN permission was not granted")
             isRunning = false
             return
         }

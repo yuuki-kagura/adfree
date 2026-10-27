@@ -1,5 +1,8 @@
 package git.shin.adfree.data
 
+import androidx.annotation.StringRes
+import git.shin.adfree.R
+
 /**
  * The bundled catalogue of filter lists behind the "Bộ lọc" tab.
  *
@@ -13,16 +16,26 @@ package git.shin.adfree.data
  * * [CatalogFilter.format] is `standard` (AdGuard/EasyList syntax) or `hosts`;
  * * [CatalogFilter.listId] lets an entry reuse a file older builds already
  *   downloaded (`builtin_dns`, `builtin_oisd`, `builtin_stevenblack`);
- * * [CatalogFilter.defaultEnabled] is what "Khôi phục mặc định" restores.
+ * * [CatalogFilter.defaultEnabled] is what "Khôi phục mặc định" restores;
+ * * display text lives in `strings.xml`; [CatalogFilter.name] is the stable
+ *   brand name used in downloads and diagnostics.
  */
-enum class FilterGroup(val id: String, val title: String, val subtitle: String) {
-    ADS("ads", "Chặn quảng cáo và popup", "Loại bỏ quảng cáo trên web và trong ứng dụng"),
-    PRIVACY("privacy", "Riêng tư", "Chặn trình theo dõi và phân tích hành vi"),
-    SOCIAL("social", "Tiện ích xã hội", "Ẩn nút Like, chia sẻ và widget mạng xã hội"),
-    ANNOYANCES("annoyances", "Làm phiền", "Chặn popup, thông báo cookie và banner"),
-    SECURITY("security", "Bảo mật", "Chặn mã độc, lừa đảo và trang nguy hiểm"),
-    OTHER("other", "Khác", "Bộ lọc bổ sung và thử nghiệm"),
-    LANGUAGE("language", "Ngôn ngữ cụ thể", "Bộ lọc theo khu vực và ngôn ngữ");
+enum class FilterGroup(
+    val id: String,
+    @StringRes val titleRes: Int,
+    @StringRes val subtitleRes: Int,
+) {
+    ADS("ads", R.string.filter_group_ads_title, R.string.filter_group_ads_subtitle),
+    PRIVACY("privacy", R.string.filter_group_privacy_title, R.string.filter_group_privacy_subtitle),
+    SOCIAL("social", R.string.filter_group_social_title, R.string.filter_group_social_subtitle),
+    ANNOYANCES(
+        "annoyances",
+        R.string.filter_group_annoyances_title,
+        R.string.filter_group_annoyances_subtitle,
+    ),
+    SECURITY("security", R.string.filter_group_security_title, R.string.filter_group_security_subtitle),
+    OTHER("other", R.string.filter_group_other_title, R.string.filter_group_other_subtitle),
+    LANGUAGE("language", R.string.filter_group_language_title, R.string.filter_group_language_subtitle);
 
     companion object {
         fun fromId(id: String): FilterGroup? = entries.firstOrNull { it.id == id }
@@ -35,9 +48,9 @@ enum class FilterGroup(val id: String, val title: String, val subtitle: String) 
  * module covers TRACKER, ANALYTICS and SOCIAL. Malware, custom rules and
  * the user rules (`null` gates) are never switched off by a module.
  */
-enum class ModuleGate(val title: String) {
-    AD_BLOCKING("Chặn quảng cáo"),
-    TRACKING("Chặn trình theo dõi"),
+enum class ModuleGate(@StringRes val titleRes: Int) {
+    AD_BLOCKING(R.string.filter_gate_ad_blocking),
+    TRACKING(R.string.filter_gate_tracking),
 }
 
 val FilterGroup.moduleGate: ModuleGate?
@@ -50,9 +63,11 @@ val FilterGroup.moduleGate: ModuleGate?
 data class CatalogFilter(
     val id: String,
     val name: String,
-    val description: String,
+    @StringRes val descriptionRes: Int,
     val group: FilterGroup,
     val url: String,
+    /** Non-zero when the row shows a localized name instead of [name]. */
+    @StringRes val nameRes: Int = 0,
     val format: String = FORMAT_STANDARD,
     val homepage: String? = null,
     val defaultEnabled: Boolean = false,
@@ -73,7 +88,7 @@ object FilterCatalog {
         CatalogFilter(
             id = "ag-base",
             name = "AdGuard Base filter",
-            description = "Bộ lọc quảng cáo chính của AdGuard (EasyList + bộ lọc riêng).",
+            descriptionRes = R.string.filter_desc_ag_base,
             group = FilterGroup.ADS,
             url = ADGUARD_URL + "2_optimized.txt",
             homepage = "https://adguard.com",
@@ -82,7 +97,7 @@ object FilterCatalog {
         CatalogFilter(
             id = "ag-mobile-ads",
             name = "AdGuard Mobile Ads filter",
-            description = "Chặn quảng cáo hiển thị trong ứng dụng di động.",
+            descriptionRes = R.string.filter_desc_ag_mobile_ads,
             group = FilterGroup.ADS,
             url = ADGUARD_URL + "11_optimized.txt",
             defaultEnabled = true,
@@ -90,7 +105,7 @@ object FilterCatalog {
         CatalogFilter(
             id = "easylist",
             name = "EasyList",
-            description = "Danh sách quảng cáo quốc tế phổ biến nhất, chuẩn EasyList.",
+            descriptionRes = R.string.filter_desc_easylist,
             group = FilterGroup.ADS,
             url = "https://easylist.to/easylist/easylist.txt",
             homepage = "https://easylist.to/",
@@ -100,7 +115,7 @@ object FilterCatalog {
         CatalogFilter(
             id = "ag-tracking",
             name = "AdGuard Tracking Protection filter",
-            description = "Chặn mã theo dõi và phân tích hành vi trên web.",
+            descriptionRes = R.string.filter_desc_ag_tracking,
             group = FilterGroup.PRIVACY,
             url = ADGUARD_URL + "3_optimized.txt",
             defaultEnabled = true,
@@ -108,7 +123,7 @@ object FilterCatalog {
         CatalogFilter(
             id = "easyprivacy",
             name = "EasyPrivacy",
-            description = "Danh sách chống theo dõi phổ biến nhất.",
+            descriptionRes = R.string.filter_desc_easyprivacy,
             group = FilterGroup.PRIVACY,
             url = "https://easylist.to/easylist/easyprivacy.txt",
             homepage = "https://easylist.to/",
@@ -116,7 +131,7 @@ object FilterCatalog {
         CatalogFilter(
             id = "peter-lowe",
             name = "Peter Lowe's Blocklist",
-            description = "Chặn máy chủ quảng cáo và theo dõi quy mô lớn.",
+            descriptionRes = R.string.filter_desc_peter_lowe,
             group = FilterGroup.PRIVACY,
             url = "https://pgl.yoyo.org/adservers/serverlist.php?hostformat=adblockplus&showintro=0&mimetype=plaintext",
             homepage = "https://pgl.yoyo.org/adservers/",
@@ -124,7 +139,7 @@ object FilterCatalog {
         CatalogFilter(
             id = "ag-url-tracking",
             name = "AdGuard URL Tracking filter",
-            description = "Loại bỏ tham số theo dõi (utm, fbclid…) khỏi đường dẫn.",
+            descriptionRes = R.string.filter_desc_ag_url_tracking,
             group = FilterGroup.PRIVACY,
             url = ADGUARD_URL + "17_optimized.txt",
         ),
@@ -133,14 +148,14 @@ object FilterCatalog {
         CatalogFilter(
             id = "ag-social",
             name = "AdGuard Social Media filter",
-            description = "Ẩn nút chia sẻ và widget mạng xã hội.",
+            descriptionRes = R.string.filter_desc_ag_social,
             group = FilterGroup.SOCIAL,
             url = ADGUARD_URL + "4_optimized.txt",
         ),
         CatalogFilter(
             id = "fanboy-social",
             name = "Fanboy's Social Blocking List",
-            description = "Ẩn thành phần mạng xã hội nhúng trong trang.",
+            descriptionRes = R.string.filter_desc_fanboy_social,
             group = FilterGroup.SOCIAL,
             url = "https://secure.fanboy.co.nz/fanboy-social.txt",
         ),
@@ -149,63 +164,63 @@ object FilterCatalog {
         CatalogFilter(
             id = "ag-cookie",
             name = "AdGuard Cookie Notices filter",
-            description = "Ẩn thông báo xin chấp thuận cookie.",
+            descriptionRes = R.string.filter_desc_ag_cookie,
             group = FilterGroup.ANNOYANCES,
             url = ADGUARD_URL + "18_optimized.txt",
         ),
         CatalogFilter(
             id = "ag-popups",
             name = "AdGuard Popups filter",
-            description = "Chặn cửa sổ popup trên trang web.",
+            descriptionRes = R.string.filter_desc_ag_popups,
             group = FilterGroup.ANNOYANCES,
             url = ADGUARD_URL + "19_optimized.txt",
         ),
         CatalogFilter(
             id = "ag-app-banners",
             name = "AdGuard Mobile App Banners filter",
-            description = "Ẩn banner mời cài ứng dụng di động.",
+            descriptionRes = R.string.filter_desc_ag_app_banners,
             group = FilterGroup.ANNOYANCES,
             url = ADGUARD_URL + "20_optimized.txt",
         ),
         CatalogFilter(
             id = "ag-other-annoy",
             name = "AdGuard Other Annoyances filter",
-            description = "Các phần tử gây phiền khác: thanh nổi, nhắc nhở…",
+            descriptionRes = R.string.filter_desc_ag_other_annoy,
             group = FilterGroup.ANNOYANCES,
             url = ADGUARD_URL + "21_optimized.txt",
         ),
         CatalogFilter(
             id = "ag-widgets",
             name = "AdGuard Widgets filter",
-            description = "Ẩn widget và phần tử nhúng lặt vặt.",
+            descriptionRes = R.string.filter_desc_ag_widgets,
             group = FilterGroup.ANNOYANCES,
             url = ADGUARD_URL + "22_optimized.txt",
         ),
         CatalogFilter(
             id = "ag-annoyances",
             name = "AdGuard Annoyances filter",
-            description = "Tổng hợp mọi loại phiền toái (cookie, popup, widget).",
+            descriptionRes = R.string.filter_desc_ag_annoyances,
             group = FilterGroup.ANNOYANCES,
             url = ADGUARD_URL + "14_optimized.txt",
         ),
         CatalogFilter(
             id = "fanboy-annoy",
             name = "Fanboy's Annoyance List",
-            description = "Popup, cookie, tự khuyến mãi và phiền toái chung.",
+            descriptionRes = R.string.filter_desc_fanboy_annoy,
             group = FilterGroup.ANNOYANCES,
             url = "https://secure.fanboy.co.nz/fanboy-annoyance.txt",
         ),
         CatalogFilter(
             id = "easylist-cookie",
             name = "EasyList Cookie List",
-            description = "Chặn thông báo cookie theo chuẩn EasyList.",
+            descriptionRes = R.string.filter_desc_easylist_cookie,
             group = FilterGroup.ANNOYANCES,
             url = "https://secure.fanboy.co.nz/easylist-cookie.txt",
         ),
         CatalogFilter(
             id = "adblock-warning-removal",
             name = "Adblock Warning Removal List",
-            description = "Ẩn lời nhắc \"hãy tắt chặn quảng cáo\" trên các trang chống adblock.",
+            descriptionRes = R.string.filter_desc_adblock_warning_removal,
             group = FilterGroup.ANNOYANCES,
             url = ADGUARD_URL + "207_optimized.txt",
         ),
@@ -214,35 +229,35 @@ object FilterCatalog {
         CatalogFilter(
             id = "urlhaus",
             name = "Online Malicious URL Blocklist",
-            description = "Danh sách URL phát tán mã độc (URLhaus).",
+            descriptionRes = R.string.filter_desc_urlhaus,
             group = FilterGroup.SECURITY,
             url = "https://malware-filter.gitlab.io/malware-filter/urlhaus-filter-online.txt",
         ),
         CatalogFilter(
             id = "phishing",
             name = "Phishing URL Blocklist",
-            description = "Chặn trang lừa đảo trực tuyến.",
+            descriptionRes = R.string.filter_desc_phishing,
             group = FilterGroup.SECURITY,
             url = "https://malware-filter.gitlab.io/malware-filter/phishing-filter.txt",
         ),
         CatalogFilter(
             id = "scamblock",
             name = "Scam Blocklist",
-            description = "Chặn trang lừa đảo và cờ bạc trá hình.",
+            descriptionRes = R.string.filter_desc_scamblock,
             group = FilterGroup.SECURITY,
             url = "https://raw.githubusercontent.com/durablenapkin/scamblocklist/master/adguard.txt",
         ),
         CatalogFilter(
             id = "badware",
             name = "uBlock Origin – Badware risks",
-            description = "Cảnh báo phần mềm độc hại và rủi ro tải xuống.",
+            descriptionRes = R.string.filter_desc_badware,
             group = FilterGroup.SECURITY,
             url = "https://raw.githubusercontent.com/uBlockOrigin/uAssets/master/filters/badware.txt",
         ),
         CatalogFilter(
             id = "dandelion-malware",
             name = "Dandelion Sprout's Anti-Malware List",
-            description = "Chặn tên miền phát tán mã độc và lừa đảo (Dandelion Sprout).",
+            descriptionRes = R.string.filter_desc_dandelion_malware,
             group = FilterGroup.SECURITY,
             url = ADGUARD_URL + "259_optimized.txt",
         ),
@@ -251,7 +266,7 @@ object FilterCatalog {
         CatalogFilter(
             id = "ag-dns",
             name = "AdGuard DNS filter",
-            description = "Bộ lọc DNS chính thức của AdGuard, nhẹ và toàn diện.",
+            descriptionRes = R.string.filter_desc_ag_dns,
             group = FilterGroup.OTHER,
             url = "https://adguardteam.github.io/AdGuardSDNSFilter/Filters/filter.txt",
             listId = "builtin_dns",
@@ -260,7 +275,7 @@ object FilterCatalog {
         CatalogFilter(
             id = "oisd",
             name = "OISD Big",
-            description = "Kho domain quảng cáo và tracking lớn nhất (định dạng hosts).",
+            descriptionRes = R.string.filter_desc_oisd,
             group = FilterGroup.OTHER,
             url = "https://big.oisd.nl/dnsmasq2",
             format = CatalogFilter.FORMAT_HOSTS,
@@ -270,7 +285,7 @@ object FilterCatalog {
         CatalogFilter(
             id = "stevenblack",
             name = "StevenBlack Unified Hosts",
-            description = "Hosts tổng hợp quảng cáo, tracking và mã độc.",
+            descriptionRes = R.string.filter_desc_stevenblack,
             group = FilterGroup.OTHER,
             url = "https://raw.githubusercontent.com/StevenBlack/hosts/master/hosts",
             format = CatalogFilter.FORMAT_HOSTS,
@@ -279,14 +294,14 @@ object FilterCatalog {
         CatalogFilter(
             id = "hagezi",
             name = "HaGeZi Multi PRO",
-            description = "Bộ lọc DNS đa năng, chuyên sâu về quảng cáo và mã độc.",
+            descriptionRes = R.string.filter_desc_hagezi,
             group = FilterGroup.OTHER,
             url = "https://raw.githubusercontent.com/hagezi/dns-blocklists/main/adblock/pro.txt",
         ),
         CatalogFilter(
             id = "ag-experimental",
             name = "AdGuard Experimental filter",
-            description = "Bộ lọc thử nghiệm của AdGuard, có thể gây lỗi trang.",
+            descriptionRes = R.string.filter_desc_ag_experimental,
             group = FilterGroup.OTHER,
             url = ADGUARD_URL + "5_optimized.txt",
         ),
@@ -295,77 +310,77 @@ object FilterCatalog {
         CatalogFilter(
             id = "ag-russian",
             name = "AdGuard Russian filter",
-            description = "Bộ lọc cho trang web tiếng Nga.",
+            descriptionRes = R.string.filter_desc_ag_russian,
             group = FilterGroup.LANGUAGE,
             url = ADGUARD_URL + "1_optimized.txt",
         ),
         CatalogFilter(
             id = "ag-german",
             name = "AdGuard German filter",
-            description = "Bộ lọc cho trang web tiếng Đức.",
+            descriptionRes = R.string.filter_desc_ag_german,
             group = FilterGroup.LANGUAGE,
             url = ADGUARD_URL + "6_optimized.txt",
         ),
         CatalogFilter(
             id = "ag-japanese",
             name = "AdGuard Japanese filter",
-            description = "Bộ lọc cho trang web tiếng Nhật.",
+            descriptionRes = R.string.filter_desc_ag_japanese,
             group = FilterGroup.LANGUAGE,
             url = ADGUARD_URL + "7_optimized.txt",
         ),
         CatalogFilter(
             id = "ag-dutch",
             name = "AdGuard Dutch filter",
-            description = "Bộ lọc cho trang web tiếng Hà Lan.",
+            descriptionRes = R.string.filter_desc_ag_dutch,
             group = FilterGroup.LANGUAGE,
             url = ADGUARD_URL + "8_optimized.txt",
         ),
         CatalogFilter(
             id = "ag-spanish",
             name = "AdGuard Spanish/Portuguese filter",
-            description = "Bộ lọc cho trang web tiếng Tây Ban Nha và Bồ Đào Nha.",
+            descriptionRes = R.string.filter_desc_ag_spanish,
             group = FilterGroup.LANGUAGE,
             url = ADGUARD_URL + "9_optimized.txt",
         ),
         CatalogFilter(
             id = "ag-turkish",
             name = "AdGuard Turkish filter",
-            description = "Bộ lọc cho trang web tiếng Thổ Nhĩ Kỳ.",
+            descriptionRes = R.string.filter_desc_ag_turkish,
             group = FilterGroup.LANGUAGE,
             url = ADGUARD_URL + "13_optimized.txt",
         ),
         CatalogFilter(
             id = "ag-french",
             name = "AdGuard French filter",
-            description = "Bộ lọc cho trang web tiếng Pháp.",
+            descriptionRes = R.string.filter_desc_ag_french,
             group = FilterGroup.LANGUAGE,
             url = ADGUARD_URL + "16_optimized.txt",
         ),
         CatalogFilter(
             id = "ag-ukrainian",
             name = "AdGuard Ukrainian filter",
-            description = "Bộ lọc cho trang web tiếng Ukraina.",
+            descriptionRes = R.string.filter_desc_ag_ukrainian,
             group = FilterGroup.LANGUAGE,
             url = ADGUARD_URL + "23_optimized.txt",
         ),
         CatalogFilter(
             id = "ag-chinese",
             name = "AdGuard Chinese filter",
-            description = "Bộ lọc cho trang web tiếng Trung.",
+            descriptionRes = R.string.filter_desc_ag_chinese,
             group = FilterGroup.LANGUAGE,
             url = ADGUARD_URL + "224_optimized.txt",
         ),
         CatalogFilter(
             id = "polish",
             name = "Polish filters for AdBlock/uBlock/AdGuard",
-            description = "Bộ lọc Ba Lan chính thức (MajkiIT).",
+            descriptionRes = R.string.filter_desc_polish,
             group = FilterGroup.LANGUAGE,
             url = "https://raw.githubusercontent.com/MajkiIT/polish-ads-filter/master/polish-adblock-filters/adblock.txt",
         ),
         CatalogFilter(
             id = "hostsvn",
             name = "hostsVN",
-            description = "Chặn quảng cáo Việt Nam (định dạng hosts).",
+            descriptionRes = R.string.filter_desc_hostsvn,
             group = FilterGroup.LANGUAGE,
             url = "https://raw.githubusercontent.com/bigdargon/hostsVN/master/hosts",
             format = CatalogFilter.FORMAT_HOSTS,
@@ -373,7 +388,7 @@ object FilterCatalog {
         CatalogFilter(
             id = "abpvn",
             name = "ABPVN List",
-            description = "Bộ lọc quảng cáo tiếng Việt cho AdGuard/uBlock.",
+            descriptionRes = R.string.filter_desc_abpvn,
             group = FilterGroup.LANGUAGE,
             url = "https://raw.githubusercontent.com/abpvn/abpvn/master/filter/abpvn_adguard.txt",
         ),
@@ -383,70 +398,70 @@ object FilterCatalog {
         CatalogFilter(
             id = "ag-italian",
             name = "AdGuard Italian filter",
-            description = "Bộ lọc cho trang web tiếng Ý.",
+            descriptionRes = R.string.filter_desc_ag_italian,
             group = FilterGroup.LANGUAGE,
             url = ADGUARD_URL + "26_optimized.txt",
         ),
         CatalogFilter(
             id = "easylist-germany",
             name = "EasyList Germany",
-            description = "Bộ lọc bổ sung cho trang web tiếng Đức (EasyList).",
+            descriptionRes = R.string.filter_desc_easylist_germany,
             group = FilterGroup.LANGUAGE,
             url = ADGUARD_URL + "107_optimized.txt",
         ),
         CatalogFilter(
             id = "liste-fr",
             name = "Liste FR",
-            description = "Bộ lọc bổ sung cho trang web tiếng Pháp (Liste FR).",
+            descriptionRes = R.string.filter_desc_liste_fr,
             group = FilterGroup.LANGUAGE,
             url = ADGUARD_URL + "113_optimized.txt",
         ),
         CatalogFilter(
             id = "easylist-spanish",
             name = "EasyList Spanish",
-            description = "Bộ lọc cho trang web tiếng Tây Ban Nha (EasyList).",
+            descriptionRes = R.string.filter_desc_easylist_spanish,
             group = FilterGroup.LANGUAGE,
             url = ADGUARD_URL + "231_optimized.txt",
         ),
         CatalogFilter(
             id = "easylist-portuguese",
             name = "EasyList Portuguese",
-            description = "Bộ lọc cho trang web tiếng Bồ Đào Nha (EasyList).",
+            descriptionRes = R.string.filter_desc_easylist_portuguese,
             group = FilterGroup.LANGUAGE,
             url = ADGUARD_URL + "124_optimized.txt",
         ),
         CatalogFilter(
             id = "easylist-china",
             name = "EasyList China",
-            description = "Bộ lọc cho trang web tiếng Trung (EasyList China).",
+            descriptionRes = R.string.filter_desc_easylist_china,
             group = FilterGroup.LANGUAGE,
             url = ADGUARD_URL + "104_optimized.txt",
         ),
         CatalogFilter(
             id = "easylist-thailand",
             name = "EasyList Thailand",
-            description = "Bộ lọc cho trang web tiếng Thái (EasyList Thailand).",
+            descriptionRes = R.string.filter_desc_easylist_thailand,
             group = FilterGroup.LANGUAGE,
             url = ADGUARD_URL + "202_optimized.txt",
         ),
         CatalogFilter(
             id = "adblock-id",
             name = "AdBlockID",
-            description = "Bộ lọc cho trang web tiếng Indonesia (AdBlockID).",
+            descriptionRes = R.string.filter_desc_adblock_id,
             group = FilterGroup.LANGUAGE,
             url = ADGUARD_URL + "120_optimized.txt",
         ),
         CatalogFilter(
             id = "youslist",
             name = "YousList",
-            description = "Bộ lọc cho trang web tiếng Hàn (YousList).",
+            descriptionRes = R.string.filter_desc_youslist,
             group = FilterGroup.LANGUAGE,
             url = ADGUARD_URL + "244_optimized.txt",
         ),
         CatalogFilter(
             id = "indianlist",
             name = "IndianList",
-            description = "Bộ lọc cho trang web tiếng Hindi và khu vực Ấn Độ.",
+            descriptionRes = R.string.filter_desc_indianlist,
             group = FilterGroup.LANGUAGE,
             url = ADGUARD_URL + "253_optimized.txt",
         ),
@@ -459,8 +474,10 @@ object FilterCatalog {
 data class CatalogUserScript(
     val id: String,
     val name: String,
-    val description: String,
+    @StringRes val descriptionRes: Int,
     val url: String,
+    /** Non-zero when the row shows a localized name instead of [name]. */
+    @StringRes val nameRes: Int = 0,
     /**
      * Body shipped with the core instead of downloaded (`coreInstallBuiltinScripts`
      * writes it into the store); such an entry is on by default and has no URL.
@@ -473,21 +490,22 @@ object UserScriptCatalog {
         CatalogUserScript(
             id = "adfree-extra",
             name = "AdFree Extra",
-            description = "Giữ các thư viện dò chặn quảng cáo (BlockAdBlock, FuckAdBlock) khỏi thấy dấu vết ẩn quảng cáo.",
+            descriptionRes = R.string.script_catalog_adfree_extra,
             url = "",
             builtin = true,
         ),
         CatalogUserScript(
             id = "adguard-extra",
             name = "AdGuard Extra",
-            description = "Tăng cường chặn quảng cáo trên trang phức tạp (thử nghiệm, có thể làm chậm trang).",
+            descriptionRes = R.string.script_catalog_adguard_extra,
             url = "https://userscripts.adtidy.org/release/adguard-extra/1.0/adguard-extra.user.js",
         ),
         CatalogUserScript(
             id = "disable-amp",
-            name = "Chặn trang AMP",
-            description = "Chuyển trang AMP của Google về trang gốc.",
+            name = "AMP page blocker",
+            descriptionRes = R.string.script_catalog_disable_amp,
             url = "https://userscripts.adtidy.org/release/disable-amp/1.0/disable-amp.user.js",
+            nameRes = R.string.script_name_disable_amp,
         ),
     )
 }

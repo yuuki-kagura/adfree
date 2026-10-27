@@ -136,6 +136,78 @@
     <string name="script_created_now">Vừa tạo</string>
     <string name="script_edited_now">Vừa sửa</string>
     <string name="script_loading">Đang tải %1$s…</string>
+    <string name="script_catalog_adfree_extra">Giữ các thư viện dò chặn quảng cáo (BlockAdBlock, FuckAdBlock) khỏi thấy dấu vết ẩn quảng cáo.</string>
+    <string name="script_catalog_adguard_extra">Tăng cường chặn quảng cáo trên trang phức tạp (thử nghiệm, có thể làm chậm trang).</string>
+    <string name="script_catalog_disable_amp">Chuyển trang AMP của Google về trang gốc.</string>
+    <string name="script_name_disable_amp">Chặn trang AMP</string>
+
+    <!-- Filter catalogue -->
+    <string name="filter_group_ads_title">Chặn quảng cáo và popup</string>
+    <string name="filter_group_ads_subtitle">Loại bỏ quảng cáo trên web và trong ứng dụng</string>
+    <string name="filter_group_privacy_title">Riêng tư</string>
+    <string name="filter_group_privacy_subtitle">Chặn trình theo dõi và phân tích hành vi</string>
+    <string name="filter_group_social_title">Tiện ích xã hội</string>
+    <string name="filter_group_social_subtitle">Ẩn nút Like, chia sẻ và widget mạng xã hội</string>
+    <string name="filter_group_annoyances_title">Làm phiền</string>
+    <string name="filter_group_annoyances_subtitle">Chặn popup, thông báo cookie và banner</string>
+    <string name="filter_group_security_title">Bảo mật</string>
+    <string name="filter_group_security_subtitle">Chặn mã độc, lừa đảo và trang nguy hiểm</string>
+    <string name="filter_group_other_title">Khác</string>
+    <string name="filter_group_other_subtitle">Bộ lọc bổ sung và thử nghiệm</string>
+    <string name="filter_group_language_title">Ngôn ngữ cụ thể</string>
+    <string name="filter_group_language_subtitle">Bộ lọc theo khu vực và ngôn ngữ</string>
+    <string name="filter_gate_ad_blocking">Chặn quảng cáo</string>
+    <string name="filter_gate_tracking">Chặn trình theo dõi</string>
+    <string name="filter_desc_ag_base">Bộ lọc quảng cáo chính của AdGuard (EasyList + bộ lọc riêng).</string>
+    <string name="filter_desc_ag_mobile_ads">Chặn quảng cáo hiển thị trong ứng dụng di động.</string>
+    <string name="filter_desc_easylist">Danh sách quảng cáo quốc tế phổ biến nhất, chuẩn EasyList.</string>
+    <string name="filter_desc_ag_tracking">Chặn mã theo dõi và phân tích hành vi trên web.</string>
+    <string name="filter_desc_easyprivacy">Danh sách chống theo dõi phổ biến nhất.</string>
+    <string name="filter_desc_peter_lowe">Chặn máy chủ quảng cáo và theo dõi quy mô lớn.</string>
+    <string name="filter_desc_ag_url_tracking">Loại bỏ tham số theo dõi (utm, fbclid…) khỏi đường dẫn.</string>
+    <string name="filter_desc_ag_social">Ẩn nút chia sẻ và widget mạng xã hội.</string>
+    <string name="filter_desc_fanboy_social">Ẩn thành phần mạng xã hội nhúng trong trang.</string>
+    <string name="filter_desc_ag_cookie">Ẩn thông báo xin chấp thuận cookie.</string>
+    <string name="filter_desc_ag_popups">Chặn cửa sổ popup trên trang web.</string>
+    <string name="filter_desc_ag_app_banners">Ẩn banner mời cài ứng dụng di động.</string>
+    <string name="filter_desc_ag_other_annoy">Các phần tử gây phiền khác: thanh nổi, nhắc nhở…</string>
+    <string name="filter_desc_ag_widgets">Ẩn widget và phần tử nhúng lặt vặt.</string>
+    <string name="filter_desc_ag_annoyances">Tổng hợp mọi loại phiền toái (cookie, popup, widget).</string>
+    <string name="filter_desc_fanboy_annoy">Popup, cookie, tự khuyến mãi và phiền toái chung.</string>
+    <string name="filter_desc_easylist_cookie">Chặn thông báo cookie theo chuẩn EasyList.</string>
+    <string name="filter_desc_adblock_warning_removal">Ẩn lời nhắc &quot;hãy tắt chặn quảng cáo&quot; trên các trang chống adblock.</string>
+    <string name="filter_desc_urlhaus">Danh sách URL phát tán mã độc (URLhaus).</string>
+    <string name="filter_desc_phishing">Chặn trang lừa đảo trực tuyến.</string>
+    <string name="filter_desc_scamblock">Chặn trang lừa đảo và cờ bạc trá hình.</string>
+    <string name="filter_desc_badware">Cảnh báo phần mềm độc hại và rủi ro tải xuống.</string>
+    <string name="filter_desc_dandelion_malware">Chặn tên miền phát tán mã độc và lừa đảo (Dandelion Sprout).</string>
+    <string name="filter_desc_ag_dns">Bộ lọc DNS chính thức của AdGuard, nhẹ và toàn diện.</string>
+    <string name="filter_desc_oisd">Kho domain quảng cáo và tracking lớn nhất (định dạng hosts).</string>
+    <string name="filter_desc_stevenblack">Hosts tổng hợp quảng cáo, tracking và mã độc.</string>
+    <string name="filter_desc_hagezi">Bộ lọc DNS đa năng, chuyên sâu về quảng cáo và mã độc.</string>
+    <string name="filter_desc_ag_experimental">Bộ lọc thử nghiệm của AdGuard, có thể gây lỗi trang.</string>
+    <string name="filter_desc_ag_russian">Bộ lọc cho trang web tiếng Nga.</string>
+    <string name="filter_desc_ag_german">Bộ lọc cho trang web tiếng Đức.</string>
+    <string name="filter_desc_ag_japanese">Bộ lọc cho trang web tiếng Nhật.</string>
+    <string name="filter_desc_ag_dutch">Bộ lọc cho trang web tiếng Hà Lan.</string>
+    <string name="filter_desc_ag_spanish">Bộ lọc cho trang web tiếng Tây Ban Nha và Bồ Đào Nha.</string>
+    <string name="filter_desc_ag_turkish">Bộ lọc cho trang web tiếng Thổ Nhĩ Kỳ.</string>
+    <string name="filter_desc_ag_french">Bộ lọc cho trang web tiếng Pháp.</string>
+    <string name="filter_desc_ag_ukrainian">Bộ lọc cho trang web tiếng Ukraina.</string>
+    <string name="filter_desc_ag_chinese">Bộ lọc cho trang web tiếng Trung.</string>
+    <string name="filter_desc_polish">Bộ lọc Ba Lan chính thức (MajkiIT).</string>
+    <string name="filter_desc_hostsvn">Chặn quảng cáo Việt Nam (định dạng hosts).</string>
+    <string name="filter_desc_abpvn">Bộ lọc quảng cáo tiếng Việt cho AdGuard/uBlock.</string>
+    <string name="filter_desc_ag_italian">Bộ lọc cho trang web tiếng Ý.</string>
+    <string name="filter_desc_easylist_germany">Bộ lọc bổ sung cho trang web tiếng Đức (EasyList).</string>
+    <string name="filter_desc_liste_fr">Bộ lọc bổ sung cho trang web tiếng Pháp (Liste FR).</string>
+    <string name="filter_desc_easylist_spanish">Bộ lọc cho trang web tiếng Tây Ban Nha (EasyList).</string>
+    <string name="filter_desc_easylist_portuguese">Bộ lọc cho trang web tiếng Bồ Đào Nha (EasyList).</string>
+    <string name="filter_desc_easylist_china">Bộ lọc cho trang web tiếng Trung (EasyList China).</string>
+    <string name="filter_desc_easylist_thailand">Bộ lọc cho trang web tiếng Thái (EasyList Thailand).</string>
+    <string name="filter_desc_adblock_id">Bộ lọc cho trang web tiếng Indonesia (AdBlockID).</string>
+    <string name="filter_desc_youslist">Bộ lọc cho trang web tiếng Hàn (YousList).</string>
+    <string name="filter_desc_indianlist">Bộ lọc cho trang web tiếng Hindi và khu vực Ấn Độ.</string>
 
     <!-- ViewModel effects -->
     <string name="protection_on">Đang bật bảo vệ</string>
@@ -327,6 +399,15 @@
     <string name="ext_run_at_end">Sau khi trang tải</string>
     <string name="ext_run_at_idle">Khi trang rảnh</string>
     <string name="ext_run_at_body">Khi trang có &lt;body&gt;</string>
+    <string name="ext_screen_subtitle">Userscript chạy trong trang HTTPS đã lọc</string>
+    <string name="ext_screen_intro">Mỗi script tự khai báo trang áp dụng bằng @match / @include. Công tắc tổng tắt thì không script nào chạy, kể cả script đang bật.</string>
+    <string name="ext_create_title">Tạo tiện ích mới</string>
+    <string name="ext_create_template">// ==UserScript==\n// @name         Tiện ích của tôi\n// @match        *://*/*\n// @grant        none\n// ==/UserScript==\n\n</string>
+    <string name="ext_create_confirm">Tạo</string>
+    <string name="ext_edit_title">Sửa mã tiện ích</string>
+    <string name="ext_save">Lưu</string>
+    <string name="ext_delete_title">Xóa tiện ích?</string>
+    <string name="ext_delete_body">Tiện ích «%1$s» và nội dung đã lưu sẽ bị xóa, không thể hoàn tác.</string>
 
     <!-- Filter lists -->
     <string name="common_add">Thêm</string>

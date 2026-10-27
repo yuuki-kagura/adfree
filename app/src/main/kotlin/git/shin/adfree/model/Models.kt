@@ -115,6 +115,10 @@ data class FilterList(
     val id: String,
     val name: String,
     val description: String,
+    /** Non-zero when the UI shows a localized catalogue name instead of [name]. */
+    val nameRes: Int = 0,
+    /** Non-zero when the UI shows a localized catalogue description. */
+    val descriptionRes: Int = 0,
     val ruleCount: Int,
     val isEnabled: Boolean,
     val category: String,
@@ -163,10 +167,15 @@ data class FilterList(
  * description, and the source URL (how users recognise a custom list). A
  * blank query matches everything.
  */
-internal fun filterMatchesQuery(list: FilterList, query: String): Boolean {
+internal fun filterMatchesQuery(
+    list: FilterList,
+    query: String,
+    name: String = list.name,
+    description: String = list.description,
+): Boolean {
     if (query.isBlank()) return true
-    return list.name.contains(query, ignoreCase = true) ||
-        list.description.contains(query, ignoreCase = true) ||
+    return name.contains(query, ignoreCase = true) ||
+        description.contains(query, ignoreCase = true) ||
         list.subscriptionUrl?.contains(query, ignoreCase = true) == true
 }
 
@@ -235,6 +244,10 @@ data class UserScriptInfo(
     val id: String,
     val name: String,
     val description: String,
+    /** Non-zero when the UI shows a localized catalogue name instead of [name]. */
+    val nameRes: Int = 0,
+    /** Non-zero when the UI shows a localized catalogue description. */
+    val descriptionRes: Int = 0,
     val url: String,
     val isEnabled: Boolean,
     val sizeBytes: Long = 0,

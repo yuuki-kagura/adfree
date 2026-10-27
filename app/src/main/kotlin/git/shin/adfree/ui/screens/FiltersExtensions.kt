@@ -658,6 +658,15 @@ private fun storeInstallsText(count: Int): String = when {
     else -> count.toString()
 }
 
+/** Catalogue scripts carry resource ids; imported/created ones keep their text. */
+@Composable
+private fun scriptDisplayName(script: UserScriptInfo): String =
+    if (script.nameRes != 0) stringResource(script.nameRes) else script.name
+
+@Composable
+private fun scriptDisplayDescription(script: UserScriptInfo): String =
+    if (script.descriptionRes != 0) stringResource(script.descriptionRes) else script.description
+
 @Composable
 private fun ScriptRow(
     script: UserScriptInfo,
@@ -689,7 +698,7 @@ private fun ScriptRow(
     ) {
         Column(modifier = Modifier.weight(1f)) {
             Text(
-                text = script.name,
+                text = scriptDisplayName(script),
                 fontSize = 13.sp,
                 fontWeight = FontWeight.SemiBold,
                 color = AdGuardTextPrimary,
@@ -848,10 +857,16 @@ fun ScriptDetailSheet(
             .fillMaxWidth()
             .padding(horizontal = 20.dp, vertical = 12.dp),
     ) {
-        Text(script.name, fontSize = 16.sp, fontWeight = FontWeight.Black, color = AdGuardTextPrimary)
-        if (script.description.isNotBlank()) {
+        Text(
+            scriptDisplayName(script),
+            fontSize = 16.sp,
+            fontWeight = FontWeight.Black,
+            color = AdGuardTextPrimary,
+        )
+        val description = scriptDisplayDescription(script)
+        if (description.isNotBlank()) {
             Spacer(modifier = Modifier.height(4.dp))
-            Text(script.description, fontSize = 12.sp, color = AdGuardTextSecondary)
+            Text(description, fontSize = 12.sp, color = AdGuardTextSecondary)
         }
 
         Spacer(modifier = Modifier.height(14.dp))

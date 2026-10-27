@@ -27,10 +27,12 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import git.shin.adfree.AdGuardApplication
+import git.shin.adfree.R
 import git.shin.adfree.model.UserScriptInfo
 import git.shin.adfree.ui.AdGuardIntent
 import git.shin.adfree.ui.AdGuardViewModel
@@ -78,8 +80,8 @@ fun ExtensionsScreen(
     ) {
         Column(modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)) {
             HubDestinationHeader(
-                title = "Tiện ích",
-                subtitle = "Userscript chạy trong trang HTTPS đã lọc",
+                title = stringResource(R.string.hub_extensions_title),
+                subtitle = stringResource(R.string.ext_screen_subtitle),
                 onBack = onBack,
             )
         }
@@ -91,8 +93,7 @@ fun ExtensionsScreen(
                 .padding(horizontal = 16.dp),
         ) {
             Text(
-                text = "Mỗi script tự khai báo trang áp dụng bằng @match / @include. " +
-                    "Công tắc tổng tắt thì không script nào chạy, kể cả script đang bật.",
+                text = stringResource(R.string.ext_screen_intro),
                 fontSize = 11.sp,
                 color = AdGuardTextMuted,
             )
@@ -133,10 +134,10 @@ fun ExtensionsScreen(
 
     if (showCreateScript) {
         ScriptTextEditorDialog(
-            title = "Tạo tiện ích mới",
+            title = stringResource(R.string.ext_create_title),
             initialName = "",
-            initialText = "// ==UserScript==\n// @name         Tiện ích của tôi\n// @match        *://*/*\n// @grant        none\n// ==/UserScript==\n\n",
-            confirmText = "Tạo",
+            initialText = stringResource(R.string.ext_create_template),
+            confirmText = stringResource(R.string.ext_create_confirm),
             onDismiss = { showCreateScript = false },
             onConfirm = { name, text ->
                 showCreateScript = false
@@ -148,10 +149,10 @@ fun ExtensionsScreen(
     editScriptTarget?.let { target ->
         if (target.isUserAdded) {
             ScriptTextEditorDialog(
-                title = "Sửa mã tiện ích",
+                title = stringResource(R.string.ext_edit_title),
                 initialName = target.name,
                 initialText = "",
-                confirmText = "Lưu",
+                confirmText = stringResource(R.string.ext_save),
                 onDismiss = { editScriptTarget = null },
                 onConfirm = { name, text ->
                     editScriptTarget = null
@@ -165,10 +166,17 @@ fun ExtensionsScreen(
     deleteScriptTarget?.let { target ->
         AlertDialog(
             onDismissRequest = { deleteScriptTarget = null },
-            title = { Text("Xóa tiện ích?", fontSize = 17.sp, fontWeight = FontWeight.Bold, color = AdGuardTextPrimary) },
+            title = {
+                Text(
+                    stringResource(R.string.ext_delete_title),
+                    fontSize = 17.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = AdGuardTextPrimary,
+                )
+            },
             text = {
                 Text(
-                    "Tiện ích «${target.name}» và nội dung đã lưu sẽ bị xóa, không thể hoàn tác.",
+                    stringResource(R.string.ext_delete_body, target.name),
                     fontSize = 12.sp,
                     color = AdGuardTextSecondary,
                 )
@@ -178,12 +186,21 @@ fun ExtensionsScreen(
                     deleteScriptTarget = null
                     viewModel.onIntent(AdGuardIntent.DeleteScript(target.id))
                 }) {
-                    Text("Xóa", fontSize = 13.sp, fontWeight = FontWeight.Bold, color = AdGuardRedBlocked)
+                    Text(
+                        stringResource(R.string.ext_delete),
+                        fontSize = 13.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = AdGuardRedBlocked,
+                    )
                 }
             },
             dismissButton = {
                 TextButton(onClick = { deleteScriptTarget = null }) {
-                    Text("Hủy", fontSize = 13.sp, color = AdGuardTextSecondary)
+                    Text(
+                        stringResource(R.string.common_cancel),
+                        fontSize = 13.sp,
+                        color = AdGuardTextSecondary,
+                    )
                 }
             },
         )

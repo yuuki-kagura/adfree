@@ -136,6 +136,78 @@
     <string name="script_created_now">Just created</string>
     <string name="script_edited_now">Just edited</string>
     <string name="script_loading">Downloading %1$s…</string>
+    <string name="script_catalog_adfree_extra">Keeps anti-adblock detectors (BlockAdBlock, FuckAdBlock) from noticing that ads are hidden.</string>
+    <string name="script_catalog_adguard_extra">Extra ad blocking on complex pages (experimental; may slow pages down).</string>
+    <string name="script_catalog_disable_amp">Redirects Google AMP pages to the original page.</string>
+    <string name="script_name_disable_amp">AMP page blocker</string>
+
+    <!-- Filter catalogue -->
+    <string name="filter_group_ads_title">Block ads and popups</string>
+    <string name="filter_group_ads_subtitle">Removes ads on websites and inside apps</string>
+    <string name="filter_group_privacy_title">Privacy</string>
+    <string name="filter_group_privacy_subtitle">Blocks trackers and behavioral analytics</string>
+    <string name="filter_group_social_title">Social widgets</string>
+    <string name="filter_group_social_subtitle">Hides Like buttons, share buttons and social widgets</string>
+    <string name="filter_group_annoyances_title">Annoyances</string>
+    <string name="filter_group_annoyances_subtitle">Blocks popups, cookie notices and banners</string>
+    <string name="filter_group_security_title">Security</string>
+    <string name="filter_group_security_subtitle">Blocks malware, scams and dangerous sites</string>
+    <string name="filter_group_other_title">Other</string>
+    <string name="filter_group_other_subtitle">Extra and experimental filters</string>
+    <string name="filter_group_language_title">Language-specific</string>
+    <string name="filter_group_language_subtitle">Filters for regions and languages</string>
+    <string name="filter_gate_ad_blocking">Ad blocking</string>
+    <string name="filter_gate_tracking">Tracker blocking</string>
+    <string name="filter_desc_ag_base">Main AdGuard ad filter (EasyList plus AdGuard rules).</string>
+    <string name="filter_desc_ag_mobile_ads">Blocks ads shown inside mobile apps.</string>
+    <string name="filter_desc_easylist">The most widely used international ad list, in EasyList format.</string>
+    <string name="filter_desc_ag_tracking">Blocks tracking scripts and behavioral analytics on the web.</string>
+    <string name="filter_desc_easyprivacy">The most widely used anti-tracking list.</string>
+    <string name="filter_desc_peter_lowe">Blocks ad and tracking servers at scale.</string>
+    <string name="filter_desc_ag_url_tracking">Removes tracking parameters (utm, fbclid…) from URLs.</string>
+    <string name="filter_desc_ag_social">Hides share buttons and social network widgets.</string>
+    <string name="filter_desc_fanboy_social">Hides social widgets embedded in pages.</string>
+    <string name="filter_desc_ag_cookie">Hides cookie consent notices.</string>
+    <string name="filter_desc_ag_popups">Blocks pop-up windows on websites.</string>
+    <string name="filter_desc_ag_app_banners">Hides banners prompting you to install a mobile app.</string>
+    <string name="filter_desc_ag_other_annoy">Other annoyances: floating bars, reminders…</string>
+    <string name="filter_desc_ag_widgets">Hides widgets and minor embedded elements.</string>
+    <string name="filter_desc_ag_annoyances">All annoyance types combined (cookies, popups, widgets).</string>
+    <string name="filter_desc_fanboy_annoy">Popups, cookies, self-promotion and general annoyances.</string>
+    <string name="filter_desc_easylist_cookie">Blocks cookie notices in EasyList format.</string>
+    <string name="filter_desc_adblock_warning_removal">Hides &quot;disable your ad blocker&quot; prompts on anti-adblock pages.</string>
+    <string name="filter_desc_urlhaus">List of malicious URLs (URLhaus).</string>
+    <string name="filter_desc_phishing">Blocks online phishing pages.</string>
+    <string name="filter_desc_scamblock">Blocks scam and disguised gambling sites.</string>
+    <string name="filter_desc_badware">Warns about malicious software and download risks.</string>
+    <string name="filter_desc_dandelion_malware">Blocks malware and scam domains (Dandelion Sprout).</string>
+    <string name="filter_desc_ag_dns">Official AdGuard DNS filter: light and comprehensive.</string>
+    <string name="filter_desc_oisd">The largest ad and tracking domain collection (hosts format).</string>
+    <string name="filter_desc_stevenblack">Combined hosts of ads, trackers and malware.</string>
+    <string name="filter_desc_hagezi">All-round DNS filter focused on ads and malware.</string>
+    <string name="filter_desc_ag_experimental">AdGuard experimental filter; may break pages.</string>
+    <string name="filter_desc_ag_russian">Filter for Russian websites.</string>
+    <string name="filter_desc_ag_german">Filter for German websites.</string>
+    <string name="filter_desc_ag_japanese">Filter for Japanese websites.</string>
+    <string name="filter_desc_ag_dutch">Filter for Dutch websites.</string>
+    <string name="filter_desc_ag_spanish">Filter for Spanish and Portuguese websites.</string>
+    <string name="filter_desc_ag_turkish">Filter for Turkish websites.</string>
+    <string name="filter_desc_ag_french">Filter for French websites.</string>
+    <string name="filter_desc_ag_ukrainian">Filter for Ukrainian websites.</string>
+    <string name="filter_desc_ag_chinese">Filter for Chinese websites.</string>
+    <string name="filter_desc_polish">Official Polish filter (MajkiIT).</string>
+    <string name="filter_desc_hostsvn">Blocks ads on Vietnamese websites (hosts format).</string>
+    <string name="filter_desc_abpvn">Vietnamese ad filter for AdGuard and uBlock.</string>
+    <string name="filter_desc_ag_italian">Filter for Italian websites.</string>
+    <string name="filter_desc_easylist_germany">Extra filter for German websites (EasyList).</string>
+    <string name="filter_desc_liste_fr">Extra filter for French websites (Liste FR).</string>
+    <string name="filter_desc_easylist_spanish">Filter for Spanish websites (EasyList).</string>
+    <string name="filter_desc_easylist_portuguese">Filter for Portuguese websites (EasyList).</string>
+    <string name="filter_desc_easylist_china">Filter for Chinese websites (EasyList China).</string>
+    <string name="filter_desc_easylist_thailand">Filter for Thai websites (EasyList Thailand).</string>
+    <string name="filter_desc_adblock_id">Filter for Indonesian websites (AdBlockID).</string>
+    <string name="filter_desc_youslist">Filter for Korean websites (YousList).</string>
+    <string name="filter_desc_indianlist">Filter for Hindi and Indian-region websites.</string>
 
     <!-- ViewModel effects -->
     <string name="protection_on">Turning protection on</string>
@@ -327,6 +399,15 @@
     <string name="ext_run_at_end">After the page loads</string>
     <string name="ext_run_at_idle">When the page is idle</string>
     <string name="ext_run_at_body">When the page has a &lt;body&gt;</string>
+    <string name="ext_screen_subtitle">Userscripts run on filtered HTTPS pages</string>
+    <string name="ext_screen_intro">Each script declares the pages it applies to with @match / @include. When the master switch is off no script runs, even enabled ones.</string>
+    <string name="ext_create_title">New extension</string>
+    <string name="ext_create_template">// ==UserScript==\n// @name         My extension\n// @match        *://*/*\n// @grant        none\n// ==/UserScript==\n\n</string>
+    <string name="ext_create_confirm">Create</string>
+    <string name="ext_edit_title">Edit extension code</string>
+    <string name="ext_save">Save</string>
+    <string name="ext_delete_title">Delete extension?</string>
+    <string name="ext_delete_body">Extension “%1$s” and its saved content will be deleted. This cannot be undone.</string>
 
     <!-- Filter lists -->
     <string name="common_add">Add</string>

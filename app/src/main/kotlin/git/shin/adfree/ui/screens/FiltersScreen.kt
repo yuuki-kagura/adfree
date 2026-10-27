@@ -159,7 +159,18 @@ fun FiltersScreen(
         }
     }
     val query = state.filterSearchQuery
-    val matchesQuery: (FilterList) -> Boolean = { filterMatchesQuery(it, query) }
+    // Catalogue text is localized at render time; search has to see the same
+    // words the user does, not the stable brand/filename fields.
+    val displayNames = state.filterLists.associate { it.id to filterDisplayName(it) }
+    val displayDescriptions = state.filterLists.associate { it.id to filterDisplayDescription(it) }
+    val matchesQuery: (FilterList) -> Boolean = { list ->
+        filterMatchesQuery(
+            list = list,
+            query = query,
+            name = displayNames[list.id] ?: list.name,
+            description = displayDescriptions[list.id] ?: list.description,
+        )
+    }
     val catalogLists = state.filterLists.filter { !it.isCustom && !it.isUserAdded }
     val customLists = state.filterLists.filter { it.isUserAdded }
     val visibleCatalog = catalogLists.filter(matchesQuery)
@@ -492,7 +503,7 @@ fun FiltersScreen(
                     },
                     text = {
                         Text(
-                            stringResource(R.string.filters_delete_body, list.name),
+                            stringResource(R.string.filters_delete_body, filterDisplayName(list)),
                             fontSize = 12.sp,
                             color = AdGuardTextSecondary,
                         )
@@ -705,8 +716,13 @@ private fun FilterGroupCard(
                 }
                 Spacer(modifier = Modifier.width(12.dp))
                 Column(modifier = Modifier.weight(1f)) {
-                    Text(group.title, fontSize = 13.sp, fontWeight = FontWeight.Bold, color = AdGuardTextPrimary)
-                    Text(group.subtitle, fontSize = 11.sp, color = AdGuardTextMuted)
+                    Text(
+                        stringResource(group.titleRes),
+                        fontSize = 13.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = AdGuardTextPrimary,
+                    )
+                    Text(stringResource(group.subtitleRes), fontSize = 11.sp, color = AdGuardTextMuted)
                 }
                 Text(
                     text = "$enabled/${lists.size}",
@@ -741,8 +757,8 @@ private fun FilterGroupCard(
                         Text(
                             stringResource(
                                 R.string.filters_inactive_body,
-                                group.title,
-                                gate?.title.orEmpty(),
+                                stringResource(group.titleRes),
+                                gate?.let { stringResource(it.titleRes) }.orEmpty(),
                             ),
                             fontSize = 11.sp,
                             color = AdGuardTextMuted,
@@ -773,6 +789,15 @@ private fun FilterGroupCard(
     }
 }
 
+/** Catalogue rows carry a resource id; user-added lists keep their own text. */
+@Composable
+private fun filterDisplayName(list: FilterList): String =
+    if (list.nameRes != 0) stringResource(list.nameRes) else list.name
+
+@Composable
+private fun filterDisplayDescription(list: FilterList): String =
+    if (list.descriptionRes != 0) stringResource(list.descriptionRes) else list.description
+
 @Composable
 private fun FilterRow(
     list: FilterList,
@@ -788,7 +813,7 @@ private fun FilterRow(
     ) {
         Column(modifier = Modifier.weight(1f)) {
             Text(
-                text = list.name,
+                text = filterDisplayName(list),
                 fontSize = 13.sp,
                 fontWeight = FontWeight.SemiBold,
                 color = AdGuardTextPrimary,
@@ -1264,15 +1289,17 @@ fun FilterDetailSheet(
 ) {
     val clipboard = LocalClipboardManager.current
     val context = LocalContext.current
+    val displayName = filterDisplayName(list)
+    val displayDescription = filterDisplayDescription(list)
     Column(
         modifier = Modifier
             .fillMaxWidth()
             .padding(horizontal = 20.dp, vertical = 12.dp),
     ) {
-        Text(list.name, fontSize = 16.sp, fontWeight = FontWeight.Black, color = AdGuardTextPrimary)
-        if (list.description.isNotBlank()) {
+        Text(displayName, fontSize = 16.sp, fontWeight = FontWeight.Black, color = AdGuardTextPrimary)
+        if (displayDescription.isNotBlank()) {
             Spacer(modifier = Modifier.height(4.dp))
-            Text(list.description, fontSize = 12.sp, color = AdGuardTextSecondary)
+            Text(displayDescription, fontSize = 12.sp, color = AdGuardTextSecondary)
         }
 
         Spacer(modifier = Modifier.height(14.dp))
@@ -1333,7 +1360,7 @@ fun FilterDetailSheet(
 
         InfoRow(
             stringResource(R.string.filters_info_group),
-            FilterGroup.fromId(list.groupId)?.title
+            FilterGroup.fromId(list.groupId)?.let { stringResource(it.titleRes) }
                 ?: stringResource(R.string.filters_info_custom_group),
         )
         InfoRow(
