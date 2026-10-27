@@ -174,7 +174,12 @@ fun SettingsScreen(
                 color = AdGuardTextSecondary,
                 modifier = Modifier.padding(bottom = 6.dp)
             )
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .horizontalScroll(rememberScrollState()),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
                 git.shin.adfree.model.DnsBlockMode.entries.forEach { mode ->
                     FilterChip(
                         selected = state.settings.blockMode == mode,

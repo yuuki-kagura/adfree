@@ -5,7 +5,10 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.unit.Density
 
 private val DarkColorScheme = darkColorScheme(
     primary = AdGuardGreenPrimary,
@@ -44,6 +47,9 @@ private val LightColorScheme = darkColorScheme( // AdGuard looks best in dark mo
     outline = AdGuardDarkOutline
 )
 
+/** Labels were laid out at 9-13sp; scale text without resizing dp containers. */
+private const val FontScale = 1.2f
+
 @Composable
 fun MyApplicationTheme(
     darkTheme: Boolean = true, // AdGuard signature dark cybersecurity look
@@ -51,10 +57,18 @@ fun MyApplicationTheme(
     content: @Composable () -> Unit,
 ) {
     val colorScheme = if (darkTheme) DarkColorScheme else LightColorScheme
+    val density = LocalDensity.current
 
-    MaterialTheme(
-        colorScheme = colorScheme,
-        typography = Typography,
-        content = content
-    )
+    CompositionLocalProvider(
+        LocalDensity provides Density(
+            density = density.density,
+            fontScale = density.fontScale * FontScale,
+        )
+    ) {
+        MaterialTheme(
+            colorScheme = colorScheme,
+            typography = Typography,
+            content = content
+        )
+    }
 }

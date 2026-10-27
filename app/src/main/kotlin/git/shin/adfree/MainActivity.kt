@@ -8,7 +8,13 @@ import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
-import androidx.compose.foundation.layout.Box
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInHorizontally
+import androidx.compose.animation.slideOutHorizontally
+import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.navigationBars
@@ -38,6 +44,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveableStateHolder
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
@@ -84,6 +91,9 @@ class MainActivity : ComponentActivity() {
             MyApplicationTheme {
                 val state by viewModel.uiState.collectAsState()
                 val snackbarHostState = remember { SnackbarHostState() }
+                // Keep each tab's own navigation (for example the Filters hub
+                // sub-screen) alive while the user visits another tab.
+                val tabStateHolder = rememberSaveableStateHolder()
 
                 // Collect one-off side effects
                 LaunchedEffect(Unit) {
@@ -143,20 +153,34 @@ class MainActivity : ComponentActivity() {
                         )
                     }
                 ) { innerPadding ->
-                    Box(
+                    AnimatedContent(
+                        targetState = state.currentTab,
                         modifier = Modifier
                             .fillMaxSize()
-                            .padding(innerPadding)
-                    ) {
-                        when (state.currentTab) {
-                            AdGuardTab.HOME -> HomeScreen(viewModel = viewModel)
-                            AdGuardTab.ACTIVITY -> FilteringLogScreen(viewModel = viewModel)
-                            AdGuardTab.FILTERS -> FilteringHubScreen(viewModel = viewModel)
-                            AdGuardTab.APPS -> AppsManagementScreen(viewModel = viewModel)
-                            AdGuardTab.SETTINGS -> SettingsScreen(viewModel = viewModel)
-                            // Reached from Settings instead of the tab bar: it is
-                            // a diagnostic tool, not something used daily.
-                            AdGuardTab.AI_LAB -> SecurityLabScreen(viewModel = viewModel)
+                            .padding(innerPadding),
+                        transitionSpec = {
+                            val direction =
+                                if (targetState.ordinal > initialState.ordinal) 1 else -1
+                            (fadeIn(tween(200)) +
+                                slideInHorizontally(tween(260)) { direction * it / 10 })
+                                .togetherWith(
+                                    fadeOut(tween(150)) +
+                                        slideOutHorizontally(tween(260)) { -direction * it / 10 }
+                                )
+                        },
+                        label = "tab-transition",
+                    ) { tab ->
+                        tabStateHolder.SaveableStateProvider(tab) {
+                            when (tab) {
+                                AdGuardTab.HOME -> HomeScreen(viewModel = viewModel)
+                                AdGuardTab.ACTIVITY -> FilteringLogScreen(viewModel = viewModel)
+                                AdGuardTab.FILTERS -> FilteringHubScreen(viewModel = viewModel)
+                                AdGuardTab.APPS -> AppsManagementScreen(viewModel = viewModel)
+                                AdGuardTab.SETTINGS -> SettingsScreen(viewModel = viewModel)
+                                // Reached from Settings instead of the tab bar: it is
+                                // a diagnostic tool, not something used daily.
+                                AdGuardTab.AI_LAB -> SecurityLabScreen(viewModel = viewModel)
+                            }
                         }
                     }
                 }

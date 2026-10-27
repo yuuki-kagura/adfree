@@ -2,6 +2,7 @@ package git.shin.adfree.ui.screens
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -16,6 +17,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -216,13 +218,15 @@ fun FilteringLogScreen(
 
         // Filter chips (All, Blocked, Allowed)
         Row(
-            modifier = Modifier.fillMaxWidth(),
+            modifier = Modifier
+                .fillMaxWidth()
+                .horizontalScroll(rememberScrollState()),
             horizontalArrangement = Arrangement.spacedBy(8.dp)
         ) {
             FilterChip(
                 selected = state.statusFilter == null,
                 onClick = { viewModel.onIntent(AdGuardIntent.FilterStatusChanged(null)) },
-                label = { Text("Tất cả (${state.logs.size})") },
+                label = { Text("Tất cả (${state.logs.size})", fontSize = 12.sp) },
                 colors = FilterChipDefaults.filterChipColors(
                     selectedContainerColor = AdGuardGreenPrimary,
                     selectedLabelColor = Color.Black,
@@ -234,7 +238,7 @@ fun FilteringLogScreen(
             FilterChip(
                 selected = state.statusFilter == FilterStatus.BLOCKED,
                 onClick = { viewModel.onIntent(AdGuardIntent.FilterStatusChanged(FilterStatus.BLOCKED)) },
-                label = { Text("Đã chặn (${state.logs.count { it.status == FilterStatus.BLOCKED }})") },
+                label = { Text("Đã chặn (${state.logs.count { it.status == FilterStatus.BLOCKED }})", fontSize = 12.sp) },
                 colors = FilterChipDefaults.filterChipColors(
                     selectedContainerColor = AdGuardRedBlocked,
                     selectedLabelColor = Color.White,
@@ -246,7 +250,7 @@ fun FilteringLogScreen(
             FilterChip(
                 selected = state.statusFilter == FilterStatus.ALLOWED,
                 onClick = { viewModel.onIntent(AdGuardIntent.FilterStatusChanged(FilterStatus.ALLOWED)) },
-                label = { Text("Cho phép (${state.logs.count { it.status == FilterStatus.ALLOWED }})") },
+                label = { Text("Cho phép (${state.logs.count { it.status == FilterStatus.ALLOWED }})", fontSize = 12.sp) },
                 colors = FilterChipDefaults.filterChipColors(
                     selectedContainerColor = AdGuardGreenLight,
                     selectedLabelColor = Color.Black,

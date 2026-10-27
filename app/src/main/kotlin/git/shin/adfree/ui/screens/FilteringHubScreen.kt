@@ -1,6 +1,13 @@
 package git.shin.adfree.ui.screens
 
 import androidx.activity.compose.BackHandler
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInHorizontally
+import androidx.compose.animation.slideOutHorizontally
+import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -77,28 +84,43 @@ fun FilteringHubScreen(
         section = FilteringSection.ROOT
     }
 
-    when (section) {
-        FilteringSection.ROOT -> FilteringHubLanding(
-            viewModel = viewModel,
-            onOpen = { section = it },
-            modifier = modifier,
-        )
-        FilteringSection.FILTERS -> FiltersScreen(
-            viewModel = viewModel,
-            onBack = { section = FilteringSection.ROOT },
-            modifier = modifier,
-        )
-        FilteringSection.EXTENSIONS -> ExtensionsScreen(
-            viewModel = viewModel,
-            onBack = { section = FilteringSection.ROOT },
-            modifier = modifier,
-        )
-        FilteringSection.NETWORK -> NetworkScreen(
-            viewModel = viewModel,
-            onBack = { section = FilteringSection.ROOT },
-            onManageScripts = { section = FilteringSection.EXTENSIONS },
-            modifier = modifier,
-        )
+    AnimatedContent(
+        targetState = section,
+        transitionSpec = {
+            val direction =
+                if (targetState.ordinal > initialState.ordinal) 1 else -1
+            (fadeIn(tween(200)) +
+                slideInHorizontally(tween(260)) { direction * it / 8 })
+                .togetherWith(
+                    fadeOut(tween(150)) +
+                        slideOutHorizontally(tween(260)) { -direction * it / 8 }
+                )
+        },
+        label = "filters-section",
+    ) { current ->
+        when (current) {
+            FilteringSection.ROOT -> FilteringHubLanding(
+                viewModel = viewModel,
+                onOpen = { section = it },
+                modifier = modifier,
+            )
+            FilteringSection.FILTERS -> FiltersScreen(
+                viewModel = viewModel,
+                onBack = { section = FilteringSection.ROOT },
+                modifier = modifier,
+            )
+            FilteringSection.EXTENSIONS -> ExtensionsScreen(
+                viewModel = viewModel,
+                onBack = { section = FilteringSection.ROOT },
+                modifier = modifier,
+            )
+            FilteringSection.NETWORK -> NetworkScreen(
+                viewModel = viewModel,
+                onBack = { section = FilteringSection.ROOT },
+                onManageScripts = { section = FilteringSection.EXTENSIONS },
+                modifier = modifier,
+            )
+        }
     }
 }
 
