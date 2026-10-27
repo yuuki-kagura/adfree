@@ -54,11 +54,13 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LifecycleEventEffect
+import git.shin.adfree.R
 import git.shin.adfree.model.ProtectionStats
 import git.shin.adfree.ui.AdGuardIntent
 import git.shin.adfree.ui.AdGuardTab
@@ -134,13 +136,13 @@ fun HomeScreen(
 
             Spacer(modifier = Modifier.height(16.dp))
 
-            SectionTitle("Mô-đun bảo vệ")
+            SectionTitle(stringResource(R.string.home_modules_title))
 
             Spacer(modifier = Modifier.height(8.dp))
 
             ModuleToggleCard(
-                title = "Chặn quảng cáo",
-                subtitle = "Quảng cáo hiển thị, video và popup trong ứng dụng",
+                title = stringResource(R.string.home_module_adblock_title),
+                subtitle = stringResource(R.string.home_module_adblock_subtitle),
                 icon = Icons.Default.Block,
                 isChecked = state.settings.isAdBlockingEnabled,
                 onCheckedChange = { viewModel.onIntent(AdGuardIntent.ToggleAdBlocking) },
@@ -150,8 +152,8 @@ fun HomeScreen(
             ModuleRow()
 
             ModuleToggleCard(
-                title = "Chống theo dõi",
-                subtitle = "Chặn analytics và telemetry giữa các ứng dụng",
+                title = stringResource(R.string.home_module_tracking_title),
+                subtitle = stringResource(R.string.home_module_tracking_subtitle),
                 icon = Icons.Default.TrackChanges,
                 isChecked = state.settings.isTrackingProtectionEnabled,
                 onCheckedChange = { viewModel.onIntent(AdGuardIntent.ToggleTracking) },
@@ -161,8 +163,8 @@ fun HomeScreen(
             ModuleRow()
 
             ModuleToggleCard(
-                title = "Bảo vệ DNS",
-                subtitle = "Lọc DNS mức hệ thống, chặn DoH/DoT",
+                title = stringResource(R.string.home_module_dns_title),
+                subtitle = stringResource(R.string.home_module_dns_subtitle),
                 icon = Icons.Default.Dns,
                 isChecked = state.settings.isDnsProtectionEnabled,
                 onCheckedChange = { viewModel.onIntent(AdGuardIntent.ToggleDns) },
@@ -172,8 +174,8 @@ fun HomeScreen(
             ModuleRow()
 
             ModuleToggleCard(
-                title = "Tường lửa",
-                subtitle = "Giới hạn Wi-Fi, dữ liệu di động và tắt màn hình theo ứng dụng",
+                title = stringResource(R.string.home_module_firewall_title),
+                subtitle = stringResource(R.string.home_module_firewall_subtitle),
                 icon = Icons.Default.Shield,
                 isChecked = state.settings.isFirewallEnabled,
                 onCheckedChange = { viewModel.onIntent(AdGuardIntent.ToggleFirewall) },
@@ -183,8 +185,8 @@ fun HomeScreen(
             ModuleRow()
 
             ModuleToggleCard(
-                title = "Chế độ tiết kiệm",
-                subtitle = "Giảm số lần đánh thức CPU để tăng thời lượng pin",
+                title = stringResource(R.string.home_module_eco_title),
+                subtitle = stringResource(R.string.home_module_eco_subtitle),
                 icon = Icons.Default.BatteryChargingFull,
                 isChecked = state.settings.isEcoBatteryModeEnabled,
                 onCheckedChange = { viewModel.onIntent(AdGuardIntent.ToggleEcoMode) },
@@ -215,7 +217,7 @@ private fun HomeHeader(isActive: Boolean) {
             )
             Spacer(modifier = Modifier.width(8.dp))
             Text(
-                text = "AdFree",
+                text = stringResource(R.string.app_name),
                 fontWeight = FontWeight.Bold,
                 fontSize = 19.sp,
                 color = AdGuardTextPrimary
@@ -236,7 +238,8 @@ private fun StatusChip(isActive: Boolean) {
             .padding(horizontal = 10.dp, vertical = 5.dp)
     ) {
         Text(
-            text = if (isActive) "Đang lọc" else "Tạm dừng",
+            text = if (isActive) stringResource(R.string.home_status_filtering)
+            else stringResource(R.string.home_status_paused),
             fontSize = 11.sp,
             fontWeight = FontWeight.Bold,
             color = tint
@@ -269,7 +272,7 @@ private fun PrivateDnsWarningCard(onOpenSettings: () -> Unit) {
                 )
                 Spacer(modifier = Modifier.width(8.dp))
                 Text(
-                    text = "Private DNS đang bật",
+                    text = stringResource(R.string.home_private_dns_title),
                     fontSize = 13.sp,
                     fontWeight = FontWeight.Bold,
                     color = AdGuardTextPrimary,
@@ -277,9 +280,7 @@ private fun PrivateDnsWarningCard(onOpenSettings: () -> Unit) {
             }
             Spacer(modifier = Modifier.height(6.dp))
             Text(
-                text = "Truy vấn DNS đi thẳng tới máy chủ riêng nên bỏ qua bộ lọc " +
-                    "của AdFree. Đã tạm ngừng chặn DoT để mạng vẫn hoạt động; " +
-                    "tắt Private DNS để lọc đầy đủ.",
+                text = stringResource(R.string.home_private_dns_body),
                 fontSize = 11.sp,
                 color = AdGuardTextSecondary,
             )
@@ -288,7 +289,7 @@ private fun PrivateDnsWarningCard(onOpenSettings: () -> Unit) {
                 onClick = onOpenSettings,
                 shape = RoundedCornerShape(8.dp),
             ) {
-                Text("Mở cài đặt Private DNS", fontSize = 11.sp)
+                Text(stringResource(R.string.home_private_dns_open), fontSize = 11.sp)
             }
         }
     }
@@ -389,7 +390,7 @@ fun AdGuardShieldHero(
             ) {
                 Icon(
                     imageVector = Icons.Default.PowerSettingsNew,
-                    contentDescription = "Bật hoặc tắt lọc",
+                    contentDescription = stringResource(R.string.home_shield_toggle),
                     tint = if (isActive) Color.Black else Color(0xFF8B9DAF),
                     modifier = Modifier.size(44.dp)
                 )
@@ -399,7 +400,8 @@ fun AdGuardShieldHero(
         Spacer(modifier = Modifier.height(10.dp))
 
         Text(
-            text = if (isActive) "Đang được bảo vệ" else "Lọc đang tắt",
+            text = if (isActive) stringResource(R.string.home_shield_protected)
+            else stringResource(R.string.home_shield_off),
             fontSize = 15.sp,
             fontWeight = FontWeight.SemiBold,
             color = if (isActive) AdGuardGreenLight else AdGuardTextMuted
@@ -421,7 +423,7 @@ private fun StatsGrid(
             horizontalArrangement = Arrangement.spacedBy(10.dp)
         ) {
             StatCard(
-                title = "Quảng cáo",
+                title = stringResource(R.string.home_stat_ads),
                 value = stats.adsBlocked.toString(),
                 icon = Icons.Default.Block,
                 accentColor = AdGuardGreenPrimary,
@@ -429,7 +431,7 @@ private fun StatsGrid(
                 modifier = Modifier.weight(1f)
             )
             StatCard(
-                title = "Theo dõi",
+                title = stringResource(R.string.home_stat_trackers),
                 value = stats.trackersBlocked.toString(),
                 icon = Icons.Default.TrackChanges,
                 accentColor = AdGuardOrangeWarning,
@@ -445,16 +447,19 @@ private fun StatsGrid(
             horizontalArrangement = Arrangement.spacedBy(10.dp)
         ) {
             StatCard(
-                title = "Dữ liệu",
-                value = "$dataMb MB",
+                title = stringResource(R.string.home_stat_data),
+                value = stringResource(R.string.home_stat_data_value, dataMb),
                 icon = Icons.Default.CloudDownload,
                 accentColor = AdGuardBlueDns,
                 onClick = onCardClick,
                 modifier = Modifier.weight(1f)
             )
             StatCard(
-                title = "Tiết kiệm pin",
-                value = "+${String.format("%.1f", stats.estimatedBatterySavedPercent)}%",
+                title = stringResource(R.string.home_stat_battery),
+                value = stringResource(
+                    R.string.home_stat_battery_value,
+                    stats.estimatedBatterySavedPercent,
+                ),
                 icon = Icons.Default.BatteryChargingFull,
                 accentColor = AdGuardGreenLight,
                 onClick = onCardClick,

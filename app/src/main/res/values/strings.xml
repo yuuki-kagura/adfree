@@ -155,4 +155,86 @@
     <string name="nav_filters">Filters</string>
     <string name="nav_apps">Apps</string>
     <string name="nav_settings">Settings</string>
+
+    <!-- Protection tab -->
+    <string name="home_modules_title">Protection modules</string>
+    <string name="home_module_adblock_title">Ad blocking</string>
+    <string name="home_module_adblock_subtitle">Display, video and pop-up ads in apps</string>
+    <string name="home_module_tracking_title">Anti-tracking</string>
+    <string name="home_module_tracking_subtitle">Blocks analytics and cross-app telemetry</string>
+    <string name="home_module_dns_title">DNS protection</string>
+    <string name="home_module_dns_subtitle">System-level DNS filtering, blocks DoH/DoT</string>
+    <string name="home_module_firewall_title">Firewall</string>
+    <string name="home_module_firewall_subtitle">Per-app Wi-Fi, mobile data and screen-off limits</string>
+    <string name="home_module_eco_title">Battery saving</string>
+    <string name="home_module_eco_subtitle">Fewer CPU wake-ups for longer battery life</string>
+    <string name="home_status_filtering">Filtering</string>
+    <string name="home_status_paused">Paused</string>
+    <string name="home_private_dns_title">Private DNS is on</string>
+    <string name="home_private_dns_body">DNS queries go straight to your chosen server and bypass AdFree's filters. DoT blocking is paused so the network keeps working; turn off Private DNS for full filtering.</string>
+    <string name="home_private_dns_open">Open Private DNS settings</string>
+    <string name="home_shield_toggle">Turn filtering on or off</string>
+    <string name="home_shield_protected">Protected</string>
+    <string name="home_shield_off">Filtering is off</string>
+    <string name="home_stat_ads">Ads</string>
+    <string name="home_stat_trackers">Trackers</string>
+    <string name="home_stat_data">Data</string>
+    <string name="home_stat_data_value">%1$d MB</string>
+    <string name="home_stat_battery">Battery saved</string>
+    <string name="home_stat_battery_value">+%1$.1f%%</string>
+
+    <!-- Network destination -->
+    <string name="network_title">Network</string>
+    <string name="network_subtitle">DNS, HTTPS filtering and traffic routing</string>
+    <string name="network_quic_title">Block QUIC / UDP 443</string>
+    <string name="network_quic_subtitle">Forces clients back to TCP so the engine sees hostnames</string>
+    <string name="network_doh_title">Block encrypted DNS (DoH)</string>
+    <string name="network_doh_subtitle">Blocks DNS-over-HTTPS so clients cannot bypass the filter</string>
+    <string name="network_dot_title">Block encrypted DNS (DoT)</string>
+    <string name="network_dot_subtitle">Blocks DNS-over-TLS (port 853) so clients cannot bypass the filter</string>
+    <string name="network_dot_private_dns">Strict Private DNS is on: the system keeps its own resolver, so port 853 is not blocked.</string>
+    <string name="network_proxy_title">Traffic routing</string>
+    <string name="network_proxy_subtitle">Send TCP flows through a SOCKS5 proxy instead of connecting directly.</string>
+    <string name="network_socks_title">SOCKS5 proxy</string>
+    <string name="network_socks_subtitle">Only TCP goes through the proxy; DNS and UDP stay direct</string>
+    <string name="network_proxy_host_error">Only IPv4/IPv6 addresses are supported; hostnames cannot be used</string>
+    <string name="network_proxy_port_error">The port must be between 1 and 65535</string>
+    <string name="network_proxy_host_label">Proxy IP address</string>
+    <string name="network_proxy_host_hint">192.168.1.10 or [::1]</string>
+    <string name="network_proxy_port_label">Port</string>
+    <string name="network_proxy_username_label">Username (optional)</string>
+    <string name="network_proxy_password_label">Password (optional)</string>
+    <string name="network_proxy_note">Username and password are sent only when both are filled in. The proxy must support CONNECT to an IP address.</string>
+    <string name="network_proxy_save">Save proxy configuration</string>
+    <string name="network_proxy_off">Off: all connections go direct.</string>
+    <string name="network_proxy_active">Applied to new connections: %1$s:%2$d</string>
+    <string name="network_proxy_invalid">The saved configuration is invalid; the engine is connecting directly.</string>
+
+    <!-- Security lab -->
+    <string name="lab_title">Security check</string>
+    <string name="lab_subtitle">Scan a domain to see why it is blocked</string>
+    <string name="lab_on_device_title">Scanned on this device, never sent anywhere</string>
+    <string name="lab_on_device_body">Scores come from the domain structure and the loaded rules. No network needed.</string>
+    <string name="lab_input_label">Domain, URL or network parameter</string>
+    <string name="lab_input_hint">For example: tracking.app.com</string>
+    <string name="lab_scan">Scan domain</string>
+    <string name="lab_analyzing">Analyzing…</string>
+    <string name="lab_how_title">How it works</string>
+    <string name="lab_how_body">• Checks the domain against the loaded ad and tracker lists, then scores it by domain structure.\n\n• Shows which list supplied the matching rule and estimates the data saved by blocking it.</string>
+    <string name="lab_assessment">Assessment</string>
+    <string name="lab_suggested_rules">Suggested rules</string>
+    <string name="lab_add">Add</string>
+    <string name="lab_offline">Analysis runs entirely on this device; no network needed.</string>
+
+    <!-- Filtering hub -->
+    <string name="hub_subtitle">Filter lists, page extensions and the network path</string>
+    <string name="hub_dns_unset">No DNS selected</string>
+    <string name="hub_filters_subtitle">%1$d filters enabled • %2$s rules</string>
+    <string name="hub_extensions_title">Extensions</string>
+    <string name="hub_extensions_none">No userscripts yet</string>
+    <string name="hub_extensions_master_off">Master switch off — no scripts run</string>
+    <string name="hub_extensions_count">%1$d/%2$d scripts on</string>
+    <string name="hub_network_https_on">%1$s • HTTPS on</string>
+    <string name="hub_network_https_off">%1$s • HTTPS off</string>
+    <string name="hub_back">Back</string>
 </resources>

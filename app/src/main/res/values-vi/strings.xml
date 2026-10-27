@@ -155,4 +155,86 @@
     <string name="nav_filters">Bộ lọc</string>
     <string name="nav_apps">Ứng dụng</string>
     <string name="nav_settings">Cài đặt</string>
+
+    <!-- Protection tab -->
+    <string name="home_modules_title">Mô-đun bảo vệ</string>
+    <string name="home_module_adblock_title">Chặn quảng cáo</string>
+    <string name="home_module_adblock_subtitle">Quảng cáo hiển thị, video và popup trong ứng dụng</string>
+    <string name="home_module_tracking_title">Chống theo dõi</string>
+    <string name="home_module_tracking_subtitle">Chặn analytics và telemetry giữa các ứng dụng</string>
+    <string name="home_module_dns_title">Bảo vệ DNS</string>
+    <string name="home_module_dns_subtitle">Lọc DNS mức hệ thống, chặn DoH/DoT</string>
+    <string name="home_module_firewall_title">Tường lửa</string>
+    <string name="home_module_firewall_subtitle">Giới hạn Wi-Fi, dữ liệu di động và tắt màn hình theo ứng dụng</string>
+    <string name="home_module_eco_title">Chế độ tiết kiệm</string>
+    <string name="home_module_eco_subtitle">Giảm số lần đánh thức CPU để tăng thời lượng pin</string>
+    <string name="home_status_filtering">Đang lọc</string>
+    <string name="home_status_paused">Tạm dừng</string>
+    <string name="home_private_dns_title">Private DNS đang bật</string>
+    <string name="home_private_dns_body">Truy vấn DNS đi thẳng tới máy chủ riêng nên bỏ qua bộ lọc của AdFree. Đã tạm ngừng chặn DoT để mạng vẫn hoạt động; tắt Private DNS để lọc đầy đủ.</string>
+    <string name="home_private_dns_open">Mở cài đặt Private DNS</string>
+    <string name="home_shield_toggle">Bật hoặc tắt lọc</string>
+    <string name="home_shield_protected">Đang được bảo vệ</string>
+    <string name="home_shield_off">Lọc đang tắt</string>
+    <string name="home_stat_ads">Quảng cáo</string>
+    <string name="home_stat_trackers">Theo dõi</string>
+    <string name="home_stat_data">Dữ liệu</string>
+    <string name="home_stat_data_value">%1$d MB</string>
+    <string name="home_stat_battery">Tiết kiệm pin</string>
+    <string name="home_stat_battery_value">+%1$.1f%%</string>
+
+    <!-- Network destination -->
+    <string name="network_title">Mạng</string>
+    <string name="network_subtitle">DNS, lọc HTTPS và đường ra của lưu lượng</string>
+    <string name="network_quic_title">Chặn QUIC / UDP 443</string>
+    <string name="network_quic_subtitle">Buộc client quay về TCP để engine thấy được hostname</string>
+    <string name="network_doh_title">Chặn DNS mã hóa (DoH)</string>
+    <string name="network_doh_subtitle">Chặn DNS-over-HTTPS để client không đi vòng qua bộ lọc</string>
+    <string name="network_dot_title">Chặn DNS mã hóa (DoT)</string>
+    <string name="network_dot_subtitle">Chặn DNS-over-TLS (cổng 853) để client không đi vòng qua bộ lọc</string>
+    <string name="network_dot_private_dns">Private DNS nghiêm ngặt đang bật: hệ thống giữ resolver riêng, cổng 853 không bị chặn.</string>
+    <string name="network_proxy_title">Đường ra của lưu lượng</string>
+    <string name="network_proxy_subtitle">Gửi luồng TCP qua một proxy SOCKS5 thay vì kết nối trực tiếp.</string>
+    <string name="network_socks_title">SOCKS5 proxy</string>
+    <string name="network_socks_subtitle">Chỉ TCP đi qua proxy; DNS và UDP vẫn đi trực tiếp</string>
+    <string name="network_proxy_host_error">Chỉ hỗ trợ địa chỉ IPv4/IPv6, không dùng tên miền</string>
+    <string name="network_proxy_port_error">Cổng phải trong khoảng 1–65535</string>
+    <string name="network_proxy_host_label">Địa chỉ IP proxy</string>
+    <string name="network_proxy_host_hint">192.168.1.10 hoặc [::1]</string>
+    <string name="network_proxy_port_label">Cổng</string>
+    <string name="network_proxy_username_label">Tên đăng nhập (tuỳ chọn)</string>
+    <string name="network_proxy_password_label">Mật khẩu (tuỳ chọn)</string>
+    <string name="network_proxy_note">Tên đăng nhập và mật khẩu chỉ được gửi khi cả hai được nhập. Proxy phải hỗ trợ CONNECT tới địa chỉ IP.</string>
+    <string name="network_proxy_save">Lưu cấu hình proxy</string>
+    <string name="network_proxy_off">Đang tắt: mọi kết nối đi trực tiếp.</string>
+    <string name="network_proxy_active">Đang áp dụng cho kết nối mới: %1$s:%2$d</string>
+    <string name="network_proxy_invalid">Cấu hình đã lưu chưa hợp lệ, engine đang kết nối trực tiếp.</string>
+
+    <!-- Security lab -->
+    <string name="lab_title">Kiểm tra an toàn</string>
+    <string name="lab_subtitle">Quét một tên miền để xem nó bị chặn vì sao</string>
+    <string name="lab_on_device_title">Quét ngay trên thiết bị, không gửi đi đâu</string>
+    <string name="lab_on_device_body">Chấm điểm từ cấu trúc tên miền và các quy tắc đang tải. Không cần mạng.</string>
+    <string name="lab_input_label">Tên miền, URL hoặc thông số mạng</string>
+    <string name="lab_input_hint">Ví dụ: tracking.app.com</string>
+    <string name="lab_scan">Quét tên miền</string>
+    <string name="lab_analyzing">Đang phân tích…</string>
+    <string name="lab_how_title">Cách hoạt động</string>
+    <string name="lab_how_body">• Đối chiếu tên miền với bộ lọc quảng cáo và tracker đang tải, đánh giá theo cấu trúc tên miền.\n\n• Kiểm tra xem quy tắc khớp đến từ danh sách nào, và ước lượng dữ liệu tiết kiệm được nếu chặn.</string>
+    <string name="lab_assessment">Đánh giá</string>
+    <string name="lab_suggested_rules">Quy tắc gợi ý</string>
+    <string name="lab_add">Thêm</string>
+    <string name="lab_offline">Phân tích chạy hoàn toàn trên thiết bị, không cần mạng.</string>
+
+    <!-- Filtering hub -->
+    <string name="hub_subtitle">Danh sách lọc, tiện ích trang và đường mạng</string>
+    <string name="hub_dns_unset">Chưa chọn DNS</string>
+    <string name="hub_filters_subtitle">%1$d bộ lọc đang bật • %2$s quy tắc</string>
+    <string name="hub_extensions_title">Tiện ích</string>
+    <string name="hub_extensions_none">Chưa có userscript nào</string>
+    <string name="hub_extensions_master_off">Đang tắt tổng — không script nào chạy</string>
+    <string name="hub_extensions_count">Bật %1$d/%2$d script</string>
+    <string name="hub_network_https_on">%1$s • HTTPS bật</string>
+    <string name="hub_network_https_off">%1$s • HTTPS tắt</string>
+    <string name="hub_back">Quay lại</string>
 </resources>

@@ -47,9 +47,11 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import git.shin.adfree.R
 import git.shin.adfree.ui.AdGuardViewModel
 import git.shin.adfree.ui.theme.AdGuardBlueDns
 import git.shin.adfree.ui.theme.AdGuardDarkBg
@@ -141,7 +143,7 @@ private fun FilteringHubLanding(
     val dnsName = state.dnsProviders
         .firstOrNull { it.id == settings.selectedDnsProviderId }
         ?.name
-        ?: "Chưa chọn DNS"
+        ?: stringResource(R.string.hub_dns_unset)
 
     Column(
         modifier = modifier
@@ -150,13 +152,13 @@ private fun FilteringHubLanding(
     ) {
         Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp)) {
             Text(
-                text = "Bộ lọc",
+                text = stringResource(R.string.nav_filters),
                 fontSize = 19.sp,
                 fontWeight = FontWeight.Bold,
                 color = AdGuardTextPrimary,
             )
             Text(
-                text = "Danh sách lọc, tiện ích trang và đường mạng",
+                text = stringResource(R.string.hub_subtitle),
                 fontSize = 12.sp,
                 color = AdGuardTextMuted,
             )
@@ -173,8 +175,12 @@ private fun FilteringHubLanding(
             HubCard(
                 icon = Icons.Default.Layers,
                 tint = AdGuardGreenLight,
-                title = "Bộ lọc",
-                subtitle = "$enabledFilters bộ lọc đang bật • ${"%,d".format(enabledRules)} quy tắc",
+                title = stringResource(R.string.nav_filters),
+                subtitle = stringResource(
+                    R.string.hub_filters_subtitle,
+                    enabledFilters,
+                    "%,d".format(enabledRules),
+                ),
                 tag = "filtering_hub_filters",
                 onClick = { onOpen(FilteringSection.FILTERS) },
             )
@@ -184,11 +190,16 @@ private fun FilteringHubLanding(
             HubCard(
                 icon = Icons.Default.Extension,
                 tint = AdGuardPurpleAI,
-                title = "Tiện ích",
+                title = stringResource(R.string.hub_extensions_title),
                 subtitle = when {
-                    state.userscripts.isEmpty() -> "Chưa có userscript nào"
-                    !state.scriptsMasterEnabled -> "Đang tắt tổng — không script nào chạy"
-                    else -> "Bật $scriptsOn/${state.userscripts.size} script"
+                    state.userscripts.isEmpty() -> stringResource(R.string.hub_extensions_none)
+                    !state.scriptsMasterEnabled ->
+                        stringResource(R.string.hub_extensions_master_off)
+                    else -> stringResource(
+                        R.string.hub_extensions_count,
+                        scriptsOn,
+                        state.userscripts.size,
+                    )
                 },
                 tag = "filtering_hub_extensions",
                 onClick = { onOpen(FilteringSection.EXTENSIONS) },
@@ -199,8 +210,12 @@ private fun FilteringHubLanding(
             HubCard(
                 icon = Icons.Default.Dns,
                 tint = AdGuardBlueDns,
-                title = "Mạng",
-                subtitle = "$dnsName • HTTPS ${if (settings.isHttpsFilteringEnabled) "bật" else "tắt"}",
+                title = stringResource(R.string.network_title),
+                subtitle = stringResource(
+                    if (settings.isHttpsFilteringEnabled) R.string.hub_network_https_on
+                    else R.string.hub_network_https_off,
+                    dnsName,
+                ),
                 tag = "filtering_hub_network",
                 onClick = { onOpen(FilteringSection.NETWORK) },
             )
@@ -281,7 +296,7 @@ internal fun HubDestinationHeader(
         IconButton(onClick = onBack) {
             Icon(
                 imageVector = Icons.AutoMirrored.Filled.ArrowBack,
-                contentDescription = "Quay lại",
+                contentDescription = stringResource(R.string.hub_back),
                 tint = AdGuardTextPrimary,
             )
         }

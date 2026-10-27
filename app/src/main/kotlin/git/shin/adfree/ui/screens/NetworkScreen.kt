@@ -31,11 +31,13 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import git.shin.adfree.R
 import git.shin.adfree.model.ProxySettings
 import git.shin.adfree.model.normalizeProxyHost
 import git.shin.adfree.ui.AdGuardIntent
@@ -73,8 +75,8 @@ fun NetworkScreen(
     ) {
         Column(modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)) {
             HubDestinationHeader(
-                title = "Mạng",
-                subtitle = "DNS, lọc HTTPS và đường ra của lưu lượng",
+                title = stringResource(R.string.network_title),
+                subtitle = stringResource(R.string.network_subtitle),
                 onBack = onBack,
             )
         }
@@ -89,8 +91,8 @@ fun NetworkScreen(
 
             SettingsSwitch(
                 icon = Icons.Default.Bolt,
-                title = "Chặn QUIC / UDP 443",
-                subtitle = "Buộc client quay về TCP để engine thấy được hostname",
+                title = stringResource(R.string.network_quic_title),
+                subtitle = stringResource(R.string.network_quic_subtitle),
                 checked = state.settings.blockQuic,
                 onCheckedChange = { viewModel.onIntent(AdGuardIntent.ToggleBlockQuic(it)) },
             )
@@ -99,8 +101,8 @@ fun NetworkScreen(
 
             SettingsSwitch(
                 icon = Icons.Default.Lock,
-                title = "Chặn DNS mã hóa (DoH)",
-                subtitle = "Chặn DNS-over-HTTPS để client không đi vòng qua bộ lọc",
+                title = stringResource(R.string.network_doh_title),
+                subtitle = stringResource(R.string.network_doh_subtitle),
                 checked = state.settings.blockDoh,
                 onCheckedChange = { viewModel.onIntent(AdGuardIntent.ToggleBlockDoh(it)) },
             )
@@ -109,11 +111,11 @@ fun NetworkScreen(
 
             SettingsSwitch(
                 icon = Icons.Default.Dns,
-                title = "Chặn DNS mã hóa (DoT)",
+                title = stringResource(R.string.network_dot_title),
                 subtitle = if (privateDnsOn) {
-                    "Private DNS nghiêm ngặt đang bật: hệ thống giữ resolver riêng, cổng 853 không bị chặn."
+                    stringResource(R.string.network_dot_private_dns)
                 } else {
-                    "Chặn DNS-over-TLS (cổng 853) để client không đi vòng qua bộ lọc"
+                    stringResource(R.string.network_dot_subtitle)
                 },
                 checked = state.settings.blockDot,
                 onCheckedChange = { viewModel.onIntent(AdGuardIntent.ToggleBlockDot(it)) },
@@ -165,7 +167,7 @@ private fun ProxySection(
 ) {
     var draft by remember(saved) { mutableStateOf(saved) }
     var portText by remember(saved) { mutableStateOf(saved.port.toString()) }
-    var error by remember(saved) { mutableStateOf<String?>(null) }
+    var error by remember(saved) { mutableStateOf<Int?>(null) }
 
     val host = normalizeProxyHost(draft.host)
     val port = portText.toIntOrNull()
@@ -173,11 +175,11 @@ private fun ProxySection(
     fun save() {
         if (draft.enabled) {
             if (host == null) {
-                error = "Chỉ hỗ trợ địa chỉ IPv4/IPv6, không dùng tên miền"
+                error = R.string.network_proxy_host_error
                 return
             }
             if (port == null || port !in 1..65535) {
-                error = "Cổng phải trong khoảng 1–65535"
+                error = R.string.network_proxy_port_error
                 return
             }
         }
@@ -193,13 +195,13 @@ private fun ProxySection(
 
     Column {
         Text(
-            text = "Đường ra của lưu lượng",
+            text = stringResource(R.string.network_proxy_title),
             fontSize = 14.sp,
             fontWeight = FontWeight.Bold,
             color = AdGuardTextPrimary,
         )
         Text(
-            text = "Gửi luồng TCP qua một proxy SOCKS5 thay vì kết nối trực tiếp.",
+            text = stringResource(R.string.network_proxy_subtitle),
             fontSize = 11.sp,
             color = AdGuardTextMuted,
         )
@@ -207,8 +209,8 @@ private fun ProxySection(
 
         SettingsSwitch(
             icon = Icons.Default.Public,
-            title = "SOCKS5 proxy",
-            subtitle = "Chỉ TCP đi qua proxy; DNS và UDP vẫn đi trực tiếp",
+            title = stringResource(R.string.network_socks_title),
+            subtitle = stringResource(R.string.network_socks_subtitle),
             checked = draft.enabled,
             onCheckedChange = { enabled ->
                 draft = draft.copy(enabled = enabled)
@@ -230,8 +232,8 @@ private fun ProxySection(
                         draft = draft.copy(host = it)
                         error = null
                     },
-                    label = { Text("Địa chỉ IP proxy", fontSize = 11.sp) },
-                    placeholder = { Text("192.168.1.10 hoặc [::1]", fontSize = 11.sp) },
+                    label = { Text(stringResource(R.string.network_proxy_host_label), fontSize = 11.sp) },
+                    placeholder = { Text(stringResource(R.string.network_proxy_host_hint), fontSize = 11.sp) },
                     singleLine = true,
                     isError = error != null,
                     modifier = Modifier.fillMaxWidth(),
@@ -245,7 +247,7 @@ private fun ProxySection(
                         portText = it.filter(Char::isDigit).take(5)
                         error = null
                     },
-                    label = { Text("Cổng", fontSize = 11.sp) },
+                    label = { Text(stringResource(R.string.network_proxy_port_label), fontSize = 11.sp) },
                     placeholder = { Text("1080", fontSize = 11.sp) },
                     singleLine = true,
                     isError = error != null,
@@ -261,7 +263,7 @@ private fun ProxySection(
                         draft = draft.copy(username = it)
                         error = null
                     },
-                    label = { Text("Tên đăng nhập (tuỳ chọn)", fontSize = 11.sp) },
+                    label = { Text(stringResource(R.string.network_proxy_username_label), fontSize = 11.sp) },
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth(),
                     shape = RoundedCornerShape(10.dp),
@@ -274,7 +276,7 @@ private fun ProxySection(
                         draft = draft.copy(password = it)
                         error = null
                     },
-                    label = { Text("Mật khẩu (tuỳ chọn)", fontSize = 11.sp) },
+                    label = { Text(stringResource(R.string.network_proxy_password_label), fontSize = 11.sp) },
                     singleLine = true,
                     visualTransformation = PasswordVisualTransformation(),
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
@@ -284,12 +286,11 @@ private fun ProxySection(
                 )
                 error?.let {
                     Spacer(modifier = Modifier.height(6.dp))
-                    Text(it, fontSize = 11.sp, color = AdGuardRedBlocked)
+                    Text(stringResource(it), fontSize = 11.sp, color = AdGuardRedBlocked)
                 }
                 Spacer(modifier = Modifier.height(8.dp))
                 Text(
-                    text = "Tên đăng nhập và mật khẩu chỉ được gửi khi cả hai được nhập. " +
-                        "Proxy phải hỗ trợ CONNECT tới địa chỉ IP.",
+                    text = stringResource(R.string.network_proxy_note),
                     fontSize = 11.sp,
                     color = AdGuardTextMuted,
                 )
@@ -300,14 +301,22 @@ private fun ProxySection(
                     shape = RoundedCornerShape(8.dp),
                     colors = ButtonDefaults.buttonColors(containerColor = AdGuardBlueDns),
                 ) {
-                    Text("Lưu cấu hình proxy", color = AdGuardOnAccent, fontWeight = FontWeight.Bold)
+                    Text(
+                        stringResource(R.string.network_proxy_save),
+                        color = AdGuardOnAccent,
+                        fontWeight = FontWeight.Bold,
+                    )
                 }
                 Spacer(modifier = Modifier.height(8.dp))
                 Text(
                     text = when {
-                        !saved.enabled -> "Đang tắt: mọi kết nối đi trực tiếp."
-                        saved.isUsable -> "Đang áp dụng cho kết nối mới: ${saved.host}:${saved.port}"
-                        else -> "Cấu hình đã lưu chưa hợp lệ, engine đang kết nối trực tiếp."
+                        !saved.enabled -> stringResource(R.string.network_proxy_off)
+                        saved.isUsable -> stringResource(
+                            R.string.network_proxy_active,
+                            saved.host,
+                            saved.port,
+                        )
+                        else -> stringResource(R.string.network_proxy_invalid)
                     },
                     fontSize = 11.sp,
                     color = when {

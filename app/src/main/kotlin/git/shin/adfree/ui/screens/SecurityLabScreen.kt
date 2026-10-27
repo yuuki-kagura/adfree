@@ -51,11 +51,13 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import git.shin.adfree.R
 import git.shin.adfree.model.ThreatAnalysisResult
 import git.shin.adfree.ui.AdGuardIntent
 import git.shin.adfree.ui.AdGuardViewModel
@@ -111,13 +113,13 @@ fun SecurityLabScreen(
             Spacer(modifier = Modifier.width(8.dp))
             Column {
                 Text(
-                    text = "Kiểm tra an toàn",
+                    text = stringResource(R.string.lab_title),
                     fontSize = 19.sp,
                     fontWeight = FontWeight.Bold,
                     color = AdGuardTextPrimary
                 )
                 Text(
-                    text = "Quét một tên miền để xem nó bị chặn vì sao",
+                    text = stringResource(R.string.lab_subtitle),
                     fontSize = 12.sp,
                     color = AdGuardTextMuted
                 )
@@ -152,14 +154,13 @@ fun SecurityLabScreen(
                     Spacer(modifier = Modifier.width(8.dp))
                     Column {
                         Text(
-                            text = "Quét ngay trên thiết bị, không gửi đi đâu",
+                            text = stringResource(R.string.lab_on_device_title),
                             fontSize = 12.sp,
                             fontWeight = FontWeight.Bold,
                             color = AdGuardTextPrimary,
                         )
                         Text(
-                            text = "Chấm điểm từ cấu trúc tên miền và các quy tắc đang tải. " +
-                                "Không cần mạng.",
+                            text = stringResource(R.string.lab_on_device_body),
                             fontSize = 11.sp,
                             color = AdGuardTextMuted,
                         )
@@ -171,8 +172,8 @@ fun SecurityLabScreen(
         OutlinedTextField(
             value = domainInput,
             onValueChange = { domainInput = it },
-            label = { Text("Tên miền, URL hoặc thông số mạng") },
-            placeholder = { Text("Ví dụ: tracking.app.com") },
+            label = { Text(stringResource(R.string.lab_input_label)) },
+            placeholder = { Text(stringResource(R.string.lab_input_hint)) },
             singleLine = true,
             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri),
             modifier = Modifier
@@ -233,7 +234,11 @@ fun SecurityLabScreen(
                 tint = AdGuardOnAccent,
             )
             Spacer(modifier = Modifier.width(8.dp))
-            Text(text = "Quét tên miền", fontWeight = FontWeight.Bold, color = AdGuardOnAccent)
+            Text(
+                text = stringResource(R.string.lab_scan),
+                fontWeight = FontWeight.Bold,
+                color = AdGuardOnAccent,
+            )
         }
 
         Spacer(modifier = Modifier.height(20.dp))
@@ -268,7 +273,7 @@ fun SecurityLabScreen(
                         )
                         Spacer(modifier = Modifier.height(6.dp))
                         Text(
-                            text = "Đang phân tích…",
+                            text = stringResource(R.string.lab_analyzing),
                             fontSize = 11.sp,
                             color = AdGuardTextMuted
                         )
@@ -323,7 +328,7 @@ fun ScienceLabIntroCard() {
                 Icon(Icons.Default.Lightbulb, contentDescription = null, tint = AdGuardGreenLight, modifier = Modifier.size(20.dp))
                 Spacer(modifier = Modifier.width(8.dp))
                 Text(
-                    text = "Cách hoạt động",
+                    text = stringResource(R.string.lab_how_title),
                     fontSize = 14.sp,
                     fontWeight = FontWeight.Bold,
                     color = AdGuardTextPrimary
@@ -333,10 +338,7 @@ fun ScienceLabIntroCard() {
             Spacer(modifier = Modifier.height(10.dp))
 
             Text(
-                text = "• Đối chiếu tên miền với bộ lọc quảng cáo và tracker đang tải, " +
-                    "đánh giá theo cấu trúc tên miền.\n\n" +
-                    "• Kiểm tra xem quy tắc khớp đến từ danh sách nào, và ước lượng " +
-                    "dữ liệu tiết kiệm được nếu chặn.",
+                text = stringResource(R.string.lab_how_body),
                 fontSize = 12.sp,
                 color = AdGuardTextSecondary,
                 lineHeight = 18.sp
@@ -413,7 +415,7 @@ fun ThreatResultCard(
 
             // Summary Explanation
             Text(
-                text = "Đánh giá",
+                text = stringResource(R.string.lab_assessment),
                 fontSize = 11.sp,
                 fontWeight = FontWeight.Bold,
                 color = AdGuardTextMuted,
@@ -432,7 +434,7 @@ fun ThreatResultCard(
             if (result.suggestedRules.isNotEmpty()) {
                 Spacer(modifier = Modifier.height(14.dp))
                 Text(
-                    text = "Quy tắc gợi ý",
+                    text = stringResource(R.string.lab_suggested_rules),
                     fontSize = 11.sp,
                     fontWeight = FontWeight.Bold,
                     color = AdGuardTextMuted,
@@ -466,7 +468,12 @@ fun ThreatResultCard(
                         ) {
                             Icon(Icons.Default.Add, contentDescription = null, tint = AdGuardOnAccent, modifier = Modifier.size(14.dp))
                             Spacer(modifier = Modifier.width(4.dp))
-                            Text("Thêm", fontSize = 12.sp, color = AdGuardOnAccent, fontWeight = FontWeight.Bold)
+                            Text(
+                                stringResource(R.string.lab_add),
+                                fontSize = 12.sp,
+                                color = AdGuardOnAccent,
+                                fontWeight = FontWeight.Bold,
+                            )
                         }
                     }
                     Spacer(modifier = Modifier.height(6.dp))
@@ -475,7 +482,7 @@ fun ThreatResultCard(
 
             // Suggested rules are produced offline, so the data-source block is gone; just state that analysis runs on device.
             Text(
-                text = "Phân tích chạy hoàn toàn trên thiết bị, không cần mạng.",
+                text = stringResource(R.string.lab_offline),
                 fontSize = 11.sp,
                 color = AdGuardTextMuted,
             )
