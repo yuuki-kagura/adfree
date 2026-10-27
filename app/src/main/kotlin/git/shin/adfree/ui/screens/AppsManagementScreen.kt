@@ -157,7 +157,7 @@ fun AppsManagementScreen(
             trailingIcon = {
                 if (state.appSearchQuery.isNotEmpty()) {
                     IconButton(onClick = { viewModel.onIntent(AdGuardIntent.AppSearchQueryChanged("")) }) {
-                        Icon(Icons.Default.Clear, contentDescription = stringResource(R.string.apps_clear_search), tint = AdGuardTextMuted)
+                        Icon(Icons.Default.Clear, contentDescription = stringResource(R.string.common_clear_search), tint = AdGuardTextMuted)
                     }
                 }
             },

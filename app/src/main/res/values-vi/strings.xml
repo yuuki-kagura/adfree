@@ -240,6 +240,8 @@
 
     <!-- Common actions -->
     <string name="common_cancel">Hủy</string>
+    <string name="common_close">Đóng</string>
+    <string name="common_clear_search">Xóa tìm kiếm</string>
 
     <!-- Userscript extensions -->
     <string name="ext_editor_name_label">Tên tiện ích</string>
@@ -398,7 +400,6 @@
     <string name="apps_subtitle">%1$d ứng dụng • chọn app nào được lọc</string>
     <string name="apps_firewall_off">Tường lửa đang tắt — giới hạn mạng theo app chưa áp dụng</string>
     <string name="apps_search_hint">Tìm ứng dụng theo tên hoặc gói (package)…</string>
-    <string name="apps_clear_search">Xóa tìm kiếm</string>
     <string name="apps_cat_all">Tất cả</string>
     <string name="apps_cat_blocked">Đang chặn</string>
     <string name="apps_cat_filtered">Được lọc</string>
@@ -457,4 +458,50 @@
     <string name="apps_log_status_allowed">CHO PHÉP</string>
     <string name="apps_preset_open">Bỏ lọc &amp; mở mạng</string>
     <string name="apps_preset_default">Bật lọc mặc định</string>
+
+    <!-- Activity log -->
+    <string name="log_title">Nhật ký</string>
+    <string name="log_subtitle">Các truy vấn mạng gần đây của thiết bị</string>
+    <string name="log_clear_action">Xóa nhật ký</string>
+    <string name="log_clear_title">Xoá nhật ký?</string>
+    <string name="log_clear_body">Toàn bộ %1$d bản ghi sẽ bị xoá và không thể hoàn tác.</string>
+    <string name="log_clear_confirm">Xoá</string>
+    <string name="log_search_hint">Tìm theo tên miền, ứng dụng, quy tắc…</string>
+    <string name="log_filter_all">Tất cả (%1$d)</string>
+    <string name="log_filter_blocked">Đã chặn (%1$d)</string>
+    <string name="log_filter_allowed">Cho phép (%1$d)</string>
+    <string name="log_filter_by_app">Đang lọc theo ứng dụng: %1$s</string>
+    <string name="log_filter_by_app_clear">Bỏ lọc theo ứng dụng</string>
+    <string name="log_empty_title">Chưa có lưu lượng mạng được ghi nhận</string>
+    <string name="log_empty_body">Bật công tắc bảo vệ ở tab Bảo vệ để bắt đầu lọc</string>
+    <string name="log_showing">Đang hiển thị %1$d/%2$d dòng</string>
+    <string name="log_load_more">Tải thêm</string>
+    <string name="log_status_blocked">Đã chặn</string>
+    <string name="log_status_allowed">Cho phép</string>
+    <string name="log_status_whitelisted">Trắng</string>
+    <string name="log_detail_title">Chi tiết truy vấn</string>
+    <string name="log_dest_header">TÊN MIỀN ĐÍCH</string>
+    <string name="log_ip_protocol">IP: %1$s • Giao thức: %2$s</string>
+    <string name="log_detail_domain">Tên miền</string>
+    <string name="log_detail_action">Quyết định xử lý</string>
+    <string name="log_detail_category">Phân loại</string>
+    <string name="log_detail_app">Ứng dụng</string>
+    <string name="log_detail_rule">Quy tắc kích hoạt</string>
+    <string name="log_detail_list">Nguồn bộ lọc</string>
+    <string name="log_detail_saved">Dung lượng tiết kiệm</string>
+    <string name="log_action_blocked">Đã chặn</string>
+    <string name="log_action_allowed">Cho phép</string>
+    <string name="log_action_whitelisted">Trong danh sách trắng</string>
+    <string name="log_app_unknown">Không xác định</string>
+    <string name="log_saved_value">%1$d KB</string>
+    <string name="log_allowlist">Danh sách trắng</string>
+    <string name="log_block_domain">Chặn tên miền</string>
+    <string name="log_check_safety">Kiểm tra an toàn</string>
+    <string name="log_category_ad">Quảng cáo</string>
+    <string name="log_category_tracker">Tracker &amp; Telemetry</string>
+    <string name="log_category_analytics">Phân tích</string>
+    <string name="log_category_social">Tiện ích mạng xã hội</string>
+    <string name="log_category_annoyance">Phiền nhiễu</string>
+    <string name="log_category_malware">Mã độc &amp; lừa đảo</string>
+    <string name="log_category_custom">Quy tắc tuỳ chỉnh</string>
 </resources>

@@ -240,6 +240,8 @@
 
     <!-- Common actions -->
     <string name="common_cancel">Cancel</string>
+    <string name="common_close">Close</string>
+    <string name="common_clear_search">Clear search</string>
 
     <!-- Userscript extensions -->
     <string name="ext_editor_name_label">Extension name</string>
@@ -398,7 +400,6 @@
     <string name="apps_subtitle">%1$d apps • choose which ones get filtered</string>
     <string name="apps_firewall_off">Firewall is off — per-app network limits are not applied</string>
     <string name="apps_search_hint">Search apps by name or package…</string>
-    <string name="apps_clear_search">Clear search</string>
     <string name="apps_cat_all">All</string>
     <string name="apps_cat_blocked">Blocked</string>
     <string name="apps_cat_filtered">Filtered</string>
@@ -457,4 +458,50 @@
     <string name="apps_log_status_allowed">ALLOWED</string>
     <string name="apps_preset_open">Unfiltered &amp; open network</string>
     <string name="apps_preset_default">Enable default filtering</string>
+
+    <!-- Activity log -->
+    <string name="log_title">Log</string>
+    <string name="log_subtitle">Recent network queries from this device</string>
+    <string name="log_clear_action">Clear log</string>
+    <string name="log_clear_title">Clear the log?</string>
+    <string name="log_clear_body">All %1$d entries will be deleted. This cannot be undone.</string>
+    <string name="log_clear_confirm">Delete</string>
+    <string name="log_search_hint">Search by domain, app, or rule…</string>
+    <string name="log_filter_all">All (%1$d)</string>
+    <string name="log_filter_blocked">Blocked (%1$d)</string>
+    <string name="log_filter_allowed">Allowed (%1$d)</string>
+    <string name="log_filter_by_app">Filtering by app: %1$s</string>
+    <string name="log_filter_by_app_clear">Clear app filter</string>
+    <string name="log_empty_title">No network traffic recorded yet</string>
+    <string name="log_empty_body">Turn protection on in the Protection tab to start filtering</string>
+    <string name="log_showing">Showing %1$d/%2$d rows</string>
+    <string name="log_load_more">Load more</string>
+    <string name="log_status_blocked">Blocked</string>
+    <string name="log_status_allowed">Allowed</string>
+    <string name="log_status_whitelisted">Allowlisted</string>
+    <string name="log_detail_title">Query details</string>
+    <string name="log_dest_header">TARGET DOMAIN</string>
+    <string name="log_ip_protocol">IP: %1$s • Protocol: %2$s</string>
+    <string name="log_detail_domain">Domain</string>
+    <string name="log_detail_action">Action</string>
+    <string name="log_detail_category">Category</string>
+    <string name="log_detail_app">App</string>
+    <string name="log_detail_rule">Matched rule</string>
+    <string name="log_detail_list">Filter source</string>
+    <string name="log_detail_saved">Data saved</string>
+    <string name="log_action_blocked">Blocked</string>
+    <string name="log_action_allowed">Allowed</string>
+    <string name="log_action_whitelisted">In the allowlist</string>
+    <string name="log_app_unknown">Unknown</string>
+    <string name="log_saved_value">%1$d KB</string>
+    <string name="log_allowlist">Allowlist</string>
+    <string name="log_block_domain">Block domain</string>
+    <string name="log_check_safety">Check safety</string>
+    <string name="log_category_ad">Advertising</string>
+    <string name="log_category_tracker">Tracker &amp; telemetry</string>
+    <string name="log_category_analytics">Analytics</string>
+    <string name="log_category_social">Social widget</string>
+    <string name="log_category_annoyance">Annoyances</string>
+    <string name="log_category_malware">Malware &amp; phishing</string>
+    <string name="log_category_custom">Custom rule</string>
 </resources>

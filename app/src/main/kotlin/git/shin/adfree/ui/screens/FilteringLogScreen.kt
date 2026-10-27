@@ -62,13 +62,16 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import git.shin.adfree.R
 import git.shin.adfree.model.FilterStatus
 import git.shin.adfree.model.NetworkRequestLog
+import git.shin.adfree.model.RequestCategory
 import git.shin.adfree.ui.AdGuardIntent
 import git.shin.adfree.ui.AdGuardTab
 import git.shin.adfree.ui.AdGuardViewModel
@@ -122,10 +125,10 @@ fun FilteringLogScreen(
             containerColor = AdGuardDarkSurface,
             titleContentColor = AdGuardTextPrimary,
             textContentColor = AdGuardTextSecondary,
-            title = { Text("Xoá nhật ký?") },
+            title = { Text(stringResource(R.string.log_clear_title)) },
             text = {
                 Text(
-                    "Toàn bộ ${state.logs.size} bản ghi sẽ bị xoá và không thể hoàn tác.",
+                    stringResource(R.string.log_clear_body, state.logs.size),
                     fontSize = 13.sp,
                 )
             },
@@ -134,12 +137,12 @@ fun FilteringLogScreen(
                     showClearConfirm = false
                     viewModel.onIntent(AdGuardIntent.ClearLogs)
                 }) {
-                    Text("Xoá", fontSize = 13.sp, fontWeight = FontWeight.Bold, color = AdGuardRedBlocked)
+                    Text(stringResource(R.string.log_clear_confirm), fontSize = 13.sp, fontWeight = FontWeight.Bold, color = AdGuardRedBlocked)
                 }
             },
             dismissButton = {
                 TextButton(onClick = { showClearConfirm = false }) {
-                    Text("Hủy", fontSize = 13.sp, color = AdGuardTextSecondary)
+                    Text(stringResource(R.string.common_cancel), fontSize = 13.sp, color = AdGuardTextSecondary)
                 }
             },
         )
@@ -159,13 +162,13 @@ fun FilteringLogScreen(
         ) {
             Column {
                 Text(
-                    text = "Nhật ký",
+                    text = stringResource(R.string.log_title),
                     fontSize = 19.sp,
                     fontWeight = FontWeight.Bold,
                     color = AdGuardTextPrimary
                 )
                 Text(
-                    text = "Các truy vấn mạng gần đây của thiết bị",
+                    text = stringResource(R.string.log_subtitle),
                     fontSize = 12.sp,
                     color = AdGuardTextMuted
                 )
@@ -177,7 +180,7 @@ fun FilteringLogScreen(
             ) {
                 Icon(
                     imageVector = Icons.Default.DeleteSweep,
-                    contentDescription = "Xóa nhật ký",
+                    contentDescription = stringResource(R.string.log_clear_action),
                     tint = AdGuardTextSecondary
                 )
             }
@@ -189,14 +192,14 @@ fun FilteringLogScreen(
         OutlinedTextField(
             value = state.searchQuery,
             onValueChange = { viewModel.onIntent(AdGuardIntent.SearchQueryChanged(it)) },
-            placeholder = { Text("Tìm theo tên miền, ứng dụng, quy tắc...", color = AdGuardTextMuted, fontSize = 13.sp) },
+            placeholder = { Text(stringResource(R.string.log_search_hint), color = AdGuardTextMuted, fontSize = 13.sp) },
             leadingIcon = {
                 Icon(Icons.Default.Search, contentDescription = null, tint = AdGuardTextMuted)
             },
             trailingIcon = {
                 if (state.searchQuery.isNotEmpty()) {
                     IconButton(onClick = { viewModel.onIntent(AdGuardIntent.SearchQueryChanged("")) }) {
-                        Icon(Icons.Default.Clear, contentDescription = "Clear", tint = AdGuardTextMuted)
+                        Icon(Icons.Default.Clear, contentDescription = stringResource(R.string.common_clear_search), tint = AdGuardTextMuted)
                     }
                 }
             },
@@ -227,7 +230,7 @@ fun FilteringLogScreen(
             FilterChip(
                 selected = state.statusFilter == null,
                 onClick = { viewModel.onIntent(AdGuardIntent.FilterStatusChanged(null)) },
-                label = { Text("Tất cả (${state.logs.size})", fontSize = 12.sp) },
+                label = { Text(stringResource(R.string.log_filter_all, state.logs.size), fontSize = 12.sp) },
                 colors = FilterChipDefaults.filterChipColors(
                     selectedContainerColor = AdGuardGreenPrimary,
                     selectedLabelColor = AdGuardOnAccent,
@@ -239,7 +242,7 @@ fun FilteringLogScreen(
             FilterChip(
                 selected = state.statusFilter == FilterStatus.BLOCKED,
                 onClick = { viewModel.onIntent(AdGuardIntent.FilterStatusChanged(FilterStatus.BLOCKED)) },
-                label = { Text("Đã chặn (${state.logs.count { it.status == FilterStatus.BLOCKED }})", fontSize = 12.sp) },
+                label = { Text(stringResource(R.string.log_filter_blocked, state.logs.count { it.status == FilterStatus.BLOCKED }), fontSize = 12.sp) },
                 colors = FilterChipDefaults.filterChipColors(
                     selectedContainerColor = AdGuardRedBlocked,
                     selectedLabelColor = Color.White,
@@ -251,7 +254,7 @@ fun FilteringLogScreen(
             FilterChip(
                 selected = state.statusFilter == FilterStatus.ALLOWED,
                 onClick = { viewModel.onIntent(AdGuardIntent.FilterStatusChanged(FilterStatus.ALLOWED)) },
-                label = { Text("Cho phép (${state.logs.count { it.status == FilterStatus.ALLOWED }})", fontSize = 12.sp) },
+                label = { Text(stringResource(R.string.log_filter_allowed, state.logs.count { it.status == FilterStatus.ALLOWED }), fontSize = 12.sp) },
                 colors = FilterChipDefaults.filterChipColors(
                     selectedContainerColor = AdGuardGreenLight,
                     selectedLabelColor = AdGuardOnAccent,
@@ -297,7 +300,7 @@ fun FilteringLogScreen(
                         )
                         Spacer(modifier = Modifier.width(8.dp))
                         Text(
-                            text = "Đang lọc theo ứng dụng: $appDisplayName",
+                            text = stringResource(R.string.log_filter_by_app, appDisplayName),
                             fontSize = 12.sp,
                             fontWeight = FontWeight.Bold,
                             color = AdGuardGreenLight,
@@ -311,7 +314,7 @@ fun FilteringLogScreen(
                     ) {
                         Icon(
                             imageVector = Icons.Default.Close,
-                            contentDescription = "Bỏ lọc theo ứng dụng",
+                            contentDescription = stringResource(R.string.log_filter_by_app_clear),
                             tint = AdGuardTextMuted,
                             modifier = Modifier.size(16.dp)
                         )
@@ -339,13 +342,13 @@ fun FilteringLogScreen(
                     )
                     Spacer(modifier = Modifier.height(12.dp))
                     Text(
-                        text = "Chưa có lưu lượng mạng được ghi nhận",
+                        text = stringResource(R.string.log_empty_title),
                         fontSize = 15.sp,
                         fontWeight = FontWeight.SemiBold,
                         color = AdGuardTextSecondary
                     )
                     Text(
-                        text = "Bật công tắc bảo vệ ở tab Bảo vệ để bắt đầu lọc",
+                        text = stringResource(R.string.log_empty_body),
                         fontSize = 12.sp,
                         color = AdGuardTextMuted
                     )
@@ -377,7 +380,7 @@ fun FilteringLogScreen(
                             horizontalAlignment = Alignment.CenterHorizontally
                         ) {
                             Text(
-                                text = "Đang hiển thị ${state.logs.size}/${state.logTotal} dòng",
+                                text = stringResource(R.string.log_showing, state.logs.size, state.logTotal),
                                 fontSize = 11.sp,
                                 color = AdGuardTextMuted
                             )
@@ -389,7 +392,7 @@ fun FilteringLogScreen(
                                 border = androidx.compose.foundation.BorderStroke(1.dp, AdGuardGreenPrimary)
                             ) {
                                 Text(
-                                    text = "Tải thêm",
+                                    text = stringResource(R.string.log_load_more),
                                     color = AdGuardGreenPrimary,
                                     fontSize = 12.sp,
                                     fontWeight = FontWeight.Bold
@@ -426,6 +429,31 @@ fun FilteringLogScreen(
             )
         }
     }
+}
+
+@Composable
+private fun logStatusLabel(status: FilterStatus): String = when (status) {
+    FilterStatus.BLOCKED -> stringResource(R.string.log_status_blocked)
+    FilterStatus.ALLOWED -> stringResource(R.string.log_status_allowed)
+    FilterStatus.WHITELISTED -> stringResource(R.string.log_status_whitelisted)
+}
+
+@Composable
+private fun logActionLabel(status: FilterStatus): String = when (status) {
+    FilterStatus.BLOCKED -> stringResource(R.string.log_action_blocked)
+    FilterStatus.ALLOWED -> stringResource(R.string.log_action_allowed)
+    FilterStatus.WHITELISTED -> stringResource(R.string.log_action_whitelisted)
+}
+
+@Composable
+private fun requestCategoryLabel(category: RequestCategory): String = when (category) {
+    RequestCategory.AD -> stringResource(R.string.log_category_ad)
+    RequestCategory.TRACKER -> stringResource(R.string.log_category_tracker)
+    RequestCategory.ANALYTICS -> stringResource(R.string.log_category_analytics)
+    RequestCategory.SOCIAL -> stringResource(R.string.log_category_social)
+    RequestCategory.ANNOYANCE -> stringResource(R.string.log_category_annoyance)
+    RequestCategory.MALWARE -> stringResource(R.string.log_category_malware)
+    RequestCategory.CUSTOM -> stringResource(R.string.log_category_custom)
 }
 
 @Composable
@@ -546,11 +574,7 @@ fun LogItemCard(
                     .padding(horizontal = 8.dp, vertical = 3.dp)
             ) {
                 Text(
-                    text = when (log.status) {
-                        FilterStatus.BLOCKED -> "Đã chặn"
-                        FilterStatus.ALLOWED -> "Cho phép"
-                        FilterStatus.WHITELISTED -> "Trắng"
-                    },
+                    text = logStatusLabel(log.status),
                     fontSize = 10.sp,
                     fontWeight = FontWeight.Bold,
                     color = statusColor
@@ -580,13 +604,13 @@ fun PacketInspectionSheetContent(
             verticalAlignment = Alignment.CenterVertically
         ) {
             Text(
-                text = "Chi tiết truy vấn",
+                text = stringResource(R.string.log_detail_title),
                 fontSize = 17.sp,
                 fontWeight = FontWeight.Bold,
                 color = AdGuardTextPrimary
             )
             IconButton(onClick = onClose) {
-                Icon(Icons.Default.Close, contentDescription = "Close", tint = AdGuardTextSecondary)
+                Icon(Icons.Default.Close, contentDescription = stringResource(R.string.common_close), tint = AdGuardTextSecondary)
             }
         }
 
@@ -600,7 +624,7 @@ fun PacketInspectionSheetContent(
         ) {
             Column(modifier = Modifier.padding(14.dp)) {
                 Text(
-                    text = "TÊN MIỀN ĐÍCH",
+                    text = stringResource(R.string.log_dest_header),
                     fontSize = 11.sp,
                     fontWeight = FontWeight.Bold,
                     color = AdGuardTextMuted
@@ -614,7 +638,7 @@ fun PacketInspectionSheetContent(
                 )
                 Spacer(modifier = Modifier.height(4.dp))
                 Text(
-                    text = "IP: ${log.ipAddress} • Giao thức: ${log.protocol.label}",
+                    text = stringResource(R.string.log_ip_protocol, log.ipAddress, log.protocol.label),
                     fontSize = 12.sp,
                     color = AdGuardTextSecondary
                 )
@@ -625,25 +649,27 @@ fun PacketInspectionSheetContent(
 
         // Detailed Metadata Grid
         Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            DetailRow(label = "Tên miền", value = log.domain)
+            DetailRow(label = stringResource(R.string.log_detail_domain), value = log.domain)
             DetailRow(
-                label = "Quyết định xử lý",
-                value = when (log.status) {
-                    FilterStatus.BLOCKED -> "Đã chặn"
-                    FilterStatus.ALLOWED -> "Cho phép"
-                    FilterStatus.WHITELISTED -> "Trong danh sách trắng"
-                }
+                label = stringResource(R.string.log_detail_action),
+                value = logActionLabel(log.status)
             )
-            DetailRow(label = "Phân loại", value = log.category.label)
-            DetailRow(label = "Ứng dụng", value = appLabel ?: "Không xác định")
+            DetailRow(label = stringResource(R.string.log_detail_category), value = requestCategoryLabel(log.category))
+            DetailRow(
+                label = stringResource(R.string.log_detail_app),
+                value = appLabel ?: stringResource(R.string.log_app_unknown)
+            )
             if (log.matchedRule != null) {
-                DetailRow(label = "Quy tắc kích hoạt", value = log.matchedRule)
+                DetailRow(label = stringResource(R.string.log_detail_rule), value = log.matchedRule)
             }
             if (log.filterListName != null) {
-                DetailRow(label = "Nguồn bộ lọc", value = log.filterListName)
+                DetailRow(label = stringResource(R.string.log_detail_list), value = log.filterListName)
             }
             if (log.dataSavedBytes > 0) {
-                DetailRow(label = "Dung lượng tiết kiệm", value = "${log.dataSavedBytes / 1024} KB")
+                DetailRow(
+                    label = stringResource(R.string.log_detail_saved),
+                    value = stringResource(R.string.log_saved_value, log.dataSavedBytes / 1024)
+                )
             }
         }
 
@@ -662,7 +688,7 @@ fun PacketInspectionSheetContent(
                 shape = RoundedCornerShape(10.dp),
                 border = androidx.compose.foundation.BorderStroke(1.dp, AdGuardBlueDns)
             ) {
-                Text("Danh sách trắng", color = AdGuardBlueDns, fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                Text(stringResource(R.string.log_allowlist), color = AdGuardBlueDns, fontWeight = FontWeight.Bold, fontSize = 12.sp)
             }
 
             OutlinedButton(
@@ -673,7 +699,7 @@ fun PacketInspectionSheetContent(
                 shape = RoundedCornerShape(10.dp),
                 border = androidx.compose.foundation.BorderStroke(1.dp, AdGuardRedBlocked)
             ) {
-                Text("Chặn tên miền", color = AdGuardRedBlocked, fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                Text(stringResource(R.string.log_block_domain), color = AdGuardRedBlocked, fontWeight = FontWeight.Bold, fontSize = 12.sp)
             }
         }
 
@@ -689,7 +715,7 @@ fun PacketInspectionSheetContent(
         ) {
             Icon(Icons.Default.Search, contentDescription = null, tint = AdGuardOnAccent)
             Spacer(modifier = Modifier.width(8.dp))
-            Text("Kiểm tra an toàn", color = AdGuardOnAccent, fontWeight = FontWeight.Bold)
+            Text(stringResource(R.string.log_check_safety), color = AdGuardOnAccent, fontWeight = FontWeight.Bold)
         }
 
         Spacer(modifier = Modifier.height(16.dp))
