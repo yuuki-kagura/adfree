@@ -219,7 +219,7 @@ fun ExtensionsSection(
                     Text("Tiện ích", fontSize = 13.sp, fontWeight = FontWeight.Bold, color = AdGuardTextPrimary)
                     Text(
                         "Script theo phạm vi @match / @include",
-                        fontSize = 10.sp,
+                        fontSize = 11.sp,
                         color = AdGuardTextMuted,
                     )
                     // AdGuard shows "Enabled: 1 of 2" on the hub row; the
@@ -232,7 +232,7 @@ fun ExtensionsSection(
                             } else {
                                 "Tắt tổng — không script nào chạy"
                             },
-                            fontSize = 10.sp,
+                            fontSize = 11.sp,
                             color = AdGuardTextMuted,
                         )
                     }
@@ -324,7 +324,7 @@ fun UserScriptStoreSheet(
                 Text("Kho tiện ích", fontSize = 17.sp, fontWeight = FontWeight.Bold, color = AdGuardTextPrimary)
                 Text(
                     "Tìm trên Greasy Fork • script tự chạy theo @match",
-                    fontSize = 10.sp,
+                    fontSize = 11.sp,
                     color = AdGuardTextMuted,
                 )
             }
@@ -334,7 +334,7 @@ fun UserScriptStoreSheet(
         Text(
             "Script chạy mã của tác giả trong trang. Chỉ cài khi bạn tin tưởng nguồn; " +
                 "GM_xmlhttpRequest/GM_download vẫn theo CORS của trang, GM_setValue và @resource chưa hỗ trợ.",
-            fontSize = 10.sp,
+            fontSize = 11.sp,
             color = AdGuardTextMuted,
         )
         Spacer(modifier = Modifier.height(10.dp))
@@ -447,7 +447,7 @@ fun UserScriptStoreSheet(
                     Spacer(modifier = Modifier.height(8.dp))
                 }
                 if (state.error != null) {
-                    Text(state.error, fontSize = 10.sp, color = AdGuardRedBlocked)
+                    Text(state.error, fontSize = 11.sp, color = AdGuardRedBlocked)
                     Spacer(modifier = Modifier.height(6.dp))
                 }
                 LazyColumn(
@@ -543,7 +543,7 @@ private fun StoreScriptRow(
                     if (bits.isNotEmpty()) {
                         Text(
                             text = bits.joinToString(" • "),
-                            fontSize = 9.sp,
+                            fontSize = 10.sp,
                             color = AdGuardTextMuted,
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis,
@@ -584,7 +584,7 @@ private fun StoreScriptRow(
                 Spacer(modifier = Modifier.height(4.dp))
                 Text(
                     text = "Nguồn Greasy Fork",
-                    fontSize = 9.sp,
+                    fontSize = 10.sp,
                     color = AdGuardBlueDns,
                     modifier = Modifier.clickable { onOpenPage() },
                 )
@@ -732,7 +732,7 @@ fun AddScriptDialog(
                 }
                 Text(
                     "Lưu ý: tiện ích có thể truy cập dữ liệu trang — chỉ cài những script bạn hiểu và tin cậy.",
-                    fontSize = 10.sp,
+                    fontSize = 11.sp,
                     color = AdGuardTextMuted,
                 )
             }
@@ -843,7 +843,7 @@ fun ScriptDetailSheet(
                 Text(
                     text = "Script dùng API vượt phạm vi trang (GM_xmlhttpRequest, unsafeWindow…). " +
                         "Chỉ nên bật khi bạn tin nguồn phát hành.",
-                    fontSize = 10.sp,
+                    fontSize = 11.sp,
                     color = AdGuardOrangeWarning,
                 )
             }
@@ -853,13 +853,13 @@ fun ScriptDetailSheet(
         if (script.isBuiltin) {
             Text(
                 text = "Đi kèm ứng dụng, cập nhật theo bản phát hành.",
-                fontSize = 9.sp,
+                fontSize = 11.sp,
                 color = AdGuardTextMuted,
             )
         } else {
             Text(
                 text = script.url,
-                fontSize = 9.sp,
+                fontSize = 10.sp,
                 fontFamily = FontFamily.Monospace,
                 color = AdGuardTextMuted,
                 maxLines = 2,

@@ -589,7 +589,7 @@ internal fun HttpsFilterSection(
                                 } else {
                                     "Hạn CA: ${formatCertDate(caExpiryMs)} (còn $daysLeft ngày)"
                                 },
-                                fontSize = 10.sp,
+                                fontSize = 11.sp,
                                 color = when {
                                     expired -> AdGuardRedBlocked
                                     daysLeft < 30 -> AdGuardOrangeWarning
@@ -642,7 +642,7 @@ internal fun HttpsFilterSection(
                     Text(
                         text = if (rootBusy) "Đang xử lý…"
                         else rootTrust?.detail ?: "Đang kiểm tra quyền root…",
-                        fontSize = 10.sp,
+                        fontSize = 11.sp,
                         color = when {
                             rootBusy -> AdGuardTextMuted
                             rootTrust?.installed == true -> AdGuardGreenLight
@@ -706,7 +706,7 @@ internal fun HttpsFilterSection(
                     text = "Giai đoạn: ${status?.stage ?: "—"} " +
                         "• ${status?.scriptCount ?: 0} script • " +
                         "${status?.leavesIssued ?: 0} cert đã cấp",
-                    fontSize = 10.sp,
+                    fontSize = 11.sp,
                     color = AdGuardTextMuted,
                 )
 
@@ -881,11 +881,11 @@ internal fun DnsProviderSection(
                     )
                     Text(
                         text = selected?.address ?: "Nhấn để chọn máy chủ DNS",
-                        fontSize = 10.sp,
+                        fontSize = 11.sp,
                         color = AdGuardTextMuted,
                     )
                     if (selected?.isCustom == true) {
-                        Text("Tùy chỉnh", fontSize = 9.sp, color = AdGuardBlueDns)
+                        Text("Tùy chỉnh", fontSize = 10.sp, color = AdGuardBlueDns)
                     }
                 }
                 Text("Đổi", fontSize = 12.sp, color = AdGuardBlueDns)
@@ -951,12 +951,12 @@ private fun DnsProviderDialog(
                             )
                             Text(
                                 text = provider.address,
-                                fontSize = 10.sp,
+                                fontSize = 11.sp,
                                 color = AdGuardTextMuted,
                                 fontFamily = FontFamily.Monospace,
                             )
                             if (provider.isCustom) {
-                                Text("Tùy chỉnh", fontSize = 9.sp, color = AdGuardBlueDns)
+                                Text("Tùy chỉnh", fontSize = 10.sp, color = AdGuardBlueDns)
                             }
                         }
                     }
@@ -1081,7 +1081,7 @@ fun SettingsSwitch(
                     )
                     Text(
                         text = subtitle,
-                        fontSize = 10.sp,
+                        fontSize = 11.sp,
                         color = AdGuardTextMuted,
                     )
                 }
@@ -1176,7 +1176,7 @@ private fun HttpsWebsiteSection(
             Text(
                 text = "Chọn trang không bị giải mã, hoặc chỉ giải mã một số trang. " +
                     "Trang bị bỏ qua sẽ không lọc được quảng cáo và script.",
-                fontSize = 10.sp,
+                fontSize = 11.sp,
                 color = AdGuardTextMuted,
             )
 
@@ -1192,7 +1192,7 @@ private fun HttpsWebsiteSection(
                     )
                     Text(
                         text = "Mọi trang khác được nối thẳng, không giải mã.",
-                        fontSize = 10.sp,
+                        fontSize = 11.sp,
                         color = AdGuardTextMuted,
                     )
                 }
@@ -1227,7 +1227,7 @@ private fun HttpsWebsiteSection(
                 Text(
                     text = "${settings.httpsOnlyHosts.size} trang đang chờ trong danh sách " +
                         "\"chỉ lọc\" — bật công tắc trên để dùng.",
-                    fontSize = 9.sp,
+                    fontSize = 11.sp,
                     color = AdGuardTextMuted,
                     modifier = Modifier.padding(top = 8.dp),
                 )
@@ -1257,11 +1257,11 @@ private fun HttpsHostList(
                 Text("Thêm", fontSize = 11.sp, color = AdGuardGreenLight)
             }
         }
-        Text(hint, fontSize = 9.sp, color = AdGuardTextMuted)
+        Text(hint, fontSize = 11.sp, color = AdGuardTextMuted)
         if (hosts.isEmpty()) {
             Text(
                 text = "Chưa có trang nào.",
-                fontSize = 10.sp,
+                fontSize = 11.sp,
                 color = AdGuardTextMuted,
                 modifier = Modifier.padding(top = 4.dp),
             )
@@ -1331,7 +1331,7 @@ private fun HttpsHostDialog(
                 if (value.isNotBlank() && normalized == null) {
                     Text(
                         text = "Tên miền không hợp lệ (chỉ hỗ trợ ký tự ASCII; dùng dạng xn-- cho tên quốc tế).",
-                        fontSize = 10.sp,
+                        fontSize = 11.sp,
                         color = AdGuardOrangeWarning,
                         modifier = Modifier.padding(top = 4.dp),
                     )

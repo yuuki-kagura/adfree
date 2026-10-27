@@ -637,7 +637,7 @@ private fun FilterGroupCard(
                 Spacer(modifier = Modifier.width(12.dp))
                 Column(modifier = Modifier.weight(1f)) {
                     Text(group.title, fontSize = 13.sp, fontWeight = FontWeight.Bold, color = AdGuardTextPrimary)
-                    Text(group.subtitle, fontSize = 10.sp, color = AdGuardTextMuted)
+                    Text(group.subtitle, fontSize = 11.sp, color = AdGuardTextMuted)
                 }
                 Text(
                     text = "$enabled/${lists.size}",
@@ -672,7 +672,7 @@ private fun FilterGroupCard(
                         Text(
                             "«${group.title}» có bộ lọc đang bật nhưng module " +
                                 "«${gate?.title}» đang tắt — không req nào của nhóm này bị lọc",
-                            fontSize = 10.sp,
+                            fontSize = 11.sp,
                             color = AdGuardTextMuted,
                         )
                     }
@@ -720,7 +720,7 @@ private fun FilterRow(
             )
             Text(
                 text = "${"%,d".format(list.ruleCount)} quy tắc • ${list.lastUpdatedText}",
-                fontSize = 10.sp,
+                fontSize = 11.sp,
                 color = AdGuardTextMuted,
             )
             // AdGuard rows carry "Version: … / Updated: …"; we only show a
@@ -729,7 +729,7 @@ private fun FilterRow(
             if (list.version.isNotBlank()) {
                 Text(
                     text = "Phiên bản ${list.version}",
-                    fontSize = 10.sp,
+                    fontSize = 11.sp,
                     color = AdGuardTextMuted,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
@@ -741,7 +741,7 @@ private fun FilterRow(
             if (list.lastError.isNotBlank()) {
                 Text(
                     text = "Lỗi: ${list.lastError}",
-                    fontSize = 10.sp,
+                    fontSize = 11.sp,
                     color = AdGuardRedBlocked,
                     maxLines = 2,
                     overflow = TextOverflow.Ellipsis,
@@ -831,7 +831,7 @@ private fun CustomFiltersCard(
                     Text("Bộ lọc tùy chỉnh", fontSize = 13.sp, fontWeight = FontWeight.Bold, color = AdGuardTextPrimary)
                     Text(
                         "Danh sách bạn tự thêm từ URL hoặc tệp trong máy",
-                        fontSize = 10.sp,
+                        fontSize = 11.sp,
                         color = AdGuardTextMuted,
                     )
                 }
@@ -899,7 +899,7 @@ private fun UserRulesCard(
             Spacer(modifier = Modifier.width(12.dp))
             Column(modifier = Modifier.weight(1f)) {
                 Text("Quy tắc của bạn", fontSize = 13.sp, fontWeight = FontWeight.Bold, color = AdGuardTextPrimary)
-                Text("$count quy tắc • $allowCount ngoại lệ", fontSize = 10.sp, color = AdGuardTextMuted)
+                Text("$count quy tắc • $allowCount ngoại lệ", fontSize = 11.sp, color = AdGuardTextMuted)
             }
             Icon(Icons.Default.ChevronRight, contentDescription = null, tint = AdGuardTextMuted, modifier = Modifier.size(20.dp))
         }
@@ -1079,7 +1079,7 @@ private fun EditCustomFilterDialog(
                 Spacer(modifier = Modifier.height(8.dp))
                 Text(
                     "Đổi URL sẽ tải lại nội dung của bộ lọc.",
-                    fontSize = 10.sp,
+                    fontSize = 11.sp,
                     color = AdGuardTextMuted,
                 )
             }
@@ -1198,7 +1198,7 @@ fun FilterDetailSheet(
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(
                     text = url,
-                    fontSize = 9.sp,
+                    fontSize = 10.sp,
                     fontFamily = FontFamily.Monospace,
                     color = AdGuardTextMuted,
                     maxLines = 2,

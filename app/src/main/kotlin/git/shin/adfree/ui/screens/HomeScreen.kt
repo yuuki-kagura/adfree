@@ -503,7 +503,7 @@ private fun StatCard(
             )
             Text(
                 text = title,
-                fontSize = 10.sp,
+                fontSize = 11.sp,
                 color = AdGuardTextMuted
             )
         }
@@ -559,7 +559,7 @@ private fun ModuleToggleCard(
                 )
                 Text(
                     text = subtitle,
-                    fontSize = 11.sp,
+                    fontSize = 12.sp,
                     color = AdGuardTextSecondary
                 )
             }

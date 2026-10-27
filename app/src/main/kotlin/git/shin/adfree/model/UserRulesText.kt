@@ -37,10 +37,41 @@ fun userWhitelistRule(input: String): String? {
     if (trimmed.startsWith("@@")) {
         return parseUserRulesText(trimmed).firstOrNull()?.takeIf { it.length > 2 }
     }
+    val host = typedHost(trimmed) ?: return null
+    return "@@||$host^"
+}
+
+/**
+ * Turns a typed domain or URL into a blocking rule. Complete rule syntax is
+ * kept verbatim, so cosmetic (`##.ad`) and hosts-style lines still work; a
+ * bare host becomes `||host^` instead of a literal that matches nothing.
+ */
+fun userBlockRule(input: String): String? {
+    val trimmed = input.trim()
+    if (trimmed.isEmpty()) return null
+    if (trimmed.startsWith("@@")) {
+        return parseUserRulesText(trimmed).firstOrNull()?.takeIf { it.length > 2 }
+    }
+    val rule = parseUserRulesText(trimmed).firstOrNull() ?: return null
+    if (hasExplicitRuleSyntax(trimmed)) return rule
+    // Everything else is a typed host or URL. If it is not a valid ASCII
+    // host (a telex keyboard can leave accents behind), reject it instead of
+    // persisting a rule that silently matches nothing.
+    return typedHost(trimmed)?.let { "||$it^" }
+}
+
+private fun hasExplicitRuleSyntax(input: String): Boolean =
+    input.startsWith("||") ||
+        input.startsWith("/") ||
+        input.contains('$') ||
+        Regex("#[#%$@?]").containsMatchIn(input) ||
+        Regex("""^\d{1,3}(\.\d{1,3}){3}\s+\S+""").containsMatchIn(input)
+
+private fun typedHost(input: String): String? {
     val withoutScheme = when {
-        trimmed.startsWith("https://", ignoreCase = true) -> trimmed.substring(8)
-        trimmed.startsWith("http://", ignoreCase = true) -> trimmed.substring(7)
-        else -> trimmed
+        input.startsWith("https://", ignoreCase = true) -> input.substring(8)
+        input.startsWith("http://", ignoreCase = true) -> input.substring(7)
+        else -> input
     }
     val host = withoutScheme
         .substringBefore('/')
@@ -53,5 +84,5 @@ fun userWhitelistRule(input: String): String? {
     // A port, path or wildcard exception is not a bare host. Keep the input
     // grammar narrow: letters, digits, dots, hyphens, underscores and `*`.
     if (!host.matches(Regex("^[a-z0-9*._-]+$"))) return null
-    return "@@||$host^"
+    return host
 }

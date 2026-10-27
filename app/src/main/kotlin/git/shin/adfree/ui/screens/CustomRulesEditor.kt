@@ -18,6 +18,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.AutoFixHigh
@@ -52,6 +53,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import git.shin.adfree.ui.theme.AdGuardDarkOutline
@@ -64,6 +66,7 @@ import git.shin.adfree.ui.theme.AdGuardTextMuted
 import git.shin.adfree.ui.theme.AdGuardTextPrimary
 import git.shin.adfree.ui.theme.AdGuardTextSecondary
 import git.shin.adfree.model.parseUserRulesText
+import git.shin.adfree.model.userBlockRule
 import git.shin.adfree.model.userWhitelistRule
 
 /**
@@ -88,6 +91,7 @@ fun FriendlyCustomRuleEditorSheet(
 
     val context = LocalContext.current
     var notice by remember { mutableStateOf<String?>(null) }
+    var noticeIsError by remember { mutableStateOf(false) }
     var exportText by remember { mutableStateOf("") }
 
     // Files come from anywhere: AdGuard's export, a hosts file, or a plain
@@ -99,11 +103,13 @@ fun FriendlyCustomRuleEditorSheet(
         }.getOrNull()
         if (text == null) {
             notice = "Không đọc được tệp"
+            noticeIsError = true
             return@rememberLauncherForActivityResult
         }
         val imported = parseUserRulesText(text)
         if (imported.isEmpty()) {
             notice = "Tệp không có quy tắc hợp lệ"
+            noticeIsError = true
             return@rememberLauncherForActivityResult
         }
         val before = rulesList.toSet()
@@ -113,6 +119,7 @@ fun FriendlyCustomRuleEditorSheet(
         rawText = merged.joinToString("\n")
         onSaveAll(merged)
         notice = if (added == 0) "Tệp chỉ chứa quy tắc đã có" else "Đã nhập $added quy tắc"
+        noticeIsError = added == 0
     }
 
     // CreateDocument writes the current rules, including unsaved edits in the
@@ -130,6 +137,7 @@ fun FriendlyCustomRuleEditorSheet(
         } else {
             "Không ghi được tệp"
         }
+        noticeIsError = !written
     }
 
     val whitelistCount = rulesList.count { it.startsWith("@@") }
@@ -186,6 +194,7 @@ fun FriendlyCustomRuleEditorSheet(
                     }
                     if (exportText.isBlank()) {
                         notice = "Chưa có quy tắc để xuất"
+                        noticeIsError = true
                     } else {
                         exportPicker.launch("adfree-user-rules.txt")
                     }
@@ -198,8 +207,8 @@ fun FriendlyCustomRuleEditorSheet(
                 Text(
                     text = it,
                     fontSize = 11.sp,
-                    color = AdGuardGreenLight,
-                    maxLines = 1,
+                    color = if (noticeIsError) AdGuardRedBlocked else AdGuardGreenLight,
+                    maxLines = 2,
                 )
             }
         }
@@ -222,6 +231,7 @@ fun FriendlyCustomRuleEditorSheet(
                 selected = selectedTab == 0,
                 onClick = {
                     selectedTab = 0
+                    notice = null
                     // Pull in whatever was typed in the raw editor.
                     rulesList = parseUserRulesText(rawText)
                     rawText = rulesList.joinToString("\n")
@@ -232,6 +242,7 @@ fun FriendlyCustomRuleEditorSheet(
                 selected = selectedTab == 1,
                 onClick = {
                     selectedTab = 1
+                    notice = null
                     rawText = rulesList.joinToString("\n")
                 },
                 text = { Text("Toàn văn", fontSize = 12.sp, fontWeight = FontWeight.Bold) },
@@ -240,6 +251,7 @@ fun FriendlyCustomRuleEditorSheet(
                 selected = selectedTab == 2,
                 onClick = {
                     selectedTab = 2
+                    notice = null
                     // Include raw-tab edits before showing the filtered list.
                     rulesList = parseUserRulesText(rawText)
                     rawText = rulesList.joinToString("\n")
@@ -257,11 +269,15 @@ fun FriendlyCustomRuleEditorSheet(
             ) {
                 OutlinedTextField(
                     value = newSingleRule,
-                    onValueChange = { newSingleRule = it },
+                    onValueChange = {
+                        newSingleRule = it
+                        notice = null
+                    },
                     placeholder = {
                         Text("Nhập quy tắc: ||domain.com^ hoặc @@||cho-phep.com^", color = AdGuardTextMuted, fontSize = 12.sp)
                     },
                     singleLine = true,
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri),
                     modifier = Modifier.weight(1f),
                     shape = RoundedCornerShape(10.dp),
                     colors = OutlinedTextFieldDefaults.colors(
@@ -278,16 +294,28 @@ fun FriendlyCustomRuleEditorSheet(
 
                 Button(
                     onClick = {
-                        val trimmed = newSingleRule.trim()
-                        val parsed = parseUserRulesText(trimmed)
-                        if (parsed.isEmpty()) {
-                            if (trimmed.isNotEmpty()) notice = "Chú thích không phải là quy tắc"
-                        } else {
-                            val rule = parsed.first()
-                            rulesList = (listOf(rule) + rulesList).distinct()
-                            rawText = rulesList.joinToString("\n")
-                            newSingleRule = ""
-                            onSaveAll(rulesList)
+                        val rule = userBlockRule(newSingleRule)
+                        when {
+                            rule == null -> {
+                                notice = if (newSingleRule.isBlank()) {
+                                    "Nhập tên miền hoặc quy tắc"
+                                } else {
+                                    "Tên miền hoặc quy tắc không hợp lệ"
+                                }
+                                noticeIsError = true
+                            }
+                            rule in rulesList -> {
+                                notice = "Quy tắc đã có trong danh sách"
+                                noticeIsError = true
+                            }
+                            else -> {
+                                rulesList = listOf(rule) + rulesList
+                                rawText = rulesList.joinToString("\n")
+                                newSingleRule = ""
+                                onSaveAll(rulesList)
+                                notice = "Đã thêm $rule"
+                                noticeIsError = false
+                            }
                         }
                     },
                     colors = ButtonDefaults.buttonColors(containerColor = AdGuardGreenPrimary),
@@ -358,7 +386,7 @@ fun FriendlyCustomRuleEditorSheet(
                                         .background(badgeColor.copy(alpha = 0.15f))
                                         .padding(horizontal = 6.dp, vertical = 2.dp),
                                 ) {
-                                    Text(badgeText, fontSize = 9.sp, fontWeight = FontWeight.Bold, color = badgeColor)
+                                    Text(badgeText, fontSize = 10.sp, fontWeight = FontWeight.Bold, color = badgeColor)
                                 }
                                 Spacer(modifier = Modifier.width(10.dp))
                                 Text(
@@ -374,6 +402,8 @@ fun FriendlyCustomRuleEditorSheet(
                                     rulesList = rulesList.filter { it != rule }
                                     rawText = rulesList.joinToString("\n")
                                     onSaveAll(rulesList)
+                                    notice = "Đã xoá $rule"
+                                    noticeIsError = false
                                 },
                                 modifier = Modifier.size(28.dp),
                             ) {
@@ -444,6 +474,7 @@ fun FriendlyCustomRuleEditorSheet(
                         rawText = newRules.joinToString("\n")
                         onSaveAll(newRules)
                         notice = "Đã lưu ${newRules.size} quy tắc"
+                        noticeIsError = false
                     },
                     colors = ButtonDefaults.buttonColors(containerColor = AdGuardGreenPrimary),
                     shape = RoundedCornerShape(8.dp),
@@ -468,6 +499,7 @@ fun FriendlyCustomRuleEditorSheet(
                         Text("domain được phép, vd: example.com", color = AdGuardTextMuted, fontSize = 12.sp)
                     },
                     singleLine = true,
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri),
                     modifier = Modifier.weight(1f),
                     shape = RoundedCornerShape(10.dp),
                     colors = OutlinedTextFieldDefaults.colors(
@@ -485,13 +517,18 @@ fun FriendlyCustomRuleEditorSheet(
                         val rule = userWhitelistRule(newWhitelistDomain)
                         if (rule == null) {
                             notice = "Domain không hợp lệ"
+                            noticeIsError = true
+                        } else if (rule in rulesList) {
+                            notice = "Ngoại lệ đã có trong danh sách"
+                            noticeIsError = true
                         } else {
-                            val merged = (rulesList + rule).distinct()
+                            val merged = rulesList + rule
                             rulesList = merged
                             rawText = merged.joinToString("\n")
                             newWhitelistDomain = ""
                             onSaveAll(merged)
-                            notice = "Đã thêm ngoại lệ"
+                            notice = "Đã thêm ngoại lệ $rule"
+                            noticeIsError = false
                         }
                     },
                     colors = ButtonDefaults.buttonColors(containerColor = AdGuardGreenPrimary),
@@ -554,7 +591,7 @@ fun FriendlyCustomRuleEditorSheet(
                                 ) {
                                     Text(
                                         text = "CHO PHÉP",
-                                        fontSize = 9.sp,
+                                        fontSize = 10.sp,
                                         fontWeight = FontWeight.Bold,
                                         color = AdGuardGreenLight,
                                     )
@@ -563,7 +600,7 @@ fun FriendlyCustomRuleEditorSheet(
                                 Text(
                                     text = rule,
                                     modifier = Modifier.weight(1f),
-                                    fontSize = 12.sp,
+                                    fontSize = 13.sp,
                                     fontFamily = FontFamily.Monospace,
                                     color = AdGuardTextPrimary,
                                 )
@@ -572,7 +609,8 @@ fun FriendlyCustomRuleEditorSheet(
                                         rulesList = rulesList.filterNot { it == rule }
                                         rawText = rulesList.joinToString("\n")
                                         onSaveAll(rulesList)
-                                        notice = "Đã xoá ngoại lệ"
+                                        notice = "Đã xoá ngoại lệ $rule"
+                                        noticeIsError = false
                                     },
                                     modifier = Modifier.size(28.dp),
                                 ) {

@@ -133,8 +133,9 @@ class ThreatAnalyzer(
             score >= 25 -> "Ít dấu hiệu bất thường."
             else -> "Không thấy dấu hiệu theo dõi."
         }
-        parts += "Đánh giá chạy hoàn toàn trên thiết bị, không cần mạng."
-        return parts.joinToString(separator = "; ") + "."
+        // The screen already shows the on-device note in its footer.
+        val text = parts.joinToString(separator = "; ")
+        return if (text.endsWith(".")) text else "$text."
     }
 
     private companion object {

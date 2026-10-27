@@ -624,13 +624,13 @@ fun AppDetailsFirewallSheet(
             Spacer(modifier = Modifier.height(4.dp))
             Text(
                 text = "VPN đang chạy giữ danh sách app được lọc từ lúc bật; khởi động lại để thay đổi có hiệu lực.",
-                fontSize = 10.sp,
+                fontSize = 11.sp,
                 color = AdGuardTextMuted
             )
         } else {
             Text(
                 text = "Thay đổi sẽ được áp dụng ở lần bật VPN kế tiếp.",
-                fontSize = 10.sp,
+                fontSize = 11.sp,
                 color = AdGuardTextMuted
             )
         }
@@ -650,7 +650,7 @@ fun AppDetailsFirewallSheet(
             } else {
                 "Lọc HTTPS đang tắt trong Cài đặt — công tắc này có hiệu lực khi bật lại."
             },
-            fontSize = 10.sp,
+            fontSize = 11.sp,
             color = if (httpsFilteringEnabled) AdGuardTextMuted else AdGuardOrangeWarning,
         )
         Spacer(modifier = Modifier.height(8.dp))
@@ -713,7 +713,7 @@ fun AppDetailsFirewallSheet(
             text = "Các công tắc bên dưới do VPN thực thi cho kết nối mới và cả " +
                 "kết nối đang mở. App đang \"Bỏ qua lọc\" không đi qua VPN nên " +
                 "không bị chặn theo mạng.",
-            fontSize = 10.sp,
+            fontSize = 11.sp,
             color = AdGuardOrangeWarning,
         )
 
@@ -804,7 +804,7 @@ fun AppDetailsFirewallSheet(
             Text(
                 text = "App này đang bỏ qua VPN: các giới hạn mạng ở trên không " +
                     "có tác dụng cho tới khi bật lại lọc.",
-                fontSize = 10.sp,
+                fontSize = 11.sp,
                 color = AdGuardOrangeWarning,
             )
         }
@@ -909,7 +909,7 @@ fun AppDetailsFirewallSheet(
                             if (logItem.matchedRule != null) {
                                 Text(
                                     text = logItem.matchedRule,
-                                    fontSize = 10.sp,
+                                    fontSize = 11.sp,
                                     color = AdGuardRedBlocked,
                                     maxLines = 1,
                                     overflow = TextOverflow.Ellipsis
@@ -927,7 +927,7 @@ fun AppDetailsFirewallSheet(
                         ) {
                             Text(
                                 text = if (logItem.status == FilterStatus.BLOCKED) "ĐÃ CHẶN" else "CHO PHÉP",
-                                fontSize = 9.sp,
+                                fontSize = 10.sp,
                                 fontWeight = FontWeight.Bold,
                                 color = if (logItem.status == FilterStatus.BLOCKED) AdGuardRedBlocked else AdGuardGreenLight
                             )

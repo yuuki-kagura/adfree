@@ -86,4 +86,29 @@ class UserRulesTextTest {
         assertEquals(null, userWhitelistRule("example.com:8080"))
         assertEquals(null, userWhitelistRule("@@"))
     }
+
+    @Test
+    fun `a typed domain becomes a blocking rule`() {
+        assertEquals("||example.com^", userBlockRule("example.com"))
+        assertEquals("||example.com^", userBlockRule("  https://Example.com/path?q=1  "))
+        assertEquals("||example.com^", userBlockRule("example.com/path?q=1"))
+        assertEquals("||*.example.com^", userBlockRule("*.example.com"))
+    }
+
+    @Test
+    fun `complete rule syntax is kept verbatim on the block tab`() {
+        assertEquals("||ads.example^\$third-party", userBlockRule("||ads.example^\$third-party"))
+        assertEquals("example.com##.banner", userBlockRule("example.com##.banner"))
+        assertEquals("0.0.0.0 tracker.example", userBlockRule("0.0.0.0 tracker.example"))
+        assertEquals("@@||safe.example^", userBlockRule("@@||safe.example^"))
+    }
+
+    @Test
+    fun `blank, comment-only and non-host block input is rejected`() {
+        assertEquals(null, userBlockRule(""))
+        assertEquals(null, userBlockRule("! just a comment"))
+        assertEquals(null, userBlockRule("# hosts comment"))
+        assertEquals(null, userBlockRule("tétblock.com"))
+        assertEquals(null, userBlockRule("not a rule"))
+    }
 }

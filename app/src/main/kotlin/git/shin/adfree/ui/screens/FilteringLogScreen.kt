@@ -27,6 +27,7 @@ import androidx.compose.material.icons.filled.DeleteSweep
 import androidx.compose.material.icons.filled.FilterList
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Shield
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
@@ -43,11 +44,15 @@ import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Switch
 import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -97,6 +102,7 @@ fun FilteringLogScreen(
 ) {
     val state by viewModel.uiState.collectAsState()
     val listState = rememberLazyListState()
+    var showClearConfirm by remember { mutableStateOf(false) }
 
     // While the list sits at its top it follows incoming rows; scrolling into
     // history tells the repository to freeze the window instead, or fresh rows
@@ -105,6 +111,35 @@ fun FilteringLogScreen(
         snapshotFlow { listState.firstVisibleItemIndex == 0 }
             .distinctUntilChanged()
             .collect { viewModel.onIntent(AdGuardIntent.SetLogTailing(it)) }
+    }
+
+    if (showClearConfirm) {
+        AlertDialog(
+            onDismissRequest = { showClearConfirm = false },
+            containerColor = AdGuardDarkSurface,
+            titleContentColor = AdGuardTextPrimary,
+            textContentColor = AdGuardTextSecondary,
+            title = { Text("Xoá nhật ký?") },
+            text = {
+                Text(
+                    "Toàn bộ ${state.logs.size} bản ghi sẽ bị xoá và không thể hoàn tác.",
+                    fontSize = 13.sp,
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    showClearConfirm = false
+                    viewModel.onIntent(AdGuardIntent.ClearLogs)
+                }) {
+                    Text("Xoá", fontSize = 13.sp, fontWeight = FontWeight.Bold, color = AdGuardRedBlocked)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showClearConfirm = false }) {
+                    Text("Hủy", fontSize = 13.sp, color = AdGuardTextSecondary)
+                }
+            },
+        )
     }
 
     Column(
@@ -134,7 +169,7 @@ fun FilteringLogScreen(
             }
 
             IconButton(
-                onClick = { viewModel.onIntent(AdGuardIntent.ClearLogs) },
+                onClick = { showClearConfirm = true },
                 modifier = Modifier.testTag("clear_logs_button")
             ) {
                 Icon(
@@ -211,7 +246,7 @@ fun FilteringLogScreen(
             FilterChip(
                 selected = state.statusFilter == FilterStatus.ALLOWED,
                 onClick = { viewModel.onIntent(AdGuardIntent.FilterStatusChanged(FilterStatus.ALLOWED)) },
-                label = { Text("Cho phép") },
+                label = { Text("Cho phép (${state.logs.count { it.status == FilterStatus.ALLOWED }})") },
                 colors = FilterChipDefaults.filterChipColors(
                     selectedContainerColor = AdGuardGreenLight,
                     selectedLabelColor = Color.Black,
@@ -561,7 +596,7 @@ fun PacketInspectionSheetContent(
             Column(modifier = Modifier.padding(14.dp)) {
                 Text(
                     text = "TÊN MIỀN ĐÍCH",
-                    fontSize = 10.sp,
+                    fontSize = 11.sp,
                     fontWeight = FontWeight.Bold,
                     color = AdGuardTextMuted
                 )

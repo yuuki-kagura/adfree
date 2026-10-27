@@ -273,7 +273,7 @@ private fun ProxySection(
                 Text(
                     text = "Tên đăng nhập và mật khẩu chỉ được gửi khi cả hai được nhập. " +
                         "Proxy phải hỗ trợ CONNECT tới địa chỉ IP.",
-                    fontSize = 10.sp,
+                    fontSize = 11.sp,
                     color = AdGuardTextMuted,
                 )
                 Spacer(modifier = Modifier.height(10.dp))
@@ -292,7 +292,7 @@ private fun ProxySection(
                         saved.isUsable -> "Đang áp dụng cho kết nối mới: ${saved.host}:${saved.port}"
                         else -> "Cấu hình đã lưu chưa hợp lệ, engine đang kết nối trực tiếp."
                     },
-                    fontSize = 10.sp,
+                    fontSize = 11.sp,
                     color = when {
                         !saved.enabled -> AdGuardTextMuted
                         saved.isUsable -> AdGuardGreenPrimary

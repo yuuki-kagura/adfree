@@ -3,6 +3,7 @@ package git.shin.adfree.ui.screens
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -16,11 +17,11 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Lightbulb
-import androidx.compose.material.icons.filled.Psychology
 import androidx.compose.material.icons.filled.Public
 import androidx.compose.material.icons.filled.Science
 import androidx.compose.material.icons.filled.Search
@@ -52,6 +53,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import git.shin.adfree.model.ThreatAnalysisResult
@@ -157,7 +159,7 @@ fun SecurityLabScreen(
                         Text(
                             text = "Chấm điểm từ cấu trúc tên miền và các quy tắc đang tải. " +
                                 "Không cần mạng.",
-                            fontSize = 10.sp,
+                            fontSize = 11.sp,
                             color = AdGuardTextMuted,
                         )
                     }
@@ -171,6 +173,7 @@ fun SecurityLabScreen(
             label = { Text("Tên miền, URL hoặc thông số mạng") },
             placeholder = { Text("Ví dụ: tracking.app.com") },
             singleLine = true,
+            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri),
             modifier = Modifier
                 .fillMaxWidth()
                 .testTag("ai_threat_input"),
@@ -189,7 +192,9 @@ fun SecurityLabScreen(
 
         // Quick Examples row
         Row(
-            modifier = Modifier.fillMaxWidth(),
+            modifier = Modifier
+                .fillMaxWidth()
+                .horizontalScroll(rememberScrollState()),
             horizontalArrangement = Arrangement.spacedBy(6.dp)
         ) {
             quickExamples.forEach { ex ->
@@ -202,7 +207,7 @@ fun SecurityLabScreen(
                 ) {
                     Text(
                         text = ex,
-                        fontSize = 10.sp,
+                        fontSize = 11.sp,
                         fontFamily = FontFamily.Monospace,
                         color = AdGuardTextSecondary
                     )
@@ -391,7 +396,7 @@ fun ThreatResultCard(
                         )
                         Text(
                             text = result.riskLevel.uppercase(),
-                            fontSize = 9.sp,
+                            fontSize = 10.sp,
                             fontWeight = FontWeight.Bold,
                             color = riskColor
                         )
@@ -404,7 +409,7 @@ fun ThreatResultCard(
             // Summary Explanation
             Text(
                 text = "Đánh giá",
-                fontSize = 10.sp,
+                fontSize = 11.sp,
                 fontWeight = FontWeight.Bold,
                 color = AdGuardTextMuted,
             )
@@ -418,34 +423,12 @@ fun ThreatResultCard(
                 lineHeight = 18.sp
             )
 
-            // Thinking trace summary if present
-            if (result.summary != null) {
-                Spacer(modifier = Modifier.height(12.dp))
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clip(RoundedCornerShape(8.dp))
-                        .background(AdGuardDarkSurfaceVariant)
-                        .padding(10.dp)
-                ) {
-                    Column {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Icon(Icons.Default.Psychology, contentDescription = null, tint = AdGuardPurpleAI, modifier = Modifier.size(16.dp))
-                            Spacer(modifier = Modifier.width(6.dp))
-                            Text("Dấu vết suy luận chuyên sâu (High Thinking Trace)", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = AdGuardPurpleAI)
-                        }
-                        Spacer(modifier = Modifier.height(4.dp))
-                        Text(text = result.summary, fontSize = 11.sp, color = AdGuardTextSecondary)
-                    }
-                }
-            }
-
             // Synthesized Rules section
             if (result.suggestedRules.isNotEmpty()) {
                 Spacer(modifier = Modifier.height(14.dp))
                 Text(
-                    text = "Cách tính điểm",
-                    fontSize = 10.sp,
+                    text = "Quy tắc gợi ý",
+                    fontSize = 11.sp,
                     fontWeight = FontWeight.Bold,
                     color = AdGuardTextMuted,
                 )
@@ -478,7 +461,7 @@ fun ThreatResultCard(
                         ) {
                             Icon(Icons.Default.Add, contentDescription = null, tint = Color.Black, modifier = Modifier.size(14.dp))
                             Spacer(modifier = Modifier.width(4.dp))
-                            Text("Thêm", fontSize = 11.sp, color = Color.Black, fontWeight = FontWeight.Bold)
+                            Text("Thêm", fontSize = 12.sp, color = Color.Black, fontWeight = FontWeight.Bold)
                         }
                     }
                     Spacer(modifier = Modifier.height(6.dp))
@@ -488,7 +471,7 @@ fun ThreatResultCard(
             // Suggested rules are produced offline, so the data-source block is gone; just state that analysis runs on device.
             Text(
                 text = "Phân tích chạy hoàn toàn trên thiết bị, không cần mạng.",
-                fontSize = 10.sp,
+                fontSize = 11.sp,
                 color = AdGuardTextMuted,
             )
         }
