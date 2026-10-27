@@ -413,7 +413,11 @@ impl StreamState {
             return;
         }
         self.head_sent = true;
-        let encoding = if self.gzip.is_some() { Some("gzip") } else { None };
+        let encoding = if self.gzip.is_some() {
+            Some("gzip")
+        } else {
+            None
+        };
         let mut head = std::mem::take(&mut self.head);
         if injecting {
             head = http::csp_with_nonce(&head, &self.nonce, LOCAL_ORIGIN);
@@ -906,9 +910,8 @@ impl ProxySession {
             }
             if let Some(ech_len) = ech_len {
                 let ech = self.ech_hosts.as_deref();
-                let reason = ech.and_then(|ech| {
-                    ech.splice_reason(name, self.full_ech, crate::util::now_ms())
-                });
+                let reason = ech
+                    .and_then(|ech| ech.splice_reason(name, self.full_ech, crate::util::now_ms()));
                 if let Some(reason) = reason {
                     // A real ECH hello exposes only the config's public name:
                     // the host inside is encrypted, and terminating this TLS
@@ -999,13 +1002,11 @@ impl ProxySession {
                     .ech_hosts
                     .as_deref()
                     .and_then(|ech| ech.upstream_ech(&name, crate::util::now_ms()));
-                let (upstream_config, armed_ech) = match ech_list
-                    .as_deref()
-                    .and_then(|list| upstream.with_ech(list))
-                {
-                    Some(config) => (config, true),
-                    None => (upstream.plain(), false),
-                };
+                let (upstream_config, armed_ech) =
+                    match ech_list.as_deref().and_then(|list| upstream.with_ech(list)) {
+                        Some(config) => (config, true),
+                        None => (upstream.plain(), false),
+                    };
                 let client = match tls::new_client(upstream_config, &name) {
                     Ok(client) => client,
                     Err(_) => {
@@ -1192,7 +1193,9 @@ impl ProxySession {
         if !request.is_empty() {
             let started = Instant::now();
             let handshaking = tls::client_handshaking(&session.client);
-            outcome.to_peer.extend(feed_client(&mut session.client, &request)?);
+            outcome
+                .to_peer
+                .extend(feed_client(&mut session.client, &request)?);
             record_tls(stats, started, handshaking);
         }
         Ok(())
@@ -1307,9 +1310,7 @@ impl ProxySession {
             if let Some(edit) = filter.header_edit(&url, &source, request_type, &method) {
                 // `drop_headers` is `None` when none of the names is there, so
                 // the request is spliced only when it actually changes.
-                if let Some(fixed) =
-                    http::drop_headers(&buffer[..head_end], &edit.remove_request)
-                {
+                if let Some(fixed) = http::drop_headers(&buffer[..head_end], &edit.remove_request) {
                     let old_end = head_end;
                     head_end = fixed.len();
                     buffer.splice(..old_end, fixed);
@@ -1576,8 +1577,7 @@ impl ProxySession {
         while header_end(buffer).is_some() {
             let started = Instant::now();
             let handshaking = tls::server_handshaking(server);
-            let response = match take_local_request(serve_path, script_body, filter, None, buffer)
-            {
+            let response = match take_local_request(serve_path, script_body, filter, None, buffer) {
                 Some(response) => response,
                 None => {
                     let head = header_end(buffer).expect("checked by the loop condition");
@@ -1696,7 +1696,10 @@ impl ProxySession {
         let rewrite_started = Instant::now();
         let (edited, injected) = self.rewrite_response(&plain);
         if let Some(stats) = self.stats.as_deref() {
-            stats.add(&stats.rewrite_ns, rewrite_started.elapsed().as_nanos() as u64);
+            stats.add(
+                &stats.rewrite_ns,
+                rewrite_started.elapsed().as_nanos() as u64,
+            );
         }
         outcome.injected = injected;
         if let ProxyState::Active(session) = &mut self.state {
@@ -1937,10 +1940,8 @@ impl ProxySession {
                     let html = req
                         .html
                         .filter(|_| info.html && info.status == 200 && editable);
-                    let holding = replace.is_some()
-                        || jsonprune.is_some()
-                        || hls.is_some()
-                        || html.is_some();
+                    let holding =
+                        replace.is_some() || jsonprune.is_some() || hls.is_some() || html.is_some();
                     // A body edit needs the whole body, which is the one thing
                     // streaming cannot give it: a body already known to be over
                     // the cap is left to the page's own handling below.
@@ -1985,11 +1986,7 @@ impl ProxySession {
                             self.captured.as_deref().unwrap_or("?"),
                             info.status,
                             framing.expect("over the cap means a length was known"),
-                            body_edit_name(
-                                replace.is_some(),
-                                jsonprune.is_some(),
-                                html.is_some()
-                            ),
+                            body_edit_name(replace.is_some(), jsonprune.is_some(), html.is_some()),
                         ));
                     }
                     if html_edit {
@@ -2000,7 +1997,11 @@ impl ProxySession {
                             info.status,
                             framing,
                             info.encoding,
-                            if streamable(info.encoding) { "reading" } else { "buffering" }
+                            if streamable(info.encoding) {
+                                "reading"
+                            } else {
+                                "buffering"
+                            }
                         ));
                         // A body that is already known to be longer than the
                         // injector may hold goes straight to streaming.
@@ -2207,8 +2208,10 @@ impl ProxySession {
                             payload_summary(rule.payload())
                         ));
                     }
-                    let edited =
-                        replaced.is_some() || pruned.is_some() || trimmed.is_some() || cut.is_some();
+                    let edited = replaced.is_some()
+                        || pruned.is_some()
+                        || trimmed.is_some()
+                        || cut.is_some();
                     // One nonce for this response: the tags carry it, and the
                     // policy does too when the head goes out rewritten below.
                     let nonce = http::new_nonce();
@@ -2645,10 +2648,7 @@ impl ProxySession {
         if json.is_none() && !inline_hides {
             return None;
         }
-        Some(CosmeticPayload {
-            json,
-            inline_hides,
-        })
+        Some(CosmeticPayload { json, inline_hides })
     }
 }
 
@@ -3457,7 +3457,10 @@ mod tests {
             text.contains(&format!("Content-Length: {}", expected.len())),
             "{text}"
         );
-        assert!(!text.contains(&format!("Content-Length: {}", body.len())), "{text}");
+        assert!(
+            !text.contains(&format!("Content-Length: {}", body.len())),
+            "{text}"
+        );
     }
 
     /// A connection that carries a `$cookie` plan and nothing else still needs

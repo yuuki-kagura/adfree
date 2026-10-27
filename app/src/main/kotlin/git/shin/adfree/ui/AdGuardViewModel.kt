@@ -229,7 +229,6 @@ class AdGuardViewModel(
 
     init {
         _privateDnsOn.value = isPrivateDnsStrict()
-        repository.loadInstalledApps()
         // Protection that was on when the app last ran comes back by itself;
         // a first run has nothing saved and waits for the user. The consent
         // dialog can only be raised by the Activity, hence the flag.
@@ -261,11 +260,8 @@ class AdGuardViewModel(
             is AdGuardIntent.ToggleHttps ->
                 repository.toggleHttpsFiltering(!uiState.value.settings.isHttpsFilteringEnabled)
 
-            is AdGuardIntent.ToggleFirewall -> {
+            is AdGuardIntent.ToggleFirewall ->
                 repository.toggleFirewall(!uiState.value.settings.isFirewallEnabled)
-                // Enforcement lives in the core policy, not in the setting.
-                repository.pushAppRouting()
-            }
 
             is AdGuardIntent.ToggleEcoMode -> {
                 repository.toggleEcoBatteryMode(!uiState.value.settings.isEcoBatteryModeEnabled)
@@ -345,7 +341,6 @@ class AdGuardViewModel(
                     intent.blockWhenScreenOff,
                     intent.httpsFiltered,
                 )
-                repository.pushAppRouting()
                 // The sheet reads this snapshot, not the repository flow, so
                 // without the copy every switch would snap back to its old
                 // value on the next recomposition.

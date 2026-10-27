@@ -273,31 +273,27 @@ fn apply_step<'a>(
                 match selector {
                     Selector::Key(key) => apply_step(&StepKind::Key(key.clone()), path, node, out),
                     Selector::Wildcard => each_child(path, node, out),
-                    Selector::Index(index) => {
-                        apply_step(&StepKind::Index(*index), path, node, out)
-                    }
+                    Selector::Index(index) => apply_step(&StepKind::Index(*index), path, node, out),
                 }
             }
         }
-        StepKind::Filter(filter) => {
-            match node {
-                Value::Object(map) => {
-                    for (key, child) in map {
-                        if filter.matches(child) {
-                            out.push((extended(path, PathElem::Key(key.clone())), child));
-                        }
+        StepKind::Filter(filter) => match node {
+            Value::Object(map) => {
+                for (key, child) in map {
+                    if filter.matches(child) {
+                        out.push((extended(path, PathElem::Key(key.clone())), child));
                     }
                 }
-                Value::Array(items) => {
-                    for (index, child) in items.iter().enumerate() {
-                        if filter.matches(child) {
-                            out.push((extended(path, PathElem::Index(index)), child));
-                        }
-                    }
-                }
-                _ => {}
             }
-        }
+            Value::Array(items) => {
+                for (index, child) in items.iter().enumerate() {
+                    if filter.matches(child) {
+                        out.push((extended(path, PathElem::Index(index)), child));
+                    }
+                }
+            }
+            _ => {}
+        },
     }
 }
 
@@ -347,9 +343,9 @@ fn remove_at(document: &mut Value, path: &[PathElem]) -> bool {
     }
     match (last, node) {
         (PathElem::Key(key), Value::Object(map)) => map.remove(key).is_some(),
-        (PathElem::Index(index), Value::Array(items)) => {
-            (*index < items.len()).then(|| items.remove(*index)).is_some()
-        }
+        (PathElem::Index(index), Value::Array(items)) => (*index < items.len())
+            .then(|| items.remove(*index))
+            .is_some(),
         _ => false,
     }
 }
@@ -643,10 +639,7 @@ impl Parser {
 /// characters — the dots and brackets of the path, the filter punctuation,
 /// the quote characters and the comma — end one.
 fn is_name_char(ch: char) -> bool {
-    !matches!(
-        ch,
-        '.' | '[' | ']' | '(' | ')' | '"' | '\'' | ',' | ':'
-    ) && !ch.is_whitespace()
+    !matches!(ch, '.' | '[' | ']' | '(' | ')' | '"' | '\'' | ',' | ':') && !ch.is_whitespace()
 }
 
 fn is_quote(ch: char) -> bool {
@@ -830,7 +823,10 @@ mod tests {
                 ]
             }),
         );
-        assert_eq!(out, json!({"elems": [{"d": {"e": {"f": 123}}, "k1": "v1"}]}));
+        assert_eq!(
+            out,
+            json!({"elems": [{"d": {"e": {"f": 123}}, "k1": "v1"}]})
+        );
     }
 
     #[test]
@@ -920,7 +916,10 @@ mod tests {
 
     #[test]
     fn a_bare_asterisk_takes_every_child() {
-        let out = pruned("$.adBreak.*", json!({"adBreak": {"a": 1, "b": 2}, "keep": 3}));
+        let out = pruned(
+            "$.adBreak.*",
+            json!({"adBreak": {"a": 1, "b": 2}, "keep": 3}),
+        );
         assert_eq!(out, json!({"adBreak": {}, "keep": 3}));
     }
 
@@ -932,7 +931,10 @@ mod tests {
 
     #[test]
     fn a_wildcard_under_descent_reaches_every_level() {
-        let out = pruned("$.a..b", json!({"a": {"b": 1, "c": {"b": 2}, "d": [{"b": 3}]}}));
+        let out = pruned(
+            "$.a..b",
+            json!({"a": {"b": 1, "c": {"b": 2}, "d": [{"b": 3}]}}),
+        );
         assert_eq!(out, json!({"a": {"c": {}, "d": [{}]}}));
     }
 
@@ -950,7 +952,10 @@ mod tests {
             "$.configs['SliceShow/ntpmsn'].properties.ad",
             json!({"configs": {"SliceShow/ntpmsn": {"properties": {"ad": 1}}}}),
         );
-        assert_eq!(out, json!({"configs": {"SliceShow/ntpmsn": {"properties": {}}}}));
+        assert_eq!(
+            out,
+            json!({"configs": {"SliceShow/ntpmsn": {"properties": {}}}})
+        );
     }
 
     #[test]
@@ -967,7 +972,10 @@ mod tests {
 
     #[test]
     fn a_dotted_bracket_step_reads_the_same_as_a_plain_one() {
-        let out = pruned("$.entries.[?(has ad)]", json!({"entries": [{"ad": 1}, {"b": 2}]}));
+        let out = pruned(
+            "$.entries.[?(has ad)]",
+            json!({"entries": [{"ad": 1}, {"b": 2}]}),
+        );
         assert_eq!(out, json!({"entries": [{"b": 2}]}));
     }
 
@@ -1015,24 +1023,20 @@ mod tests {
 
     #[test]
     fn a_body_that_is_not_json_goes_untouched() {
-        let rules = [
-            JsonpruneRule {
-                text: "test".to_string(),
-                expression: parse("$.ad"),
-            },
-        ];
+        let rules = [JsonpruneRule {
+            text: "test".to_string(),
+            expression: parse("$.ad"),
+        }];
         assert!(prune_body(&rules, b"<!doctype html><html></html>").is_none());
         assert!(prune_body(&rules, b"{\"keep\": 1}").is_none());
     }
 
     #[test]
     fn a_jsonp_body_is_rewritten_inside_its_shell() {
-        let rules = [
-            JsonpruneRule {
-                text: "test".to_string(),
-                expression: parse("$.ad"),
-            },
-        ];
+        let rules = [JsonpruneRule {
+            text: "test".to_string(),
+            expression: parse("$.ad"),
+        }];
         let (out, applied) =
             prune_body(&rules, b"\tcb({\n  \"ad\": 1,\n  \"keep\": 2\n});\n").expect("changed");
         assert_eq!(applied, ["test"]);
@@ -1054,7 +1058,8 @@ mod tests {
                 expression: parse("$.b"),
             },
         ];
-        let (out, applied) = prune_body(&rules, br#"{"a": 1, "b": 2, "keep": 3}"#).expect("changed");
+        let (out, applied) =
+            prune_body(&rules, br#"{"a": 1, "b": 2, "keep": 3}"#).expect("changed");
         assert_eq!(applied, ["first", "second"]);
         assert_eq!(out, br#"{"keep":3}"#);
         // A rule that matches nothing does not stop the next one.

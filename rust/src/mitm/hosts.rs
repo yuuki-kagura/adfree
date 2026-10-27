@@ -37,7 +37,9 @@ impl HostPatterns {
         if host.is_empty() {
             return false;
         }
-        self.patterns.iter().any(|pattern| host_matches(&host, pattern))
+        self.patterns
+            .iter()
+            .any(|pattern| host_matches(&host, pattern))
     }
 }
 
@@ -107,7 +109,10 @@ fn normalize(raw: &str) -> Option<String> {
             }
         }
     }
-    value = value.trim_end_matches('.').trim_start_matches('.').to_string();
+    value = value
+        .trim_end_matches('.')
+        .trim_start_matches('.')
+        .to_string();
     if value.is_empty()
         || value.chars().any(|c| c.is_whitespace())
         || value.chars().any(|c| {

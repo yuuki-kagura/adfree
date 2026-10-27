@@ -120,9 +120,8 @@ impl UdpNat {
     /// policy change; their descriptors are closed by [`UdpFlow`]'s drop.
     pub fn expire(&mut self, now: u64) -> usize {
         let before = self.flows.len();
-        self.flows.retain(|_, f| {
-            !f.retire && now.saturating_sub(f.last_ms) < UDP_FLOW_IDLE_MS
-        });
+        self.flows
+            .retain(|_, f| !f.retire && now.saturating_sub(f.last_ms) < UDP_FLOW_IDLE_MS);
         before - self.flows.len()
     }
 

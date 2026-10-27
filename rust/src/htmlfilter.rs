@@ -478,7 +478,11 @@ fn rule_line(
     // `$url` is not compatible with a domain-specific rule (KB §`$url`
     // limitations); a rule's own domain position beside the URL mask is
     // refused, like the cosmetic scanner refuses it.
-    if location.as_ref().is_some_and(|location| location.url.is_some()) && !prefix.is_empty() {
+    if location
+        .as_ref()
+        .is_some_and(|location| location.url.is_some())
+        && !prefix.is_empty()
+    {
         return Parsed::Unsupported;
     }
     // A path-in-domain target and a bracket `$path` are two path scopes on
@@ -521,11 +525,7 @@ fn rule_line(
                 };
                 // uBO writes a hostname on every blocking HTML filter; a
                 // path-in-domain target is that hostname.
-                if syntax == Syntax::Ubo
-                    && !exception
-                    && domains.is_none()
-                    && location.is_none()
-                {
+                if syntax == Syntax::Ubo && !exception && domains.is_none() && location.is_none() {
                     return Parsed::Unsupported;
                 }
                 let rule = Rule {
@@ -629,9 +629,9 @@ fn path_in_domain_candidate(prefix: &str) -> bool {
 /// `##^` inside an argument. A domain position holds nothing but domain-list
 /// characters, which is what keeps those lines out.
 fn domain_position_ok(prefix: &str) -> bool {
-    prefix.chars().all(|c| {
-        c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-' | '~' | ',' | '*' | ' ')
-    })
+    prefix
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-' | '~' | ',' | '*' | ' '))
 }
 
 /// Splits a selector into its `>` chain of compounds and parses each.
@@ -1326,7 +1326,11 @@ impl Plan {
         let mut by_tag: HashMap<String, Vec<usize>> = HashMap::new();
         let mut any = Vec::new();
         for (index, rule) in kept.iter().enumerate() {
-            match rule.chain.last().and_then(|compound| compound.tag.as_deref()) {
+            match rule
+                .chain
+                .last()
+                .and_then(|compound| compound.tag.as_deref())
+            {
                 Some(tag) => by_tag.entry(tag.to_string()).or_default().push(index),
                 None => any.push(index),
             }
@@ -1722,7 +1726,11 @@ fn markup_end(body: &[u8], from: usize) -> Option<usize> {
 
 /// Reads a start tag's attributes. `None` when the tag cannot be read: an
 /// element with unreadable attributes matches no rule.
-fn parse_attrs(body: &[u8], mut cursor: usize, end: usize) -> Option<Vec<(String, Option<String>)>> {
+fn parse_attrs(
+    body: &[u8],
+    mut cursor: usize,
+    end: usize,
+) -> Option<Vec<(String, Option<String>)>> {
     let mut attrs: Vec<(String, Option<String>)> = Vec::new();
     while cursor < end {
         while cursor < end && body[cursor].is_ascii_whitespace() {
@@ -1883,11 +1891,11 @@ mod tests {
 
     #[test]
     fn a_rule_is_only_html_filtering_when_its_prefix_is_a_domain_position() {
-        assert!(matches!(parse_line("shop.test$$script[src]"), Parsed::Rule(_)));
         assert!(matches!(
-            parse_line("$$div[class=\"ad\"]"),
+            parse_line("shop.test$$script[src]"),
             Parsed::Rule(_)
         ));
+        assert!(matches!(parse_line("$$div[class=\"ad\"]"), Parsed::Rule(_)));
         assert!(matches!(parse_line("a.com,b.com$$div"), Parsed::Rule(_)));
         assert!(matches!(
             parse_line("example.org#%#//scriptlet('set-constant', '$$.analytics', 'emptyObj')"),
@@ -1912,10 +1920,19 @@ mod tests {
             Parsed::Unsupported
         ));
         // Class and id sugar are the CSS reading, not the CoreLibs one.
-        assert!(matches!(parse_line("shop.test$$div.ad"), Parsed::Unsupported));
-        assert!(matches!(parse_line("shop.test$$div#slot"), Parsed::Unsupported));
+        assert!(matches!(
+            parse_line("shop.test$$div.ad"),
+            Parsed::Unsupported
+        ));
+        assert!(matches!(
+            parse_line("shop.test$$div#slot"),
+            Parsed::Unsupported
+        ));
         // A selector list.
-        assert!(matches!(parse_line("shop.test$$div, p"), Parsed::Unsupported));
+        assert!(matches!(
+            parse_line("shop.test$$div, p"),
+            Parsed::Unsupported
+        ));
         // An unknown pseudo.
         assert!(matches!(
             parse_line("shop.test$$div:has(span)"),
@@ -1933,7 +1950,9 @@ mod tests {
     fn the_adguard_value_match_is_a_substring() {
         let plan = plan_of(&["shop.test$$script[src=\"html-load.com\"]"]);
         let (body, rules) = plan
-            .apply(&body_of("<script src=\"//cdn.html-load.com/x.js\"></script>"))
+            .apply(&body_of(
+                "<script src=\"//cdn.html-load.com/x.js\"></script>",
+            ))
             .expect("a removal");
         assert!(body.is_empty(), "{}", String::from_utf8_lossy(&body));
         assert_eq!(rules, vec!["script[src=\"html-load.com\"]".to_string()]);
@@ -1941,14 +1960,18 @@ mod tests {
         // `*=` is the same predicate in this reading.
         let plan = plan_of(&["shop.test$$script[src*=\"html-load.com\"]"]);
         assert!(plan
-            .apply(&body_of("<script src=\"//cdn.html-load.com/x.js\"></script>"))
+            .apply(&body_of(
+                "<script src=\"//cdn.html-load.com/x.js\"></script>"
+            ))
             .is_some());
     }
 
     #[test]
     fn a_bare_attribute_tests_presence() {
         let plan = plan_of(&["shop.test$$meta[property]"]);
-        assert!(plan.apply(&body_of("<meta property=\"og:title\">")).is_some());
+        assert!(plan
+            .apply(&body_of("<meta property=\"og:title\">"))
+            .is_some());
         assert!(plan.apply(&body_of("<meta name=\"x\">")).is_none());
     }
 
@@ -2015,13 +2038,8 @@ mod tests {
             Parsed::Rule(rule) => rule,
             _ => panic!("a rule"),
         };
-        let plan = Plan::build(
-            std::slice::from_ref(&rule),
-            &[],
-            "filmweb.pl",
-            "/",
-        )
-        .expect("a plan");
+        let plan =
+            Plan::build(std::slice::from_ref(&rule), &[], "filmweb.pl", "/").expect("a plan");
         assert!(plan
             .apply(&body_of("<script>if(x.name)throw h=\"ABP\",y</script>"))
             .is_some());
@@ -2088,7 +2106,9 @@ mod tests {
     #[test]
     fn the_knowledge_bases_length_pattern_is_answered_natively() {
         let plan = plan_of(&["shop.test$$script:contains(/^(?=.{10,20}$).*/s)"]);
-        assert!(plan.apply(&body_of("<script>1234567890</script>")).is_some());
+        assert!(plan
+            .apply(&body_of("<script>1234567890</script>"))
+            .is_some());
         assert!(plan.apply(&body_of("<script>123</script>")).is_none());
         assert!(plan
             .apply(&body_of("<script>1234567890123456789012345</script>"))
@@ -2126,14 +2146,18 @@ mod tests {
         // Nested same-name elements: the outer goes with its content.
         let plan = plan_of(&["shop.test$$div[class=\"ad\"]"]);
         let (out, _) = plan
-            .apply(&body_of("<div class=\"ad\">a<div class=\"ad\">b</div></div>keep"))
+            .apply(&body_of(
+                "<div class=\"ad\">a<div class=\"ad\">b</div></div>keep",
+            ))
             .expect("a removal");
         assert_eq!(String::from_utf8_lossy(&out), "keep");
 
         // A void element is removed on its own.
         let plan = plan_of(&["shop.test$$meta[property=\"og:title\"]"]);
         let (out, _) = plan
-            .apply(&body_of("<head><meta property=\"og:title\"><title>x</title></head>"))
+            .apply(&body_of(
+                "<head><meta property=\"og:title\"><title>x</title></head>",
+            ))
             .expect("a removal");
         assert_eq!(
             String::from_utf8_lossy(&out),
@@ -2200,11 +2224,16 @@ mod tests {
         // the reference compares them, so the rule stays.
         let built = Plan::build(
             &rules_of(&[rules]),
-            &exceptions_of(&["shop.test$@$script[max-length=\"500\"][tag-content=\"fbevents.js\"]"]),
+            &exceptions_of(&[
+                "shop.test$@$script[max-length=\"500\"][tag-content=\"fbevents.js\"]",
+            ]),
             "shop.test",
             "/",
         );
-        assert!(built.is_none(), "attribute order is not part of the selector");
+        assert!(
+            built.is_none(),
+            "attribute order is not part of the selector"
+        );
 
         // A different selector does not cancel the rule.
         let built = Plan::build(
@@ -2227,7 +2256,9 @@ mod tests {
         // An exception for another host does not.
         let built = Plan::build(
             &rules_of(&[rules]),
-            &exceptions_of(&["other.test$@$script[tag-content=\"fbevents.js\"][max-length=\"500\"]"]),
+            &exceptions_of(&[
+                "other.test$@$script[tag-content=\"fbevents.js\"][max-length=\"500\"]",
+            ]),
             "shop.test",
             "/",
         );
@@ -2282,8 +2313,7 @@ mod tests {
             Parsed::Rule(rule) => rule,
             _ => panic!("a rule"),
         };
-        let plan =
-            Plan::build(std::slice::from_ref(&rule), &[], "shop.test", "/").expect("a plan");
+        let plan = Plan::build(std::slice::from_ref(&rule), &[], "shop.test", "/").expect("a plan");
         assert!(plan.apply(&body_of("<div class=\"ad\">x</div>")).is_some());
         assert!(Plan::build(std::slice::from_ref(&rule), &[], "other.test", "/").is_none());
 
@@ -2296,9 +2326,8 @@ mod tests {
         assert!(Plan::build(std::slice::from_ref(&rule), &[], "shop.test", "/other").is_none());
 
         // `[$url=…]` matches the whole page URL.
-        let rule = match parse_line(
-            "[$url=/^https:\\/\\/shop\\.test\\/video/]$$div[class=\"ad\"]",
-        ) {
+        let rule = match parse_line("[$url=/^https:\\/\\/shop\\.test\\/video/]$$div[class=\"ad\"]")
+        {
             Parsed::Rule(rule) => rule,
             _ => panic!("a rule"),
         };
@@ -2347,27 +2376,9 @@ mod tests {
             panic!("a target list");
         };
         assert_eq!(blocking.len(), 2);
-        assert!(Plan::build(
-            &blocking,
-            &[],
-            "alpha.test",
-            "https://alpha.test/other"
-        )
-        .is_some());
-        assert!(Plan::build(
-            &blocking,
-            &[],
-            "beta.test",
-            "https://beta.test/other"
-        )
-        .is_none());
-        assert!(Plan::build(
-            &blocking,
-            &[],
-            "beta.test",
-            "https://beta.test/checkout"
-        )
-        .is_some());
+        assert!(Plan::build(&blocking, &[], "alpha.test", "https://alpha.test/other").is_some());
+        assert!(Plan::build(&blocking, &[], "beta.test", "https://beta.test/other").is_none());
+        assert!(Plan::build(&blocking, &[], "beta.test", "https://beta.test/checkout").is_some());
 
         // A whole-target regexp sees the host and the path together.
         let rule = match parse_line(r#"/shop\.test\/video[0-9]+/$$div[class="ad"]"#) {
@@ -2424,23 +2435,15 @@ mod tests {
         };
         assert!(Plan::build(std::slice::from_ref(&rule), &[], "shop.test", "/").is_none());
         let apps = vec!["org.example.app".to_string()];
-        assert!(Plan::build_for_apps(
-            std::slice::from_ref(&rule),
-            &[],
-            "shop.test",
-            "/",
-            &apps
-        )
-        .is_some());
+        assert!(
+            Plan::build_for_apps(std::slice::from_ref(&rule), &[], "shop.test", "/", &apps)
+                .is_some()
+        );
         let other = vec!["com.example.app".to_string()];
-        assert!(Plan::build_for_apps(
-            std::slice::from_ref(&rule),
-            &[],
-            "shop.test",
-            "/",
-            &other
-        )
-        .is_none());
+        assert!(
+            Plan::build_for_apps(std::slice::from_ref(&rule), &[], "shop.test", "/", &other)
+                .is_none()
+        );
     }
 
     #[test]
@@ -2565,7 +2568,9 @@ mod tests {
     fn a_chain_asks_about_the_parent() {
         let plan = plan_of(&["shop.test$$div[class=\"ad\"] > iframe[src]"]);
         assert!(plan
-            .apply(&body_of("<div class=\"ad\"><iframe src=\"x\"></iframe></div>"))
+            .apply(&body_of(
+                "<div class=\"ad\"><iframe src=\"x\"></iframe></div>"
+            ))
             .is_some());
         // The parent must be the direct one and match.
         assert!(plan
@@ -2574,7 +2579,9 @@ mod tests {
             ))
             .is_none());
         assert!(plan
-            .apply(&body_of("<div class=\"other\"><iframe src=\"x\"></iframe></div>"))
+            .apply(&body_of(
+                "<div class=\"other\"><iframe src=\"x\"></iframe></div>"
+            ))
             .is_none());
     }
 
@@ -2594,8 +2601,7 @@ mod tests {
             Parsed::Rule(rule) => rule,
             _ => panic!("a rule"),
         };
-        let plan =
-            Plan::build(std::slice::from_ref(&rule), &[], "shop.test", "/").expect("a plan");
+        let plan = Plan::build(std::slice::from_ref(&rule), &[], "shop.test", "/").expect("a plan");
         // uBO's literal search does not care about case.
         let (out, _) = plan
             .apply(&body_of("<script>await EVAL(async()=>{})</script>"))
@@ -2607,10 +2613,11 @@ mod tests {
             Parsed::Rule(rule) => rule,
             _ => panic!("a rule"),
         };
-        let plan =
-            Plan::build(std::slice::from_ref(&rule), &[], "shop.test", "/").expect("a plan");
+        let plan = Plan::build(std::slice::from_ref(&rule), &[], "shop.test", "/").expect("a plan");
         assert!(plan
-            .apply(&body_of("<div class=\"x ad y\" id=\"slot\" data-x=\"ayb\">t</div>"))
+            .apply(&body_of(
+                "<div class=\"x ad y\" id=\"slot\" data-x=\"ayb\">t</div>"
+            ))
             .is_some());
 
         // The text search reads textContent, not the markup.
@@ -2618,8 +2625,7 @@ mod tests {
             Parsed::Rule(rule) => rule,
             _ => panic!("a rule"),
         };
-        let plan =
-            Plan::build(std::slice::from_ref(&rule), &[], "shop.test", "/").expect("a plan");
+        let plan = Plan::build(std::slice::from_ref(&rule), &[], "shop.test", "/").expect("a plan");
         assert!(plan
             .apply(&body_of("<div>hello <b>world</b></div>"))
             .is_some());
@@ -2640,19 +2646,23 @@ mod tests {
             Parsed::Rule(rule) => rule,
             _ => panic!("a rule"),
         };
-        let plan =
-            Plan::build(std::slice::from_ref(&rule), &[], "shop.test", "/").expect("a plan");
+        let plan = Plan::build(std::slice::from_ref(&rule), &[], "shop.test", "/").expect("a plan");
         // Without `i`, the regexp is case-sensitive.
-        assert!(plan.apply(&body_of("<script>await eval</script>")).is_some());
-        assert!(plan.apply(&body_of("<script>await EVAL</script>")).is_none());
+        assert!(plan
+            .apply(&body_of("<script>await eval</script>"))
+            .is_some());
+        assert!(plan
+            .apply(&body_of("<script>await EVAL</script>"))
+            .is_none());
 
         let rule = match parse_line("shop.test##^script:has-text(/await eval/i)") {
             Parsed::Rule(rule) => rule,
             _ => panic!("a rule"),
         };
-        let plan =
-            Plan::build(std::slice::from_ref(&rule), &[], "shop.test", "/").expect("a plan");
-        assert!(plan.apply(&body_of("<script>await EVAL</script>")).is_some());
+        let plan = Plan::build(std::slice::from_ref(&rule), &[], "shop.test", "/").expect("a plan");
+        assert!(plan
+            .apply(&body_of("<script>await EVAL</script>"))
+            .is_some());
     }
 
     #[test]
@@ -2712,5 +2722,3 @@ mod tests {
         assert!(plan.apply(b"not html at all").is_none());
     }
 }
-
-

@@ -11,7 +11,6 @@ import android.provider.MediaStore
 import android.provider.Settings
 import android.util.Log
 import git.shin.adfree.AdGuardApplication
-import git.shin.adfree.model.DnsBlockMode
 import git.shin.adfree.model.NetworkRequestLog
 import java.io.File
 import java.security.KeyStore
@@ -116,89 +115,84 @@ class CoreEngine {
 
     // ----------------------------------------------------------------- config
 
-    fun setResolver(host: String, port: Int) {
-        runCatching { git.shin.adfree.core.coreSetResolver(host, port.toUShort()) }
-            .onFailure { Log.w(tag, "setResolver($host:$port) failed", it) }
-    }
-
-    fun configure(
-        mitmEnabled: Boolean,
-        fullEch: Boolean,
-        blockQuic: Boolean,
-        blockDoh: Boolean,
-        blockDot: Boolean,
-        adBlocking: Boolean,
-        trackingProtection: Boolean,
-        dnsProtection: Boolean,
-        smartFiltering: Boolean,
-        blockMode: DnsBlockMode,
-        logAllowed: Boolean,
-        ecoMode: Boolean,
-        httpsSkipHosts: List<String> = emptyList(),
-        httpsOnlyHosts: List<String> = emptyList(),
-        httpsOnlyMode: Boolean = false,
-        proxyEnabled: Boolean = false,
-        proxyHost: String = "",
-        proxyPort: Int = 0,
-        proxyUsername: String = "",
-        proxyPassword: String = "",
-    ) {
-        val config = git.shin.adfree.core.EngineConfig(
-            mitmEnabled = mitmEnabled,
-            fullEch = fullEch,
-            blockQuic = blockQuic,
-            blockDoh = blockDoh,
-            blockDot = blockDot,
-            adBlocking = adBlocking,
-            trackingProtection = trackingProtection,
-            dnsProtection = dnsProtection,
-            smartFiltering = smartFiltering,
-            blockMode = blockMode.code.toInt(),
-            logAllowed = logAllowed,
-            ecoMode = ecoMode,
-            httpsSkipHosts = httpsSkipHosts,
-            httpsOnlyHosts = httpsOnlyHosts,
-            httpsOnlyMode = httpsOnlyMode,
-            proxyEnabled = proxyEnabled,
-            proxyHost = proxyHost,
-            proxyPort = proxyPort.coerceIn(0, 65535).toUShort(),
-            proxyUsername = proxyUsername,
-            proxyPassword = proxyPassword,
-        )
-        runCatching { git.shin.adfree.core.coreConfigure(config) }
-            .onFailure { Log.w(tag, "configure failed", it) }
-    }
-
     fun setScreenOff(off: Boolean) = runCatching { git.shin.adfree.core.coreSetScreenOff(off) }
 
-    /**
-     * Packages whose HTTPS payload must not be decrypted (per-app switch off).
-     * Their flows stay in the tunnel, so DNS filtering still applies. The core
-     * reads the list when a connection opens; no tunnel restart is needed.
-     */
-    fun setHttpsSkipApps(packages: List<String>) {
-        runCatching { git.shin.adfree.core.coreSetHttpsSkipApps(packages) }
-            .onFailure { Log.w(tag, "setHttpsSkipApps failed", it) }
-    }
+    // ------------------------------------------------------------ typed state
 
     /**
-     * Per-app firewall: packages barred from a network or from going online
-     * while the screen is off. The core cuts open flows of an app that becomes
-     * restricted, so no tunnel restart is needed.
+     * The whole persisted state, already merged with the built-in resolvers.
+     * Kotlin hydrates its flows from this; defaults come from Rust only.
      */
-    fun setAppNetworkPolicy(
-        cellularBlocked: List<String>,
-        wifiBlocked: List<String>,
-        screenOffBlocked: List<String>,
-    ) {
-        runCatching {
-            git.shin.adfree.core.coreSetAppNetworkPolicy(
-                cellularBlocked = cellularBlocked,
-                wifiBlocked = wifiBlocked,
-                screenOffBlocked = screenOffBlocked,
-            )
-        }.onFailure { Log.w(tag, "setAppNetworkPolicy failed", it) }
-    }
+    fun stateLoad(): git.shin.adfree.core.StateSnapshot =
+        git.shin.adfree.core.coreStateLoad()
+
+    fun saveProtection(value: git.shin.adfree.core.ProtectionState): Boolean =
+        runCatching { git.shin.adfree.core.coreProtectionSave(value) }.getOrDefault(false)
+
+    fun saveFirewall(rules: List<git.shin.adfree.core.AppFirewallRule>): Boolean =
+        runCatching { git.shin.adfree.core.coreFirewallSave(rules) }.getOrDefault(false)
+
+    fun saveDns(value: git.shin.adfree.core.DnsState): Boolean =
+        runCatching { git.shin.adfree.core.coreDnsSave(value) }.getOrDefault(false)
+
+    fun saveFilters(value: git.shin.adfree.core.FilterState): Boolean =
+        runCatching { git.shin.adfree.core.coreFiltersSave(value) }.getOrDefault(false)
+
+    fun saveScripts(value: git.shin.adfree.core.ScriptState): Boolean =
+        runCatching { git.shin.adfree.core.coreScriptsSave(value) }.getOrDefault(false)
+
+    /** Rebuilds the engine config (modules, resolvers, firewall policy) from state. */
+    fun applyConfig(privateDnsStrict: Boolean): git.shin.adfree.core.ConfigOutcome =
+        runCatching { git.shin.adfree.core.coreApplyConfig(privateDnsStrict) }
+            .getOrElse {
+                git.shin.adfree.core.ConfigOutcome(
+                    ok = false,
+                    warning = git.shin.adfree.core.ConfigWarning.STORE_UNAVAILABLE,
+                )
+            }
+
+    /** What Android should hand the tunnel as its DNS server. */
+    fun resolverSnapshot(): git.shin.adfree.core.ResolverSnapshot =
+        runCatching { git.shin.adfree.core.coreResolverSnapshot() }
+            .getOrElse {
+                git.shin.adfree.core.ResolverSnapshot(
+                    tunnelDns = "94.140.14.14",
+                    providerId = "",
+                    warning = git.shin.adfree.core.ConfigWarning.STORE_UNAVAILABLE,
+                )
+            }
+
+    /** Apps whose routing switch is off, for `addDisallowedApplication`. */
+    fun excludedPackages(): List<String> =
+        runCatching { git.shin.adfree.core.coreExcludedPackages() }.getOrDefault(emptyList())
+
+    /** Protocol-aware resolver address validation, owned by the core. */
+    fun validateDnsProvider(
+        protocol: git.shin.adfree.core.DnsProtocol,
+        address: String,
+    ): git.shin.adfree.core.DnsValidation =
+        runCatching { git.shin.adfree.core.coreValidateDnsProvider(protocol, address) }
+            .getOrElse {
+                git.shin.adfree.core.DnsValidation(
+                    valid = false,
+                    address = "",
+                    port = 0u,
+                    protocol = protocol,
+                    error = git.shin.adfree.core.DnsError.INVALID_ADDRESS,
+                )
+            }
+
+    fun backupExport(): String =
+        runCatching { git.shin.adfree.core.coreBackupExport() }.getOrDefault("")
+
+    fun backupImport(json: String): git.shin.adfree.core.BackupOutcome =
+        runCatching { git.shin.adfree.core.coreBackupImport(json) }
+            .getOrElse {
+                git.shin.adfree.core.BackupOutcome(
+                    ok = false,
+                    error = git.shin.adfree.core.BackupError.STORE_UNAVAILABLE,
+                )
+            }
 
     /** The default network, classified by the VPN service's network callback. */
     fun setNetworkType(kind: Int) {

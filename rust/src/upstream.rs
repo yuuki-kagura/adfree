@@ -89,7 +89,8 @@ impl Upstream {
     }
 
     pub fn pending_len(&self) -> usize {
-        self.pending.len()    }
+        self.pending.len()
+    }
 
     pub fn timeouts(&self) -> u64 {
         self.timeouts
@@ -219,7 +220,7 @@ impl Upstream {
         let mut received = 0;
         for (i, p) in fds.iter().enumerate() {
             // Drain every pending datagram: poll reports that data is ready but not how
-        // much, so read until EWOULDBLOCK.
+            // much, so read until EWOULDBLOCK.
             if p.revents & libc::POLLIN == 0 {
                 continue;
             }
@@ -296,11 +297,7 @@ fn dns_payload(packet: &[u8]) -> Option<&[u8]> {
 }
 
 #[inline]
-fn sendto(
-    fd: RawFd,
-    packet: &[u8],
-    sock: libc::sockaddr_in,
-) -> isize {
+fn sendto(fd: RawFd, packet: &[u8], sock: libc::sockaddr_in) -> isize {
     unsafe {
         libc::sendto(
             fd,

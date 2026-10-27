@@ -48,7 +48,10 @@ fn spawn_resolver(socket: UdpSocket) {
         let mut buf = [0u8; 2048];
         let (n, peer) = socket.recv_from(&mut buf).expect("recv query");
         let q = dns::parse_query(&buf[..n]).expect("valid DNS query");
-        assert!(q.has_question, "the resolver must receive a real DNS message");
+        assert!(
+            q.has_question,
+            "the resolver must receive a real DNS message"
+        );
         let mut reply = Vec::new();
         reply.extend_from_slice(&q.id.to_be_bytes());
         reply.extend_from_slice(&[0x85, 0x80]); // QR + RD + RA
@@ -70,17 +73,11 @@ fn query_buf(q: &dns::Query<'_>) -> Vec<u8> {
 
 #[test]
 fn an_ip_packet_is_forwarded_as_a_dns_message_and_answered() {
-    let resolver = UdpSocket::bind(SocketAddr::V4(SocketAddrV4::new(
-        Ipv4Addr::LOCALHOST,
-        0,
-    )))
-    .expect("bind");
+    let resolver =
+        UdpSocket::bind(SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 0))).expect("bind");
     let resolver_addr = resolver.local_addr().expect("addr");
-    let socket = UdpSocket::bind(SocketAddr::V4(SocketAddrV4::new(
-        Ipv4Addr::LOCALHOST,
-        0,
-    )))
-    .expect("bind client");
+    let socket = UdpSocket::bind(SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 0)))
+        .expect("bind client");
     socket
         .set_read_timeout(Some(std::time::Duration::from_millis(500)))
         .expect("timeout");
@@ -118,7 +115,8 @@ fn an_ip_packet_is_forwarded_as_a_dns_message_and_answered() {
 
     // The client-facing rewrite has to turn this into a packet the client
     // accepts: same addresses, same ports, restored transaction id.
-    let client_packet = Packet::parse(&reply.pending.packet).expect("the stored packet is an IP packet");
+    let client_packet =
+        Packet::parse(&reply.pending.packet).expect("the stored packet is an IP packet");
     let mut message = reply.message.clone();
     dns::patch_txid(&mut message, reply.pending.client_txid);
     let rewritten = client_packet.rewrite_udp(&message);
@@ -131,7 +129,10 @@ fn an_ip_packet_is_forwarded_as_a_dns_message_and_answered() {
     assert_eq!(parsed.dst_port, 40000);
 
     let answered = dns::parse_query(parsed.l4_payload()).expect("the DNS answer must decode");
-    assert_eq!(answered.id, 0x4321, "the client's transaction id must be restored");
+    assert_eq!(
+        answered.id, 0x4321,
+        "the client's transaction id must be restored"
+    );
     assert!(!answered.is_query());
     assert_eq!(answered.qname.as_str(), "allowed.example.com");
 }

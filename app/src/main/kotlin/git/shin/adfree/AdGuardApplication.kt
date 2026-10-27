@@ -17,15 +17,11 @@ class AdGuardApplication : Application() {
         // a CA the engine cannot terminate TLS - it would relay port 443
         // unfiltered instead of filtering it.
         container.coreEngine.ensureCa()
-        // Restore the switches before the filter state: the launch-time
-        // subscription refresh reads the auto-update interval, and the engine
-        // has to be configured with the user's modules from the first frame.
-        container.repository.loadSettings()
-        // Load the filter/script state from disk and sync the configuration to
-        // the core.
-        container.repository.loadFilterState()
-        container.repository.loadScriptsState()
-        container.syncConfigToEngine()
+        // Rust owns the persisted state: hydrate the flows from it, then
+        // rebuild the engine from the same records. Hydration also starts the
+        // asynchronous filter/script file refresh.
+        container.repository.hydrateState()
+        container.applyConfig()
     }
 
     companion object {

@@ -719,6 +719,12 @@ internal object IntegrityCheckingUniffiLib {
     }
 
     internal fun ensureInitialized() = Unit
+    external fun uniffi_adfree_core_checksum_func_core_apply_config(
+    ): Int
+    external fun uniffi_adfree_core_checksum_func_core_backup_export(
+    ): Int
+    external fun uniffi_adfree_core_checksum_func_core_backup_import(
+    ): Int
     external fun uniffi_adfree_core_checksum_func_core_ca_key_pem(
     ): Int
     external fun uniffi_adfree_core_checksum_func_core_ca_pem(
@@ -733,11 +739,13 @@ internal object IntegrityCheckingUniffiLib {
     ): Int
     external fun uniffi_adfree_core_checksum_func_core_combined_scripts(
     ): Int
-    external fun uniffi_adfree_core_checksum_func_core_configure(
+    external fun uniffi_adfree_core_checksum_func_core_dns_save(
     ): Int
     external fun uniffi_adfree_core_checksum_func_core_drain_events(
     ): Int
     external fun uniffi_adfree_core_checksum_func_core_ensure_ca(
+    ): Int
+    external fun uniffi_adfree_core_checksum_func_core_excluded_packages(
     ): Int
     external fun uniffi_adfree_core_checksum_func_core_filter_build_errors(
     ): Int
@@ -749,9 +757,9 @@ internal object IntegrityCheckingUniffiLib {
     ): Int
     external fun uniffi_adfree_core_checksum_func_core_filter_state(
     ): Int
-    external fun uniffi_adfree_core_checksum_func_core_filters_get(
+    external fun uniffi_adfree_core_checksum_func_core_filters_save(
     ): Int
-    external fun uniffi_adfree_core_checksum_func_core_filters_set(
+    external fun uniffi_adfree_core_checksum_func_core_firewall_save(
     ): Int
     external fun uniffi_adfree_core_checksum_func_core_generate_ca(
     ): Int
@@ -771,6 +779,8 @@ internal object IntegrityCheckingUniffiLib {
     ): Int
     external fun uniffi_adfree_core_checksum_func_core_protect_sockets(
     ): Int
+    external fun uniffi_adfree_core_checksum_func_core_protection_save(
+    ): Int
     external fun uniffi_adfree_core_checksum_func_core_relay_count(
     ): Int
     external fun uniffi_adfree_core_checksum_func_core_remove_root_ca(
@@ -778,6 +788,8 @@ internal object IntegrityCheckingUniffiLib {
     external fun uniffi_adfree_core_checksum_func_core_reset_ca(
     ): Int
     external fun uniffi_adfree_core_checksum_func_core_reset_stats(
+    ): Int
+    external fun uniffi_adfree_core_checksum_func_core_resolver_snapshot(
     ): Int
     external fun uniffi_adfree_core_checksum_func_core_restore_ca(
     ): Int
@@ -793,21 +805,17 @@ internal object IntegrityCheckingUniffiLib {
     ): Int
     external fun uniffi_adfree_core_checksum_func_core_script_text(
     ): Int
-    external fun uniffi_adfree_core_checksum_func_core_set_app_network_policy(
+    external fun uniffi_adfree_core_checksum_func_core_scripts_save(
     ): Int
     external fun uniffi_adfree_core_checksum_func_core_set_data_root(
     ): Int
     external fun uniffi_adfree_core_checksum_func_core_set_doh_ranges(
-    ): Int
-    external fun uniffi_adfree_core_checksum_func_core_set_https_skip_apps(
     ): Int
     external fun uniffi_adfree_core_checksum_func_core_set_lists(
     ): Int
     external fun uniffi_adfree_core_checksum_func_core_set_lists_async(
     ): Int
     external fun uniffi_adfree_core_checksum_func_core_set_network_type(
-    ): Int
-    external fun uniffi_adfree_core_checksum_func_core_set_resolver(
     ): Int
     external fun uniffi_adfree_core_checksum_func_core_set_screen_off(
     ): Int
@@ -819,11 +827,9 @@ internal object IntegrityCheckingUniffiLib {
     ): Int
     external fun uniffi_adfree_core_checksum_func_core_set_uid_lookup(
     ): Int
-    external fun uniffi_adfree_core_checksum_func_core_settings_get(
-    ): Int
-    external fun uniffi_adfree_core_checksum_func_core_settings_set(
-    ): Int
     external fun uniffi_adfree_core_checksum_func_core_start(
+    ): Int
+    external fun uniffi_adfree_core_checksum_func_core_state_load(
     ): Int
     external fun uniffi_adfree_core_checksum_func_core_stats(
     ): Int
@@ -832,6 +838,8 @@ internal object IntegrityCheckingUniffiLib {
     external fun uniffi_adfree_core_checksum_func_core_take_log_lines(
     ): Int
     external fun uniffi_adfree_core_checksum_func_core_uid_for_port(
+    ): Int
+    external fun uniffi_adfree_core_checksum_func_core_validate_dns_provider(
     ): Int
     external fun uniffi_adfree_core_checksum_func_core_version(
     ): Int
@@ -877,6 +885,12 @@ internal object UniffiLib {
     ): Unit
     external fun uniffi_adfree_core_fn_method_socketprotector_protect(`ptr`: Long,`fd`: Int,uniffi_out_err: UniffiRustCallStatus, 
     ): Byte
+    external fun uniffi_adfree_core_fn_func_core_apply_config(`privateDnsStrict`: Byte,uniffi_out_err: UniffiRustCallStatus, 
+    ): RustBuffer.ByValue
+    external fun uniffi_adfree_core_fn_func_core_backup_export(uniffi_out_err: UniffiRustCallStatus, 
+    ): RustBuffer.ByValue
+    external fun uniffi_adfree_core_fn_func_core_backup_import(`json`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    ): RustBuffer.ByValue
     external fun uniffi_adfree_core_fn_func_core_ca_key_pem(uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
     external fun uniffi_adfree_core_fn_func_core_ca_pem(uniffi_out_err: UniffiRustCallStatus, 
@@ -891,11 +905,13 @@ internal object UniffiLib {
     ): Unit
     external fun uniffi_adfree_core_fn_func_core_combined_scripts(uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
-    external fun uniffi_adfree_core_fn_func_core_configure(`config`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
-    ): Unit
+    external fun uniffi_adfree_core_fn_func_core_dns_save(`value`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    ): Byte
     external fun uniffi_adfree_core_fn_func_core_drain_events(`max`: Int,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
     external fun uniffi_adfree_core_fn_func_core_ensure_ca(uniffi_out_err: UniffiRustCallStatus, 
+    ): RustBuffer.ByValue
+    external fun uniffi_adfree_core_fn_func_core_excluded_packages(uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
     external fun uniffi_adfree_core_fn_func_core_filter_build_errors(uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
@@ -907,9 +923,9 @@ internal object UniffiLib {
     ): RustBuffer.ByValue
     external fun uniffi_adfree_core_fn_func_core_filter_state(`id`: RustBuffer.ByValue,`withMeta`: Byte,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
-    external fun uniffi_adfree_core_fn_func_core_filters_get(uniffi_out_err: UniffiRustCallStatus, 
-    ): RustBuffer.ByValue
-    external fun uniffi_adfree_core_fn_func_core_filters_set(`json`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    external fun uniffi_adfree_core_fn_func_core_filters_save(`value`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    ): Byte
+    external fun uniffi_adfree_core_fn_func_core_firewall_save(`rules`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): Byte
     external fun uniffi_adfree_core_fn_func_core_generate_ca(uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
@@ -929,6 +945,8 @@ internal object UniffiLib {
     ): RustBuffer.ByValue
     external fun uniffi_adfree_core_fn_func_core_protect_sockets(`fds`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): Unit
+    external fun uniffi_adfree_core_fn_func_core_protection_save(`value`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    ): Byte
     external fun uniffi_adfree_core_fn_func_core_relay_count(uniffi_out_err: UniffiRustCallStatus, 
     ): Int
     external fun uniffi_adfree_core_fn_func_core_remove_root_ca(uniffi_out_err: UniffiRustCallStatus, 
@@ -937,6 +955,8 @@ internal object UniffiLib {
     ): Unit
     external fun uniffi_adfree_core_fn_func_core_reset_stats(uniffi_out_err: UniffiRustCallStatus, 
     ): Unit
+    external fun uniffi_adfree_core_fn_func_core_resolver_snapshot(uniffi_out_err: UniffiRustCallStatus, 
+    ): RustBuffer.ByValue
     external fun uniffi_adfree_core_fn_func_core_restore_ca(`certPem`: RustBuffer.ByValue,`keyPem`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): Byte
     external fun uniffi_adfree_core_fn_func_core_root_trust_status(uniffi_out_err: UniffiRustCallStatus, 
@@ -951,21 +971,17 @@ internal object UniffiLib {
     ): RustBuffer.ByValue
     external fun uniffi_adfree_core_fn_func_core_script_text(`id`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
-    external fun uniffi_adfree_core_fn_func_core_set_app_network_policy(`cellularBlocked`: RustBuffer.ByValue,`wifiBlocked`: RustBuffer.ByValue,`screenOffBlocked`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
-    ): Unit
+    external fun uniffi_adfree_core_fn_func_core_scripts_save(`value`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    ): Byte
     external fun uniffi_adfree_core_fn_func_core_set_data_root(`path`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): Byte
     external fun uniffi_adfree_core_fn_func_core_set_doh_ranges(`ranges`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): Byte
-    external fun uniffi_adfree_core_fn_func_core_set_https_skip_apps(`packages`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
-    ): Unit
     external fun uniffi_adfree_core_fn_func_core_set_lists(`lists`: RustBuffer.ByValue,`userRules`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): Byte
     external fun uniffi_adfree_core_fn_func_core_set_lists_async(`lists`: RustBuffer.ByValue,`userRules`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): Byte
     external fun uniffi_adfree_core_fn_func_core_set_network_type(`kind`: Byte,uniffi_out_err: UniffiRustCallStatus, 
-    ): Unit
-    external fun uniffi_adfree_core_fn_func_core_set_resolver(`host`: RustBuffer.ByValue,`port`: Short,uniffi_out_err: UniffiRustCallStatus, 
     ): Unit
     external fun uniffi_adfree_core_fn_func_core_set_screen_off(`screenOff`: Byte,uniffi_out_err: UniffiRustCallStatus, 
     ): Unit
@@ -977,12 +993,10 @@ internal object UniffiLib {
     ): Byte
     external fun uniffi_adfree_core_fn_func_core_set_uid_lookup(`lookup`: Long,uniffi_out_err: UniffiRustCallStatus, 
     ): Unit
-    external fun uniffi_adfree_core_fn_func_core_settings_get(uniffi_out_err: UniffiRustCallStatus, 
-    ): RustBuffer.ByValue
-    external fun uniffi_adfree_core_fn_func_core_settings_set(`json`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
-    ): Byte
     external fun uniffi_adfree_core_fn_func_core_start(`tunFd`: Int,uniffi_out_err: UniffiRustCallStatus, 
     ): Unit
+    external fun uniffi_adfree_core_fn_func_core_state_load(uniffi_out_err: UniffiRustCallStatus, 
+    ): RustBuffer.ByValue
     external fun uniffi_adfree_core_fn_func_core_stats(uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
     external fun uniffi_adfree_core_fn_func_core_stop(uniffi_out_err: UniffiRustCallStatus, 
@@ -991,6 +1005,8 @@ internal object UniffiLib {
     ): RustBuffer.ByValue
     external fun uniffi_adfree_core_fn_func_core_uid_for_port(`port`: Short,uniffi_out_err: UniffiRustCallStatus, 
     ): Int
+    external fun uniffi_adfree_core_fn_func_core_validate_dns_provider(`protocol`: RustBuffer.ByValue,`address`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    ): RustBuffer.ByValue
     external fun uniffi_adfree_core_fn_func_core_version(uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
     external fun ffi_adfree_core_rustbuffer_alloc(`size`: Long,uniffi_out_err: UniffiRustCallStatus, 
@@ -1112,6 +1128,15 @@ private fun uniffiCheckContractApiVersion(lib: IntegrityCheckingUniffiLib) {
 }
 @Suppress("UNUSED_PARAMETER")
 private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
+    if ((lib.uniffi_adfree_core_checksum_func_core_apply_config() and 0xFFFF) != 14598) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if ((lib.uniffi_adfree_core_checksum_func_core_backup_export() and 0xFFFF) != 3197) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if ((lib.uniffi_adfree_core_checksum_func_core_backup_import() and 0xFFFF) != 10762) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
     if ((lib.uniffi_adfree_core_checksum_func_core_ca_key_pem() and 0xFFFF) != 284) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
@@ -1133,13 +1158,16 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
     if ((lib.uniffi_adfree_core_checksum_func_core_combined_scripts() and 0xFFFF) != 30644) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if ((lib.uniffi_adfree_core_checksum_func_core_configure() and 0xFFFF) != 18644) {
+    if ((lib.uniffi_adfree_core_checksum_func_core_dns_save() and 0xFFFF) != 28630) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if ((lib.uniffi_adfree_core_checksum_func_core_drain_events() and 0xFFFF) != 38967) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if ((lib.uniffi_adfree_core_checksum_func_core_ensure_ca() and 0xFFFF) != 62169) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if ((lib.uniffi_adfree_core_checksum_func_core_excluded_packages() and 0xFFFF) != 50683) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if ((lib.uniffi_adfree_core_checksum_func_core_filter_build_errors() and 0xFFFF) != 43396) {
@@ -1157,10 +1185,10 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
     if ((lib.uniffi_adfree_core_checksum_func_core_filter_state() and 0xFFFF) != 16434) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if ((lib.uniffi_adfree_core_checksum_func_core_filters_get() and 0xFFFF) != 42145) {
+    if ((lib.uniffi_adfree_core_checksum_func_core_filters_save() and 0xFFFF) != 50505) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if ((lib.uniffi_adfree_core_checksum_func_core_filters_set() and 0xFFFF) != 47458) {
+    if ((lib.uniffi_adfree_core_checksum_func_core_firewall_save() and 0xFFFF) != 18898) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if ((lib.uniffi_adfree_core_checksum_func_core_generate_ca() and 0xFFFF) != 49008) {
@@ -1190,6 +1218,9 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
     if ((lib.uniffi_adfree_core_checksum_func_core_protect_sockets() and 0xFFFF) != 13156) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
+    if ((lib.uniffi_adfree_core_checksum_func_core_protection_save() and 0xFFFF) != 21422) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
     if ((lib.uniffi_adfree_core_checksum_func_core_relay_count() and 0xFFFF) != 38928) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
@@ -1200,6 +1231,9 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if ((lib.uniffi_adfree_core_checksum_func_core_reset_stats() and 0xFFFF) != 20945) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if ((lib.uniffi_adfree_core_checksum_func_core_resolver_snapshot() and 0xFFFF) != 647) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if ((lib.uniffi_adfree_core_checksum_func_core_restore_ca() and 0xFFFF) != 62634) {
@@ -1223,16 +1257,13 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
     if ((lib.uniffi_adfree_core_checksum_func_core_script_text() and 0xFFFF) != 46210) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if ((lib.uniffi_adfree_core_checksum_func_core_set_app_network_policy() and 0xFFFF) != 8237) {
+    if ((lib.uniffi_adfree_core_checksum_func_core_scripts_save() and 0xFFFF) != 31369) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if ((lib.uniffi_adfree_core_checksum_func_core_set_data_root() and 0xFFFF) != 27462) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if ((lib.uniffi_adfree_core_checksum_func_core_set_doh_ranges() and 0xFFFF) != 51723) {
-        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
-    }
-    if ((lib.uniffi_adfree_core_checksum_func_core_set_https_skip_apps() and 0xFFFF) != 24421) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if ((lib.uniffi_adfree_core_checksum_func_core_set_lists() and 0xFFFF) != 34567) {
@@ -1242,9 +1273,6 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if ((lib.uniffi_adfree_core_checksum_func_core_set_network_type() and 0xFFFF) != 22213) {
-        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
-    }
-    if ((lib.uniffi_adfree_core_checksum_func_core_set_resolver() and 0xFFFF) != 2771) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if ((lib.uniffi_adfree_core_checksum_func_core_set_screen_off() and 0xFFFF) != 60122) {
@@ -1262,13 +1290,10 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
     if ((lib.uniffi_adfree_core_checksum_func_core_set_uid_lookup() and 0xFFFF) != 59477) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if ((lib.uniffi_adfree_core_checksum_func_core_settings_get() and 0xFFFF) != 44339) {
-        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
-    }
-    if ((lib.uniffi_adfree_core_checksum_func_core_settings_set() and 0xFFFF) != 64325) {
-        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
-    }
     if ((lib.uniffi_adfree_core_checksum_func_core_start() and 0xFFFF) != 51365) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if ((lib.uniffi_adfree_core_checksum_func_core_state_load() and 0xFFFF) != 43672) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if ((lib.uniffi_adfree_core_checksum_func_core_stats() and 0xFFFF) != 31721) {
@@ -1281,6 +1306,9 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if ((lib.uniffi_adfree_core_checksum_func_core_uid_for_port() and 0xFFFF) != 15771) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if ((lib.uniffi_adfree_core_checksum_func_core_validate_dns_provider() and 0xFFFF) != 452) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if ((lib.uniffi_adfree_core_checksum_func_core_version() and 0xFFFF) != 2808) {
@@ -2346,6 +2374,64 @@ public object FfiConverterTypeSocketProtector: FfiConverter<SocketProtector, Lon
 
 
 
+data class AppFirewallRule (
+    var `packageName`: kotlin.String
+    , 
+    var `cellular`: kotlin.Boolean
+    , 
+    var `wifi`: kotlin.Boolean
+    , 
+    var `filtered`: kotlin.Boolean
+    , 
+    var `screenOff`: kotlin.Boolean
+    , 
+    var `https`: kotlin.Boolean
+    
+){
+    
+
+    
+
+    
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeAppFirewallRule: FfiConverterRustBuffer<AppFirewallRule> {
+    override fun read(buf: ByteBuffer): AppFirewallRule {
+        return AppFirewallRule(
+            FfiConverterString.read(buf),
+            FfiConverterBoolean.read(buf),
+            FfiConverterBoolean.read(buf),
+            FfiConverterBoolean.read(buf),
+            FfiConverterBoolean.read(buf),
+            FfiConverterBoolean.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: AppFirewallRule) = (
+            FfiConverterString.allocationSize(value.`packageName`) +
+            FfiConverterBoolean.allocationSize(value.`cellular`) +
+            FfiConverterBoolean.allocationSize(value.`wifi`) +
+            FfiConverterBoolean.allocationSize(value.`filtered`) +
+            FfiConverterBoolean.allocationSize(value.`screenOff`) +
+            FfiConverterBoolean.allocationSize(value.`https`)
+    )
+
+    override fun write(value: AppFirewallRule, buf: ByteBuffer) {
+            FfiConverterString.write(value.`packageName`, buf)
+            FfiConverterBoolean.write(value.`cellular`, buf)
+            FfiConverterBoolean.write(value.`wifi`, buf)
+            FfiConverterBoolean.write(value.`filtered`, buf)
+            FfiConverterBoolean.write(value.`screenOff`, buf)
+            FfiConverterBoolean.write(value.`https`, buf)
+    }
+}
+
+
+
 /**
  * One downloaded file, as the UI sees it.
  */
@@ -2413,6 +2499,295 @@ public object FfiConverterTypeAssetState: FfiConverterRustBuffer<AssetState> {
             FfiConverterOptionalString.write(value.`version`, buf)
             FfiConverterOptionalString.write(value.`updatedText`, buf)
             FfiConverterOptionalString.write(value.`detectedFormat`, buf)
+    }
+}
+
+
+
+data class BackupOutcome (
+    var `ok`: kotlin.Boolean
+    , 
+    var `error`: BackupError
+    
+){
+    
+
+    
+
+    
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeBackupOutcome: FfiConverterRustBuffer<BackupOutcome> {
+    override fun read(buf: ByteBuffer): BackupOutcome {
+        return BackupOutcome(
+            FfiConverterBoolean.read(buf),
+            FfiConverterTypeBackupError.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: BackupOutcome) = (
+            FfiConverterBoolean.allocationSize(value.`ok`) +
+            FfiConverterTypeBackupError.allocationSize(value.`error`)
+    )
+
+    override fun write(value: BackupOutcome, buf: ByteBuffer) {
+            FfiConverterBoolean.write(value.`ok`, buf)
+            FfiConverterTypeBackupError.write(value.`error`, buf)
+    }
+}
+
+
+
+data class ConfigOutcome (
+    var `ok`: kotlin.Boolean
+    , 
+    var `warning`: ConfigWarning
+    
+){
+    
+
+    
+
+    
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeConfigOutcome: FfiConverterRustBuffer<ConfigOutcome> {
+    override fun read(buf: ByteBuffer): ConfigOutcome {
+        return ConfigOutcome(
+            FfiConverterBoolean.read(buf),
+            FfiConverterTypeConfigWarning.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: ConfigOutcome) = (
+            FfiConverterBoolean.allocationSize(value.`ok`) +
+            FfiConverterTypeConfigWarning.allocationSize(value.`warning`)
+    )
+
+    override fun write(value: ConfigOutcome, buf: ByteBuffer) {
+            FfiConverterBoolean.write(value.`ok`, buf)
+            FfiConverterTypeConfigWarning.write(value.`warning`, buf)
+    }
+}
+
+
+
+data class DnsProviderRecord (
+    var `id`: kotlin.String
+    , 
+    var `name`: kotlin.String
+    , 
+    /**
+     * UDP: an IPv4 literal. DoT: a hostname or IP. DoH: the full HTTPS URL.
+     */
+    var `address`: kotlin.String
+    , 
+    var `port`: kotlin.UShort
+    , 
+    var `protocol`: DnsProtocol
+    , 
+    /**
+     * Free text for custom providers; empty for built-ins.
+     */
+    var `description`: kotlin.String
+    , 
+    /**
+     * String-resource key for built-ins; ignored for custom providers.
+     */
+    var `descriptionKey`: kotlin.String
+    , 
+    var `isCustom`: kotlin.Boolean
+    
+){
+    
+
+    
+
+    
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeDnsProviderRecord: FfiConverterRustBuffer<DnsProviderRecord> {
+    override fun read(buf: ByteBuffer): DnsProviderRecord {
+        return DnsProviderRecord(
+            FfiConverterString.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterUShort.read(buf),
+            FfiConverterTypeDnsProtocol.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterBoolean.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: DnsProviderRecord) = (
+            FfiConverterString.allocationSize(value.`id`) +
+            FfiConverterString.allocationSize(value.`name`) +
+            FfiConverterString.allocationSize(value.`address`) +
+            FfiConverterUShort.allocationSize(value.`port`) +
+            FfiConverterTypeDnsProtocol.allocationSize(value.`protocol`) +
+            FfiConverterString.allocationSize(value.`description`) +
+            FfiConverterString.allocationSize(value.`descriptionKey`) +
+            FfiConverterBoolean.allocationSize(value.`isCustom`)
+    )
+
+    override fun write(value: DnsProviderRecord, buf: ByteBuffer) {
+            FfiConverterString.write(value.`id`, buf)
+            FfiConverterString.write(value.`name`, buf)
+            FfiConverterString.write(value.`address`, buf)
+            FfiConverterUShort.write(value.`port`, buf)
+            FfiConverterTypeDnsProtocol.write(value.`protocol`, buf)
+            FfiConverterString.write(value.`description`, buf)
+            FfiConverterString.write(value.`descriptionKey`, buf)
+            FfiConverterBoolean.write(value.`isCustom`, buf)
+    }
+}
+
+
+
+data class DnsRewrite (
+    var `host`: kotlin.String
+    , 
+    /**
+     * An IPv4 or IPv6 literal; the core answers A/AAAA with it directly.
+     */
+    var `answer`: kotlin.String
+    
+){
+    
+
+    
+
+    
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeDnsRewrite: FfiConverterRustBuffer<DnsRewrite> {
+    override fun read(buf: ByteBuffer): DnsRewrite {
+        return DnsRewrite(
+            FfiConverterString.read(buf),
+            FfiConverterString.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: DnsRewrite) = (
+            FfiConverterString.allocationSize(value.`host`) +
+            FfiConverterString.allocationSize(value.`answer`)
+    )
+
+    override fun write(value: DnsRewrite, buf: ByteBuffer) {
+            FfiConverterString.write(value.`host`, buf)
+            FfiConverterString.write(value.`answer`, buf)
+    }
+}
+
+
+
+data class DnsState (
+    /**
+     * Built-ins plus custom entries on the way out; only custom entries are
+     * written to disk, so a future build can add or fix a built-in.
+     */
+    var `providers`: List<DnsProviderRecord>
+    , 
+    var `rewrites`: List<DnsRewrite>
+    
+){
+    
+
+    
+
+    
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeDnsState: FfiConverterRustBuffer<DnsState> {
+    override fun read(buf: ByteBuffer): DnsState {
+        return DnsState(
+            FfiConverterSequenceTypeDnsProviderRecord.read(buf),
+            FfiConverterSequenceTypeDnsRewrite.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: DnsState) = (
+            FfiConverterSequenceTypeDnsProviderRecord.allocationSize(value.`providers`) +
+            FfiConverterSequenceTypeDnsRewrite.allocationSize(value.`rewrites`)
+    )
+
+    override fun write(value: DnsState, buf: ByteBuffer) {
+            FfiConverterSequenceTypeDnsProviderRecord.write(value.`providers`, buf)
+            FfiConverterSequenceTypeDnsRewrite.write(value.`rewrites`, buf)
+    }
+}
+
+
+
+data class DnsValidation (
+    var `valid`: kotlin.Boolean
+    , 
+    var `address`: kotlin.String
+    , 
+    var `port`: kotlin.UShort
+    , 
+    var `protocol`: DnsProtocol
+    , 
+    var `error`: DnsError
+    
+){
+    
+
+    
+
+    
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeDnsValidation: FfiConverterRustBuffer<DnsValidation> {
+    override fun read(buf: ByteBuffer): DnsValidation {
+        return DnsValidation(
+            FfiConverterBoolean.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterUShort.read(buf),
+            FfiConverterTypeDnsProtocol.read(buf),
+            FfiConverterTypeDnsError.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: DnsValidation) = (
+            FfiConverterBoolean.allocationSize(value.`valid`) +
+            FfiConverterString.allocationSize(value.`address`) +
+            FfiConverterUShort.allocationSize(value.`port`) +
+            FfiConverterTypeDnsProtocol.allocationSize(value.`protocol`) +
+            FfiConverterTypeDnsError.allocationSize(value.`error`)
+    )
+
+    override fun write(value: DnsValidation, buf: ByteBuffer) {
+            FfiConverterBoolean.write(value.`valid`, buf)
+            FfiConverterString.write(value.`address`, buf)
+            FfiConverterUShort.write(value.`port`, buf)
+            FfiConverterTypeDnsProtocol.write(value.`protocol`, buf)
+            FfiConverterTypeDnsError.write(value.`error`, buf)
     }
 }
 
@@ -2499,169 +2874,6 @@ public object FfiConverterTypeDownloadOutcome: FfiConverterRustBuffer<DownloadOu
 
 
 /**
- * Runtime knobs, mirrored from the app's `ProtectionSettings`.
- */
-data class EngineConfig (
-    /**
-     * Terminate TLS for intercepted connections and inject scripts.
-     */
-    var `mitmEnabled`: kotlin.Boolean
-    , 
-    /**
-     * Leave ECHConfigs in DNS answers (default off): clients then run ECH end
-     * to end, and the hosts that use it are spliced instead of filtered.
-     */
-    var `fullEch`: kotlin.Boolean
-    , 
-    var `blockQuic`: kotlin.Boolean
-    , 
-    var `blockDoh`: kotlin.Boolean
-    , 
-    var `blockDot`: kotlin.Boolean
-    , 
-    /**
-     * Ad blocking module (ad + annoyance categories).
-     */
-    var `adBlocking`: kotlin.Boolean
-    , 
-    /**
-     * Tracking protection (privacy, analytics and social categories).
-     */
-    var `trackingProtection`: kotlin.Boolean
-    , 
-    /**
-     * DNS protection; off means host lookups are forwarded unfiltered.
-     */
-    var `dnsProtection`: kotlin.Boolean
-    , 
-    /**
-     * Let a host blocked in a tight retry loop through for a cooldown.
-     */
-    var `smartFiltering`: kotlin.Boolean
-    , 
-    /**
-     * 0 = NXDOMAIN, 1 = answer 0.0.0.0, 2 = REFUSED.
-     */
-    var `blockMode`: kotlin.Int
-    , 
-    var `logAllowed`: kotlin.Boolean
-    , 
-    var `ecoMode`: kotlin.Boolean
-    , 
-    /**
-     * HTTPS website allowlist: hosts whose TLS is spliced untouched.
-     */
-    var `httpsSkipHosts`: List<kotlin.String>
-    , 
-    /**
-     * HTTPS website blocklist: with `https_only_mode`, only these are decrypted.
-     */
-    var `httpsOnlyHosts`: List<kotlin.String>
-    , 
-    var `httpsOnlyMode`: kotlin.Boolean
-    , 
-    /**
-     * Route new TCP flows through a SOCKS5 proxy. `proxy_host` is a literal
-     * IPv4/IPv6 address: resolving a name on the packet loop would block it.
-     */
-    var `proxyEnabled`: kotlin.Boolean
-    , 
-    var `proxyHost`: kotlin.String
-    , 
-    var `proxyPort`: kotlin.UShort
-    , 
-    var `proxyUsername`: kotlin.String
-    , 
-    var `proxyPassword`: kotlin.String
-    
-){
-    
-
-    
-
-    
-    companion object
-}
-
-/**
- * @suppress
- */
-public object FfiConverterTypeEngineConfig: FfiConverterRustBuffer<EngineConfig> {
-    override fun read(buf: ByteBuffer): EngineConfig {
-        return EngineConfig(
-            FfiConverterBoolean.read(buf),
-            FfiConverterBoolean.read(buf),
-            FfiConverterBoolean.read(buf),
-            FfiConverterBoolean.read(buf),
-            FfiConverterBoolean.read(buf),
-            FfiConverterBoolean.read(buf),
-            FfiConverterBoolean.read(buf),
-            FfiConverterBoolean.read(buf),
-            FfiConverterBoolean.read(buf),
-            FfiConverterInt.read(buf),
-            FfiConverterBoolean.read(buf),
-            FfiConverterBoolean.read(buf),
-            FfiConverterSequenceString.read(buf),
-            FfiConverterSequenceString.read(buf),
-            FfiConverterBoolean.read(buf),
-            FfiConverterBoolean.read(buf),
-            FfiConverterString.read(buf),
-            FfiConverterUShort.read(buf),
-            FfiConverterString.read(buf),
-            FfiConverterString.read(buf),
-        )
-    }
-
-    override fun allocationSize(value: EngineConfig) = (
-            FfiConverterBoolean.allocationSize(value.`mitmEnabled`) +
-            FfiConverterBoolean.allocationSize(value.`fullEch`) +
-            FfiConverterBoolean.allocationSize(value.`blockQuic`) +
-            FfiConverterBoolean.allocationSize(value.`blockDoh`) +
-            FfiConverterBoolean.allocationSize(value.`blockDot`) +
-            FfiConverterBoolean.allocationSize(value.`adBlocking`) +
-            FfiConverterBoolean.allocationSize(value.`trackingProtection`) +
-            FfiConverterBoolean.allocationSize(value.`dnsProtection`) +
-            FfiConverterBoolean.allocationSize(value.`smartFiltering`) +
-            FfiConverterInt.allocationSize(value.`blockMode`) +
-            FfiConverterBoolean.allocationSize(value.`logAllowed`) +
-            FfiConverterBoolean.allocationSize(value.`ecoMode`) +
-            FfiConverterSequenceString.allocationSize(value.`httpsSkipHosts`) +
-            FfiConverterSequenceString.allocationSize(value.`httpsOnlyHosts`) +
-            FfiConverterBoolean.allocationSize(value.`httpsOnlyMode`) +
-            FfiConverterBoolean.allocationSize(value.`proxyEnabled`) +
-            FfiConverterString.allocationSize(value.`proxyHost`) +
-            FfiConverterUShort.allocationSize(value.`proxyPort`) +
-            FfiConverterString.allocationSize(value.`proxyUsername`) +
-            FfiConverterString.allocationSize(value.`proxyPassword`)
-    )
-
-    override fun write(value: EngineConfig, buf: ByteBuffer) {
-            FfiConverterBoolean.write(value.`mitmEnabled`, buf)
-            FfiConverterBoolean.write(value.`fullEch`, buf)
-            FfiConverterBoolean.write(value.`blockQuic`, buf)
-            FfiConverterBoolean.write(value.`blockDoh`, buf)
-            FfiConverterBoolean.write(value.`blockDot`, buf)
-            FfiConverterBoolean.write(value.`adBlocking`, buf)
-            FfiConverterBoolean.write(value.`trackingProtection`, buf)
-            FfiConverterBoolean.write(value.`dnsProtection`, buf)
-            FfiConverterBoolean.write(value.`smartFiltering`, buf)
-            FfiConverterInt.write(value.`blockMode`, buf)
-            FfiConverterBoolean.write(value.`logAllowed`, buf)
-            FfiConverterBoolean.write(value.`ecoMode`, buf)
-            FfiConverterSequenceString.write(value.`httpsSkipHosts`, buf)
-            FfiConverterSequenceString.write(value.`httpsOnlyHosts`, buf)
-            FfiConverterBoolean.write(value.`httpsOnlyMode`, buf)
-            FfiConverterBoolean.write(value.`proxyEnabled`, buf)
-            FfiConverterString.write(value.`proxyHost`, buf)
-            FfiConverterUShort.write(value.`proxyPort`, buf)
-            FfiConverterString.write(value.`proxyUsername`, buf)
-            FfiConverterString.write(value.`proxyPassword`, buf)
-    }
-}
-
-
-
-/**
  * One enabled list whose body the last filter build could not read.
  */
 data class FilterBuildError (
@@ -2704,6 +2916,72 @@ public object FfiConverterTypeFilterBuildError: FfiConverterRustBuffer<FilterBui
     override fun write(value: FilterBuildError, buf: ByteBuffer) {
             FfiConverterInt.write(value.`listId`, buf)
             FfiConverterString.write(value.`message`, buf)
+    }
+}
+
+
+
+data class FilterChoice (
+    var `id`: kotlin.String
+    , 
+    var `name`: kotlin.String
+    , 
+    var `url`: kotlin.String
+    , 
+    /**
+     * "standard" or "hosts".
+     */
+    var `format`: kotlin.String
+    , 
+    var `homepage`: kotlin.String
+    , 
+    var `enabled`: kotlin.Boolean
+    , 
+    var `trusted`: kotlin.Boolean
+    
+){
+    
+
+    
+
+    
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeFilterChoice: FfiConverterRustBuffer<FilterChoice> {
+    override fun read(buf: ByteBuffer): FilterChoice {
+        return FilterChoice(
+            FfiConverterString.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterBoolean.read(buf),
+            FfiConverterBoolean.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: FilterChoice) = (
+            FfiConverterString.allocationSize(value.`id`) +
+            FfiConverterString.allocationSize(value.`name`) +
+            FfiConverterString.allocationSize(value.`url`) +
+            FfiConverterString.allocationSize(value.`format`) +
+            FfiConverterString.allocationSize(value.`homepage`) +
+            FfiConverterBoolean.allocationSize(value.`enabled`) +
+            FfiConverterBoolean.allocationSize(value.`trusted`)
+    )
+
+    override fun write(value: FilterChoice, buf: ByteBuffer) {
+            FfiConverterString.write(value.`id`, buf)
+            FfiConverterString.write(value.`name`, buf)
+            FfiConverterString.write(value.`url`, buf)
+            FfiConverterString.write(value.`format`, buf)
+            FfiConverterString.write(value.`homepage`, buf)
+            FfiConverterBoolean.write(value.`enabled`, buf)
+            FfiConverterBoolean.write(value.`trusted`, buf)
     }
 }
 
@@ -2803,6 +3081,74 @@ public object FfiConverterTypeFilterListBinding: FfiConverterRustBuffer<FilterLi
             FfiConverterBoolean.write(value.`trusted`, buf)
             FfiConverterLong.write(value.`ruleCount`, buf)
             FfiConverterString.write(value.`lastError`, buf)
+    }
+}
+
+
+
+/**
+ * The user's deviations from the catalogue (which is code in Kotlin).
+ */
+data class FilterState (
+    /**
+     * False means "never chosen": the caller applies catalogue defaults.
+     */
+    var `catalogConfigured`: kotlin.Boolean
+    , 
+    var `enabledCatalogIds`: List<kotlin.String>
+    , 
+    var `trustedIds`: List<kotlin.String>
+    , 
+    var `custom`: List<FilterChoice>
+    , 
+    var `userRules`: List<kotlin.String>
+    , 
+    /**
+     * False means the starter rules should be seeded on first use; an empty
+     * list that the user emptied must stay empty.
+     */
+    var `userRulesConfigured`: kotlin.Boolean
+    
+){
+    
+
+    
+
+    
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeFilterState: FfiConverterRustBuffer<FilterState> {
+    override fun read(buf: ByteBuffer): FilterState {
+        return FilterState(
+            FfiConverterBoolean.read(buf),
+            FfiConverterSequenceString.read(buf),
+            FfiConverterSequenceString.read(buf),
+            FfiConverterSequenceTypeFilterChoice.read(buf),
+            FfiConverterSequenceString.read(buf),
+            FfiConverterBoolean.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: FilterState) = (
+            FfiConverterBoolean.allocationSize(value.`catalogConfigured`) +
+            FfiConverterSequenceString.allocationSize(value.`enabledCatalogIds`) +
+            FfiConverterSequenceString.allocationSize(value.`trustedIds`) +
+            FfiConverterSequenceTypeFilterChoice.allocationSize(value.`custom`) +
+            FfiConverterSequenceString.allocationSize(value.`userRules`) +
+            FfiConverterBoolean.allocationSize(value.`userRulesConfigured`)
+    )
+
+    override fun write(value: FilterState, buf: ByteBuffer) {
+            FfiConverterBoolean.write(value.`catalogConfigured`, buf)
+            FfiConverterSequenceString.write(value.`enabledCatalogIds`, buf)
+            FfiConverterSequenceString.write(value.`trustedIds`, buf)
+            FfiConverterSequenceTypeFilterChoice.write(value.`custom`, buf)
+            FfiConverterSequenceString.write(value.`userRules`, buf)
+            FfiConverterBoolean.write(value.`userRulesConfigured`, buf)
     }
 }
 
@@ -3039,6 +3385,305 @@ public object FfiConverterTypeMitmStatus: FfiConverterRustBuffer<MitmStatus> {
 
 
 /**
+ * Everything the switches screen edits.
+ *
+ * This mirrors the UI model one-to-one; `Default` is the only definition of
+ * what a fresh install (or a missing blob) uses.
+ */
+data class ProtectionState (
+    var `isProtectionActive`: kotlin.Boolean
+    , 
+    var `isAdBlockingEnabled`: kotlin.Boolean
+    , 
+    var `isTrackingProtectionEnabled`: kotlin.Boolean
+    , 
+    var `isDnsProtectionEnabled`: kotlin.Boolean
+    , 
+    var `isSmartFilteringEnabled`: kotlin.Boolean
+    , 
+    var `isHttpsFilteringEnabled`: kotlin.Boolean
+    , 
+    var `isFullEchEnabled`: kotlin.Boolean
+    , 
+    var `isFirewallEnabled`: kotlin.Boolean
+    , 
+    var `isEcoBatteryModeEnabled`: kotlin.Boolean
+    , 
+    var `isStealthModeEnabled`: kotlin.Boolean
+    , 
+    var `blockQuic`: kotlin.Boolean
+    , 
+    var `blockDoh`: kotlin.Boolean
+    , 
+    var `blockDot`: kotlin.Boolean
+    , 
+    var `filterAutoUpdateHours`: kotlin.UInt
+    , 
+    var `logAllowedRequests`: kotlin.Boolean
+    , 
+    var `blockMode`: DnsBlockMode
+    , 
+    var `stripUtmTracking`: kotlin.Boolean
+    , 
+    var `blockWebRtcLeaks`: kotlin.Boolean
+    , 
+    var `disguiseUserAgent`: kotlin.Boolean
+    , 
+    var `blockThirdPartyCookies`: kotlin.Boolean
+    , 
+    var `selectedDnsProviderId`: kotlin.String
+    , 
+    var `httpsSkipHosts`: List<kotlin.String>
+    , 
+    var `httpsOnlyHosts`: List<kotlin.String>
+    , 
+    var `httpsOnlyMode`: kotlin.Boolean
+    , 
+    var `proxy`: ProxyState
+    , 
+    /**
+     * BCP-47 language picked in the app; `System` follows the device.
+     */
+    var `appLanguage`: AppLanguage
+    , 
+    var `themeMode`: ThemeMode
+    , 
+    /**
+     * Bring the tunnel back after a reboot (only when it was on).
+     */
+    var `autoStart`: kotlin.Boolean
+    , 
+    /**
+     * Hide ad placeholders with cosmetic rules. Needs HTTPS filtering.
+     */
+    var `cosmeticFiltering`: kotlin.Boolean
+    , 
+    /**
+     * Force safe search on the major engines (CNAME rewrites).
+     */
+    var `safeSearch`: kotlin.Boolean
+    
+){
+    
+
+    
+
+    
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeProtectionState: FfiConverterRustBuffer<ProtectionState> {
+    override fun read(buf: ByteBuffer): ProtectionState {
+        return ProtectionState(
+            FfiConverterBoolean.read(buf),
+            FfiConverterBoolean.read(buf),
+            FfiConverterBoolean.read(buf),
+            FfiConverterBoolean.read(buf),
+            FfiConverterBoolean.read(buf),
+            FfiConverterBoolean.read(buf),
+            FfiConverterBoolean.read(buf),
+            FfiConverterBoolean.read(buf),
+            FfiConverterBoolean.read(buf),
+            FfiConverterBoolean.read(buf),
+            FfiConverterBoolean.read(buf),
+            FfiConverterBoolean.read(buf),
+            FfiConverterBoolean.read(buf),
+            FfiConverterUInt.read(buf),
+            FfiConverterBoolean.read(buf),
+            FfiConverterTypeDnsBlockMode.read(buf),
+            FfiConverterBoolean.read(buf),
+            FfiConverterBoolean.read(buf),
+            FfiConverterBoolean.read(buf),
+            FfiConverterBoolean.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterSequenceString.read(buf),
+            FfiConverterSequenceString.read(buf),
+            FfiConverterBoolean.read(buf),
+            FfiConverterTypeProxyState.read(buf),
+            FfiConverterTypeAppLanguage.read(buf),
+            FfiConverterTypeThemeMode.read(buf),
+            FfiConverterBoolean.read(buf),
+            FfiConverterBoolean.read(buf),
+            FfiConverterBoolean.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: ProtectionState) = (
+            FfiConverterBoolean.allocationSize(value.`isProtectionActive`) +
+            FfiConverterBoolean.allocationSize(value.`isAdBlockingEnabled`) +
+            FfiConverterBoolean.allocationSize(value.`isTrackingProtectionEnabled`) +
+            FfiConverterBoolean.allocationSize(value.`isDnsProtectionEnabled`) +
+            FfiConverterBoolean.allocationSize(value.`isSmartFilteringEnabled`) +
+            FfiConverterBoolean.allocationSize(value.`isHttpsFilteringEnabled`) +
+            FfiConverterBoolean.allocationSize(value.`isFullEchEnabled`) +
+            FfiConverterBoolean.allocationSize(value.`isFirewallEnabled`) +
+            FfiConverterBoolean.allocationSize(value.`isEcoBatteryModeEnabled`) +
+            FfiConverterBoolean.allocationSize(value.`isStealthModeEnabled`) +
+            FfiConverterBoolean.allocationSize(value.`blockQuic`) +
+            FfiConverterBoolean.allocationSize(value.`blockDoh`) +
+            FfiConverterBoolean.allocationSize(value.`blockDot`) +
+            FfiConverterUInt.allocationSize(value.`filterAutoUpdateHours`) +
+            FfiConverterBoolean.allocationSize(value.`logAllowedRequests`) +
+            FfiConverterTypeDnsBlockMode.allocationSize(value.`blockMode`) +
+            FfiConverterBoolean.allocationSize(value.`stripUtmTracking`) +
+            FfiConverterBoolean.allocationSize(value.`blockWebRtcLeaks`) +
+            FfiConverterBoolean.allocationSize(value.`disguiseUserAgent`) +
+            FfiConverterBoolean.allocationSize(value.`blockThirdPartyCookies`) +
+            FfiConverterString.allocationSize(value.`selectedDnsProviderId`) +
+            FfiConverterSequenceString.allocationSize(value.`httpsSkipHosts`) +
+            FfiConverterSequenceString.allocationSize(value.`httpsOnlyHosts`) +
+            FfiConverterBoolean.allocationSize(value.`httpsOnlyMode`) +
+            FfiConverterTypeProxyState.allocationSize(value.`proxy`) +
+            FfiConverterTypeAppLanguage.allocationSize(value.`appLanguage`) +
+            FfiConverterTypeThemeMode.allocationSize(value.`themeMode`) +
+            FfiConverterBoolean.allocationSize(value.`autoStart`) +
+            FfiConverterBoolean.allocationSize(value.`cosmeticFiltering`) +
+            FfiConverterBoolean.allocationSize(value.`safeSearch`)
+    )
+
+    override fun write(value: ProtectionState, buf: ByteBuffer) {
+            FfiConverterBoolean.write(value.`isProtectionActive`, buf)
+            FfiConverterBoolean.write(value.`isAdBlockingEnabled`, buf)
+            FfiConverterBoolean.write(value.`isTrackingProtectionEnabled`, buf)
+            FfiConverterBoolean.write(value.`isDnsProtectionEnabled`, buf)
+            FfiConverterBoolean.write(value.`isSmartFilteringEnabled`, buf)
+            FfiConverterBoolean.write(value.`isHttpsFilteringEnabled`, buf)
+            FfiConverterBoolean.write(value.`isFullEchEnabled`, buf)
+            FfiConverterBoolean.write(value.`isFirewallEnabled`, buf)
+            FfiConverterBoolean.write(value.`isEcoBatteryModeEnabled`, buf)
+            FfiConverterBoolean.write(value.`isStealthModeEnabled`, buf)
+            FfiConverterBoolean.write(value.`blockQuic`, buf)
+            FfiConverterBoolean.write(value.`blockDoh`, buf)
+            FfiConverterBoolean.write(value.`blockDot`, buf)
+            FfiConverterUInt.write(value.`filterAutoUpdateHours`, buf)
+            FfiConverterBoolean.write(value.`logAllowedRequests`, buf)
+            FfiConverterTypeDnsBlockMode.write(value.`blockMode`, buf)
+            FfiConverterBoolean.write(value.`stripUtmTracking`, buf)
+            FfiConverterBoolean.write(value.`blockWebRtcLeaks`, buf)
+            FfiConverterBoolean.write(value.`disguiseUserAgent`, buf)
+            FfiConverterBoolean.write(value.`blockThirdPartyCookies`, buf)
+            FfiConverterString.write(value.`selectedDnsProviderId`, buf)
+            FfiConverterSequenceString.write(value.`httpsSkipHosts`, buf)
+            FfiConverterSequenceString.write(value.`httpsOnlyHosts`, buf)
+            FfiConverterBoolean.write(value.`httpsOnlyMode`, buf)
+            FfiConverterTypeProxyState.write(value.`proxy`, buf)
+            FfiConverterTypeAppLanguage.write(value.`appLanguage`, buf)
+            FfiConverterTypeThemeMode.write(value.`themeMode`, buf)
+            FfiConverterBoolean.write(value.`autoStart`, buf)
+            FfiConverterBoolean.write(value.`cosmeticFiltering`, buf)
+            FfiConverterBoolean.write(value.`safeSearch`, buf)
+    }
+}
+
+
+
+/**
+ * A SOCKS5 endpoint. `host` must be an IPv4/IPv6 literal: the packet loop
+ * cannot resolve a name without stalling.
+ */
+data class ProxyState (
+    var `enabled`: kotlin.Boolean
+    , 
+    var `host`: kotlin.String
+    , 
+    var `port`: kotlin.UShort
+    , 
+    var `username`: kotlin.String
+    , 
+    var `password`: kotlin.String
+    
+){
+    
+
+    
+
+    
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeProxyState: FfiConverterRustBuffer<ProxyState> {
+    override fun read(buf: ByteBuffer): ProxyState {
+        return ProxyState(
+            FfiConverterBoolean.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterUShort.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterString.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: ProxyState) = (
+            FfiConverterBoolean.allocationSize(value.`enabled`) +
+            FfiConverterString.allocationSize(value.`host`) +
+            FfiConverterUShort.allocationSize(value.`port`) +
+            FfiConverterString.allocationSize(value.`username`) +
+            FfiConverterString.allocationSize(value.`password`)
+    )
+
+    override fun write(value: ProxyState, buf: ByteBuffer) {
+            FfiConverterBoolean.write(value.`enabled`, buf)
+            FfiConverterString.write(value.`host`, buf)
+            FfiConverterUShort.write(value.`port`, buf)
+            FfiConverterString.write(value.`username`, buf)
+            FfiConverterString.write(value.`password`, buf)
+    }
+}
+
+
+
+data class ResolverSnapshot (
+    /**
+     * What the tunnel should hand Android as its DNS server.
+     */
+    var `tunnelDns`: kotlin.String
+    , 
+    var `providerId`: kotlin.String
+    , 
+    var `warning`: ConfigWarning
+    
+){
+    
+
+    
+
+    
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeResolverSnapshot: FfiConverterRustBuffer<ResolverSnapshot> {
+    override fun read(buf: ByteBuffer): ResolverSnapshot {
+        return ResolverSnapshot(
+            FfiConverterString.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterTypeConfigWarning.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: ResolverSnapshot) = (
+            FfiConverterString.allocationSize(value.`tunnelDns`) +
+            FfiConverterString.allocationSize(value.`providerId`) +
+            FfiConverterTypeConfigWarning.allocationSize(value.`warning`)
+    )
+
+    override fun write(value: ResolverSnapshot, buf: ByteBuffer) {
+            FfiConverterString.write(value.`tunnelDns`, buf)
+            FfiConverterString.write(value.`providerId`, buf)
+            FfiConverterTypeConfigWarning.write(value.`warning`, buf)
+    }
+}
+
+
+
+/**
  * Root-mode state for the UI, mirroring [`crate::trust::RootTrust`].
  */
 data class RootTrustBinding (
@@ -3150,6 +3795,154 @@ public object FfiConverterTypeScriptBinding: FfiConverterRustBuffer<ScriptBindin
             FfiConverterString.write(value.`name`, buf)
             FfiConverterString.write(value.`body`, buf)
             FfiConverterBoolean.write(value.`enabled`, buf)
+    }
+}
+
+
+
+data class ScriptRecord (
+    var `id`: kotlin.String
+    , 
+    var `name`: kotlin.String
+    , 
+    var `description`: kotlin.String
+    , 
+    var `url`: kotlin.String
+    , 
+    var `enabled`: kotlin.Boolean
+    
+){
+    
+
+    
+
+    
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeScriptRecord: FfiConverterRustBuffer<ScriptRecord> {
+    override fun read(buf: ByteBuffer): ScriptRecord {
+        return ScriptRecord(
+            FfiConverterString.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterBoolean.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: ScriptRecord) = (
+            FfiConverterString.allocationSize(value.`id`) +
+            FfiConverterString.allocationSize(value.`name`) +
+            FfiConverterString.allocationSize(value.`description`) +
+            FfiConverterString.allocationSize(value.`url`) +
+            FfiConverterBoolean.allocationSize(value.`enabled`)
+    )
+
+    override fun write(value: ScriptRecord, buf: ByteBuffer) {
+            FfiConverterString.write(value.`id`, buf)
+            FfiConverterString.write(value.`name`, buf)
+            FfiConverterString.write(value.`description`, buf)
+            FfiConverterString.write(value.`url`, buf)
+            FfiConverterBoolean.write(value.`enabled`, buf)
+    }
+}
+
+
+
+data class ScriptState (
+    /**
+     * Master switch; ON follows AdGuard's default and the catalogue rows,
+     * which start enabled.
+     */
+    var `master`: kotlin.Boolean
+    , 
+    var `scripts`: List<ScriptRecord>
+    
+){
+    
+
+    
+
+    
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeScriptState: FfiConverterRustBuffer<ScriptState> {
+    override fun read(buf: ByteBuffer): ScriptState {
+        return ScriptState(
+            FfiConverterBoolean.read(buf),
+            FfiConverterSequenceTypeScriptRecord.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: ScriptState) = (
+            FfiConverterBoolean.allocationSize(value.`master`) +
+            FfiConverterSequenceTypeScriptRecord.allocationSize(value.`scripts`)
+    )
+
+    override fun write(value: ScriptState, buf: ByteBuffer) {
+            FfiConverterBoolean.write(value.`master`, buf)
+            FfiConverterSequenceTypeScriptRecord.write(value.`scripts`, buf)
+    }
+}
+
+
+
+data class StateSnapshot (
+    var `protection`: ProtectionState
+    , 
+    var `firewall`: List<AppFirewallRule>
+    , 
+    var `dns`: DnsState
+    , 
+    var `filters`: FilterState
+    , 
+    var `scripts`: ScriptState
+    
+){
+    
+
+    
+
+    
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeStateSnapshot: FfiConverterRustBuffer<StateSnapshot> {
+    override fun read(buf: ByteBuffer): StateSnapshot {
+        return StateSnapshot(
+            FfiConverterTypeProtectionState.read(buf),
+            FfiConverterSequenceTypeAppFirewallRule.read(buf),
+            FfiConverterTypeDnsState.read(buf),
+            FfiConverterTypeFilterState.read(buf),
+            FfiConverterTypeScriptState.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: StateSnapshot) = (
+            FfiConverterTypeProtectionState.allocationSize(value.`protection`) +
+            FfiConverterSequenceTypeAppFirewallRule.allocationSize(value.`firewall`) +
+            FfiConverterTypeDnsState.allocationSize(value.`dns`) +
+            FfiConverterTypeFilterState.allocationSize(value.`filters`) +
+            FfiConverterTypeScriptState.allocationSize(value.`scripts`)
+    )
+
+    override fun write(value: StateSnapshot, buf: ByteBuffer) {
+            FfiConverterTypeProtectionState.write(value.`protection`, buf)
+            FfiConverterSequenceTypeAppFirewallRule.write(value.`firewall`, buf)
+            FfiConverterTypeDnsState.write(value.`dns`, buf)
+            FfiConverterTypeFilterState.write(value.`filters`, buf)
+            FfiConverterTypeScriptState.write(value.`scripts`, buf)
     }
 }
 
@@ -3402,6 +4195,261 @@ public object FfiConverterTypeUidApps: FfiConverterRustBuffer<UidApps> {
 
 
 
+enum class AppLanguage {
+    
+    SYSTEM,
+    ENGLISH,
+    VIETNAMESE;
+
+    
+
+
+    companion object
+}
+
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeAppLanguage: FfiConverterRustBuffer<AppLanguage> {
+    override fun read(buf: ByteBuffer) = try {
+        AppLanguage.values()[buf.getInt() - 1]
+    } catch (e: IndexOutOfBoundsException) {
+        throw RuntimeException("invalid enum value, something is very wrong!!", e)
+    }
+
+    override fun allocationSize(value: AppLanguage) = 4UL
+
+    override fun write(value: AppLanguage, buf: ByteBuffer) {
+        buf.putInt(value.ordinal + 1)
+    }
+}
+
+
+
+
+
+
+enum class BackupError {
+    
+    NONE,
+    NOT_BACKUP,
+    UNSUPPORTED_VERSION,
+    MALFORMED,
+    STORE_UNAVAILABLE;
+
+    
+
+
+    companion object
+}
+
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeBackupError: FfiConverterRustBuffer<BackupError> {
+    override fun read(buf: ByteBuffer) = try {
+        BackupError.values()[buf.getInt() - 1]
+    } catch (e: IndexOutOfBoundsException) {
+        throw RuntimeException("invalid enum value, something is very wrong!!", e)
+    }
+
+    override fun allocationSize(value: BackupError) = 4UL
+
+    override fun write(value: BackupError, buf: ByteBuffer) {
+        buf.putInt(value.ordinal + 1)
+    }
+}
+
+
+
+
+
+
+enum class ConfigWarning {
+    
+    NONE,
+    PROVIDER_MISSING,
+    ADDRESS_INVALID,
+    PROXY_INVALID,
+    STORE_UNAVAILABLE;
+
+    
+
+
+    companion object
+}
+
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeConfigWarning: FfiConverterRustBuffer<ConfigWarning> {
+    override fun read(buf: ByteBuffer) = try {
+        ConfigWarning.values()[buf.getInt() - 1]
+    } catch (e: IndexOutOfBoundsException) {
+        throw RuntimeException("invalid enum value, something is very wrong!!", e)
+    }
+
+    override fun allocationSize(value: ConfigWarning) = 4UL
+
+    override fun write(value: ConfigWarning, buf: ByteBuffer) {
+        buf.putInt(value.ordinal + 1)
+    }
+}
+
+
+
+
+
+
+enum class DnsBlockMode {
+    
+    NX_DOMAIN,
+    ZERO_IP,
+    REFUSED;
+
+    
+
+
+    companion object
+}
+
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeDnsBlockMode: FfiConverterRustBuffer<DnsBlockMode> {
+    override fun read(buf: ByteBuffer) = try {
+        DnsBlockMode.values()[buf.getInt() - 1]
+    } catch (e: IndexOutOfBoundsException) {
+        throw RuntimeException("invalid enum value, something is very wrong!!", e)
+    }
+
+    override fun allocationSize(value: DnsBlockMode) = 4UL
+
+    override fun write(value: DnsBlockMode, buf: ByteBuffer) {
+        buf.putInt(value.ordinal + 1)
+    }
+}
+
+
+
+
+
+
+enum class DnsError {
+    
+    NONE,
+    EMPTY,
+    INVALID_ADDRESS,
+    INVALID_PORT,
+    UNSUPPORTED_SCHEME,
+    /**
+     * Plain UDP upstream currently dials IPv4 only.
+     */
+    IP_V6_UDP_UNSUPPORTED;
+
+    
+
+
+    companion object
+}
+
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeDnsError: FfiConverterRustBuffer<DnsError> {
+    override fun read(buf: ByteBuffer) = try {
+        DnsError.values()[buf.getInt() - 1]
+    } catch (e: IndexOutOfBoundsException) {
+        throw RuntimeException("invalid enum value, something is very wrong!!", e)
+    }
+
+    override fun allocationSize(value: DnsError) = 4UL
+
+    override fun write(value: DnsError, buf: ByteBuffer) {
+        buf.putInt(value.ordinal + 1)
+    }
+}
+
+
+
+
+
+
+enum class DnsProtocol {
+    
+    UDP,
+    DOT,
+    DOH;
+
+    
+
+
+    companion object
+}
+
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeDnsProtocol: FfiConverterRustBuffer<DnsProtocol> {
+    override fun read(buf: ByteBuffer) = try {
+        DnsProtocol.values()[buf.getInt() - 1]
+    } catch (e: IndexOutOfBoundsException) {
+        throw RuntimeException("invalid enum value, something is very wrong!!", e)
+    }
+
+    override fun allocationSize(value: DnsProtocol) = 4UL
+
+    override fun write(value: DnsProtocol, buf: ByteBuffer) {
+        buf.putInt(value.ordinal + 1)
+    }
+}
+
+
+
+
+
+
+enum class ThemeMode {
+    
+    SYSTEM,
+    DARK,
+    LIGHT;
+
+    
+
+
+    companion object
+}
+
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeThemeMode: FfiConverterRustBuffer<ThemeMode> {
+    override fun read(buf: ByteBuffer) = try {
+        ThemeMode.values()[buf.getInt() - 1]
+    } catch (e: IndexOutOfBoundsException) {
+        throw RuntimeException("invalid enum value, something is very wrong!!", e)
+    }
+
+    override fun allocationSize(value: ThemeMode) = 4UL
+
+    override fun write(value: ThemeMode, buf: ByteBuffer) {
+        buf.putInt(value.ordinal + 1)
+    }
+}
+
+
+
+
+
+
 /**
  * @suppress
  */
@@ -3557,6 +4605,90 @@ public object FfiConverterSequenceString: FfiConverterRustBuffer<List<kotlin.Str
 /**
  * @suppress
  */
+public object FfiConverterSequenceTypeAppFirewallRule: FfiConverterRustBuffer<List<AppFirewallRule>> {
+    override fun read(buf: ByteBuffer): List<AppFirewallRule> {
+        val len = buf.getInt()
+        return List<AppFirewallRule>(len) {
+            FfiConverterTypeAppFirewallRule.read(buf)
+        }
+    }
+
+    override fun allocationSize(value: List<AppFirewallRule>): ULong {
+        val sizeForLength = 4UL
+        val sizeForItems = value.map { FfiConverterTypeAppFirewallRule.allocationSize(it) }.sum()
+        return sizeForLength + sizeForItems
+    }
+
+    override fun write(value: List<AppFirewallRule>, buf: ByteBuffer) {
+        buf.putInt(value.size)
+        value.iterator().forEach {
+            FfiConverterTypeAppFirewallRule.write(it, buf)
+        }
+    }
+}
+
+
+
+
+/**
+ * @suppress
+ */
+public object FfiConverterSequenceTypeDnsProviderRecord: FfiConverterRustBuffer<List<DnsProviderRecord>> {
+    override fun read(buf: ByteBuffer): List<DnsProviderRecord> {
+        val len = buf.getInt()
+        return List<DnsProviderRecord>(len) {
+            FfiConverterTypeDnsProviderRecord.read(buf)
+        }
+    }
+
+    override fun allocationSize(value: List<DnsProviderRecord>): ULong {
+        val sizeForLength = 4UL
+        val sizeForItems = value.map { FfiConverterTypeDnsProviderRecord.allocationSize(it) }.sum()
+        return sizeForLength + sizeForItems
+    }
+
+    override fun write(value: List<DnsProviderRecord>, buf: ByteBuffer) {
+        buf.putInt(value.size)
+        value.iterator().forEach {
+            FfiConverterTypeDnsProviderRecord.write(it, buf)
+        }
+    }
+}
+
+
+
+
+/**
+ * @suppress
+ */
+public object FfiConverterSequenceTypeDnsRewrite: FfiConverterRustBuffer<List<DnsRewrite>> {
+    override fun read(buf: ByteBuffer): List<DnsRewrite> {
+        val len = buf.getInt()
+        return List<DnsRewrite>(len) {
+            FfiConverterTypeDnsRewrite.read(buf)
+        }
+    }
+
+    override fun allocationSize(value: List<DnsRewrite>): ULong {
+        val sizeForLength = 4UL
+        val sizeForItems = value.map { FfiConverterTypeDnsRewrite.allocationSize(it) }.sum()
+        return sizeForLength + sizeForItems
+    }
+
+    override fun write(value: List<DnsRewrite>, buf: ByteBuffer) {
+        buf.putInt(value.size)
+        value.iterator().forEach {
+            FfiConverterTypeDnsRewrite.write(it, buf)
+        }
+    }
+}
+
+
+
+
+/**
+ * @suppress
+ */
 public object FfiConverterSequenceTypeFilterBuildError: FfiConverterRustBuffer<List<FilterBuildError>> {
     override fun read(buf: ByteBuffer): List<FilterBuildError> {
         val len = buf.getInt()
@@ -3575,6 +4707,34 @@ public object FfiConverterSequenceTypeFilterBuildError: FfiConverterRustBuffer<L
         buf.putInt(value.size)
         value.iterator().forEach {
             FfiConverterTypeFilterBuildError.write(it, buf)
+        }
+    }
+}
+
+
+
+
+/**
+ * @suppress
+ */
+public object FfiConverterSequenceTypeFilterChoice: FfiConverterRustBuffer<List<FilterChoice>> {
+    override fun read(buf: ByteBuffer): List<FilterChoice> {
+        val len = buf.getInt()
+        return List<FilterChoice>(len) {
+            FfiConverterTypeFilterChoice.read(buf)
+        }
+    }
+
+    override fun allocationSize(value: List<FilterChoice>): ULong {
+        val sizeForLength = 4UL
+        val sizeForItems = value.map { FfiConverterTypeFilterChoice.allocationSize(it) }.sum()
+        return sizeForLength + sizeForItems
+    }
+
+    override fun write(value: List<FilterChoice>, buf: ByteBuffer) {
+        buf.putInt(value.size)
+        value.iterator().forEach {
+            FfiConverterTypeFilterChoice.write(it, buf)
         }
     }
 }
@@ -3669,6 +4829,34 @@ public object FfiConverterSequenceTypeScriptBinding: FfiConverterRustBuffer<List
 /**
  * @suppress
  */
+public object FfiConverterSequenceTypeScriptRecord: FfiConverterRustBuffer<List<ScriptRecord>> {
+    override fun read(buf: ByteBuffer): List<ScriptRecord> {
+        val len = buf.getInt()
+        return List<ScriptRecord>(len) {
+            FfiConverterTypeScriptRecord.read(buf)
+        }
+    }
+
+    override fun allocationSize(value: List<ScriptRecord>): ULong {
+        val sizeForLength = 4UL
+        val sizeForItems = value.map { FfiConverterTypeScriptRecord.allocationSize(it) }.sum()
+        return sizeForLength + sizeForItems
+    }
+
+    override fun write(value: List<ScriptRecord>, buf: ByteBuffer) {
+        buf.putInt(value.size)
+        value.iterator().forEach {
+            FfiConverterTypeScriptRecord.write(it, buf)
+        }
+    }
+}
+
+
+
+
+/**
+ * @suppress
+ */
 public object FfiConverterSequenceTypeUidApps: FfiConverterRustBuffer<List<UidApps>> {
     override fun read(buf: ByteBuffer): List<UidApps> {
         val len = buf.getInt()
@@ -3690,6 +4878,50 @@ public object FfiConverterSequenceTypeUidApps: FfiConverterRustBuffer<List<UidAp
         }
     }
 }
+        /**
+         * Rebuilds the engine config from the persisted state. Kotlin calls this
+         * after every save and once the data root is open; a warning means the
+         * engine fell back to something usable (the tunnel still comes up).
+         */ fun `coreApplyConfig`(`privateDnsStrict`: kotlin.Boolean): ConfigOutcome {
+            return FfiConverterTypeConfigOutcome.lift(
+    uniffiRustCall() { _status ->
+    UniffiLib.uniffi_adfree_core_fn_func_core_apply_config(
+    
+        
+        FfiConverterBoolean.lower(`privateDnsStrict`),_status)
+}
+    )
+    }
+    
+
+        /**
+         * The whole state as a v2 backup file. Empty when the store is not open.
+         */ fun `coreBackupExport`(): kotlin.String {
+            return FfiConverterString.lift(
+    uniffiRustCall() { _status ->
+    UniffiLib.uniffi_adfree_core_fn_func_core_backup_export(
+    
+        _status)
+}
+    )
+    }
+    
+
+        /**
+         * Replaces the state from a backup file (v1 or v2). Malformed input leaves
+         * the current state untouched.
+         */ fun `coreBackupImport`(`json`: kotlin.String): BackupOutcome {
+            return FfiConverterTypeBackupOutcome.lift(
+    uniffiRustCall() { _status ->
+    UniffiLib.uniffi_adfree_core_fn_func_core_backup_import(
+    
+        
+        FfiConverterString.lower(`json`),_status)
+}
+    )
+    }
+    
+
         /**
          * PEM of the CA private key.
          *
@@ -3769,15 +5001,16 @@ public object FfiConverterSequenceTypeUidApps: FfiConverterRustBuffer<List<UidAp
     )
     }
     
- fun `coreConfigure`(`config`: EngineConfig)
-        = 
+ fun `coreDnsSave`(`value`: DnsState): kotlin.Boolean {
+            return FfiConverterBoolean.lift(
     uniffiRustCall() { _status ->
-    UniffiLib.uniffi_adfree_core_fn_func_core_configure(
+    UniffiLib.uniffi_adfree_core_fn_func_core_dns_save(
     
         
-        FfiConverterTypeEngineConfig.lower(`config`),_status)
+        FfiConverterTypeDnsState.lower(`value`),_status)
 }
-    
+    )
+    }
     
 
         /**
@@ -3801,6 +5034,19 @@ public object FfiConverterSequenceTypeUidApps: FfiConverterRustBuffer<List<UidAp
             return FfiConverterString.lift(
     uniffiRustCall() { _status ->
     UniffiLib.uniffi_adfree_core_fn_func_core_ensure_ca(
+    
+        _status)
+}
+    )
+    }
+    
+
+        /**
+         * Apps whose routing switch is off, for `addDisallowedApplication`.
+         */ fun `coreExcludedPackages`(): List<kotlin.String> {
+            return FfiConverterSequenceString.lift(
+    uniffiRustCall() { _status ->
+    UniffiLib.uniffi_adfree_core_fn_func_core_excluded_packages(
     
         _status)
 }
@@ -3886,30 +5132,24 @@ public object FfiConverterSequenceTypeUidApps: FfiConverterRustBuffer<List<UidAp
     )
     }
     
-
-        /**
-         * The opaque filter/script choices blob (enabled lists, custom lists, user
-         * rules, userscripts). The platform owns the JSON schema.
-         */ fun `coreFiltersGet`(): kotlin.String? {
-            return FfiConverterOptionalString.lift(
+ fun `coreFiltersSave`(`value`: FilterState): kotlin.Boolean {
+            return FfiConverterBoolean.lift(
     uniffiRustCall() { _status ->
-    UniffiLib.uniffi_adfree_core_fn_func_core_filters_get(
+    UniffiLib.uniffi_adfree_core_fn_func_core_filters_save(
     
-        _status)
+        
+        FfiConverterTypeFilterState.lower(`value`),_status)
 }
     )
     }
     
-
-        /**
-         * Replaces the filter/script choices blob. False when the store is not open.
-         */ fun `coreFiltersSet`(`json`: kotlin.String): kotlin.Boolean {
+ fun `coreFirewallSave`(`rules`: List<AppFirewallRule>): kotlin.Boolean {
             return FfiConverterBoolean.lift(
     uniffiRustCall() { _status ->
-    UniffiLib.uniffi_adfree_core_fn_func_core_filters_set(
+    UniffiLib.uniffi_adfree_core_fn_func_core_firewall_save(
     
         
-        FfiConverterString.lower(`json`),_status)
+        FfiConverterSequenceTypeAppFirewallRule.lower(`rules`),_status)
 }
     )
     }
@@ -4037,6 +5277,17 @@ public object FfiConverterSequenceTypeUidApps: FfiConverterRustBuffer<List<UidAp
 }
     
     
+ fun `coreProtectionSave`(`value`: ProtectionState): kotlin.Boolean {
+            return FfiConverterBoolean.lift(
+    uniffiRustCall() { _status ->
+    UniffiLib.uniffi_adfree_core_fn_func_core_protection_save(
+    
+        
+        FfiConverterTypeProtectionState.lower(`value`),_status)
+}
+    )
+    }
+    
 
         /**
          * Number of relays currently alive (for the UI).
@@ -4083,6 +5334,20 @@ public object FfiConverterSequenceTypeUidApps: FfiConverterRustBuffer<List<UidAp
         _status)
 }
     
+    
+
+        /**
+         * What `VpnService.Builder.addDnsServer` should use. Safe to call before the
+         * store is open: it answers with the built-in default.
+         */ fun `coreResolverSnapshot`(): ResolverSnapshot {
+            return FfiConverterTypeResolverSnapshot.lift(
+    uniffiRustCall() { _status ->
+    UniffiLib.uniffi_adfree_core_fn_func_core_resolver_snapshot(
+    
+        _status)
+}
+    )
+    }
     
 
         /**
@@ -4191,23 +5456,16 @@ public object FfiConverterSequenceTypeUidApps: FfiConverterRustBuffer<List<UidAp
     )
     }
     
-
-        /**
-         * Replaces the per-app network firewall. `cellular_blocked` and
-         * `wifi_blocked` name packages that must not use that network;
-         * `screen_off_blocked` names packages that must stay offline while the screen
-         * is off. Open flows belonging to a newly restricted app are cut immediately.
-         */ fun `coreSetAppNetworkPolicy`(`cellularBlocked`: List<kotlin.String>, `wifiBlocked`: List<kotlin.String>, `screenOffBlocked`: List<kotlin.String>)
-        = 
+ fun `coreScriptsSave`(`value`: ScriptState): kotlin.Boolean {
+            return FfiConverterBoolean.lift(
     uniffiRustCall() { _status ->
-    UniffiLib.uniffi_adfree_core_fn_func_core_set_app_network_policy(
+    UniffiLib.uniffi_adfree_core_fn_func_core_scripts_save(
     
         
-        FfiConverterSequenceString.lower(`cellularBlocked`),
-        FfiConverterSequenceString.lower(`wifiBlocked`),
-        FfiConverterSequenceString.lower(`screenOffBlocked`),_status)
+        FfiConverterTypeScriptState.lower(`value`),_status)
 }
-    
+    )
+    }
     
 
         /**
@@ -4237,22 +5495,6 @@ public object FfiConverterSequenceTypeUidApps: FfiConverterRustBuffer<List<UidAp
 }
     )
     }
-    
-
-        /**
-         * Replaces the packages whose HTTPS traffic must not be decrypted (the
-         * per-app "HTTPS filtering" switch turned off). Their flows are still carried
-         * by the tunnel, so DNS filtering keeps working; the TLS stream is spliced.
-         * Applies to connections opened afterwards.
-         */ fun `coreSetHttpsSkipApps`(`packages`: List<kotlin.String>)
-        = 
-    uniffiRustCall() { _status ->
-    UniffiLib.uniffi_adfree_core_fn_func_core_set_https_skip_apps(
-    
-        
-        FfiConverterSequenceString.lower(`packages`),_status)
-}
-    
     
 
         /**
@@ -4297,20 +5539,6 @@ public object FfiConverterSequenceTypeUidApps: FfiConverterRustBuffer<List<UidAp
     
         
         FfiConverterUByte.lower(`kind`),_status)
-}
-    
-    
-
-        /**
-         * Sets the upstream resolver, e.g. `core_set_resolver("1.1.1.1", 53)`.
-         */ fun `coreSetResolver`(`host`: kotlin.String, `port`: kotlin.UShort)
-        = 
-    uniffiRustCall() { _status ->
-    UniffiLib.uniffi_adfree_core_fn_func_core_set_resolver(
-    
-        
-        FfiConverterString.lower(`host`),
-        FfiConverterUShort.lower(`port`),_status)
 }
     
     
@@ -4385,35 +5613,6 @@ public object FfiConverterSequenceTypeUidApps: FfiConverterRustBuffer<List<UidAp
     
 
         /**
-         * The opaque settings blob (the platform owns the JSON schema). `None` on a
-         * first run, or while the store is not open.
-         */ fun `coreSettingsGet`(): kotlin.String? {
-            return FfiConverterOptionalString.lift(
-    uniffiRustCall() { _status ->
-    UniffiLib.uniffi_adfree_core_fn_func_core_settings_get(
-    
-        _status)
-}
-    )
-    }
-    
-
-        /**
-         * Replaces the settings blob. False when the store is not open, in which
-         * case the caller keeps its own copy and retries on the next launch.
-         */ fun `coreSettingsSet`(`json`: kotlin.String): kotlin.Boolean {
-            return FfiConverterBoolean.lift(
-    uniffiRustCall() { _status ->
-    UniffiLib.uniffi_adfree_core_fn_func_core_settings_set(
-    
-        
-        FfiConverterString.lower(`json`),_status)
-}
-    )
-    }
-    
-
-        /**
          * Starts the packet engine on a TUN descriptor. `tun_fd` is the raw file
          * descriptor returned by `VpnService.Builder.establish()`.
          */ fun `coreStart`(`tunFd`: kotlin.Int)
@@ -4425,6 +5624,20 @@ public object FfiConverterSequenceTypeUidApps: FfiConverterRustBuffer<List<UidAp
         FfiConverterInt.lower(`tunFd`),_status)
 }
     
+    
+
+        /**
+         * The whole persisted state. Defaults when the store is not open (the UI
+         * still renders a usable screen).
+         */ fun `coreStateLoad`(): StateSnapshot {
+            return FfiConverterTypeStateSnapshot.lift(
+    uniffiRustCall() { _status ->
+    UniffiLib.uniffi_adfree_core_fn_func_core_state_load(
+    
+        _status)
+}
+    )
+    }
     
  fun `coreStats`(): StatsSnapshot {
             return FfiConverterTypeStatsSnapshot.lift(
@@ -4468,6 +5681,22 @@ public object FfiConverterSequenceTypeUidApps: FfiConverterRustBuffer<List<UidAp
     
         
         FfiConverterUShort.lower(`port`),_status)
+}
+    )
+    }
+    
+
+        /**
+         * Normalizes one resolver address for the editor. The same validator runs on
+         * save, so the form cannot accept what the engine would reject.
+         */ fun `coreValidateDnsProvider`(`protocol`: DnsProtocol, `address`: kotlin.String): DnsValidation {
+            return FfiConverterTypeDnsValidation.lift(
+    uniffiRustCall() { _status ->
+    UniffiLib.uniffi_adfree_core_fn_func_core_validate_dns_provider(
+    
+        
+        FfiConverterTypeDnsProtocol.lower(`protocol`),
+        FfiConverterString.lower(`address`),_status)
 }
     )
     }

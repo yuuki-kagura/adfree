@@ -339,9 +339,7 @@ fn start_origin_mode(html: &'static str, mode: OriginBody) -> Origin {
                      Content-Length: 2\r\nConnection: keep-alive\r\n\r\n{body}"
                 )
                 .into_bytes()
-            } else if line.starts_with("GET /jsonprune ")
-                || line.starts_with("POST /jsonprune ")
-            {
+            } else if line.starts_with("GET /jsonprune ") || line.starts_with("POST /jsonprune ") {
                 // A JSON API answer a `$jsonprune` rule takes items out of.
                 let body = r#"{"ads": [1, 2], "keep": 3}"#;
                 format!(
@@ -550,7 +548,11 @@ fn contains_bytes(hay: &[u8], needle: &[u8]) -> bool {
 
 /// Drives the handshake until rustls says it is done.
 fn handshake(tcp: &mut Client, cfg: Arc<ClientConfig>) -> ClientConnection {
-    handshake_with(tcp, cfg, ServerName::try_from("shop.test").expect("server name"))
+    handshake_with(
+        tcp,
+        cfg,
+        ServerName::try_from("shop.test").expect("server name"),
+    )
 }
 
 /// Same, for a connection whose name is not a hostname: the injection origin
@@ -646,9 +648,8 @@ fn nonce_of(head: &str) -> String {
 /// The page as the client can read it: gunzipped when the head says so.
 fn page_text(head: &str, body: &[u8]) -> String {
     if head.to_lowercase().contains("content-encoding: gzip") {
-        let decoded =
-            crate::mitm::http::decode_body(body, crate::mitm::http::Encoding::Gzip)
-                .expect("the body must decode as gzip");
+        let decoded = crate::mitm::http::decode_body(body, crate::mitm::http::Encoding::Gzip)
+            .expect("the body must decode as gzip");
         String::from_utf8_lossy(&decoded).to_string()
     } else {
         String::from_utf8_lossy(body).to_string()
@@ -662,9 +663,8 @@ fn request_with(
     path: &str,
     extra: &str,
 ) -> (String, Vec<u8>) {
-    let req = format!(
-        "GET {path} HTTP/1.1\r\nHost: shop.test\r\nConnection: keep-alive\r\n{extra}\r\n"
-    );
+    let req =
+        format!("GET {path} HTTP/1.1\r\nHost: shop.test\r\nConnection: keep-alive\r\n{extra}\r\n");
     send_and_read(tcp, conn, &req.into_bytes())
 }
 
@@ -715,7 +715,10 @@ fn send_and_read(tcp: &mut Client, conn: &mut ClientConnection, req: &[u8]) -> (
     let declared: usize = head
         .to_lowercase()
         .lines()
-        .find_map(|l| l.strip_prefix("content-length:").map(|v| v.trim().to_string()))
+        .find_map(|l| {
+            l.strip_prefix("content-length:")
+                .map(|v| v.trim().to_string())
+        })
         .and_then(|v| v.parse().ok())
         .unwrap_or(body.len());
     body.truncate(declared);
@@ -726,10 +729,11 @@ fn send_and_read(tcp: &mut Client, conn: &mut ClientConnection, req: &[u8]) -> (
 /// for a body: it reads until the head is complete, then listens a little
 /// longer to prove nothing follows it.
 fn head_request(tcp: &mut Client, conn: &mut ClientConnection, path: &str, extra: &str) -> Vec<u8> {
-    let req = format!(
-        "HEAD {path} HTTP/1.1\r\nHost: shop.test\r\nConnection: keep-alive\r\n{extra}\r\n"
-    );
-    conn.writer().write_all(req.as_bytes()).expect("write request");
+    let req =
+        format!("HEAD {path} HTTP/1.1\r\nHost: shop.test\r\nConnection: keep-alive\r\n{extra}\r\n");
+    conn.writer()
+        .write_all(req.as_bytes())
+        .expect("write request");
     flush_tls(tcp, conn);
 
     let mut raw = Vec::new();
@@ -740,7 +744,11 @@ fn head_request(tcp: &mut Client, conn: &mut ClientConnection, path: &str, extra
         if raw.windows(4).any(|w| w == b"\r\n\r\n") {
             break;
         }
-        assert!(Instant::now() < deadline, "no head for {path}: {:?}", raw.len());
+        assert!(
+            Instant::now() < deadline,
+            "no head for {path}: {:?}",
+            raw.len()
+        );
     }
     // Anything arriving after the head would be a body on a HEAD — the one
     // thing a client is not allowed to be sent.
@@ -837,7 +845,10 @@ fn setup_core_with_list(origin: &Origin, tag: &str, list: &str) -> (Arc<Core>, V
     );
 
     // A user script large enough to force window-limited bursts.
-    let body = format!("/* e2e-marker */window.__adfree_e2e=\"{}\";", "x".repeat(300_000));
+    let body = format!(
+        "/* e2e-marker */window.__adfree_e2e=\"{}\";",
+        "x".repeat(300_000)
+    );
     {
         let mut scripts = core.mitm_scripts.write().unwrap();
         scripts.replace_all(vec![UserScript {
@@ -933,8 +944,14 @@ fn cosmetic_filtering_rides_the_packet_path() {
     );
     // Element hiding left the payload: it travels as a stylesheet the browser
     // fetches once per site, and its URL hashes exactly what it serves.
-    assert!(href.starts_with("/adfree-hide.css?dmn=shop.test&h="), "{href}");
-    assert!(!page.contains("\"hide\""), "hiding left the payload: {page}");
+    assert!(
+        href.starts_with("/adfree-hide.css?dmn=shop.test&h="),
+        "{href}"
+    );
+    assert!(
+        !page.contains("\"hide\""),
+        "hiding left the payload: {page}"
+    );
     assert!(
         !page.contains("display:none"),
         "no CSS belongs inline any more: {page}"
@@ -949,10 +966,16 @@ fn cosmetic_filtering_rides_the_packet_path() {
     );
     assert!(page.contains("has-text"), "procedural rule missing: {page}");
     // Generic class/id rules, matched from the HTML the proxy scanned.
-    assert!(page.contains("\".adsbygoogle\""), "class rule missing: {page}");
+    assert!(
+        page.contains("\".adsbygoogle\""),
+        "class rule missing: {page}"
+    );
     assert!(page.contains("\"#slot-1\""), "id rule missing: {page}");
     // The origin's own content survived the rewrite.
-    assert!(page.contains("Sponsored content"), "the page itself is intact");
+    assert!(
+        page.contains("Sponsored content"),
+        "the page itself is intact"
+    );
 
     // 3. The page runtime is served locally.
     let (head, body) = request(&mut tcp, &mut conn, "/adfree-page.js");
@@ -962,7 +985,10 @@ fn cosmetic_filtering_rides_the_packet_path() {
         runtime.contains("window.__adfree_page"),
         "the runtime must consume the inline payload"
     );
-    assert!(runtime.contains("MutationObserver"), "the runtime must watch the DOM");
+    assert!(
+        runtime.contains("MutationObserver"),
+        "the runtime must watch the DOM"
+    );
     assert!(
         runtime.contains("adfree-hide"),
         "the runtime must keep the hiding stylesheet alive"
@@ -1093,7 +1119,10 @@ fn an_elemhide_exception_clears_the_page() {
         page.contains("setConstant"),
         "`$elemhide` is not `$jsinject`, the scriptlet stays: {page}"
     );
-    assert!(page.contains("Sponsored content"), "the page itself is intact");
+    assert!(
+        page.contains("Sponsored content"),
+        "the page itself is intact"
+    );
 
     // The lookup endpoint answers empty: `$elemhide` covers generic rules too.
     let (head, body) = request(
@@ -1138,7 +1167,10 @@ fn a_document_exception_takes_every_cosmetic_tag_out() {
         page.contains("adfree-user.js"),
         "the user script still goes out: {page}"
     );
-    assert!(page.contains("Sponsored content"), "the page itself is intact");
+    assert!(
+        page.contains("Sponsored content"),
+        "the page itself is intact"
+    );
 
     tcp.close();
 }
@@ -1182,7 +1214,10 @@ fn path_rules_apply_to_their_page_only() {
         let href = rest[..end].to_string();
         let (_, css_body) = request(&mut tcp, &mut conn, &href);
         let css = String::from_utf8_lossy(&css_body).to_string();
-        assert!(css.contains(".ad-box"), "the host rule is in the stylesheet: {css}");
+        assert!(
+            css.contains(".ad-box"),
+            "the host rule is in the stylesheet: {css}"
+        );
         assert!(
             !css.contains(".path-only"),
             "a path rule must not travel in the per-host stylesheet: {css}"
@@ -1464,7 +1499,11 @@ fn header_rules_shape_the_https_exchange() {
         "Sec-Fetch-Dest: document\r\nAccept-Language: en-US\r\nReferer: https://shop.test/\r\n",
     );
     assert!(head.starts_with("HTTP/1.1 200"), "{head}");
-    assert_eq!(body, SCRIPT.as_bytes(), "the body must come through untouched");
+    assert_eq!(
+        body,
+        SCRIPT.as_bytes(),
+        "the body must come through untouched"
+    );
     let lower = head.to_lowercase();
     assert!(
         lower.contains("content-security-policy: worker-src 'none'"),
@@ -1717,7 +1756,11 @@ fn a_blocked_request_body_is_swallowed_and_the_connection_goes_on() {
         "the page must come back with its tags injected"
     );
     let seen = origin.requests.lock().expect("requests");
-    assert_eq!(seen.len(), 1, "only the page may reach the origin: {seen:?}");
+    assert_eq!(
+        seen.len(),
+        1,
+        "only the page may reach the origin: {seen:?}"
+    );
 
     tcp.close();
 }
@@ -2110,7 +2153,10 @@ fn html_rules_cut_elements_on_the_https_path() {
         page.contains(&format!(" nonce=\"{nonce}\"")),
         "the injection must land on the cut body: {page}"
     );
-    assert!(page.ends_with("</html>"), "the body must be complete: {page}");
+    assert!(
+        page.ends_with("</html>"),
+        "the body must be complete: {page}"
+    );
     assert_eq!(declared_length(&head), body.len());
 
     // The same connection, one more round: a cut response is framed like any
@@ -2330,7 +2376,10 @@ fn the_injection_origin_is_answered_without_a_peer() {
         client_config(ca_der),
         ServerName::try_from("192.0.2.1").expect("address literal"),
     );
-    assert!(!conn.is_handshaking(), "the local origin must complete a handshake");
+    assert!(
+        !conn.is_handshaking(),
+        "the local origin must complete a handshake"
+    );
 
     // 1. The runtime, for the host its tag named (`dmn=`, like AdGuard's
     //    content script carries). A `<script src>` needs no CORS, only CORP;
@@ -2420,8 +2469,9 @@ fn compressed_and_chunked_pages_are_still_filtered() {
                     lower.contains("content-encoding: gzip"),
                     "the page must still travel compressed: {head}"
                 );
-                let decoded = crate::mitm::http::decode_body(&body, crate::mitm::http::Encoding::Gzip)
-                    .expect("the body must decode as gzip");
+                let decoded =
+                    crate::mitm::http::decode_body(&body, crate::mitm::http::Encoding::Gzip)
+                        .expect("the body must decode as gzip");
                 String::from_utf8_lossy(&decoded).to_string()
             }
             _ => {
@@ -2441,8 +2491,14 @@ fn compressed_and_chunked_pages_are_still_filtered() {
             href.starts_with("/adfree-hide.css?dmn=shop.test&h="),
             "hiding travels as a stylesheet into a {mode:?} page: {href}"
         );
-        assert!(page.contains("\"#slot-1\""), "generic rules must be scanned: {page}");
-        assert!(page.contains("Sponsored content"), "the page itself is intact: {page}");
+        assert!(
+            page.contains("\"#slot-1\""),
+            "generic rules must be scanned: {page}"
+        );
+        assert!(
+            page.contains("Sponsored content"),
+            "the page itself is intact: {page}"
+        );
         tcp.close();
     }
 }
@@ -2480,7 +2536,10 @@ fn a_page_without_a_doctype_is_injected_like_any_other() {
             )),
             "the runtime must travel with the same nonce into a {mode:?} page: {page}"
         );
-        assert!(page.contains("\"#slot-1\""), "generic rules must be scanned: {page}");
+        assert!(
+            page.contains("\"#slot-1\""),
+            "generic rules must be scanned: {page}"
+        );
         tcp.close();
     }
 }
@@ -2570,7 +2629,9 @@ fn request_streamed(
     path: &str,
 ) -> (String, Vec<u8>) {
     let req = format!("GET {path} HTTP/1.1\r\nHost: shop.test\r\nConnection: keep-alive\r\n\r\n");
-    conn.writer().write_all(req.as_bytes()).expect("write request");
+    conn.writer()
+        .write_all(req.as_bytes())
+        .expect("write request");
     flush_tls(tcp, conn);
 
     let mut raw = Vec::new();
@@ -2653,14 +2714,23 @@ fn a_page_larger_than_one_window_streams_to_the_client() {
     // Hostname rules come from the URL, so they are there even though the scan
     // only saw the head of the document — as the stylesheet the browser caches.
     let href = hide_href(&page);
-    assert!(href.starts_with("/adfree-hide.css?dmn=shop.test&h="), "{href}");
-    assert!(!page.contains("\"hide\""), "hiding left the payload: {page}");
+    assert!(
+        href.starts_with("/adfree-hide.css?dmn=shop.test&h="),
+        "{href}"
+    );
+    assert!(
+        !page.contains("\"hide\""),
+        "hiding left the payload: {page}"
+    );
     // The tag has to land before the body renders, and nothing may be lost.
     let tag = page.find("/adfree-user.js").expect("tag");
     let head_close = page.find("</head>").expect("</head>");
     assert!(tag < head_close, "the tag must land inside the head");
     assert_eq!(page.matches("</head>").count(), 1, "no duplicated parts");
-    assert!(page.ends_with("</body></html>"), "the page must be complete");
+    assert!(
+        page.ends_with("</body></html>"),
+        "the page must be complete"
+    );
     assert!(page.contains("ad-box"), "the origin's own content survived");
 
     tcp.close();
@@ -3110,8 +3180,7 @@ fn an_ech_required_refusal_needs_two_bare_502s() {
         "the second bare refusal must confirm the host"
     );
     assert!(
-        core.ech_hosts
-            .splices("cloudflare-ech.test", false, now),
+        core.ech_hosts.splices("cloudflare-ech.test", false, now),
         "and the public name its config exposes is what gets spliced"
     );
 }

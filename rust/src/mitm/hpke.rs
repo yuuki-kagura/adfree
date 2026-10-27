@@ -266,7 +266,13 @@ fn labeled_expand(prk: &[u8], suite_id: &[u8], label: &[u8], info: &[u8], len: u
 fn extract_and_expand(dh: &[u8], kem_context: &[u8]) -> Vec<u8> {
     let kem_suite = kem_suite_id();
     let eae_prk = labeled_extract(&[], &kem_suite, b"eae_prk", dh);
-    labeled_expand(&eae_prk, &kem_suite, b"shared_secret", kem_context, N_SECRET)
+    labeled_expand(
+        &eae_prk,
+        &kem_suite,
+        b"shared_secret",
+        kem_context,
+        N_SECRET,
+    )
 }
 
 /// Base-mode key schedule (RFC 9180, 5.1).
@@ -349,8 +355,7 @@ mod tests {
     #[test]
     fn key_schedule_matches_rfc_9180_a_1_1() {
         let info = hex("4f6465206f6e2061204772656369616e2055726e");
-        let shared_secret =
-            hex("fe0e18c9f024ce43799ae393c7e8fe8fce9d218875e8227b0187c04e7d2ea1fc");
+        let shared_secret = hex("fe0e18c9f024ce43799ae393c7e8fe8fce9d218875e8227b0187c04e7d2ea1fc");
         let (key, base_nonce) = key_schedule(&shared_secret, &info);
         assert_eq!(key, hex("4531685d41d65f03dc48f6b8302c05b0"), "RFC key");
         assert_eq!(

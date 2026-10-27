@@ -69,7 +69,7 @@ fn default_doh_cidrs() -> CidrSet {
     let mut set = CidrSet::new();
     let v4 = [
         (0x0101_0100u32, 24), // Cloudflare
-        (0x0100_0000, 24),     // Cloudflare secondary anycast
+        (0x0100_0000, 24),    // Cloudflare secondary anycast
         (0x0808_0400, 24),    // Google
         (0x0808_0800, 24),
         (0x0909_0900, 24), // Quad9
@@ -211,9 +211,7 @@ impl AppNetworkPolicy {
             NETWORK_WIFI if packages.iter().any(|p| self.wifi_blocked.contains(p)) => {
                 Some("app not allowed on Wi-Fi")
             }
-            NETWORK_CELLULAR
-                if packages.iter().any(|p| self.cellular_blocked.contains(p)) =>
-            {
+            NETWORK_CELLULAR if packages.iter().any(|p| self.cellular_blocked.contains(p)) => {
                 Some("app not allowed on cellular data")
             }
             _ => None,
@@ -314,6 +312,8 @@ pub struct Core {
     /// log database and (later) everything else the app persists. `None` until
     /// `set_data_root` runs, and tests run without it.
     store: OnceLock<Arc<crate::store::Store>>,
+    /// The typed, core-owned settings/filters/scripts, opened with the store.
+    state: OnceLock<Arc<crate::state::StateStore>>,
     /// The port->uid table of the kernel, which says whose UDP/TCP sockets
     /// are whose.
     uidmap: Mutex<UidMap>,
@@ -416,8 +416,7 @@ pub(crate) fn log_mitm_block(block: &crate::mitm::proxy::MitmBlock<'_>) {
         first_app(block.apps),
     );
     core.log_event(event);
-    core.stats
-        .add(&core.stats.bytes_saved, u64::from(saved));
+    core.stats.add(&core.stats.bytes_saved, u64::from(saved));
 }
 
 /// A uid can resolve to several packages (shared uid); the log names the first
@@ -448,6 +447,7 @@ impl Core {
             stats: Arc::new(Stats::new()),
             events: Mutex::new(EventLog::default()),
             store: OnceLock::new(),
+            state: OnceLock::new(),
             uidmap: Mutex::new(UidMap::new()),
             uid_apps: RwLock::new(FxHashMap::default()),
             uid_lookup: RwLock::new(None),
@@ -492,7 +492,16 @@ impl Core {
             return true;
         }
         match crate::store::Store::open(std::path::Path::new(path)) {
-            Ok(store) => self.store.set(Arc::new(store)).is_ok(),
+            Ok(store) => {
+                let store = Arc::new(store);
+                // Opening the state runs the one-time import from the blobs
+                // older builds wrote, so it must happen before the platform
+                // reads the state back.
+                let state = crate::state::StateStore::open(Arc::clone(&store));
+                let stored = self.store.set(store).is_ok();
+                let stated = self.state.set(state).is_ok();
+                stored && stated
+            }
             Err(e) => {
                 crate::logbuf::push(&format!("store open: {e}"));
                 false
@@ -505,30 +514,10 @@ impl Core {
         self.store.get()
     }
 
-    /// The opaque settings blob (schema owned by the platform).
-    pub fn settings_get(&self) -> Option<String> {
-        self.store.get().and_then(|s| s.settings_get())
-    }
-
-    /// Replaces the settings blob. False while the store is not open — the
-    /// platform then keeps its own copy and retries on the next launch.
-    pub fn settings_set(&self, json: &str) -> bool {
-        match self.store.get() {
-            Some(store) => store.settings_set(json).is_ok(),
-            None => false,
-        }
-    }
-
-    /// The opaque filter/script choices blob (schema owned by the platform).
-    pub fn filters_get(&self) -> Option<String> {
-        self.store.get().and_then(|s| s.filters_get())
-    }
-
-    pub fn filters_set(&self, json: &str) -> bool {
-        match self.store.get() {
-            Some(store) => store.filters_set(json).is_ok(),
-            None => false,
-        }
+    /// The typed state, once the store is open. Every setting the UI edits
+    /// lives here; the platform only projects it.
+    pub fn state(&self) -> Option<&Arc<crate::state::StateStore>> {
+        self.state.get()
     }
 
     /// Loads the local CA from the store, or mints one and persists the pair
@@ -591,16 +580,12 @@ impl Core {
         // the live category gate below.
         let lists_changed = {
             let old = self.cfg.read().unwrap();
-            old.ad_blocking != cfg.ad_blocking
-                || old.tracking_protection != cfg.tracking_protection
+            old.ad_blocking != cfg.ad_blocking || old.tracking_protection != cfg.tracking_protection
         };
         // The filter engine owns the hot-path copy so a module switch takes
         // effect on the next packet without recompiling the lists.
-        self.filter.set_module_flags(
-            cfg.ad_blocking,
-            cfg.tracking_protection,
-            cfg.dns_protection,
-        );
+        self.filter
+            .set_module_flags(cfg.ad_blocking, cfg.tracking_protection, cfg.dns_protection);
         self.smart.lock().unwrap().set_enabled(cfg.smart_filtering);
         *self.https_hosts.write().unwrap() = HttpsHosts {
             skip: Arc::new(crate::mitm::hosts::HostPatterns::new(
@@ -805,13 +790,15 @@ impl Core {
 
     /// Keeps the stats snapshot in sync with the engine.
     pub fn sync_engine_stats(&self) {
-        self.stats.set(&self.stats.filter_rules, self.filter.active_rules());
+        self.stats
+            .set(&self.stats.filter_rules, self.filter.active_rules());
         self.stats
             .set(&self.stats.engine_bytes, self.filter.memory_bytes() as u64);
         let hits = self.filter.cache_hits() as i64;
         let misses = self.filter.cache_misses() as i64;
         self.stats.set(&self.stats.cache_hits, hits.max(0) as u64);
-        self.stats.set(&self.stats.cache_misses, misses.max(0) as u64);
+        self.stats
+            .set(&self.stats.cache_misses, misses.max(0) as u64);
     }
 
     pub fn filter_engine(&self) -> Arc<FilterEngine> {
@@ -1261,9 +1248,7 @@ impl Core {
     /// and the tunnel MTU is the hard ceiling.
     fn relay_mss(&self, pkt: &Packet<'_>) -> usize {
         let cap = if pkt.version == 4 { 1460 } else { 1440 };
-        pkt.tcp_mss()
-            .map(|m| (m as usize).min(cap))
-            .unwrap_or(cap)
+        pkt.tcp_mss().map(|m| (m as usize).min(cap)).unwrap_or(cap)
     }
 
     /// Starts a relay for a new TCP flow.
@@ -1482,13 +1467,8 @@ impl Core {
             IpKey::V4(_) => libc::AF_INET,
             IpKey::V6(_) => libc::AF_INET6,
         };
-        let fd = unsafe {
-            libc::socket(
-                family,
-                kind | libc::SOCK_NONBLOCK | libc::SOCK_CLOEXEC,
-                0,
-            )
-        };
+        let fd =
+            unsafe { libc::socket(family, kind | libc::SOCK_NONBLOCK | libc::SOCK_CLOEXEC, 0) };
         if fd < 0 {
             crate::logbuf::push("relay: socket() failed");
             return None;
@@ -1592,7 +1572,11 @@ impl Core {
                             return;
                         }
                         relay.flushing = true;
-                        (relay.peer_fd, std::mem::take(&mut relay.pending_to_peer), false)
+                        (
+                            relay.peer_fd,
+                            std::mem::take(&mut relay.pending_to_peer),
+                            false,
+                        )
                     }
                 }
             };
@@ -1648,7 +1632,12 @@ impl Core {
         let mut off = 0;
         while off < bytes.len() {
             let n = unsafe {
-                libc::send(fd, bytes.as_ptr().add(off) as *const libc::c_void, bytes.len() - off, libc::MSG_NOSIGNAL)
+                libc::send(
+                    fd,
+                    bytes.as_ptr().add(off) as *const libc::c_void,
+                    bytes.len() - off,
+                    libc::MSG_NOSIGNAL,
+                )
             };
             if n <= 0 {
                 break;
@@ -1821,9 +1810,8 @@ impl Core {
         // A host the app keeps demanding must not become a retry storm: after
         // a few blocked attempts inside the window it is forwarded for a
         // cooldown and the answer below is learned as allowed.
-        let smart_allowed = verdict.blocked
-            && !deferred
-            && self.smart.lock().unwrap().note_blocked(host);
+        let smart_allowed =
+            verdict.blocked && !deferred && self.smart.lock().unwrap().note_blocked(host);
         if verdict.blocked && !deferred && !smart_allowed {
             self.stats.inc(&self.stats.dns_blocked);
             let saved = BYTES_PER_BLOCKED_REQUEST;
@@ -2003,15 +1991,16 @@ impl Core {
         // a real ECH hello will expose on the wire. Only an HTTPS query can
         // carry either.
         let (config, public_name) = if mitm && https_query {
-            (dns::ech_config_list(&message), dns::ech_public_name(&message))
+            (
+                dns::ech_config_list(&message),
+                dns::ech_public_name(&message),
+            )
         } else {
             (None, None)
         };
         if mitm && exempt {
             if let (Some(host), true) = (host.as_deref(), https_query) {
-                crate::logbuf::push(&format!(
-                    "dns: ECH kept for {host} (the host requires it)"
-                ));
+                crate::logbuf::push(&format!("dns: ECH kept for {host} (the host requires it)"));
                 // The name inside the config is what a real ECH hello will
                 // expose on the wire, and the DNS half is the only place that
                 // can read it. It is learned only for the hosts whose config
@@ -2279,7 +2268,11 @@ impl Core {
             events_dropped: self.events_dropped(),
             filter_build_ms: self.filter.build_time_ms(),
             conntrack_entries: self.conntrack_entries(),
-            pending_dns: self.upstream.lock().map(|u| u.pending_len() as u64).unwrap_or(0),
+            pending_dns: self
+                .upstream
+                .lock()
+                .map(|u| u.pending_len() as u64)
+                .unwrap_or(0),
             uptime_ms: self.uptime_ms(),
         }
     }
@@ -2648,8 +2641,6 @@ impl Core {
             }
         }
     }
-
-
 }
 
 /// Reads packets off the TUN descriptor until the engine is stopped.
@@ -2676,9 +2667,7 @@ fn tun_loop(core: &'static Core, fd: RawFd) {
             continue; // timeout or shutdown requested
         }
         loop {
-            let n = unsafe {
-                libc::read(fd, buf.as_mut_ptr() as *mut libc::c_void, buf.len())
-            };
+            let n = unsafe { libc::read(fd, buf.as_mut_ptr() as *mut libc::c_void, buf.len()) };
             if n <= 0 {
                 let err = std::io::Error::last_os_error();
                 if err.kind() == std::io::ErrorKind::WouldBlock {
@@ -2764,7 +2753,6 @@ fn forwarder_loop(core: &'static Core) {
 /// [`Core::wait_for_events`], which also covers the wake eventfd and the DNS
 /// sockets.
 impl Core {
-
     /// One relay's peer socket became readable (or writable again).
     fn handle_relay_ready(&self, peer: (u16, RawFd, bool, bool, bool), revents: libc::c_short) {
         let (client_port, fd, was_connecting, was_writing, _) = peer;
@@ -2794,9 +2782,7 @@ impl Core {
                 if self.retry_peer_connect(client_port) {
                     return;
                 }
-                crate::logbuf::push(&format!(
-                    "relay: connect to the peer failed (errno {err})"
-                ));
+                crate::logbuf::push(&format!("relay: connect to the peer failed (errno {err})"));
                 self.close_relay_from_peer(client_port, true);
                 return;
             }
@@ -3127,9 +3113,7 @@ impl Core {
                 };
                 if restart {
                     if !self.restart_peer_socket(client_port) {
-                        crate::logbuf::push(
-                            "relay: no fresh peer socket for the plain ECH retry",
-                        );
+                        crate::logbuf::push("relay: no fresh peer socket for the plain ECH retry");
                     }
                     return true;
                 }
@@ -3285,7 +3269,13 @@ fn parse_cidr(text: &str) -> Option<(IpKey, u8)> {
 
 /// Writes `contents` to `dir/name` through `tmp_name`, optionally 0600 from
 /// the first byte. False when the directory or the write refused.
-fn write_atomic(dir: &std::path::Path, tmp_name: &str, name: &str, contents: &str, private: bool) -> bool {
+fn write_atomic(
+    dir: &std::path::Path,
+    tmp_name: &str,
+    name: &str,
+    contents: &str,
+    private: bool,
+) -> bool {
     use std::io::Write as _;
     use std::os::unix::fs::OpenOptionsExt as _;
 
@@ -3395,10 +3385,7 @@ mod tests {
 
         let doh_raw = tcp_packet([1, 1, 1, 1], 443);
         let doh = Packet::parse(&doh_raw).expect("doh syn");
-        assert!(
-            core.tcp_blocked(&doh, &cfg),
-            "DoH on 443 is still blocked"
-        );
+        assert!(core.tcp_blocked(&doh, &cfg), "DoH on 443 is still blocked");
 
         let plain_raw = udp_packet(40000, [1, 1, 1, 1], 53);
         let plain = Packet::parse(&plain_raw).expect("dns datagram");
@@ -3409,7 +3396,10 @@ mod tests {
 
         let doh3_raw = udp_packet(40000, [1, 1, 1, 1], 443);
         let doh3 = Packet::parse(&doh3_raw).expect("doh3 datagram");
-        assert!(core.udp_blocked(&doh3, &cfg), "DoH3 on 443 is still blocked");
+        assert!(
+            core.udp_blocked(&doh3, &cfg),
+            "DoH3 on 443 is still blocked"
+        );
     }
 
     #[test]
@@ -3769,26 +3759,25 @@ mod tests {
     #[test]
     fn reloading_the_same_ca_keeps_rejections_but_a_new_ca_clears_them() {
         let core = Core::new();
-        let ca = Arc::new(
-            crate::mitm::ca::CertificateAuthority::generate().expect("first CA"),
-        );
+        let ca = Arc::new(crate::mitm::ca::CertificateAuthority::generate().expect("first CA"));
         core.set_mitm_ca(Arc::clone(&ca));
         core.note_client_cert_rejection(
             "process_new_packets: received fatal alert: CertificateUnknown",
             &["com.example.news".to_string()],
             "example.com",
         );
-        assert!(core.effective_https_skip_apps().contains("com.example.news"));
+        assert!(core
+            .effective_https_skip_apps()
+            .contains("com.example.news"));
 
         core.set_mitm_ca(Arc::clone(&ca));
         assert!(
-            core.effective_https_skip_apps().contains("com.example.news"),
+            core.effective_https_skip_apps()
+                .contains("com.example.news"),
             "the same certificate is not a reason to retry"
         );
 
-        let fresh = Arc::new(
-            crate::mitm::ca::CertificateAuthority::generate().expect("second CA"),
-        );
+        let fresh = Arc::new(crate::mitm::ca::CertificateAuthority::generate().expect("second CA"));
         core.set_mitm_ca(fresh);
         assert!(
             core.effective_https_skip_apps().is_empty(),
@@ -3828,11 +3817,7 @@ mod tests {
         core.set_socket_protector(Arc::new(AllowAll));
         core.set_uid_apps(vec![(10_123, vec!["com.example.news".to_string()])]);
         core.pin_uid_for_port(40000, 10_123);
-        core.set_app_network_policy(
-            vec!["com.example.news".to_string()],
-            Vec::new(),
-            Vec::new(),
-        );
+        core.set_app_network_policy(vec!["com.example.news".to_string()], Vec::new(), Vec::new());
 
         core.set_network_type(NETWORK_WIFI);
         core.handle_packet(&tcp_syn(40000, [93, 184, 216, 34], 80));
@@ -3842,11 +3827,7 @@ mod tests {
         other.set_socket_protector(Arc::new(AllowAll));
         other.set_uid_apps(vec![(10_123, vec!["com.example.news".to_string()])]);
         other.pin_uid_for_port(40000, 10_123);
-        other.set_app_network_policy(
-            vec!["com.example.news".to_string()],
-            Vec::new(),
-            Vec::new(),
-        );
+        other.set_app_network_policy(vec!["com.example.news".to_string()], Vec::new(), Vec::new());
         other.set_network_type(NETWORK_CELLULAR);
         other.handle_packet(&tcp_syn(40000, [93, 184, 216, 34], 80));
         assert_eq!(other.relay_count(), 0, "no peer socket may be opened");
@@ -3889,11 +3870,7 @@ mod tests {
         core.set_uid_lookup(Arc::new(FixedUid(10_123)));
         core.set_uid_apps(vec![(10_123, vec!["com.example.news".to_string()])]);
         core.set_network_type(NETWORK_CELLULAR);
-        core.set_app_network_policy(
-            vec!["com.example.news".to_string()],
-            Vec::new(),
-            Vec::new(),
-        );
+        core.set_app_network_policy(vec!["com.example.news".to_string()], Vec::new(), Vec::new());
 
         assert_eq!(dns_reply_rcode(&core, "example.test"), Some(3));
         assert_eq!(
@@ -3985,11 +3962,7 @@ mod tests {
         core.set_uid_lookup(Arc::new(FixedUid(10_123)));
         core.set_uid_apps(vec![(10_123, vec!["com.example.news".to_string()])]);
         core.set_network_type(NETWORK_CELLULAR);
-        core.set_app_network_policy(
-            vec!["com.example.news".to_string()],
-            Vec::new(),
-            Vec::new(),
-        );
+        core.set_app_network_policy(vec!["com.example.news".to_string()], Vec::new(), Vec::new());
 
         core.handle_packet(&tcp_syn(40000, [93, 184, 216, 34], 80));
         let events = core.take_events(8);
@@ -4046,7 +4019,12 @@ mod tests {
         }
         assert_eq!(accepted, 2, "the retry opened a real second connection");
         // Only one retry: a second failure is left to the client's own retry.
-        core.relays.lock().unwrap().get_mut(40000).unwrap().connecting = true;
+        core.relays
+            .lock()
+            .unwrap()
+            .get_mut(40000)
+            .unwrap()
+            .connecting = true;
         assert!(!core.retry_peer_connect(40000));
     }
 
@@ -4237,19 +4215,17 @@ mod tests {
         std::fs::write(&ads, "example.com##.ad-hide\n").expect("write ads");
         let tracker = dir.join("track-cosmetics.txt");
         std::fs::write(&tracker, "example.com##.track-hide\n").expect("write tracker");
-        let list = |id: u16, name: &str, path: std::path::PathBuf, category: u8| {
-            FilterListInfo {
-                id,
-                name: name.to_string(),
-                url: String::new(),
-                enabled: true,
-                local_path: Some(path),
-                format: crate::filter::ListFormat::Standard,
-                category,
-                trusted: true,
-                rule_count: 0,
-                last_error: None,
-            }
+        let list = |id: u16, name: &str, path: std::path::PathBuf, category: u8| FilterListInfo {
+            id,
+            name: name.to_string(),
+            url: String::new(),
+            enabled: true,
+            local_path: Some(path),
+            format: crate::filter::ListFormat::Standard,
+            category,
+            trusted: true,
+            rule_count: 0,
+            last_error: None,
         };
         let core = Core::new();
         core.set_lists(

@@ -111,11 +111,15 @@ impl<'a> Packet<'a> {
 
     /// Source address as dotted-quad / hextet text. Borrows the packet buffer.
     pub fn src_ip_text(&self) -> String {
-        self.src_ip().map(|k| k.as_ip().to_string()).unwrap_or_default()
+        self.src_ip()
+            .map(|k| k.as_ip().to_string())
+            .unwrap_or_default()
     }
 
     pub fn dst_ip_text(&self) -> String {
-        self.dst_ip().map(|k| k.as_ip().to_string()).unwrap_or_default()
+        self.dst_ip()
+            .map(|k| k.as_ip().to_string())
+            .unwrap_or_default()
     }
 
     pub fn l4_payload(&self) -> &'a [u8] {
@@ -172,12 +176,7 @@ impl<'a> Packet<'a> {
                 if total_len < ihl || total_len > raw.len() {
                     return None;
                 }
-                (
-                    raw[9],
-                    ihl,
-                    total_len,
-                    ihl,
-                )
+                (raw[9], ihl, total_len, ihl)
             }
             6 => {
                 if raw.len() < 40 {
@@ -263,8 +262,7 @@ impl<'a> Packet<'a> {
                 let dp = u16::from_be_bytes([l4_hdr[2], l4_hdr[3]]);
                 let f = l4_hdr[13];
                 let seq = u32::from_be_bytes([l4_hdr[4], l4_hdr[5], l4_hdr[6], l4_hdr[7]]);
-                let ack =
-                    u32::from_be_bytes([l4_hdr[8], l4_hdr[9], l4_hdr[10], l4_hdr[11]]);
+                let ack = u32::from_be_bytes([l4_hdr[8], l4_hdr[9], l4_hdr[10], l4_hdr[11]]);
                 // The window is what funds every byte we send back: without it
                 // a big response (the stitched userscript) overruns the client's
                 // receive buffer and the excess is dropped, never retransmitted.
@@ -325,11 +323,13 @@ impl<'a> Packet<'a> {
         if self.proto != PROTO_TCP {
             return None;
         }
-        let options = self.raw.get(self.ip_hdr_len + 20..self.ip_hdr_len + self.l4_hdr_len())?;
+        let options = self
+            .raw
+            .get(self.ip_hdr_len + 20..self.ip_hdr_len + self.l4_hdr_len())?;
         let mut i = 0;
         while i < options.len() {
             match options[i] {
-                0 => break, // End of options
+                0 => break,  // End of options
                 1 => i += 1, // NOP
                 kind => {
                     let len = *options.get(i + 1)? as usize;
@@ -355,11 +355,13 @@ impl<'a> Packet<'a> {
         if self.proto != PROTO_TCP {
             return None;
         }
-        let options = self.raw.get(self.ip_hdr_len + 20..self.ip_hdr_len + self.l4_hdr_len())?;
+        let options = self
+            .raw
+            .get(self.ip_hdr_len + 20..self.ip_hdr_len + self.l4_hdr_len())?;
         let mut i = 0;
         while i < options.len() {
             match options[i] {
-                0 => break, // End of options
+                0 => break,  // End of options
                 1 => i += 1, // NOP
                 kind => {
                     let len = *options.get(i + 1)? as usize;
@@ -541,7 +543,7 @@ pub fn build_ack_response(pkt: &Packet<'_>, seq: u32, ack: u32) -> Option<Vec<u8
     out[l4 + 4..l4 + 8].copy_from_slice(&seq.to_be_bytes());
     out[l4 + 8..l4 + 12].copy_from_slice(&ack.to_be_bytes());
     out[l4 + 12] = 5 << 4; // data offset 5, no options
-    // SYN-ACK when replying to a SYN.
+                           // SYN-ACK when replying to a SYN.
     out[l4 + 13] = if pkt.is_syn { ACK | SYN } else { ACK };
     out[l4 + 14] = 0xff; // window
     out[l4 + 15] = 0xff;

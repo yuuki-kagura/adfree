@@ -222,10 +222,7 @@ impl Relay {
             return out;
         };
         while !self.pending_to_client.is_empty() {
-            let in_flight = self
-                .flow
-                .next_send_seq()
-                .wrapping_sub(self.flow.client_ack) as u64;
+            let in_flight = self.flow.next_send_seq().wrapping_sub(self.flow.client_ack) as u64;
             let window = self.flow.client_window as u64;
             if in_flight >= window {
                 break;
@@ -257,10 +254,7 @@ impl Relay {
         // A deferred FIN rides out once the last byte is on its way and the
         // window has room for its sequence number.
         if self.pending_to_client.is_empty() && self.fin_after_flush && !self.closed {
-            let in_flight = self
-                .flow
-                .next_send_seq()
-                .wrapping_sub(self.flow.client_ack) as u64;
+            let in_flight = self.flow.next_send_seq().wrapping_sub(self.flow.client_ack) as u64;
             if in_flight < self.flow.client_window as u64 {
                 self.fin_after_flush = false;
                 if let Some(fin) = self.fin_now() {
@@ -429,7 +423,11 @@ impl Relay {
     pub fn split_segments(payload: Vec<u8>, max: usize) -> Vec<Vec<u8>> {
         let max = max.max(1);
         if payload.len() <= max {
-            return if payload.is_empty() { Vec::new() } else { vec![payload] };
+            return if payload.is_empty() {
+                Vec::new()
+            } else {
+                vec![payload]
+            };
         }
         payload.chunks(max).map(<[u8]>::to_vec).collect()
     }
@@ -610,8 +608,7 @@ mod tests {
 
     #[test]
     fn a_plain_relay_moves_bytes_untouched() {
-        let flow =
-            crate::mitm::tcp::Flow::new(crate::packet::IpKey::V4(1), 40000, 80, 1000, 5000);
+        let flow = crate::mitm::tcp::Flow::new(crate::packet::IpKey::V4(1), 40000, 80, 1000, 5000);
         let mut r = Relay::new_plain(flow, -1, syn_packet(), DEFAULT_MSS, false);
         // No handshake to complete: bytes can flow immediately.
         assert!(r.is_established());
@@ -623,8 +620,13 @@ mod tests {
         // The request must be acknowledged (client seq + 1 from the SYN).
         assert_eq!(r.flow.acked_seq, 1001 + 18);
         assert_eq!(r.flow.down_bytes, 18);
-        let back = r.on_peer_data(b"HTTP/1.1 200 OK\r\n\r\n").expect("peer step");
-        assert_eq!(back, (Vec::new(), b"HTTP/1.1 200 OK\r\n\r\n".to_vec(), false));
+        let back = r
+            .on_peer_data(b"HTTP/1.1 200 OK\r\n\r\n")
+            .expect("peer step");
+        assert_eq!(
+            back,
+            (Vec::new(), b"HTTP/1.1 200 OK\r\n\r\n".to_vec(), false)
+        );
     }
 
     #[test]
@@ -638,7 +640,10 @@ mod tests {
         r.flow.client_window = 0;
         r.queue_to_client(&[0u8]);
         assert!(r.client_paused());
-        assert!(r.flush_to_client().is_empty(), "a zero window takes nothing");
+        assert!(
+            r.flush_to_client().is_empty(),
+            "a zero window takes nothing"
+        );
         assert!(r.client_paused());
         let mut table = RelayTable::new();
         table.insert(r);
@@ -668,7 +673,11 @@ mod tests {
         // POST must never reach the peer.
         let (again, _) = r.on_client_segment(1001, request).expect("dup");
         assert!(again.is_empty());
-        assert_eq!(r.flow.acked_seq, 1001 + 22, "a duplicate must not advance the ack");
+        assert_eq!(
+            r.flow.acked_seq,
+            1001 + 22,
+            "a duplicate must not advance the ack"
+        );
         assert_eq!(r.flow.down_bytes, 22);
     }
 
@@ -691,7 +700,10 @@ mod tests {
         let ack = r.ack_to_client().expect("ack");
         let pkt = crate::packet::Packet::parse(&ack).expect("parse");
         assert!(pkt.is_ack && !pkt.is_fin);
-        assert_eq!(pkt.seq, 5001, "no data sent yet: seq stays after the SYN-ACK");
+        assert_eq!(
+            pkt.seq, 5001,
+            "no data sent yet: seq stays after the SYN-ACK"
+        );
         assert_eq!(pkt.ack_seq, 1001 + 5);
     }
 
@@ -836,7 +848,10 @@ mod tests {
     #[test]
     fn empty_payloads_are_no_ops() {
         let mut r = relay();
-        assert_eq!(r.on_client_segment(1001, &[]).unwrap(), (Vec::new(), Vec::new()));
+        assert_eq!(
+            r.on_client_segment(1001, &[]).unwrap(),
+            (Vec::new(), Vec::new())
+        );
         assert_eq!(
             r.on_peer_data(&[]).unwrap(),
             (Vec::new(), Vec::new(), false)
@@ -862,7 +877,9 @@ mod tests {
         let origin_ca = CertificateAuthority::generate().expect("origin ca");
         let mut origin_roots = rustls::RootCertStore::empty();
         origin_roots
-            .add(rustls::pki_types::CertificateDer::from(origin_ca.cert_der()))
+            .add(rustls::pki_types::CertificateDer::from(
+                origin_ca.cert_der(),
+            ))
             .expect("origin root");
 
         // The CA the browser trusts: the one we present to it.
@@ -938,8 +955,7 @@ mod tests {
             // origin -> relay -> browser
             let wire = crate::mitm::tls::take_server_outbound(&mut origin);
             if !wire.is_empty() {
-                let (to_peer, to_client, _restart) =
-                    relay.on_peer_data(&wire).expect("peer step");
+                let (to_peer, to_client, _restart) = relay.on_peer_data(&wire).expect("peer step");
                 to_origin.extend_from_slice(&to_peer);
                 feed_browser(&mut browser, &to_client, &mut browser_plain);
             }

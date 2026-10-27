@@ -13,7 +13,7 @@
 //! * no async: everything is synchronous, and the expensive part (compiling a new
 //!   filter set) happens on a native background thread.
 
-use crate::engine::{Config, VpnStats};
+use crate::engine::VpnStats;
 use crate::events;
 use crate::filter::{FilterListInfo, ListFormat};
 use std::sync::Arc;
@@ -241,96 +241,6 @@ impl From<&crate::store::LogRow> for LogEvent {
     }
 }
 
-/// Runtime knobs, mirrored from the app's `ProtectionSettings`.
-#[derive(uniffi::Record, Clone, Debug)]
-pub struct EngineConfig {
-    /// Terminate TLS for intercepted connections and inject scripts.
-    pub mitm_enabled: bool,
-    /// Leave ECHConfigs in DNS answers (default off): clients then run ECH end
-    /// to end, and the hosts that use it are spliced instead of filtered.
-    pub full_ech: bool,
-    pub block_quic: bool,
-    pub block_doh: bool,
-    pub block_dot: bool,
-    /// Ad blocking module (ad + annoyance categories).
-    pub ad_blocking: bool,
-    /// Tracking protection (privacy, analytics and social categories).
-    pub tracking_protection: bool,
-    /// DNS protection; off means host lookups are forwarded unfiltered.
-    pub dns_protection: bool,
-    /// Let a host blocked in a tight retry loop through for a cooldown.
-    pub smart_filtering: bool,
-    /// 0 = NXDOMAIN, 1 = answer 0.0.0.0, 2 = REFUSED.
-    pub block_mode: i32,
-    pub log_allowed: bool,
-    pub eco_mode: bool,
-    /// HTTPS website allowlist: hosts whose TLS is spliced untouched.
-    pub https_skip_hosts: Vec<String>,
-    /// HTTPS website blocklist: with `https_only_mode`, only these are decrypted.
-    pub https_only_hosts: Vec<String>,
-    pub https_only_mode: bool,
-    /// Route new TCP flows through a SOCKS5 proxy. `proxy_host` is a literal
-    /// IPv4/IPv6 address: resolving a name on the packet loop would block it.
-    pub proxy_enabled: bool,
-    pub proxy_host: String,
-    pub proxy_port: u16,
-    pub proxy_username: String,
-    pub proxy_password: String,
-}
-
-impl From<EngineConfig> for Config {
-    fn from(c: EngineConfig) -> Self {
-        let proxy = proxy_endpoint(&c);
-        Config {
-            mitm_enabled: c.mitm_enabled,
-            full_ech: c.full_ech,
-            block_quic: c.block_quic,
-            block_doh: c.block_doh,
-            block_dot: c.block_dot,
-            ad_blocking: c.ad_blocking,
-            tracking_protection: c.tracking_protection,
-            dns_protection: c.dns_protection,
-            smart_filtering: c.smart_filtering,
-            block_mode: crate::dns::BlockMode::from_u8(c.block_mode.clamp(0, 2) as u8),
-            log_allowed: c.log_allowed,
-            eco_mode: c.eco_mode,
-            https_skip_hosts: c.https_skip_hosts,
-            https_only_hosts: c.https_only_hosts,
-            https_only_mode: c.https_only_mode,
-            proxy,
-        }
-    }
-}
-
-/// Validates the proxy binding once per config push. A name that fails to
-/// parse as an IP leaves direct connections in place instead of blocking the
-/// packet loop on a resolver.
-fn proxy_endpoint(c: &EngineConfig) -> Option<Arc<crate::socks5::ProxyEndpoint>> {
-    if !c.proxy_enabled {
-        return None;
-    }
-    let host = c.proxy_host.trim();
-    let addr = host
-        .parse::<std::net::IpAddr>()
-        .ok()
-        .map(crate::packet::ip_key_from);
-    match addr {
-        Some(addr) if c.proxy_port != 0 => Some(Arc::new(crate::socks5::ProxyEndpoint {
-            addr,
-            port: c.proxy_port,
-            username: c.proxy_username.clone(),
-            password: c.proxy_password.clone(),
-        })),
-        _ => {
-            crate::logbuf::push(
-                "proxy: host must be an IPv4/IPv6 literal and the port non-zero; \
-                 using direct connections",
-            );
-            None
-        }
-    }
-}
-
 fn guard<T>(fallback: T, f: impl FnOnce() -> T) -> T {
     match std::panic::catch_unwind(std::panic::AssertUnwindSafe(f)) {
         Ok(v) => v,
@@ -370,21 +280,6 @@ pub fn core_is_running() -> bool {
 #[uniffi::export]
 pub fn core_protect_sockets(fds: Vec<i32>) {
     guard((), || crate::core().set_socket_fds(&fds))
-}
-
-/// Sets the upstream resolver, e.g. `core_set_resolver("1.1.1.1", 53)`.
-#[uniffi::export]
-pub fn core_set_resolver(host: String, port: u16) {
-    guard((), || {
-        if let Ok(ip) = host.trim().parse::<std::net::IpAddr>() {
-            crate::core().set_resolver(std::net::SocketAddr::new(ip, port));
-        }
-    })
-}
-
-#[uniffi::export]
-pub fn core_configure(config: EngineConfig) {
-    guard((), || crate::core().set_config(config.into()))
 }
 
 #[uniffi::export]
@@ -457,34 +352,6 @@ pub fn core_set_uid_apps(entries: Vec<UidApps>) -> bool {
     })
 }
 
-/// Replaces the packages whose HTTPS traffic must not be decrypted (the
-/// per-app "HTTPS filtering" switch turned off). Their flows are still carried
-/// by the tunnel, so DNS filtering keeps working; the TLS stream is spliced.
-/// Applies to connections opened afterwards.
-#[uniffi::export]
-pub fn core_set_https_skip_apps(packages: Vec<String>) {
-    guard((), || crate::core().set_https_skip_apps(packages))
-}
-
-/// Replaces the per-app network firewall. `cellular_blocked` and
-/// `wifi_blocked` name packages that must not use that network;
-/// `screen_off_blocked` names packages that must stay offline while the screen
-/// is off. Open flows belonging to a newly restricted app are cut immediately.
-#[uniffi::export]
-pub fn core_set_app_network_policy(
-    cellular_blocked: Vec<String>,
-    wifi_blocked: Vec<String>,
-    screen_off_blocked: Vec<String>,
-) {
-    guard((), || {
-        crate::core().set_app_network_policy(
-            cellular_blocked,
-            wifi_blocked,
-            screen_off_blocked,
-        )
-    })
-}
-
 /// The platform's classification of the default network: 0 unknown, 1 Wi-Fi,
 /// 2 cellular, 3 anything else (Ethernet, VPN over another transport...).
 #[uniffi::export]
@@ -519,9 +386,7 @@ pub fn core_clear_dns_cache() {
 
 #[uniffi::export]
 pub fn core_stats() -> StatsSnapshot {
-    guard(StatsSnapshot::default(), || {
-        crate::core().snapshot().into()
-    })
+    guard(StatsSnapshot::default(), || crate::core().snapshot().into())
 }
 
 #[uniffi::export]
@@ -558,6 +423,149 @@ pub fn core_set_data_root(path: String) -> bool {
     guard(false, || crate::core().set_data_root(&path))
 }
 
+// --------------------------------------------------------------------- state
+
+/// The whole persisted state. Defaults when the store is not open (the UI
+/// still renders a usable screen).
+#[uniffi::export]
+pub fn core_state_load() -> crate::state::model::StateSnapshot {
+    guard(Default::default(), || {
+        crate::core()
+            .state()
+            .map(|s| s.snapshot())
+            .unwrap_or_default()
+    })
+}
+
+#[uniffi::export]
+pub fn core_protection_save(value: crate::state::model::ProtectionState) -> bool {
+    guard(false, || {
+        crate::core()
+            .state()
+            .is_some_and(|s| s.save_protection(value))
+    })
+}
+
+#[uniffi::export]
+pub fn core_firewall_save(rules: Vec<crate::state::model::AppFirewallRule>) -> bool {
+    guard(false, || {
+        crate::core()
+            .state()
+            .is_some_and(|s| s.save_firewall(rules))
+    })
+}
+
+#[uniffi::export]
+pub fn core_dns_save(value: crate::state::model::DnsState) -> bool {
+    guard(false, || {
+        crate::core().state().is_some_and(|s| s.save_dns(value))
+    })
+}
+
+#[uniffi::export]
+pub fn core_filters_save(value: crate::state::model::FilterState) -> bool {
+    guard(false, || {
+        crate::core().state().is_some_and(|s| s.save_filters(value))
+    })
+}
+
+#[uniffi::export]
+pub fn core_scripts_save(value: crate::state::model::ScriptState) -> bool {
+    guard(false, || {
+        crate::core().state().is_some_and(|s| s.save_scripts(value))
+    })
+}
+
+/// Rebuilds the engine config from the persisted state. Kotlin calls this
+/// after every save and once the data root is open; a warning means the
+/// engine fell back to something usable (the tunnel still comes up).
+#[uniffi::export]
+pub fn core_apply_config(private_dns_strict: bool) -> crate::state::model::ConfigOutcome {
+    guard(
+        crate::state::model::ConfigOutcome {
+            ok: false,
+            warning: crate::state::model::ConfigWarning::StoreUnavailable,
+        },
+        || match crate::core().state() {
+            Some(state) => {
+                let core = crate::core();
+                crate::state::config::apply(state, core, private_dns_strict)
+            }
+            None => crate::state::model::ConfigOutcome {
+                ok: false,
+                warning: crate::state::model::ConfigWarning::StoreUnavailable,
+            },
+        },
+    )
+}
+
+/// What `VpnService.Builder.addDnsServer` should use. Safe to call before the
+/// store is open: it answers with the built-in default.
+#[uniffi::export]
+pub fn core_resolver_snapshot() -> crate::state::model::ResolverSnapshot {
+    guard(Default::default(), || {
+        let snapshot = crate::core()
+            .state()
+            .map(|s| s.snapshot())
+            .unwrap_or_default();
+        crate::state::config::resolver_snapshot(&snapshot)
+    })
+}
+
+/// Apps whose routing switch is off, for `addDisallowedApplication`.
+#[uniffi::export]
+pub fn core_excluded_packages() -> Vec<String> {
+    guard(Vec::new(), || {
+        let snapshot = crate::core()
+            .state()
+            .map(|s| s.snapshot())
+            .unwrap_or_default();
+        crate::state::config::excluded_packages(&snapshot)
+    })
+}
+
+/// Normalizes one resolver address for the editor. The same validator runs on
+/// save, so the form cannot accept what the engine would reject.
+#[uniffi::export]
+pub fn core_validate_dns_provider(
+    protocol: crate::state::model::DnsProtocol,
+    address: String,
+) -> crate::state::model::DnsValidation {
+    guard(Default::default(), || {
+        crate::state::dnsaddr::validate(protocol, &address)
+    })
+}
+
+/// The whole state as a v2 backup file. Empty when the store is not open.
+#[uniffi::export]
+pub fn core_backup_export() -> String {
+    guard(String::new(), || {
+        crate::core()
+            .state()
+            .map(|s| crate::state::backup::export(&s.snapshot()))
+            .unwrap_or_default()
+    })
+}
+
+/// Replaces the state from a backup file (v1 or v2). Malformed input leaves
+/// the current state untouched.
+#[uniffi::export]
+pub fn core_backup_import(json: String) -> crate::state::model::BackupOutcome {
+    guard(
+        crate::state::model::BackupOutcome {
+            ok: false,
+            error: crate::state::model::BackupError::StoreUnavailable,
+        },
+        || match crate::core().state() {
+            Some(state) => crate::state::backup::import(state, &json),
+            None => crate::state::model::BackupOutcome {
+                ok: false,
+                error: crate::state::model::BackupError::StoreUnavailable,
+            },
+        },
+    )
+}
+
 /// One page of the persisted request log, newest first. Pages are indexed, so
 /// the UI can keep asking while the user scrolls.
 #[uniffi::export]
@@ -588,33 +596,6 @@ pub fn core_log_clear() -> bool {
         crate::core().clear_log();
         true
     })
-}
-
-/// The opaque settings blob (the platform owns the JSON schema). `None` on a
-/// first run, or while the store is not open.
-#[uniffi::export]
-pub fn core_settings_get() -> Option<String> {
-    guard(None, || crate::core().settings_get())
-}
-
-/// Replaces the settings blob. False when the store is not open, in which
-/// case the caller keeps its own copy and retries on the next launch.
-#[uniffi::export]
-pub fn core_settings_set(json: String) -> bool {
-    guard(false, || crate::core().settings_set(&json))
-}
-
-/// The opaque filter/script choices blob (enabled lists, custom lists, user
-/// rules, userscripts). The platform owns the JSON schema.
-#[uniffi::export]
-pub fn core_filters_get() -> Option<String> {
-    guard(None, || crate::core().filters_get())
-}
-
-/// Replaces the filter/script choices blob. False when the store is not open.
-#[uniffi::export]
-pub fn core_filters_set(json: String) -> bool {
-    guard(false, || crate::core().filters_set(&json))
 }
 
 // --------------------------------------------------------------------- assets
@@ -888,7 +869,6 @@ pub fn core_uid_for_port(port: u16) -> u32 {
     guard(0, || crate::core().uid_for_port(port))
 }
 
-
 // ---------------------------------------------------------------- MITM (TLS)
 
 /// One user script, as the UI holds it.
@@ -914,7 +894,6 @@ pub struct MitmStatus {
     /// Which stage the MITM code is at (`observe` / `armed`).
     pub stage: String,
 }
-
 
 /// Android hook for descriptors the core opens on demand.
 ///
@@ -1023,8 +1002,16 @@ pub fn core_mitm_status() -> MitmStatus {
         let scripts = crate::core().mitm_scripts.read().unwrap();
         MitmStatus {
             has_ca: ca.has_ca(),
-            ca_pem: if ca.has_ca() { ca.cert_pem() } else { String::new() },
-            fingerprint: if ca.has_ca() { ca.fingerprint_sha256() } else { String::new() },
+            ca_pem: if ca.has_ca() {
+                ca.cert_pem()
+            } else {
+                String::new()
+            },
+            fingerprint: if ca.has_ca() {
+                ca.fingerprint_sha256()
+            } else {
+                String::new()
+            },
             scripts_enabled: scripts.is_enabled(),
             script_count: scripts.scripts().len() as u32,
             leaves_issued: ca.cached_hosts() as u32,
@@ -1033,13 +1020,16 @@ pub fn core_mitm_status() -> MitmStatus {
     })
 }
 
-
 /// PEM of the CA certificate currently loaded.
 #[uniffi::export]
 pub fn core_ca_pem() -> String {
     guard(String::new(), || {
         let ca = crate::core().mitm_ca.read().unwrap();
-        if ca.has_ca() { ca.cert_pem() } else { String::new() }
+        if ca.has_ca() {
+            ca.cert_pem()
+        } else {
+            String::new()
+        }
     })
 }
 
@@ -1072,7 +1062,11 @@ impl From<crate::trust::RootTrust> for RootTrustBinding {
 
 fn root_ca_der() -> Vec<u8> {
     let ca = crate::core().mitm_ca.read().unwrap();
-    if ca.has_ca() { ca.cert_der() } else { Vec::new() }
+    if ca.has_ca() {
+        ca.cert_der()
+    } else {
+        Vec::new()
+    }
 }
 
 /// Reports whether the system store is reachable and holds our CA.
@@ -1132,7 +1126,11 @@ pub fn core_remove_root_ca() -> RootTrustBinding {
 pub fn core_ca_key_pem() -> String {
     guard(String::new(), || {
         let ca = crate::core().mitm_ca.read().unwrap();
-        if ca.has_ca() { ca.key_pem() } else { String::new() }
+        if ca.has_ca() {
+            ca.key_pem()
+        } else {
+            String::new()
+        }
     })
 }
 
@@ -1166,95 +1164,6 @@ pub fn core_combined_scripts() -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn config_round_trips() {
-        let cfg = EngineConfig {
-            mitm_enabled: false,
-            full_ech: true,
-            block_quic: true,
-            block_doh: false,
-            block_dot: true,
-            ad_blocking: true,
-            tracking_protection: false,
-            dns_protection: true,
-            smart_filtering: true,
-            block_mode: 1,
-            log_allowed: true,
-            eco_mode: false,
-            https_skip_hosts: vec!["bank.example".to_string()],
-            https_only_hosts: vec!["shop.example".to_string()],
-            https_only_mode: true,
-            proxy_enabled: false,
-            proxy_host: String::new(),
-            proxy_port: 0,
-            proxy_username: String::new(),
-            proxy_password: String::new(),
-        };
-        let native: Config = cfg.into();
-        assert!(!native.mitm_enabled, "MITM must stay off until asked");
-        assert!(native.full_ech, "the full-ECH switch must survive the trip");
-        assert_eq!(native.https_skip_hosts, vec!["bank.example".to_string()]);
-        assert_eq!(native.https_only_hosts, vec!["shop.example".to_string()]);
-        assert!(native.https_only_mode);
-        assert!(native.block_quic);
-        assert!(!native.block_doh);
-        assert!(native.ad_blocking);
-        assert!(!native.tracking_protection);
-        assert!(native.dns_protection);
-        assert!(native.smart_filtering);
-        assert!(matches!(native.block_mode, crate::dns::BlockMode::ZeroIp));
-    }
-
-    fn config_with_proxy(host: &str, port: u16) -> EngineConfig {
-        EngineConfig {
-            mitm_enabled: false,
-            full_ech: false,
-            block_quic: true,
-            block_doh: true,
-            block_dot: true,
-            ad_blocking: true,
-            tracking_protection: true,
-            dns_protection: true,
-            smart_filtering: true,
-            block_mode: 0,
-            log_allowed: false,
-            eco_mode: true,
-            https_skip_hosts: Vec::new(),
-            https_only_hosts: Vec::new(),
-            https_only_mode: false,
-            proxy_enabled: true,
-            proxy_host: host.to_string(),
-            proxy_port: port,
-            proxy_username: "u".to_string(),
-            proxy_password: "p".to_string(),
-        }
-    }
-
-    #[test]
-    fn a_proxy_binding_needs_a_literal_address() {
-        let endpoint = proxy_endpoint(&config_with_proxy("127.0.0.1", 1080))
-            .expect("a literal IPv4 must be accepted");
-        assert_eq!(endpoint.addr, crate::packet::IpKey::V4(0x7f00_0001));
-        assert_eq!(endpoint.port, 1080);
-        assert_eq!(
-            endpoint.credentials(),
-            Some(("u".to_string(), "p".to_string()))
-        );
-
-        assert!(
-            proxy_endpoint(&config_with_proxy("proxy.example", 1080)).is_none(),
-            "a name would need a resolver on the packet loop"
-        );
-        assert!(
-            proxy_endpoint(&config_with_proxy("127.0.0.1", 0)).is_none(),
-            "port zero is not a proxy"
-        );
-        assert!(matches!(
-            proxy_endpoint(&config_with_proxy("::1", 1080)).map(|e| e.addr),
-            Some(crate::packet::IpKey::V6(_))
-        ));
-    }
 
     #[test]
     fn list_binding_round_trips() {
@@ -1341,21 +1250,26 @@ mod mitm_api_tests {
         assert!(js.contains("let x = 1;"), "{js}");
         assert!(js.contains("'use strict'"));
         // Disabling the master switch stops serving.
-        core_set_scripts(vec![ScriptBinding {
-            name: "basic".into(),
-            body: "let x = 1;".into(),
-            enabled: true,
-        }], false);
+        core_set_scripts(
+            vec![ScriptBinding {
+                name: "basic".into(),
+                body: "let x = 1;".into(),
+                enabled: true,
+            }],
+            false,
+        );
         assert!(core_combined_scripts().is_empty());
         // And re-enabling restores it.
-        core_set_scripts(vec![ScriptBinding {
-            name: "basic".into(),
-            body: "let x = 1;".into(),
-            enabled: true,
-        }], true);
+        core_set_scripts(
+            vec![ScriptBinding {
+                name: "basic".into(),
+                body: "let x = 1;".into(),
+                enabled: true,
+            }],
+            true,
+        );
         assert!(core_combined_scripts().contains("let x = 1;"));
     }
-
 
     #[test]
     fn ca_round_trips_through_the_pem_export() {

@@ -168,12 +168,14 @@ impl ScriptMeta {
                         push_pattern(&mut meta.exclude, pattern);
                     }
                 }
-                "@run-at" => run_at = Some(match value {
-                    "document-start" => RunAt::Start,
-                    "document-end" => RunAt::End,
-                    "document-idle" => RunAt::Idle,
-                    _ => continue,
-                }),
+                "@run-at" => {
+                    run_at = Some(match value {
+                        "document-start" => RunAt::Start,
+                        "document-end" => RunAt::End,
+                        "document-idle" => RunAt::Idle,
+                        _ => continue,
+                    })
+                }
                 "@noframes" => meta.noframes = true,
                 "@version" if meta.version.is_empty() => meta.version = value.to_string(),
                 "@grant" if !value.is_empty() => {
@@ -649,7 +651,9 @@ impl ScriptEntry {
             "var GM_log=function(){try{console.log.apply(console,arguments);}catch(e){}};\n",
         );
         if !self.meta.requires.is_empty() {
-            out.push_str("console.warn('AdFree: @require is not supported by this userscript host');\n");
+            out.push_str(
+                "console.warn('AdFree: @require is not supported by this userscript host');\n",
+            );
         }
         out.push_str("try{\n");
         out.push_str(&self.body);
@@ -796,7 +800,10 @@ mod tests {
     fn replaces_the_whole_list() {
         let mut set = ScriptSet::new();
         set.set_enabled(true);
-        set.replace_all(vec![script("one", "let a = 1;"), script("two", "let b = 2;")]);
+        set.replace_all(vec![
+            script("one", "let a = 1;"),
+            script("two", "let b = 2;"),
+        ]);
         assert_eq!(set.scripts().len(), 2);
         set.replace_all(vec![script("only", "let c = 3;")]);
         assert_eq!(set.scripts().len(), 1);
@@ -811,9 +818,21 @@ mod tests {
         set.set_enabled(true);
         let huge = "x".repeat(MAX_SCRIPT_BYTES + 1);
         set.replace_all(vec![
-            UserScript { name: String::new(), body: "a".into(), enabled: true },
-            UserScript { name: "empty".into(), body: String::new(), enabled: true },
-            UserScript { name: "big".into(), body: huge, enabled: true },
+            UserScript {
+                name: String::new(),
+                body: "a".into(),
+                enabled: true,
+            },
+            UserScript {
+                name: "empty".into(),
+                body: String::new(),
+                enabled: true,
+            },
+            UserScript {
+                name: "big".into(),
+                body: huge,
+                enabled: true,
+            },
             script("ok", "let ok = true;"),
         ]);
         assert_eq!(set.scripts().len(), 1);
@@ -1005,7 +1024,10 @@ mod tests {
              window.__scoped = true;",
         )]);
         let js = set.combined_js();
-        assert!(js.contains("new RegExp("), "the match source must reach the page");
+        assert!(
+            js.contains("new RegExp("),
+            "the match source must reach the page"
+        );
         assert!(js.contains("document.readyState==='loading'"));
         assert!(js.contains("DOMContentLoaded"));
         assert!(js.contains("window.__scoped = true;"));

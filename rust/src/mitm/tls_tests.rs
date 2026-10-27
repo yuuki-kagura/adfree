@@ -31,10 +31,7 @@ fn server_using(ca: Arc<crate::mitm::ca::CertificateAuthority>) -> ServerConnect
 }
 
 /// Runs a full handshake between our `ServerConnection` and the client side.
-fn handshake(
-    server: &mut ServerConnection,
-    client: &mut ClientConnection,
-) {
+fn handshake(server: &mut ServerConnection, client: &mut ClientConnection) {
     let mut rounds = 0;
     let mut outbound = take_client_outbound(client);
     while server_handshaking(server) || client_handshaking(client) {
@@ -134,11 +131,8 @@ fn a_restored_ca_still_signs_leaves_the_original_trusts() {
     // chain and HTTPS pages would die with CERT_AUTHORITY_INVALID.
     let ca = crate::mitm::ca::CertificateAuthority::generate().expect("ca");
     let stored_der = ca.cert_der();
-    let restored = crate::mitm::ca::CertificateAuthority::from_pem(
-        &ca.cert_pem(),
-        &ca.key_pem(),
-    )
-    .expect("restore");
+    let restored = crate::mitm::ca::CertificateAuthority::from_pem(&ca.cert_pem(), &ca.key_pem())
+        .expect("restore");
 
     let issued = restored.issue("origin.example.com").expect("leaf");
     let _ = &issued; // the resolver mints its own leaf; keep the call to exercise the cache
@@ -183,7 +177,10 @@ fn the_flow_resolver_captures_the_clients_sni() {
 
     assert_eq!(flow.captured().as_deref(), Some("captured.example.com"));
     assert!(
-        inner.issued_hosts().iter().any(|h| h == "captured.example.com"),
+        inner
+            .issued_hosts()
+            .iter()
+            .any(|h| h == "captured.example.com"),
         "the shared resolver must still mint the leaf: {:?}",
         inner.issued_hosts()
     );
@@ -267,7 +264,9 @@ fn a_hello_that_offers_ech_keeps_its_outer_name() {
 fn a_client_hello_can_be_told_from_garbage() {
     // A record that promises a hello but carries junk: nothing readable, and
     // no panic.
-    let mut junk = vec![0x16, 0x03, 0x01, 0x00, 0x08, 0x01, 0x00, 0x00, 0x04, 0, 0, 0, 0];
+    let mut junk = vec![
+        0x16, 0x03, 0x01, 0x00, 0x08, 0x01, 0x00, 0x00, 0x04, 0, 0, 0, 0,
+    ];
     assert_eq!(
         first_flight(&junk),
         Flight::Hello {
@@ -280,10 +279,7 @@ fn a_client_hello_can_be_told_from_garbage() {
 }
 
 /// Reads new plaintext from a client connection without draining old data.
-fn feed_client_read_only(
-    connection: &mut ClientConnection,
-    cipher: &[u8],
-) -> Vec<u8> {
+fn feed_client_read_only(connection: &mut ClientConnection, cipher: &[u8]) -> Vec<u8> {
     let mut reader = std::io::Cursor::new(cipher);
     while let Ok(n) = connection.read_tls(&mut reader) {
         if n == 0 {
@@ -298,13 +294,19 @@ fn feed_client_read_only(
 
 /// Encrypts a payload on the server side, returning the wire bytes.
 fn send_from_server(connection: &mut ServerConnection, plaintext: &[u8]) -> Vec<u8> {
-    connection.writer().write_all(plaintext).expect("server write");
+    connection
+        .writer()
+        .write_all(plaintext)
+        .expect("server write");
     take_server_outbound(connection)
 }
 
 /// Encrypts a payload on the client side, returning the wire bytes.
 fn send_from_client(connection: &mut ClientConnection, plaintext: &[u8]) -> Vec<u8> {
-    connection.writer().write_all(plaintext).expect("client write");
+    connection
+        .writer()
+        .write_all(plaintext)
+        .expect("client write");
     take_client_outbound(connection)
 }
 
@@ -386,7 +388,9 @@ fn ech_rejection_is_recognized_in_the_formatted_error() {
     assert!(!ech_rejected(
         "client process_new_packets: peer is incompatible: Tls12NotOffered"
     ));
-    assert!(!ech_rejected("client process_new_packets: peer sent no certificates"));
+    assert!(!ech_rejected(
+        "client process_new_packets: peer sent no certificates"
+    ));
 }
 
 /// Roots for a live check on a developer machine: the device store when it is
@@ -570,7 +574,10 @@ fn a_real_host_accepts_the_dns_learned_config() {
     let answer = https_record(host);
     let list = crate::dns::ech_config_list(&answer).expect("the host advertises ECH");
     let public = crate::dns::ech_public_name(&answer).expect("the config names a public name");
-    assert_ne!(public, host, "the outer name must differ from the inner one");
+    assert_ne!(
+        public, host,
+        "the outer name must differ from the inner one"
+    );
 
     let upstream = UpstreamTls::with_roots(live_roots());
     let config = upstream.with_ech(&list).expect("the list names our suite");
@@ -605,7 +612,10 @@ fn a_real_host_accepts_the_dns_learned_config() {
             sock.write_all(&out).expect("client flight");
         }
     }
-    assert!(!client_handshaking(&client), "the ECH handshake must finish");
+    assert!(
+        !client_handshaking(&client),
+        "the ECH handshake must finish"
+    );
     assert_eq!(
         client_ech_status(&client),
         rustls::client::EchStatus::Accepted,

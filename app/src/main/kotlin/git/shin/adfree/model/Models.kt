@@ -301,7 +301,12 @@ data class DnsProvider(
     val type: ProtocolType,
     val description: String,
     val isCustom: Boolean = false,
-    val pingMs: Int = 12,
+    val port: Int = 53,
+    /**
+     * String-resource key for built-ins (Rust owns the list); empty for
+     * custom providers, whose [description] is user data.
+     */
+    val descriptionKey: String = "",
 )
 
 /**
@@ -392,7 +397,31 @@ data class ProtectionSettings(
     val httpsOnlyMode: Boolean = false,
     /** Routing mode: send new TCP flows through a SOCKS5 proxy instead of direct. */
     val proxy: ProxySettings = ProxySettings(),
+    /** In-app language; `SYSTEM` follows the device. */
+    val appLanguage: AppLanguage = AppLanguage.SYSTEM,
+    /** Light/dark choice; `SYSTEM` follows the device. */
+    val themeMode: ThemeMode = ThemeMode.SYSTEM,
+    /** Bring the tunnel back after a reboot (only when it was on). */
+    val autoStart: Boolean = false,
+    /** Hide ad placeholders with cosmetic rules; needs HTTPS filtering. */
+    val cosmeticFiltering: Boolean = true,
+    /** Force Safe Search on the major engines (CNAME rewrites). */
+    val safeSearch: Boolean = false,
 )
+
+/** In-app language selection. */
+enum class AppLanguage {
+    SYSTEM,
+    ENGLISH,
+    VIETNAMESE,
+}
+
+/** Light/dark selection. */
+enum class ThemeMode {
+    SYSTEM,
+    DARK,
+    LIGHT,
+}
 
 /** Result of scanning one domain on the Security Lab screen (no AI/API key). */
 data class ThreatAnalysisResult(

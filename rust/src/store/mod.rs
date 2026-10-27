@@ -61,8 +61,8 @@ impl Store {
                 .map_err(|e| format!("create {}: {e}", path.display()))?;
         }
         let db_path = root.join("adfree.db");
-        let conn = Connection::open(&db_path)
-            .map_err(|e| format!("open {}: {e}", db_path.display()))?;
+        let conn =
+            Connection::open(&db_path).map_err(|e| format!("open {}: {e}", db_path.display()))?;
         conn.execute_batch(
             // WAL: readers never wait on the writer. NORMAL is its standard
             // companion — a power cut can lose the last seconds, never the file.
@@ -140,6 +140,106 @@ impl Store {
                 0
             }
         }
+    }
+
+    // ------------------------------------------------------------ typed state
+
+    /// One typed state record, serialized by the core. `None` means it was
+    /// never written (or the row was lost), so the caller applies defaults.
+    pub fn state_get(&self, key: &str) -> Option<String> {
+        self.db
+            .lock()
+            .query_row("SELECT json FROM state WHERE key = ?1", [key], |r| r.get(0))
+            .ok()
+    }
+
+    pub fn state_set(&self, key: &str, json: &str) -> Result<(), String> {
+        self.db
+            .lock()
+            .execute(
+                "INSERT INTO state (key, json, updated_ms) VALUES (?1, ?2, ?3)
+                 ON CONFLICT(key) DO UPDATE SET json = excluded.json, updated_ms = excluded.updated_ms",
+                rusqlite::params![key, json, crate::util::now_ms() as i64],
+            )
+            .map(|_| ())
+            .map_err(|e| format!("state write {key}: {e}"))
+    }
+
+    /// Writes several records in one transaction, leaving other keys alone.
+    pub fn state_put_all(&self, entries: &[(String, String)]) -> Result<(), String> {
+        let mut conn = self.db.lock();
+        let tx = conn
+            .transaction()
+            .map_err(|e| format!("state transaction: {e}"))?;
+        {
+            let now = crate::util::now_ms() as i64;
+            let mut stmt = tx
+                .prepare(
+                    "INSERT INTO state (key, json, updated_ms) VALUES (?1, ?2, ?3)
+                     ON CONFLICT(key) DO UPDATE SET json = excluded.json, updated_ms = excluded.updated_ms",
+                )
+                .map_err(|e| format!("state prepare: {e}"))?;
+            for (key, json) in entries {
+                stmt.execute(rusqlite::params![key, json, now])
+                    .map_err(|e| format!("state write {key}: {e}"))?;
+            }
+        }
+        tx.commit().map_err(|e| format!("state commit: {e}"))
+    }
+
+    /// Replaces the whole state table in one transaction (backup restore).
+    pub fn state_replace_all(&self, entries: &[(String, String)]) -> Result<(), String> {
+        let mut conn = self.db.lock();
+        let tx = conn
+            .transaction()
+            .map_err(|e| format!("state transaction: {e}"))?;
+        tx.execute("DELETE FROM state", [])
+            .map_err(|e| format!("state clear: {e}"))?;
+        {
+            let now = crate::util::now_ms() as i64;
+            let mut stmt = tx
+                .prepare("INSERT INTO state (key, json, updated_ms) VALUES (?1, ?2, ?3)")
+                .map_err(|e| format!("state prepare: {e}"))?;
+            for (key, json) in entries {
+                stmt.execute(rusqlite::params![key, json, now])
+                    .map_err(|e| format!("state write {key}: {e}"))?;
+            }
+        }
+        tx.commit().map_err(|e| format!("state commit: {e}"))
+    }
+
+    pub fn state_keys(&self) -> Vec<String> {
+        let conn = self.db.lock();
+        let Ok(mut stmt) = conn.prepare("SELECT key FROM state ORDER BY key") else {
+            return Vec::new();
+        };
+        let rows = stmt.query_map([], |r| r.get::<_, String>(0));
+        match rows {
+            Ok(rows) => rows.filter_map(Result::ok).collect(),
+            Err(_) => Vec::new(),
+        }
+    }
+
+    /// Bookkeeping that is not user data (migration markers).
+    pub fn meta_get(&self, key: &str) -> Option<String> {
+        self.db
+            .lock()
+            .query_row("SELECT value FROM state_meta WHERE key = ?1", [key], |r| {
+                r.get(0)
+            })
+            .ok()
+    }
+
+    pub fn meta_set(&self, key: &str, value: &str) -> Result<(), String> {
+        self.db
+            .lock()
+            .execute(
+                "INSERT INTO state_meta (key, value) VALUES (?1, ?2)
+                 ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                rusqlite::params![key, value],
+            )
+            .map(|_| ())
+            .map_err(|e| format!("state_meta write {key}: {e}"))
     }
 
     // ------------------------------------------------------------- platform blobs
@@ -249,6 +349,26 @@ fn migrate(conn: &Connection) -> Result<(), String> {
              COMMIT;",
         )
         .map_err(|e| format!("migrate schema to v3: {e}"))?;
+    }
+    if version < 4 {
+        // v4: the core owns the schema. `settings` stays as an archive of the
+        // platform-written blobs; `state` holds one typed JSON value per
+        // collection and `state_meta` marks one-time work (the import).
+        conn.execute_batch(
+            "BEGIN;
+             CREATE TABLE state (
+                 key        TEXT PRIMARY KEY,
+                 json       TEXT NOT NULL,
+                 updated_ms INTEGER NOT NULL
+             );
+             CREATE TABLE state_meta (
+                 key   TEXT PRIMARY KEY,
+                 value TEXT NOT NULL
+             );
+             PRAGMA user_version = 4;
+             COMMIT;",
+        )
+        .map_err(|e| format!("migrate schema to v4: {e}"))?;
     }
     Ok(())
 }
@@ -452,7 +572,10 @@ mod tests {
         let (store, dir) = temp_store("settings");
         assert_eq!(store.settings_get(), None);
         store.settings_set("{\"protection\":true}").unwrap();
-        assert_eq!(store.settings_get().as_deref(), Some("{\"protection\":true}"));
+        assert_eq!(
+            store.settings_get().as_deref(),
+            Some("{\"protection\":true}")
+        );
         store.settings_set("{\"protection\":false}").unwrap();
         assert_eq!(
             store.settings_get().as_deref(),
@@ -473,11 +596,12 @@ mod tests {
         assert_eq!(store.filters_get(), None);
         store.settings_set("{\"protection\":true}").unwrap();
         store.filters_set("{\"enabled\":[\"a\"]}").unwrap();
-        store
-            .filters_set("{\"enabled\":[\"a\",\"b\"]}")
-            .unwrap();
+        store.filters_set("{\"enabled\":[\"a\",\"b\"]}").unwrap();
         // Each blob keeps its own row: writing one never disturbs the other.
-        assert_eq!(store.settings_get().as_deref(), Some("{\"protection\":true}"));
+        assert_eq!(
+            store.settings_get().as_deref(),
+            Some("{\"protection\":true}")
+        );
         assert_eq!(
             store.filters_get().as_deref(),
             Some("{\"enabled\":[\"a\",\"b\"]}")
@@ -493,6 +617,81 @@ mod tests {
             reopened.settings_get().as_deref(),
             Some("{\"protection\":true}")
         );
+    }
+
+    #[test]
+    fn v3_opens_with_state_tables_and_keeps_the_legacy_blobs() {
+        let dir = std::env::temp_dir().join(format!("adfree-store-{}-v3", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        {
+            let conn = Connection::open(dir.join("adfree.db")).unwrap();
+            conn.execute_batch(
+                "CREATE TABLE settings (
+                     id         INTEGER PRIMARY KEY,
+                     json       TEXT NOT NULL,
+                     updated_ms INTEGER NOT NULL
+                 );
+                 CREATE TABLE log_events (
+                     id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                     ts_ms       INTEGER NOT NULL,
+                     action      INTEGER NOT NULL,
+                     category    INTEGER NOT NULL,
+                     domain      TEXT NOT NULL,
+                     ip          TEXT NOT NULL,
+                     rule        TEXT NOT NULL,
+                     list_name   TEXT NOT NULL,
+                     latency_ns  INTEGER NOT NULL DEFAULT 0,
+                     bytes_saved INTEGER NOT NULL DEFAULT 0,
+                     ipv6        INTEGER NOT NULL DEFAULT 0,
+                     app         TEXT NOT NULL DEFAULT ''
+                 );
+                 INSERT INTO settings VALUES (1, '{\"protection\":true}', 1);
+                 INSERT INTO settings VALUES (2, '{\"user_rules\":[\"a\"]}', 2);
+                 PRAGMA user_version = 3;",
+            )
+            .unwrap();
+        }
+
+        let store = Store::open(&dir).expect("v3 store opens");
+        // The archive is untouched: the import reads it, it does not consume it.
+        assert_eq!(
+            store.settings_get().as_deref(),
+            Some("{\"protection\":true}")
+        );
+        assert_eq!(
+            store.filters_get().as_deref(),
+            Some("{\"user_rules\":[\"a\"]}")
+        );
+        // The new tables exist and start empty.
+        assert!(store.state_keys().is_empty());
+        assert_eq!(store.meta_get("legacy_imported"), None);
+        store.state_set("protection", "{}").unwrap();
+        store.meta_set("legacy_imported", "1").unwrap();
+        assert_eq!(store.state_keys(), vec!["protection"]);
+        assert_eq!(store.meta_get("legacy_imported").as_deref(), Some("1"));
+        drop(store);
+
+        let reopened = Store::open(&dir).expect("v4 reopen");
+        assert_eq!(reopened.state_keys(), vec!["protection"]);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn state_replace_all_is_atomic_and_drops_absent_keys() {
+        let (store, _) = temp_store("state-replace");
+        store
+            .state_put_all(&[
+                ("a".to_string(), "1".to_string()),
+                ("b".to_string(), "2".to_string()),
+            ])
+            .unwrap();
+        assert_eq!(store.state_keys(), vec!["a", "b"]);
+        store
+            .state_replace_all(&[("b".to_string(), "3".to_string())])
+            .unwrap();
+        assert_eq!(store.state_keys(), vec!["b"]);
+        assert_eq!(store.state_get("b").as_deref(), Some("3"));
     }
 
     #[test]

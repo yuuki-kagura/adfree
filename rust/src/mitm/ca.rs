@@ -93,11 +93,9 @@ impl CertificateAuthority {
     /// Restore the CA from PEM (cert to install + key used to issue leaves).
     pub fn from_pem(ca_pem: &str, key_pem: &str) -> Result<Self, String> {
         let cert_der = decode_cert_pem(ca_pem)?;
-        let ca_key = rcgen::KeyPair::from_pkcs8_pem_and_sign_algo(
-            key_pem,
-            &rcgen::PKCS_ECDSA_P256_SHA256,
-        )
-        .map_err(|e| format!("key pem: {e}"))?;
+        let ca_key =
+            rcgen::KeyPair::from_pkcs8_pem_and_sign_algo(key_pem, &rcgen::PKCS_ECDSA_P256_SHA256)
+                .map_err(|e| format!("key pem: {e}"))?;
         let (ca_object, _fresh) = self_signed_ca(&ca_key)?;
         Ok(Self {
             cert_der,
@@ -152,8 +150,8 @@ impl CertificateAuthority {
         }
 
         let leaf_key = leaf_key()?;
-        let mut params =
-            rcgen::CertificateParams::new(vec![host.clone()]).map_err(|e| format!("params: {e}"))?;
+        let mut params = rcgen::CertificateParams::new(vec![host.clone()])
+            .map_err(|e| format!("params: {e}"))?;
         // Same as the CA: the DN is what a "view certificate" screen shows, so
         // it names the host instead of rcgen's placeholder.
         let mut dn = rcgen::DistinguishedName::new();
@@ -226,8 +224,8 @@ fn leaf_key() -> Result<&'static rcgen::KeyPair, String> {
 
 /// Self-sign a CA object and return its DER.
 fn self_signed_ca(key: &rcgen::KeyPair) -> Result<(rcgen::Certificate, Vec<u8>), String> {
-    let mut params = rcgen::CertificateParams::new(Vec::new())
-        .map_err(|e| format!("params: {e}"))?;
+    let mut params =
+        rcgen::CertificateParams::new(Vec::new()).map_err(|e| format!("params: {e}"))?;
     // `new()` only fills the SANs; without a distinguished name rcgen writes
     // "CN=rcgen self signed cert" into the certificate, which is what the
     // system's certificate install dialog shows the user.
@@ -243,7 +241,9 @@ fn self_signed_ca(key: &rcgen::KeyPair) -> Result<(rcgen::Certificate, Vec<u8>),
     ];
     params.not_before = time::OffsetDateTime::now_utc() - time::Duration::days(1);
     params.not_after = time::OffsetDateTime::now_utc() + time::Duration::days(3_650);
-    let cert = params.self_signed(key).map_err(|e| format!("self-sign: {e}"))?;
+    let cert = params
+        .self_signed(key)
+        .map_err(|e| format!("self-sign: {e}"))?;
     let der = cert.der().to_vec();
     Ok((cert, der))
 }
@@ -261,9 +261,9 @@ fn decode_cert_pem(pem: &str) -> Result<Vec<u8>, String> {
 
 /// Private key of a leaf in the form rustls wants.
 pub fn private_key_der(issued: &IssuedCert) -> rustls::pki_types::PrivateKeyDer<'static> {
-    rustls::pki_types::PrivateKeyDer::Pkcs8(
-        rustls::pki_types::PrivatePkcs8KeyDer::from(issued.key.clone()),
-    )
+    rustls::pki_types::PrivateKeyDer::Pkcs8(rustls::pki_types::PrivatePkcs8KeyDer::from(
+        issued.key.clone(),
+    ))
 }
 
 /// Base64-encode a DER block as PEM (no external crate needed).
@@ -395,11 +395,13 @@ mod tests {
         let key = rcgen::KeyPair::generate().unwrap();
         let pem = key.serialize_pem();
         let first = pem.lines().next().unwrap_or("").to_string();
-        let back = rcgen::KeyPair::from_pkcs8_pem_and_sign_algo(
-            &pem,
-            &rcgen::PKCS_ECDSA_P256_SHA256,
+        let back =
+            rcgen::KeyPair::from_pkcs8_pem_and_sign_algo(&pem, &rcgen::PKCS_ECDSA_P256_SHA256);
+        assert!(
+            back.is_ok(),
+            "first={first} err={:?}",
+            back.err().map(|e| e.to_string())
         );
-        assert!(back.is_ok(), "first={first} err={:?}", back.err().map(|e| e.to_string()));
     }
 
     #[test]

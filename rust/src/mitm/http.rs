@@ -425,7 +425,12 @@ fn add_nonce_to_policy(value: &str, nonce: &str, host_source: &str) -> String {
     if directives.is_empty() {
         return value.to_string();
     }
-    let name_of = |d: &str| d.split_whitespace().next().unwrap_or("").to_ascii_lowercase();
+    let name_of = |d: &str| {
+        d.split_whitespace()
+            .next()
+            .unwrap_or("")
+            .to_ascii_lowercase()
+    };
     let names: Vec<String> = directives.iter().map(|d| name_of(d)).collect();
     let has = |n: &str| names.iter().any(|x| x == n);
     // The specific directives win over `default-src`, and `-elem` wins over the
@@ -795,7 +800,11 @@ pub fn drop_undecodable_encodings(buf: &[u8], force: bool) -> Option<Vec<u8>> {
             if !kept.is_empty() {
                 let name_end = line.iter().position(|b| *b == b':').unwrap_or(0);
                 let name = String::from_utf8_lossy(&line[..name_end]).to_string();
-                let ending = if line.ends_with(b"\r\n") { "\r\n" } else { "\n" };
+                let ending = if line.ends_with(b"\r\n") {
+                    "\r\n"
+                } else {
+                    "\n"
+                };
                 out.extend_from_slice(format!("{name}: {}{ending}", kept.join(", ")).as_bytes());
             } else if force {
                 // Nothing left, and the header cannot simply go away: with no
@@ -979,7 +988,11 @@ pub fn drop_request_cookies(head: &[u8], dropped: &[String]) -> Option<Vec<u8>> 
             out.extend_from_slice(line);
             continue;
         };
-        let ending = if line.ends_with(b"\r\n") { "\r\n" } else { "\n" };
+        let ending = if line.ends_with(b"\r\n") {
+            "\r\n"
+        } else {
+            "\n"
+        };
         out.extend_from_slice(&line[..colon]);
         out.extend_from_slice(format!(": {}{ending}", kept.join("; ")).as_bytes());
     }
@@ -1062,7 +1075,11 @@ pub fn apply_response_headers(
     if !(head.ends_with(b"\r\n\r\n") || head.ends_with(b"\n\n")) {
         return edits;
     }
-    let ending = if head.ends_with(b"\r\n") { "\r\n" } else { "\n" };
+    let ending = if head.ends_with(b"\r\n") {
+        "\r\n"
+    } else {
+        "\n"
+    };
     let mut lines = String::new();
     for value in csp {
         lines.push_str("Content-Security-Policy: ");
@@ -1315,18 +1332,14 @@ pub fn head_for_new_body(head: &[u8], body_len: usize, encoding: Option<&str>) -
         if lower.starts_with(b"content-encoding:") {
             if let Some(enc) = encoding {
                 let name = header_name(line);
-                out.extend_from_slice(
-                    format!("{name}: {enc}{}", line_ending(line)).as_bytes(),
-                );
+                out.extend_from_slice(format!("{name}: {enc}{}", line_ending(line)).as_bytes());
             }
             continue;
         }
         if lower.starts_with(b"content-length:") {
             have_length = true;
             let name = header_name(line);
-            out.extend_from_slice(
-                format!("{name}: {body_len}{}", line_ending(line)).as_bytes(),
-            );
+            out.extend_from_slice(format!("{name}: {body_len}{}", line_ending(line)).as_bytes());
             continue;
         }
         out.extend_from_slice(line);
@@ -1625,7 +1638,11 @@ impl GunzipState {
             out.resize(start + DECODE_CHUNK, 0);
             let status = self
                 .dec
-                .decompress(&data[pos..], &mut out[start..], flate2::FlushDecompress::None)
+                .decompress(
+                    &data[pos..],
+                    &mut out[start..],
+                    flate2::FlushDecompress::None,
+                )
                 .map_err(|e| format!("gzip: {e}"))?;
             let read = (self.dec.total_in() - in_before) as usize;
             let written = (self.dec.total_out() - out_before) as usize;
@@ -1700,7 +1717,10 @@ fn gzip_body_start(buf: &[u8]) -> GzipHeader {
 /// Only gzip can be produced here (no brotli), and only gzip is checked for:
 /// a client that did not ask for it gets the body plain.
 pub fn accepts_gzip(request_head: &[u8]) -> bool {
-    let lower: Vec<u8> = request_head.iter().map(|b| b.to_ascii_lowercase()).collect();
+    let lower: Vec<u8> = request_head
+        .iter()
+        .map(|b| b.to_ascii_lowercase())
+        .collect();
     let Some(pos) = find_ci(&lower, b"\r\naccept-encoding:") else {
         return false;
     };
@@ -1806,11 +1826,15 @@ mod tests {
     fn falls_back_to_body_close_then_body_open() {
         let (out, d) = inject_script(b"<html><body>x</body></html>", "/a.js");
         assert_eq!(d, Decision::Injected);
-        assert!(String::from_utf8(out).unwrap().contains("<script src=\"/a.js\""));
+        assert!(String::from_utf8(out)
+            .unwrap()
+            .contains("<script src=\"/a.js\""));
 
         let (out, d) = inject_script(b"<html><body><p>x</p></html>", "/a.js");
         assert_eq!(d, Decision::Injected);
-        assert!(String::from_utf8(out).unwrap().starts_with("<html><body><script"));
+        assert!(String::from_utf8(out)
+            .unwrap()
+            .starts_with("<html><body><script"));
     }
 
     #[test]
@@ -1831,10 +1855,13 @@ mod tests {
     fn a_page_without_a_doctype_is_still_a_page() {
         // news.ycombinator.com ships exactly this shape: no doctype at all and
         // an `<html>` tag that carries attributes, so `"<html>"` never occurs.
-        let body = b"<html lang=\"en\" op=\"news\"><head><title>t</title></head><body>x</body></html>";
+        let body =
+            b"<html lang=\"en\" op=\"news\"><head><title>t</title></head><body>x</body></html>";
         let (out, d) = inject_script(body, "/a.js");
         assert_eq!(d, Decision::Injected);
-        assert!(String::from_utf8(out).unwrap().contains("<script src=\"/a.js\""));
+        assert!(String::from_utf8(out)
+            .unwrap()
+            .contains("<script src=\"/a.js\""));
     }
 
     #[test]
@@ -1849,7 +1876,9 @@ mod tests {
     fn injects_into_doctype_pages() {
         let (out, d) = inject_script(b"<!doctype html><html><head></head></html>", "/a.js");
         assert_eq!(d, Decision::Injected);
-        assert!(String::from_utf8(out).unwrap().contains("<script src=\"/a.js\""));
+        assert!(String::from_utf8(out)
+            .unwrap()
+            .contains("<script src=\"/a.js\""));
     }
 
     #[test]
@@ -2003,7 +2032,10 @@ mod tests {
         let req = b"GET / HTTP/1.1\r\nHost: x\r\nAccept: text/html,application/xhtml+xml\r\nAccept-Encoding: gzip, deflate, br, zstd\r\n\r\n";
         let out = drop_undecodable_encodings(req, false).expect("rewritten");
         let text = String::from_utf8(out).unwrap();
-        assert!(text.contains("Accept-Encoding: gzip, deflate\r\n"), "{text}");
+        assert!(
+            text.contains("Accept-Encoding: gzip, deflate\r\n"),
+            "{text}"
+        );
         assert!(!text.contains("br"), "{text}");
         assert!(!text.contains("zstd"), "{text}");
 
@@ -2122,7 +2154,10 @@ mod tests {
             out.contains("script-src 'unsafe-inline' https://cdn.test https://192.0.2.1"),
             "{out}"
         );
-        assert!(out.contains("style-src 'unsafe-inline' https://192.0.2.1"), "{out}");
+        assert!(
+            out.contains("style-src 'unsafe-inline' https://192.0.2.1"),
+            "{out}"
+        );
     }
 
     #[test]
@@ -2166,7 +2201,10 @@ mod tests {
         // everything else — which is where the lookup's fetch lands.
         let head = b"HTTP/1.1 200 OK\r\nContent-Security-Policy: default-src 'none'; script-src 'nonce-page'; style-src 'unsafe-inline'\r\n\r\n";
         let out = String::from_utf8(csp_with_nonce(head, "abc123", "https://192.0.2.1")).unwrap();
-        assert!(out.contains("default-src 'none' https://192.0.2.1"), "{out}");
+        assert!(
+            out.contains("default-src 'none' https://192.0.2.1"),
+            "{out}"
+        );
         assert!(
             out.contains("script-src 'nonce-page' 'nonce-abc123'"),
             "{out}"
@@ -2236,7 +2274,10 @@ mod tests {
         );
         let escaped = script_tag("/a\"<b>", false, "");
         assert!(!escaped.contains("/a\"<b>"), "{escaped}");
-        assert!(escaped.contains("&quot;") && escaped.contains("&lt;"), "{escaped}");
+        assert!(
+            escaped.contains("&quot;") && escaped.contains("&lt;"),
+            "{escaped}"
+        );
     }
 
     #[test]
@@ -2309,7 +2350,8 @@ mod tests {
 
     #[test]
     fn token_scan_ignores_non_attributes() {
-        let body = b"<html><body><script>var classy = 1; var myid=2;</script><div>t</div></body></html>";
+        let body =
+            b"<html><body><script>var classy = 1; var myid=2;</script><div>t</div></body></html>";
         let (classes, ids) = collect_class_id_tokens(body);
         assert!(classes.is_empty(), "{classes:?}");
         assert!(ids.is_empty(), "{ids:?}");
@@ -2391,7 +2433,8 @@ mod tests {
             use std::io::Write;
             let mut enc =
                 flate2::write::DeflateEncoder::new(&mut deflated, flate2::Compression::fast());
-            enc.write_all(b"<html><head></head></html>").expect("deflate");
+            enc.write_all(b"<html><head></head></html>")
+                .expect("deflate");
             enc.finish().expect("deflate");
         }
         let mut member = vec![0x1f, 0x8b, 8, 0x08, 0, 0, 0, 0, 0, 3];
@@ -2452,11 +2495,16 @@ mod tests {
 
     #[test]
     fn chunked_heads_are_dropped_when_the_body_is_not_compressed() {
-        let head = b"HTTP/1.1 200 OK\r\nContent-Encoding: gzip\r\nTransfer-Encoding: chunked\r\n\r\n";
+        let head =
+            b"HTTP/1.1 200 OK\r\nContent-Encoding: gzip\r\nTransfer-Encoding: chunked\r\n\r\n";
         let out = head_for_chunked_body(head, None);
         let text = String::from_utf8(out).unwrap();
         assert!(!text.to_lowercase().contains("content-encoding"), "{text}");
-        assert_eq!(text.matches("Transfer-Encoding: chunked").count(), 1, "{text}");
+        assert_eq!(
+            text.matches("Transfer-Encoding: chunked").count(),
+            1,
+            "{text}"
+        );
     }
 
     #[test]
@@ -2528,8 +2576,14 @@ mod tests {
             injection_point(b"<html><head><meta charset=\"utf-8\"><lin"),
             None
         );
-        assert_eq!(injection_point(b"<html><head><script>var a = 1;</scr"), None);
-        assert_eq!(injection_point(b"<html><head><meta charset=\"utf-8\"><!-- still open"), None);
+        assert_eq!(
+            injection_point(b"<html><head><script>var a = 1;</scr"),
+            None
+        );
+        assert_eq!(
+            injection_point(b"<html><head><meta charset=\"utf-8\"><!-- still open"),
+            None
+        );
     }
 
     #[test]
@@ -2540,7 +2594,8 @@ mod tests {
         let body = b"<head><script>var m = '<meta charset=utf-8>'; if (a<b) {}</script><meta charset=utf-8><link rel=\"icon\"></head>";
         let pos = injection_point(body).expect("a point");
         assert_eq!(&body[pos..pos + 5], b"<link");
-        let only_script = b"<head><script>document.write('<meta charset=x>')</script><link rel=\"icon\"></head>";
+        let only_script =
+            b"<head><script>document.write('<meta charset=x>')</script><link rel=\"icon\"></head>";
         let pos = injection_point(only_script).expect("a point");
         assert_eq!(&only_script[pos..pos + 7], b"</head>");
     }
@@ -2615,8 +2670,7 @@ mod tests {
     fn apply_response_headers_leaves_an_unframed_head_alone() {
         // No blank line, no place to put a header: nothing is appended.
         let mut head = b"HTTP/1.1 200 OK\r\nX-Drop: 1".to_vec();
-        let edits =
-            apply_response_headers(&mut head, &[], &["worker-src 'none'".to_string()], &[]);
+        let edits = apply_response_headers(&mut head, &[], &["worker-src 'none'".to_string()], &[]);
         assert!(edits.added.is_empty());
         assert_eq!(
             String::from_utf8(head).unwrap(),
@@ -2686,9 +2740,8 @@ mod tests {
     #[test]
     fn drop_set_cookie_headers_takes_whole_lines_off() {
         let head = b"HTTP/1.1 200 OK\r\nSet-Cookie: a=1; Path=/\r\nSet-Cookie: b=2\r\nSet-Cookie: a=9\r\n\r\n";
-        let (out, taken) =
-            drop_set_cookie_headers(head, &["a".to_string(), "missing".to_string()])
-                .expect("one went");
+        let (out, taken) = drop_set_cookie_headers(head, &["a".to_string(), "missing".to_string()])
+            .expect("one went");
         assert_eq!(
             String::from_utf8(out).unwrap(),
             "HTTP/1.1 200 OK\r\nSet-Cookie: b=2\r\n\r\n"

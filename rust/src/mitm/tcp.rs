@@ -239,8 +239,8 @@ pub fn build_syn_ack(pkt: &Packet<'_>, flow: &Flow) -> Option<Vec<u8>> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::packet::{self, ACK, FIN, RST};
     use crate::packet::IpKey;
+    use crate::packet::{self, ACK, FIN, RST};
 
     fn syn_packet(seq: u32) -> Vec<u8> {
         let mut p = Vec::new();
@@ -374,7 +374,6 @@ mod tests {
         let reply = build_syn_ack(&pkt, &flow).expect("syn ack");
         let parsed = Packet::parse(&reply).expect("parse reply");
         assert!(parsed.is_syn && parsed.is_ack, "must be a SYN-ACK");
-        
     }
 
     #[test]

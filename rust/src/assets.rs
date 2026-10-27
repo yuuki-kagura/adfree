@@ -213,7 +213,8 @@ fn parse_meta(body: &str) -> ParsedMeta {
             version = Some(rest.trim().chars().take(40).collect());
         } else if let Some(rest) = t.strip_prefix("! TimeUpdated:") {
             updated = format_iso_date(rest).or(updated);
-        } else if t.len() >= 3 && !t.starts_with('!') && !t.starts_with('#') && !t.starts_with('[') {
+        } else if t.len() >= 3 && !t.starts_with('!') && !t.starts_with('#') && !t.starts_with('[')
+        {
             if hosts_line(t) {
                 hosts_like += 1;
             } else {

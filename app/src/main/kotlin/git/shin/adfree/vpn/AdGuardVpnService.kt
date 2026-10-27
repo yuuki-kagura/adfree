@@ -96,13 +96,13 @@ class AdGuardVpnService : VpnService() {
             pushNetworkType()
             // Private DNS can be switched on while the tunnel is up; the
             // effective DoT policy is part of the core config.
-            container.syncConfigToEngine()
+            container.applyConfig()
         }
 
         override fun onLost(network: Network) {
             activeTransports.remove(network)
             pushNetworkType()
-            container.syncConfigToEngine()
+            container.applyConfig()
         }
     }
 
@@ -127,7 +127,7 @@ class AdGuardVpnService : VpnService() {
      */
     private val privateDnsObserver = object : ContentObserver(Handler(Looper.getMainLooper())) {
         override fun onChange(selfChange: Boolean) {
-            container.syncConfigToEngine()
+            container.applyConfig()
         }
     }
 
@@ -210,16 +210,15 @@ class AdGuardVpnService : VpnService() {
      * hands out a route and a DNS server.
      */
     private fun establishTunnel() {
-        val settings = container.repository.settings.value
-        val dns = container.repository.dnsProviders
-            .value
-            .firstOrNull { it.id == settings.selectedDnsProviderId }
-            ?: return
+        // The core resolves the persisted provider (falling back with a
+        // warning instead of leaving the device without a tunnel).
+        val tunnelDns = container.coreEngine.resolverSnapshot().tunnelDns
+            .ifBlank { "94.140.14.14" }
 
         val builder = Builder()
             .setSession("AdFree Protection")
             .addAddress(TUN_ADDRESS, TUN_PREFIX)
-            .addDnsServer(dns.address.substringBefore('/'))
+            .addDnsServer(tunnelDns)
             .addRoute(ROUTE_IPV4, ROUTE_PREFIX)
             .addRoute("2000::", 3)
             .setMtu(1500)
@@ -282,7 +281,7 @@ class AdGuardVpnService : VpnService() {
         pushNetworkType()
         container.coreEngine.start(fd)
         container.vpnController.onVpnStarted()
-        Log.i(TAG, "TUN up (fd=$fd), dns=${dns.address}")
+        Log.i(TAG, "TUN up (fd=$fd), dns=$tunnelDns")
     }
 
     private fun stopVpn() {

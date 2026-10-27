@@ -168,11 +168,15 @@ impl CidrSet {
     }
 
     pub fn contains_v4(&self, addr: u32) -> bool {
-        self.v4.iter().any(|c| addr & v4_mask(c.prefix) == c.network)
+        self.v4
+            .iter()
+            .any(|c| addr & v4_mask(c.prefix) == c.network)
     }
 
     pub fn contains_v6(&self, addr: u128) -> bool {
-        self.v6.iter().any(|c| addr & v6_mask(c.prefix) == c.network)
+        self.v6
+            .iter()
+            .any(|c| addr & v6_mask(c.prefix) == c.network)
     }
 
     pub fn contains_key(&self, key: IpKey) -> bool {
@@ -235,7 +239,10 @@ mod tests {
                 host: "dns.test".to_string()
             }
         );
-        assert_eq!(t.lookup(&IpKey::V4(0x0808_0808), now + 90_000), IpVerdict::Unknown);
+        assert_eq!(
+            t.lookup(&IpKey::V4(0x0808_0808), now + 90_000),
+            IpVerdict::Unknown
+        );
         assert_eq!(t.lookup(&IpKey::V4(0x0102_0304), now), IpVerdict::Unknown);
     }
 

@@ -285,7 +285,10 @@ mod tests {
         assert_eq!(hs.take_output(), connect_request());
         assert!(!hs.is_done());
 
-        assert_eq!(hs.on_bytes(&success_reply()).expect("reply"), Vec::<u8>::new());
+        assert_eq!(
+            hs.on_bytes(&success_reply()).expect("reply"),
+            Vec::<u8>::new()
+        );
         assert!(hs.is_done());
     }
 
@@ -327,10 +330,7 @@ mod tests {
         assert!(!hs.is_done());
         assert!(hs.on_bytes(&[1, 10, 0]).expect("partial").is_empty());
         assert!(!hs.is_done());
-        assert!(hs
-            .on_bytes(&[0, 1, 0x12, 0x34])
-            .expect("tail")
-            .is_empty());
+        assert!(hs.on_bytes(&[0, 1, 0x12, 0x34]).expect("tail").is_empty());
         assert!(hs.is_done());
     }
 
@@ -342,10 +342,7 @@ mod tests {
 
         let mut reply = success_reply();
         reply.extend_from_slice(b"HTTP/1.1");
-        assert_eq!(
-            hs.on_bytes(&reply).expect("reply"),
-            b"HTTP/1.1".to_vec()
-        );
+        assert_eq!(hs.on_bytes(&reply).expect("reply"), b"HTTP/1.1".to_vec());
         assert!(hs.is_done());
     }
 
@@ -357,7 +354,10 @@ mod tests {
         hs.on_bytes(&[5, 0]).expect("method");
         let request = hs.take_output();
         assert_eq!(&request[..4], &[5, 1, 0, 4]);
-        assert_eq!(&request[4..20], &[0x20, 0x01, 0x0d, 0xb8, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1]);
+        assert_eq!(
+            &request[4..20],
+            &[0x20, 0x01, 0x0d, 0xb8, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1]
+        );
         assert_eq!(&request[20..], &[0x00, 0x50]);
     }
 

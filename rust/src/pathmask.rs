@@ -189,9 +189,7 @@ impl UrlMask {
 /// separator, a query, a fragment or a port. A `*` stays in the host part so
 /// a wildcard host keeps its basic-rule meaning.
 fn split_url_host(rest: &str) -> (&str, &str) {
-    let end = rest
-        .find(['/', '^', '?', '#', ':'])
-        .unwrap_or(rest.len());
+    let end = rest.find(['/', '^', '?', '#', ':']).unwrap_or(rest.len());
     (&rest[..end], &rest[end..])
 }
 
@@ -388,9 +386,9 @@ fn split_targets(prefix: &str) -> Option<Vec<&str>> {
 fn domain_ok(domain: &str) -> bool {
     let body = domain.strip_prefix('~').unwrap_or(domain);
     !body.is_empty()
-        && body.chars().all(|c| {
-            c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-' | '~' | '*')
-        })
+        && body
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-' | '~' | '*'))
 }
 
 /// Undoes the syntax's own escapes (`\[`, `\]`, `\,`, `\\`) in a value, the
@@ -790,9 +788,9 @@ mod tests {
 
     #[test]
     fn bracket_domain_keeps_negations_and_becomes_commas() {
-        let BracketParse::Parsed(bracket) =
-            parse_bracket("[$domain=facebook.com|~video.facebook.com,path=/gaming]#$#body > .AdBox")
-        else {
+        let BracketParse::Parsed(bracket) = parse_bracket(
+            "[$domain=facebook.com|~video.facebook.com,path=/gaming]#$#body > .AdBox",
+        ) else {
             panic!("bracket should parse");
         };
         assert_eq!(
@@ -863,18 +861,12 @@ mod tests {
             .as_ref()
             .expect("path")
             .matches("/checkout/step"));
-        assert!(!targets[1]
-            .path
-            .as_ref()
-            .expect("path")
-            .matches("/other"));
+        assert!(!targets[1].path.as_ref().expect("path").matches("/other"));
     }
 
     #[test]
     fn path_in_domain_regexp_targets_take_the_authority() {
-        let TargetsParse::Targets(targets) =
-            parse_targets(r"/example\.org\/article[0-9]+/")
-        else {
+        let TargetsParse::Targets(targets) = parse_targets(r"/example\.org\/article[0-9]+/") else {
             panic!("a regexp target should parse");
         };
         assert_eq!(targets.len(), 1);
@@ -886,8 +878,14 @@ mod tests {
 
     #[test]
     fn an_unusable_path_in_domain_target_drops_the_whole_position() {
-        assert!(matches!(parse_targets("example.com"), TargetsParse::NotTargets));
-        assert!(matches!(parse_targets("/unterminated"), TargetsParse::Unsupported));
+        assert!(matches!(
+            parse_targets("example.com"),
+            TargetsParse::NotTargets
+        ));
+        assert!(matches!(
+            parse_targets("/unterminated"),
+            TargetsParse::Unsupported
+        ));
         assert!(matches!(
             parse_targets("example.com/path,,other.com"),
             TargetsParse::Unsupported

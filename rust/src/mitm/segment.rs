@@ -76,12 +76,7 @@ pub fn build_ack(pkt: &Packet<'_>, seq: u32, ack: u32, syn: bool) -> Option<Vec<
 }
 
 /// Builds a data segment carrying `payload` for the client.
-pub fn build_data_segment(
-    pkt: &Packet<'_>,
-    seq: u32,
-    ack: u32,
-    payload: &[u8],
-) -> Option<Vec<u8>> {
+pub fn build_data_segment(pkt: &Packet<'_>, seq: u32, ack: u32, payload: &[u8]) -> Option<Vec<u8>> {
     if payload.is_empty() {
         return None;
     }
@@ -226,10 +221,7 @@ mod tests {
         let rp = Packet::parse(&seg).expect("parse reply");
         assert_eq!(rp.l4_payload(), b"hi");
         // A zero TCP checksum is illegal on IPv6.
-        let checksum = u16::from_be_bytes([
-            seg[rp.ip_hdr_len + 16],
-            seg[rp.ip_hdr_len + 17],
-        ]);
+        let checksum = u16::from_be_bytes([seg[rp.ip_hdr_len + 16], seg[rp.ip_hdr_len + 17]]);
         assert_ne!(checksum, 0, "IPv6 TCP checksum must be non-zero");
     }
 }

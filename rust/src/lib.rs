@@ -33,6 +33,7 @@ pub mod packet;
 pub mod pathmask;
 pub mod smart;
 pub mod socks5;
+pub mod state;
 pub mod stats;
 pub mod store;
 pub mod trust;
@@ -41,7 +42,6 @@ pub mod uidmap;
 pub mod upstream;
 pub mod util;
 
-pub use api::EngineConfig;
 pub use engine::core;
 
 /// Version of the core, reported by the UI so field reports are traceable.
@@ -58,7 +58,10 @@ mod tests {
     fn log_buffer_is_wired_up() {
         crate::logbuf::clear();
         crate::logbuf::push("native core online");
-        assert_eq!(crate::logbuf::take(), vec!["native core online".to_string()]);
+        assert_eq!(
+            crate::logbuf::take(),
+            vec!["native core online".to_string()]
+        );
     }
 }
 pub mod mitm;

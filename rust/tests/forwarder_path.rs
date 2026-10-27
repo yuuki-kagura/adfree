@@ -54,19 +54,16 @@ fn fake_tun() -> (RawFd, RawFd) {
     assert_eq!(unsafe { libc::pipe(fds.as_mut_ptr()) }, 0);
     let flags = unsafe { libc::fcntl(fds[0], libc::F_GETFL, 0) };
     assert!(flags >= 0);
-    assert_eq!(unsafe { libc::fcntl(fds[0], libc::F_SETFL, flags | libc::O_NONBLOCK) }, 0);
+    assert_eq!(
+        unsafe { libc::fcntl(fds[0], libc::F_SETFL, flags | libc::O_NONBLOCK) },
+        0
+    );
     (fds[1], fds[0])
 }
 
 /// Reads from a raw fd (the TUN stand-in) without pulling in `std::fs::File`.
 fn read_raw_fd(fd: RawFd, buf: &mut [u8]) -> std::io::Result<usize> {
-    let n = unsafe {
-        libc::read(
-            fd,
-            buf.as_mut_ptr() as *mut libc::c_void,
-            buf.len(),
-        )
-    };
+    let n = unsafe { libc::read(fd, buf.as_mut_ptr() as *mut libc::c_void, buf.len()) };
     if n < 0 {
         return Err(std::io::Error::last_os_error());
     }
@@ -77,11 +74,8 @@ fn read_raw_fd(fd: RawFd, buf: &mut [u8]) -> std::io::Result<usize> {
 fn the_answer_comes_back_out_of_the_tun() {
     let _guard = LOCK.lock().unwrap_or_else(|e| e.into_inner());
 
-    let resolver = UdpSocket::bind(SocketAddr::V4(SocketAddrV4::new(
-        Ipv4Addr::LOCALHOST,
-        0,
-    )))
-    .expect("bind resolver");
+    let resolver = UdpSocket::bind(SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 0)))
+        .expect("bind resolver");
     let resolver_addr = resolver.local_addr().expect("resolver addr");
     resolver
         .set_read_timeout(Some(std::time::Duration::from_secs(2)))
@@ -121,7 +115,10 @@ fn the_answer_comes_back_out_of_the_tun() {
     // 1. the query goes in.
     let packet = query_packet("forwarded.example.com", 0x5555);
     let replies = core.handle_packet(&packet);
-    assert!(replies.is_empty(), "with a live upstream the answer is async");
+    assert!(
+        replies.is_empty(),
+        "with a live upstream the answer is async"
+    );
 
     // 2. the forwarder delivers it.
     let mut buf = [0u8; 4096];
@@ -159,7 +156,10 @@ fn the_answer_comes_back_out_of_the_tun() {
     assert_eq!(parsed.src_port, 53);
     assert_eq!(parsed.dst_port, 40000);
     let answered = dns::parse_query(parsed.l4_payload()).expect("valid DNS answer");
-    assert_eq!(answered.id, 0x5555, "the client's transaction id must survive");
+    assert_eq!(
+        answered.id, 0x5555,
+        "the client's transaction id must survive"
+    );
     assert!(!answered.is_query());
     assert_eq!(answered.qname.as_str(), "forwarded.example.com");
 

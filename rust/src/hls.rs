@@ -434,9 +434,7 @@ pub fn apply_rules(rules: &[HlsRule], base: &str, body: &[u8]) -> Option<(Vec<u8
         let gone = if tag.multi {
             !tag.covered.is_empty() && tag.covered.iter().all(|segment| removed[*segment])
         } else {
-            tag.covered
-                .first()
-                .is_some_and(|segment| removed[*segment])
+            tag.covered.first().is_some_and(|segment| removed[*segment])
         };
         if gone {
             dropped[tag.line] = true;
@@ -453,12 +451,7 @@ pub fn apply_rules(rules: &[HlsRule], base: &str, body: &[u8]) -> Option<(Vec<u8
 }
 
 /// Whether one rule removes one segment.
-fn rule_matches(
-    matcher: &HlsMatcher,
-    url: &str,
-    request: Option<&Request>,
-    tags: &[&str],
-) -> bool {
+fn rule_matches(matcher: &HlsMatcher, url: &str, request: Option<&Request>, tags: &[&str]) -> bool {
     match matcher {
         HlsMatcher::Pattern(engine) => request
             .map(|request| engine.check_network_request(request).should_block())
@@ -523,8 +516,7 @@ fn normalize_path(path: &str) -> String {
         None => (path, ""),
     };
     let absolute = path.starts_with('/');
-    let trailing =
-        path.ends_with('/') || path.ends_with("/.") || path.ends_with("/..");
+    let trailing = path.ends_with('/') || path.ends_with("/.") || path.ends_with("/..");
     let mut parts: Vec<&str> = Vec::new();
     for part in path.split('/') {
         match part {
@@ -598,12 +590,13 @@ preroll.ts
 02.ts
 #EXT-X-ENDLIST
 ";
-        let rules = [
-            rule("preroll"),
-            rule("/#UPLYNK-SEGMENT:.*\\,ad/t"),
-        ];
-        let (out, applied) = apply_rules(&rules, "https://example.org/master.m3u8", playlist.as_bytes())
-            .expect("the rules remove segments");
+        let rules = [rule("preroll"), rule("/#UPLYNK-SEGMENT:.*\\,ad/t")];
+        let (out, applied) = apply_rules(
+            &rules,
+            "https://example.org/master.m3u8",
+            playlist.as_bytes(),
+        )
+        .expect("the rules remove segments");
         assert_eq!(String::from_utf8(out).expect("utf8"), modified);
         assert_eq!(applied, vec![rules[0].text.clone(), rules[1].text.clone()]);
     }
@@ -732,7 +725,10 @@ preroll.ts
         let rules = [rule("||cdn.other.test/x/")];
         let (out, _) = apply_rules(&rules, BASE, playlist.as_bytes()).expect("removal");
         let text = String::from_utf8(out).expect("utf8");
-        assert!(!text.contains("02.ts"), "the protocol-relative URL resolves: {text}");
+        assert!(
+            !text.contains("02.ts"),
+            "the protocol-relative URL resolves: {text}"
+        );
     }
 
     /// The regexp forms: `\/` `\$` `\,` arrive escaped, `i` decides case,
@@ -747,7 +743,9 @@ https://redirector.googlevideo.com/videoplayback?dur=1&source=dclk_video_ads
 #EXTINF:10,
 https://redirector.googlevideo.com/videoplayback?dur=1&source=clean
 ";
-        let rules = [rule("/redirector\\.googlevideo\\.com\\/videoplayback[\\s\\S]*?dclk_video_ads/")];
+        let rules = [rule(
+            "/redirector\\.googlevideo\\.com\\/videoplayback[\\s\\S]*?dclk_video_ads/",
+        )];
         let (out, _) = apply_rules(&rules, BASE, playlist.as_bytes()).expect("removal");
         let text = String::from_utf8(out).expect("utf8");
         assert!(!text.contains("dclk_video_ads"), "{text}");
@@ -897,8 +895,14 @@ ad.ts
         assert_eq!(resolve(base, "./d.ts?v=1"), "https://h.test/a/b/d.ts?v=1");
         assert_eq!(resolve(base, "/x.ts"), "https://h.test/x.ts");
         assert_eq!(resolve(base, "../"), "https://h.test/a/");
-        assert_eq!(resolve(base, "//other.test/x.ts"), "https://other.test/x.ts");
-        assert_eq!(resolve(base, "http://other.test/x.ts"), "http://other.test/x.ts");
+        assert_eq!(
+            resolve(base, "//other.test/x.ts"),
+            "https://other.test/x.ts"
+        );
+        assert_eq!(
+            resolve(base, "http://other.test/x.ts"),
+            "http://other.test/x.ts"
+        );
         assert_eq!(resolve(base, "https://h.test/x.ts"), "https://h.test/x.ts");
     }
 }

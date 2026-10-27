@@ -193,9 +193,7 @@ pub fn system_root_store() -> rustls::RootCertStore {
             };
             for cert in rustls_pemfile::read_all(&mut std::io::Cursor::new(&bytes)).flatten() {
                 if let rustls_pemfile::Item::X509Certificate(der) = cert {
-                    store
-                        .add(CertificateDer::from(der.to_vec()))
-                        .ok();
+                    store.add(CertificateDer::from(der.to_vec())).ok();
                 }
             }
         }
@@ -283,13 +281,12 @@ impl UpstreamTls {
 
     fn build_ech_config(&self, list: &[u8]) -> Option<Arc<ClientConfig>> {
         let ech = rustls::client::EchConfig::new(list.into(), crate::mitm::hpke::SUITES).ok()?;
-        let mut config = ClientConfig::builder_with_provider(Arc::new(
-            rustls::crypto::ring::default_provider(),
-        ))
-        .with_ech(rustls::client::EchMode::Enable(ech))
-        .ok()?
-        .with_root_certificates(self.roots.clone())
-        .with_no_client_auth();
+        let mut config =
+            ClientConfig::builder_with_provider(Arc::new(rustls::crypto::ring::default_provider()))
+                .with_ech(rustls::client::EchMode::Enable(ech))
+                .ok()?
+                .with_root_certificates(self.roots.clone())
+                .with_no_client_auth();
         config.alpn_protocols = vec![ALPN_H1.to_vec()];
         Some(Arc::new(config))
     }
@@ -348,7 +345,10 @@ pub fn new_client(
 }
 
 /// Opens both halves for a flow towards `real_server`.
-pub fn open_session(resolver: &Arc<SniCertResolver>, real_server: &str) -> Result<TlsSession, String> {
+pub fn open_session(
+    resolver: &Arc<SniCertResolver>,
+    real_server: &str,
+) -> Result<TlsSession, String> {
     open_session_with(resolver, real_server, UpstreamTls::system())
 }
 
@@ -489,10 +489,7 @@ pub fn feed_client_wire(
 
 /// Encrypts `plaintext` on `ClientConnection` and returns the wire bytes to send
 /// to the real server.
-pub fn feed_client(
-    connection: &mut ClientConnection,
-    plaintext: &[u8],
-) -> Result<Vec<u8>, String> {
+pub fn feed_client(connection: &mut ClientConnection, plaintext: &[u8]) -> Result<Vec<u8>, String> {
     if plaintext.is_empty() {
         return Ok(Vec::new());
     }
@@ -625,8 +622,9 @@ pub fn first_flight(bytes: &[u8]) -> Flight {
             if handshake[0] != 0x01 {
                 return Flight::NotHello;
             }
-            let len =
-                ((handshake[1] as usize) << 16) | ((handshake[2] as usize) << 8) | handshake[3] as usize;
+            let len = ((handshake[1] as usize) << 16)
+                | ((handshake[2] as usize) << 8)
+                | handshake[3] as usize;
             if let Some(body) = handshake.get(4..4 + len) {
                 let Some(extensions) = client_hello_extensions(body) else {
                     return Flight::Hello {
@@ -660,7 +658,9 @@ fn server_name_of(extensions: &[u8]) -> Option<String> {
     }
     let name_len = u16::from_be_bytes([*list.get(3)?, *list.get(4)?]) as usize;
     let name = list.get(5..5 + name_len)?;
-    std::str::from_utf8(name).ok().map(|n| n.to_ascii_lowercase())
+    std::str::from_utf8(name)
+        .ok()
+        .map(|n| n.to_ascii_lowercase())
 }
 
 /// One extension's body out of a ClientHello extension block.
@@ -742,4 +742,3 @@ pub(crate) fn with_fake_ech(record: &[u8]) -> Option<Vec<u8>> {
     out[3..5].copy_from_slice(&record_len.to_be_bytes());
     Some(out)
 }
-

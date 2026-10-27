@@ -6,9 +6,16 @@ import android.content.pm.ApplicationInfo
 import android.content.pm.PackageManager
 import git.shin.adfree.core.AssetState
 import git.shin.adfree.core.CoreEngine
+import git.shin.adfree.core.DnsProtocol
+import git.shin.adfree.core.DnsRewrite
+import git.shin.adfree.core.DnsState
 import git.shin.adfree.core.DownloadResult
+import git.shin.adfree.core.FilterChoice
 import git.shin.adfree.core.FilterListBinding
+import git.shin.adfree.core.FilterState
 import git.shin.adfree.core.ScriptBinding
+import git.shin.adfree.core.ScriptRecord
+import git.shin.adfree.core.ScriptState
 import git.shin.adfree.core.StatsSnapshot
 import git.shin.adfree.model.AppFirewallRule
 import git.shin.adfree.model.DnsBlockMode
@@ -23,7 +30,6 @@ import git.shin.adfree.model.UserScriptInfo
 import git.shin.adfree.model.UserScriptMetadata
 import git.shin.adfree.model.parseUserScriptMetadata
 import git.shin.adfree.model.parseUserRulesText
-import git.shin.adfree.model.parseDnsEndpoint
 import git.shin.adfree.model.UserScriptStoreItem
 import git.shin.adfree.model.UserScriptStoreSort
 import git.shin.adfree.model.UserScriptStoreState
@@ -43,7 +49,6 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.flow.drop
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.flow.updateAndGet
 import kotlinx.coroutines.launch
@@ -78,6 +83,12 @@ private const val MAX_BACKUP_BYTES = 4 * 1024 * 1024
 class AdGuardRepository(
     private val context: Context,
     private val engine: CoreEngine,
+    /**
+     * Rebuilds the engine from the freshly persisted state. Injected so the
+     * repository does not have to know about Private DNS (the DI container
+     * owns that Android setting).
+     */
+    private val onConfigApplied: () -> Unit = {},
 ) {
     private val scope = CoroutineScope(Dispatchers.Default)
 
@@ -110,8 +121,11 @@ class AdGuardRepository(
     private val _appFirewallRules = MutableStateFlow<List<AppFirewallRule>>(emptyList())
     val appFirewallRules: StateFlow<List<AppFirewallRule>> = _appFirewallRules.asStateFlow()
 
-    private val _dnsProviders = MutableStateFlow<List<DnsProvider>>(defaultDnsProviders())
+    private val _dnsProviders = MutableStateFlow<List<DnsProvider>>(emptyList())
     val dnsProviders: StateFlow<List<DnsProvider>> = _dnsProviders.asStateFlow()
+
+    /** Rewrites persist with the resolver list; editing arrives in the DNS pass. */
+    private var dnsRewrites: List<DnsRewrite> = emptyList()
 
     private val _loadingMessage = MutableStateFlow<String?>(null)
     val loadingMessage: StateFlow<String?> = _loadingMessage.asStateFlow()
@@ -131,20 +145,10 @@ class AdGuardRepository(
         }
     }
 
-    /**
-     * User choices that outlive a restart: which lists are on, custom filters,
-     * scripts. Lazy so a JVM test can build a repository without a real
-     * Android context (SharedPreferences are only reachable through one).
-     */
-    private val prefs by lazy { FilterPreferences(context) }
-
-    /** The protection switches; without this the app came back with all of them off. */
-    private val settingsPrefs by lazy { SettingsPreferences(context) }
-
     private val _userscripts = MutableStateFlow<List<UserScriptInfo>>(emptyList())
     val userscripts: StateFlow<List<UserScriptInfo>> = _userscripts.asStateFlow()
 
-    private val _scriptsMasterEnabled = MutableStateFlow(false)
+    private val _scriptsMasterEnabled = MutableStateFlow(true)
     val scriptsMasterEnabled: StateFlow<Boolean> = _scriptsMasterEnabled.asStateFlow()
 
     private val _scriptStore = MutableStateFlow(UserScriptStoreState())
@@ -169,42 +173,37 @@ class AdGuardRepository(
 
     init {
         startStatsPoller()
-        // Every change to the switches lands on disk, so the VPN and HTTPS
-        // filtering survive a restart instead of coming back off. StateFlow
-        // conflates, so this writes once per real change, not per emission.
-        scope.launch {
-            _settings.drop(1).collect { settingsPrefs.save(it) }
-        }
     }
 
+    // -------------------------------------------------------------- hydration
+
     /**
-     * Restores the switches saved by an earlier run; called once at startup,
-     * before the configuration is pushed down to the core.
+     * Fills every flow from the Rust-owned state, then starts the asynchronous
+     * file refreshes. Called once at startup and again after a restore; Rust
+     * owns the defaults, so nothing here invents one.
      */
-    fun loadSettings() {
-        // Custom resolvers live in the settings blob; merge them before the
-        // selected id is resolved, otherwise a restart would point at a
-        // provider that only exists in memory.
-        val customDns = settingsPrefs.customDnsProviders()
-        if (customDns.isNotEmpty()) {
-            _dnsProviders.update { current ->
-                val ids = current.mapTo(HashSet(current.size)) { it.id }
-                current + customDns.filter { ids.add(it.id) }
-            }
+    fun hydrateState() {
+        val snapshot = engine.stateLoad()
+        _dnsProviders.value = snapshot.dns.providers.map { it.toModel() }
+        dnsRewrites = snapshot.dns.rewrites
+        _scriptsMasterEnabled.value = snapshot.scripts.master
+        // Enumerating installed apps is binder work; keep it off the caller
+        // (the Application's main thread) while the rest hydrates at once.
+        val firewall = snapshot.firewall
+        scope.launch {
+            _appFirewallRules.value = withContext(Dispatchers.IO) { readInstalledApps(firewall) }
         }
-        val stored = settingsPrefs.settings()
-        // Never assign an intermediate default here: the settings collector
-        // writes every emission, and after a backup restore that would race
-        // with (and possibly overwrite) the blob just read from disk.
-        _settings.value = if (stored == null) {
-            ProtectionSettings()
-        } else {
+        var settings = snapshot.protection.toModel()
+        if (settings.isHttpsFilteringEnabled && !engine.isCaTrusted()) {
             // Terminating TLS with a certificate the device no longer trusts
-            // would break every page it touches, so that switch only comes
-            // back when the CA is still installed.
-            val https = stored.isHttpsFilteringEnabled && engine.isCaTrusted()
-            stored.copy(isHttpsFilteringEnabled = https)
+            // would break every page it touches. Persist the correction so the
+            // engine config and the UI agree from the first frame.
+            settings = settings.copy(isHttpsFilteringEnabled = false)
+            engine.saveProtection(settings.toCoreState())
         }
+        _settings.value = settings
+        loadFilterState(snapshot.filters)
+        loadScriptsState(snapshot.scripts)
     }
 
     /**
@@ -212,7 +211,7 @@ class AdGuardRepository(
      * switched back on at launch instead of waiting for the user. A first run
      * has nothing saved and stays off.
      */
-    fun protectionWasOn(): Boolean = settingsPrefs.settings()?.isProtectionActive == true
+    fun protectionWasOn(): Boolean = _settings.value.isProtectionActive
 
     // ------------------------------------------------------ polling the engine
 
@@ -313,76 +312,91 @@ class AdGuardRepository(
 
     // ------------------------------------------------------------- settings
 
+    /**
+     * Single write path: the flow moves, the whole typed record lands in Rust,
+     * and the engine is reconfigured from it. Kotlin keeps no copy of its own.
+     */
+    private fun updateSettings(transform: (ProtectionSettings) -> ProtectionSettings): ProtectionSettings {
+        val next = _settings.updateAndGet(transform)
+        engine.saveProtection(next.toCoreState())
+        onConfigApplied()
+        return next
+    }
+
     fun toggleProtection(enabled: Boolean) {
-        _settings.update { it.copy(isProtectionActive = enabled) }
+        updateSettings { it.copy(isProtectionActive = enabled) }
         if (enabled) engine.markWantsStart() else engine.markWantsStop()
     }
 
-    fun toggleAdBlocking(enabled: Boolean) = _settings.update { it.copy(isAdBlockingEnabled = enabled) }
+    fun toggleAdBlocking(enabled: Boolean) =
+        updateSettings { it.copy(isAdBlockingEnabled = enabled) }
+
     fun toggleTrackingProtection(enabled: Boolean) =
-        _settings.update { it.copy(isTrackingProtectionEnabled = enabled) }
+        updateSettings { it.copy(isTrackingProtectionEnabled = enabled) }
 
     fun toggleDnsProtection(enabled: Boolean) =
-        _settings.update { it.copy(isDnsProtectionEnabled = enabled) }
+        updateSettings { it.copy(isDnsProtectionEnabled = enabled) }
 
     fun toggleSmartFiltering(enabled: Boolean) =
-        _settings.update { it.copy(isSmartFilteringEnabled = enabled) }
+        updateSettings { it.copy(isSmartFilteringEnabled = enabled) }
 
     fun toggleHttpsFiltering(enabled: Boolean) =
-        _settings.update { it.copy(isHttpsFilteringEnabled = enabled) }
+        updateSettings { it.copy(isHttpsFilteringEnabled = enabled) }
 
     fun toggleFullEch(enabled: Boolean) =
-        _settings.update { it.copy(isFullEchEnabled = enabled) }
+        updateSettings { it.copy(isFullEchEnabled = enabled) }
 
     /** Adds a host pattern to the HTTPS allowlist (sites left undecrypted). */
     fun addHttpsSkipHost(raw: String) {
         val host = normalizeHttpsHost(raw) ?: return
-        _settings.update { settings ->
+        updateSettings { settings ->
             if (settings.httpsSkipHosts.any { it.equals(host, ignoreCase = true) }) settings
             else settings.copy(httpsSkipHosts = settings.httpsSkipHosts + host)
         }
     }
 
     fun removeHttpsSkipHost(host: String) {
-        _settings.update { it.copy(httpsSkipHosts = it.httpsSkipHosts - host) }
+        updateSettings { it.copy(httpsSkipHosts = it.httpsSkipHosts - host) }
     }
 
     /** Adds a host to the list used when [setHttpsOnlyMode] is on. */
     fun addHttpsOnlyHost(raw: String) {
         val host = normalizeHttpsHost(raw) ?: return
-        _settings.update { settings ->
+        updateSettings { settings ->
             if (settings.httpsOnlyHosts.any { it.equals(host, ignoreCase = true) }) settings
             else settings.copy(httpsOnlyHosts = settings.httpsOnlyHosts + host)
         }
     }
 
     fun removeHttpsOnlyHost(host: String) {
-        _settings.update { it.copy(httpsOnlyHosts = it.httpsOnlyHosts - host) }
+        updateSettings { it.copy(httpsOnlyHosts = it.httpsOnlyHosts - host) }
     }
 
     /** Inverts HTTPS filtering: decrypt only the hosts in the blocklist. */
     fun setHttpsOnlyMode(enabled: Boolean) {
-        _settings.update { it.copy(httpsOnlyMode = enabled) }
+        updateSettings { it.copy(httpsOnlyMode = enabled) }
     }
 
     /** Routing mode: outbound SOCKS5 for new TCP flows, or direct. */
     fun updateProxy(proxy: ProxySettings) {
-        _settings.update { it.copy(proxy = proxy) }
+        updateSettings { it.copy(proxy = proxy) }
     }
 
-    fun toggleFirewall(enabled: Boolean) = _settings.update { it.copy(isFirewallEnabled = enabled) }
+    fun toggleFirewall(enabled: Boolean) =
+        updateSettings { it.copy(isFirewallEnabled = enabled) }
+
     fun toggleEcoBatteryMode(enabled: Boolean) =
-        _settings.update { it.copy(isEcoBatteryModeEnabled = enabled) }
+        updateSettings { it.copy(isEcoBatteryModeEnabled = enabled) }
 
     fun toggleStealthMode(enabled: Boolean) =
-        _settings.update { it.copy(isStealthModeEnabled = enabled) }
+        updateSettings { it.copy(isStealthModeEnabled = enabled) }
 
     fun updateStealthSetting(
         stripUtm: Boolean? = null,
         blockWebRtc: Boolean? = null,
         disguiseUa: Boolean? = null,
         blockCookies: Boolean? = null,
-    ) = _settings.update { cur ->
+    ) = updateSettings { cur ->
         cur.copy(
             stripUtmTracking = stripUtm ?: cur.stripUtmTracking,
             blockWebRtcLeaks = blockWebRtc ?: cur.blockWebRtcLeaks,
@@ -391,7 +405,7 @@ class AdGuardRepository(
         )
     }
 
-    fun toggleBlockQuic(enabled: Boolean) = _settings.update { it.copy(blockQuic = enabled) }
+    fun toggleBlockQuic(enabled: Boolean) = updateSettings { it.copy(blockQuic = enabled) }
 
     /**
      * One switch covers both encrypted-DNS transports, matching the settings
@@ -399,58 +413,78 @@ class AdGuardRepository(
      * filter through the other port.
      */
     fun toggleBlockDoh(enabled: Boolean) =
-        _settings.update { it.copy(blockDoh = enabled, blockDot = enabled) }
+        updateSettings { it.copy(blockDoh = enabled, blockDot = enabled) }
 
     /** Refresh interval for subscriptions, in hours; 0 turns it off. */
     fun setFilterAutoUpdate(hours: Int) {
         val clamped = hours.coerceIn(0, 168)
-        _settings.update { it.copy(filterAutoUpdateHours = clamped) }
+        updateSettings { it.copy(filterAutoUpdateHours = clamped) }
         showTransientStatus(
             if (clamped == 0) "Đã tắt tự động cập nhật bộ lọc"
             else "Tự động cập nhật bộ lọc mỗi $clamped giờ",
         )
     }
 
-    fun toggleLogAllowed(enabled: Boolean) = _settings.update { it.copy(logAllowedRequests = enabled) }
-    fun setBlockMode(mode: DnsBlockMode) = _settings.update { it.copy(blockMode = mode) }
+    fun toggleLogAllowed(enabled: Boolean) =
+        updateSettings { it.copy(logAllowedRequests = enabled) }
+
+    fun setBlockMode(mode: DnsBlockMode) = updateSettings { it.copy(blockMode = mode) }
 
     fun selectDnsProvider(id: String) {
-        val provider = _dnsProviders.value.firstOrNull { it.id == id } ?: return
-        val endpoint = parseDnsEndpoint(provider.address)
-        if (endpoint == null) {
-            showTransientStatus("Resolver chỉ hỗ trợ DNS UDP dạng IP (ví dụ 1.1.1.1)")
-            return
-        }
-        _settings.update { it.copy(selectedDnsProviderId = id) }
-        engine.setResolver(endpoint.host, endpoint.port)
+        if (_dnsProviders.value.none { it.id == id }) return
+        updateSettings { it.copy(selectedDnsProviderId = id) }
     }
 
     /** Adds/selects a resolver and returns the line the Settings snackbar shows. */
     fun addCustomDnsProvider(name: String, address: String): String {
         val trimmed = address.trim()
         if (trimmed.isEmpty()) return "Địa chỉ DNS trống"
-        val endpoint = parseDnsEndpoint(trimmed)
-            ?: return "Chỉ hỗ trợ DNS UDP dạng IP (ví dụ 1.1.1.1 hoặc 1.1.1.1:53)"
-        val existing = _dnsProviders.value.firstOrNull { it.address == trimmed }
+        // The forwarder sends plain UDP; DoH/DoT need another transport and
+        // arrive with their own editor. The validator is the core's.
+        val validation = engine.validateDnsProvider(DnsProtocol.UDP, trimmed)
+        if (!validation.valid) {
+            return when (validation.error) {
+                git.shin.adfree.core.DnsError.EMPTY -> "Địa chỉ DNS trống"
+                git.shin.adfree.core.DnsError.INVALID_PORT -> "Cổng DNS không hợp lệ"
+                git.shin.adfree.core.DnsError.UNSUPPORTED_SCHEME ->
+                    "Chỉ hỗ trợ DNS UDP dạng IP (ví dụ 1.1.1.1 hoặc 1.1.1.1:53)"
+                git.shin.adfree.core.DnsError.IP_V6_UDP_UNSUPPORTED ->
+                    "DNS UDP hiện chỉ hỗ trợ địa chỉ IPv4"
+                else -> "Chỉ hỗ trợ DNS UDP dạng IP (ví dụ 1.1.1.1 hoặc 1.1.1.1:53)"
+            }
+        }
+        val host = validation.address
+        val port = validation.port.toInt()
+        val existing = _dnsProviders.value.firstOrNull {
+            it.address == host && it.port == port && it.type == ProtocolType.DNS_UDP
+        }
         if (existing != null) {
             selectDnsProvider(existing.id)
             return "Đã chọn ${existing.name}"
         }
         val provider = DnsProvider(
             id = "custom_" + System.currentTimeMillis(),
-            name = name.trim().ifBlank { trimmed },
-            address = trimmed,
-            // The forwarder sends plain UDP; DoH/DoT need a different
-            // transport and are rejected above rather than silently ignored.
+            name = name.trim().ifBlank { host },
+            address = host,
             type = ProtocolType.DNS_UDP,
             description = "Tùy chỉnh",
             isCustom = true,
+            port = port,
         )
         _dnsProviders.update { it + provider }
-        settingsPrefs.saveCustomDnsProviders(_dnsProviders.value.filter { it.isCustom })
-        engine.setResolver(endpoint.host, endpoint.port)
-        _settings.update { it.copy(selectedDnsProviderId = provider.id) }
+        persistDnsState()
+        updateSettings { it.copy(selectedDnsProviderId = provider.id) }
         return "Đã thêm DNS tùy chỉnh: ${provider.name}"
+    }
+
+    /** Writes the resolver list (built-ins are re-merged by Rust on load). */
+    private fun persistDnsState() {
+        engine.saveDns(
+            DnsState(
+                providers = _dnsProviders.value.map { it.toCoreRecord() },
+                rewrites = dnsRewrites,
+            )
+        )
     }
 
     // ----------------------------------------------------------- filter lists
@@ -462,12 +496,14 @@ class AdGuardRepository(
      * Only enabled lists cost a download: a fresh install fetches the four
      * defaults and nothing else.
      */
-    fun loadFilterState() {
+    fun loadFilterState(saved: FilterState = engine.stateLoad().filters) {
         scope.launch {
-            val savedIds = prefs.enabledCatalogIds()
+            val savedIds = saved.enabledCatalogIds.toSet()
             val lists = mutableListOf<FilterList>()
             for (entry in FilterCatalog.filters) {
-                val enabled = savedIds?.contains(entry.id) ?: entry.defaultEnabled
+                // Never chosen: the catalogue defaults decide. Once the user
+                // saved a choice, the saved set wins even when it is empty.
+                val enabled = if (saved.catalogConfigured) savedIds.contains(entry.id) else entry.defaultEnabled
                 lists += FilterList(
                     id = entry.listId ?: "cat_${entry.id}",
                     name = entry.name,
@@ -492,7 +528,7 @@ class AdGuardRepository(
                     trusted = true,
                 )
             }
-            for (stored in prefs.customFilters()) {
+            for (stored in saved.custom) {
                 lists += FilterList(
                     id = stored.id,
                     name = stored.name,
@@ -505,13 +541,13 @@ class AdGuardRepository(
                     subscriptionUrl = stored.url.ifBlank { null },
                     lastUpdatedText = "Chưa tải",
                     groupId = "custom",
-                    format = stored.format,
-                    homepage = stored.homepage,
+                    format = stored.format.ifBlank { "standard" },
+                    homepage = stored.homepage.ifBlank { null },
                     isUserAdded = true,
                     trusted = stored.trusted,
                 )
             }
-            val rules = prefs.userRules() ?: starterRules
+            val rules = if (saved.userRulesConfigured) saved.userRules else starterRules
             lists += FilterList(
                 id = BUILTIN_CUSTOM,
                 name = "Quy tắc của bạn",
@@ -560,8 +596,7 @@ class AdGuardRepository(
     private suspend fun autoUpdateStaleLists() {
         lastAutoUpdateCheckMs = System.currentTimeMillis()
         if (autoUpdateRunning) return
-        val hours = settingsPrefs.settings()?.filterAutoUpdateHours
-            ?: _settings.value.filterAutoUpdateHours
+        val hours = _settings.value.filterAutoUpdateHours
         if (hours <= 0) return
         val now = System.currentTimeMillis()
         val stale = _filterLists.value.filter {
@@ -916,10 +951,12 @@ class AdGuardRepository(
      * desktop port and restored without any Android-specific container.
      */
     suspend fun exportBackup(uriText: String): BackupResult {
-        val payload = BackupCodec.encode(
-            settings = settingsPrefs.backupJson(),
-            filters = prefs.backupJson(),
-        )
+        // Rust serializes the whole typed state (settings, firewall, DNS,
+        // filters, scripts); Kotlin only moves the bytes to the SAF document.
+        val payload = engine.backupExport()
+        if (payload.isBlank()) {
+            return BackupResult(false, "Không đọc được trạng thái để sao lưu")
+        }
         val ok = withContext(Dispatchers.IO) {
             runCatching {
                 val uri = android.net.Uri.parse(uriText)
@@ -955,35 +992,36 @@ class AdGuardRepository(
             return BackupResult(false, "Tệp quá lớn để là bản sao lưu AdFree")
         }
         val raw = String(bytes, Charsets.UTF_8)
-        val payload = BackupCodec.decode(raw)
-            ?: return BackupResult(false, "Tệp không phải bản sao lưu AdFree hợp lệ")
-
-        val previousSettings = settingsPrefs.backupJson()
-        if (!settingsPrefs.restoreBackup(payload.settings)) {
-            return BackupResult(false, "Không lưu được cài đặt; bản sao lưu chưa được áp dụng")
-        }
-        if (!prefs.restoreBackup(payload.filters)) {
-            if (previousSettings != null) {
-                settingsPrefs.restoreBackup(previousSettings)
-            } else {
-                settingsPrefs.restoreBackup(JSONObject())
-            }
-            return BackupResult(false, "Không lưu được bộ lọc; đã giữ cài đặt cũ")
+        // Rust replaces every collection in one transaction, so a rejected
+        // file leaves the current state untouched.
+        val outcome = engine.backupImport(raw)
+        if (!outcome.ok) {
+            return BackupResult(false, backupErrorMessage(outcome.error))
         }
         reloadAfterRestore()
         return BackupResult(
             true,
-            "Đã khôi phục cài đặt và bộ lọc; bật lại VPN nếu cần áp dụng bộ lọc app",
+            "Đã khôi phục cài đặt, firewall, DNS, bộ lọc và tiện ích; bật lại VPN nếu cần",
         )
     }
 
-    /** Rebuilds every in-memory flow after a restore wrote new blobs. */
+    private fun backupErrorMessage(error: git.shin.adfree.core.BackupError): String =
+        when (error) {
+            git.shin.adfree.core.BackupError.NOT_BACKUP ->
+                "Tệp không phải bản sao lưu AdFree hợp lệ"
+            git.shin.adfree.core.BackupError.UNSUPPORTED_VERSION ->
+                "Bản sao lưu thuộc phiên bản AdFree khác"
+            git.shin.adfree.core.BackupError.MALFORMED ->
+                "Tệp sao lưu bị hỏng hoặc thiếu dữ liệu"
+            git.shin.adfree.core.BackupError.STORE_UNAVAILABLE ->
+                "Không truy cập được dữ liệu ứng dụng"
+            else -> "Không khôi phục được bản sao lưu"
+        }
+
+    /** Rebuilds every in-memory flow after a restore replaced the state. */
     private fun reloadAfterRestore() {
-        _dnsProviders.value = defaultDnsProviders()
-        loadSettings()
-        loadFilterState()
-        loadInstalledApps()
-        loadScriptsState()
+        hydrateState()
+        onConfigApplied()
     }
 
     /** Removes a user-added list (catalogue entries are toggled off, not deleted). */
@@ -1066,23 +1104,30 @@ class AdGuardRepository(
     /** Persists the user's choices: enabled catalogue ids, custom lists, user rules. */
     private fun saveFilterChoices() {
         val lists = _filterLists.value
-        prefs.saveEnabledCatalogIds(
-            lists.filter { it.catalogId != null && it.isEnabled }.mapNotNull { it.catalogId }.toSet()
+        engine.saveFilters(
+            FilterState(
+                // Saving is a user action: from now on the saved set wins,
+                // even when it is empty.
+                catalogConfigured = true,
+                enabledCatalogIds = lists
+                    .filter { it.catalogId != null && it.isEnabled }
+                    .mapNotNull { it.catalogId },
+                trustedIds = lists.filter { it.isUserAdded && it.trusted }.map { it.id },
+                custom = lists.filter { it.isUserAdded }.map {
+                    FilterChoice(
+                        id = it.id,
+                        name = it.name,
+                        url = it.subscriptionUrl.orEmpty(),
+                        format = it.format,
+                        homepage = it.homepage.orEmpty(),
+                        enabled = it.isEnabled,
+                        trusted = it.trusted,
+                    )
+                },
+                userRules = lists.firstOrNull { it.isCustom }?.customRules.orEmpty(),
+                userRulesConfigured = true,
+            )
         )
-        prefs.saveCustomFilters(
-            lists.filter { it.isUserAdded }.map {
-                StoredFilter(
-                    id = it.id,
-                    name = it.name,
-                    url = it.subscriptionUrl.orEmpty(),
-                    format = it.format,
-                    enabled = it.isEnabled,
-                    homepage = it.homepage,
-                    trusted = it.trusted,
-                )
-            }
-        )
-        lists.firstOrNull { it.isCustom }?.let { prefs.saveUserRules(it.customRules) }
     }
 
     fun updateAllCustomRules(newRules: List<String>) {
@@ -1224,20 +1269,11 @@ class AdGuardRepository(
 
     // ------------------------------------------------------------ app firewall
 
-    /** Read installed apps through PackageManager: the firewall is real data now. */
-    fun loadInstalledApps() {
-        scope.launch {
-            val apps = withContext(Dispatchers.IO) { readInstalledApps() }
-            _appFirewallRules.value = apps
-            // The persisted exclusions must reach the tunnel before the user
-            // opens the Apps tab; otherwise a restart silently re-enables
-            // filtering for every excluded app.
-            pushAppRouting()
-        }
-    }
-
-    private fun readInstalledApps(): List<AppFirewallRule> {
-        val overrides = settingsPrefs.appFirewall().associateBy { it.packageName }
+    /** Read installed apps through PackageManager and overlay the persisted rows. */
+    private fun readInstalledApps(
+        overrides: List<git.shin.adfree.core.AppFirewallRule>,
+    ): List<AppFirewallRule> {
+        val saved = overrides.associateBy { it.packageName }
         val pm = context.packageManager
         val installed = if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) {
             pm.getInstalledApplications(PackageManager.ApplicationInfoFlags.of(0L))
@@ -1249,17 +1285,16 @@ class AdGuardRepository(
             .asSequence()
             .filter { (it.flags and ApplicationInfo.FLAG_SYSTEM) == 0 || it.flags and ApplicationInfo.FLAG_UPDATED_SYSTEM_APP != 0 }
             .map { info ->
-                val saved = overrides[info.packageName]
-                AppFirewallRule(
-                    packageName = info.packageName,
-                    appName = pm.getApplicationLabel(info).toString(),
-                    isCellularAllowed = saved?.cellular ?: true,
-                    isWifiAllowed = saved?.wifi ?: true,
-                    isFilterRouted = saved?.filtered ?: true,
-                    isHttpsFiltered = saved?.https ?: true,
-                    blockWhenScreenOff = saved?.screenOff ?: false,
-                    category = appCategory(info),
-                )
+                val override = saved[info.packageName]
+                if (override != null) {
+                    override.toModel(pm.getApplicationLabel(info).toString(), appCategory(info))
+                } else {
+                    AppFirewallRule(
+                        packageName = info.packageName,
+                        appName = pm.getApplicationLabel(info).toString(),
+                        category = appCategory(info),
+                    )
+                }
             }
             .sortedBy { it.appName.lowercase() }
             .take(MAX_APPS_SHOWN)
@@ -1316,26 +1351,15 @@ class AdGuardRepository(
 
     /**
      * Persists only the non-default choices. An absent package is all-default
-     * when the list is rebuilt after a restart, so the blob stays small.
+     * when the list is rebuilt after a restart, so the stored rows stay small.
      */
     private fun saveAppFirewallRules() {
-        val overrides = _appFirewallRules.value.mapNotNull { app ->
-            if (app.isCellularAllowed && app.isWifiAllowed &&
-                app.isFilterRouted && app.isHttpsFiltered && !app.blockWhenScreenOff
-            ) {
-                null
-            } else {
-                StoredAppFirewall(
-                    packageName = app.packageName,
-                    cellular = app.isCellularAllowed,
-                    wifi = app.isWifiAllowed,
-                    filtered = app.isFilterRouted,
-                    screenOff = app.blockWhenScreenOff,
-                    https = app.isHttpsFiltered,
-                )
-            }
-        }
-        settingsPrefs.saveAppFirewall(overrides)
+        val overrides = _appFirewallRules.value
+            .filter { it.hasOverrides() }
+            .map { it.toCoreRule() }
+        engine.saveFirewall(overrides)
+        // Policy, HTTPS exclusions and tunnel exclusions all derive from this.
+        onConfigApplied()
     }
 
     /**
@@ -1343,9 +1367,9 @@ class AdGuardRepository(
      * user added. Bodies live under `filesDir/scripts/`, so nothing is ever
      * re-downloaded on a restart.
      */
-    fun loadScriptsState() {
+    fun loadScriptsState(saved: ScriptState = engine.stateLoad().scripts) {
         scope.launch {
-            val stored = prefs.scripts()
+            val stored = saved.scripts
             val scripts = mutableListOf<UserScriptInfo>()
             // The shipped scripts live in the store like downloaded ones; this
             // refreshes the body when an app update changes it.
@@ -1382,7 +1406,7 @@ class AdGuardRepository(
                 )
             }
             _userscripts.value = scripts
-            _scriptsMasterEnabled.value = prefs.scriptsMasterEnabled()
+            _scriptsMasterEnabled.value = saved.master
             pushScriptsToCore()
         }
     }
@@ -1400,7 +1424,7 @@ class AdGuardRepository(
 
     fun toggleScriptsMaster(enabled: Boolean) {
         _scriptsMasterEnabled.value = enabled
-        prefs.saveScriptsMasterEnabled(enabled)
+        saveScripts()
         pushScriptsToCore()
     }
 
@@ -1803,10 +1827,19 @@ class AdGuardRepository(
     }
 
     private fun saveScripts() {
-        prefs.saveScripts(
-            _userscripts.value.map {
-                StoredScript(it.id, it.name, it.description, it.url, it.isEnabled)
-            }
+        engine.saveScripts(
+            ScriptState(
+                master = _scriptsMasterEnabled.value,
+                scripts = _userscripts.value.map {
+                    ScriptRecord(
+                        id = it.id,
+                        name = it.name,
+                        description = it.description,
+                        url = it.url,
+                        enabled = it.isEnabled,
+                    )
+                },
+            )
         )
     }
 
@@ -1823,35 +1856,8 @@ class AdGuardRepository(
         engine.setScripts(bindings, _scriptsMasterEnabled.value)
     }
 
-    /**
-     * Push the excluded-app list to the core. VpnService re-reads it when
-     * it builds the tunnel next time.
-     */
-    fun pushAppRouting() {
-        val rules = _appFirewallRules.value
-        routedExclusions.clear()
-        routedExclusions += rules
-            .filterNot { it.isFilterRouted }
-            .map { it.packageName }
-        // Per-app HTTPS filtering is read at connection time, so this applies
-        // to new flows without rebuilding the tunnel.
-        engine.setHttpsSkipApps(
-            rules.filterNot { it.isHttpsFiltered }.map { it.packageName }
-        )
-        // The network/screen-off restrictions are the firewall module: with it
-        // off the core gets empty lists, which it already treats as "no
-        // restrictions". Tunnel routing and HTTPS filtering are separate
-        // switches and keep working.
-        val restricted = if (_settings.value.isFirewallEnabled) rules else emptyList<AppFirewallRule>()
-        engine.setAppNetworkPolicy(
-            cellularBlocked = restricted.filterNot { it.isCellularAllowed }.map { it.packageName },
-            wifiBlocked = restricted.filterNot { it.isWifiAllowed }.map { it.packageName },
-            screenOffBlocked = restricted.filter { it.blockWhenScreenOff }.map { it.packageName },
-        )
-    }
-
     /** Apps kept out of the tunnel (read by VpnService during establish). */
-    fun excludedPackages(): List<String> = routedExclusions
+    fun excludedPackages(): List<String> = engine.excludedPackages()
 
     fun dismissLoading() {
         _loadingMessage.value = null
@@ -1867,9 +1873,6 @@ class AdGuardRepository(
         private const val MAX_LOG_ROWS = 2_000
         private const val MAX_APPS_SHOWN = 250
         private const val BUILTIN_CUSTOM = "builtin_custom"
-
-        /** Apps excluded from the tunnel (set before establish). */
-        private val routedExclusions: MutableList<String> = mutableListOf()
 
         /** A few starter rules so the user sees how they work. */
         private val starterRules = listOf(
@@ -1905,14 +1908,6 @@ class AdGuardRepository(
                 else -> 6
             }
         }
-
-        private fun defaultDnsProviders() = listOf(
-            DnsProvider("adguard_default", "AdGuard DNS", "94.140.14.14", ProtocolType.DNS_UDP, "Chặn quảng cáo & tracker mặc định của AdGuard", pingMs = 12),
-            DnsProvider("adguard_family", "AdGuard Family", "94.140.15.16", ProtocolType.DNS_UDP, "Chặn nội dung người lớn, bật SafeSearch", pingMs = 14),
-            DnsProvider("cloudflare", "Cloudflare 1.1.1.1", "1.1.1.1", ProtocolType.DNS_UDP, "Nhanh, riêng tư, không ghi log", pingMs = 8),
-            DnsProvider("quad9", "Quad9", "9.9.9.9", ProtocolType.DNS_UDP, "Chặn domain độc hại theo dữ liệu IBM X-Force", pingMs = 16),
-            DnsProvider("google", "Google DNS", "8.8.8.8", ProtocolType.DNS_UDP, "Resolver toàn cầu", pingMs = 11),
-        )
     }
 }
 

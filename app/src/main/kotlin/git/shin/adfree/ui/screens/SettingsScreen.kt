@@ -73,7 +73,6 @@ import git.shin.adfree.model.ProtectionSettings
 import git.shin.adfree.model.caNotAfterMs
 import git.shin.adfree.model.filterAutoUpdateLabel
 import git.shin.adfree.model.normalizeHttpsHost
-import git.shin.adfree.model.parseDnsEndpoint
 import git.shin.adfree.ui.AdGuardTab
 import git.shin.adfree.ui.AdGuardIntent
 import git.shin.adfree.ui.AdGuardViewModel
@@ -925,7 +924,6 @@ private fun DnsProviderDialog(
 ) {
     var name by remember { mutableStateOf("") }
     var address by remember { mutableStateOf("") }
-    var error by remember { mutableStateOf<String?>(null) }
 
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -985,28 +983,17 @@ private fun DnsProviderDialog(
                 Spacer(modifier = Modifier.height(6.dp))
                 OutlinedTextField(
                     value = address,
-                    onValueChange = {
-                        address = it
-                        error = null
-                    },
+                    onValueChange = { address = it },
                     label = { Text("Địa chỉ IPv4/IPv6", fontSize = 11.sp) },
                     placeholder = { Text("1.1.1.1 hoặc 1.1.1.1:53", fontSize = 11.sp) },
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth(),
                 )
-                error?.let {
-                    Spacer(modifier = Modifier.height(4.dp))
-                    Text(it, fontSize = 11.sp, color = AdGuardRedBlocked)
-                }
                 Spacer(modifier = Modifier.height(8.dp))
                 Button(
-                    onClick = {
-                        if (parseDnsEndpoint(address) == null) {
-                            error = "Chỉ hỗ trợ DNS UDP dạng IP (ví dụ 1.1.1.1)"
-                        } else {
-                            onAdd(name, address)
-                        }
-                    },
+                    // The core validates the address; a rejection is shown
+                    // in the snackbar by the repository.
+                    onClick = { onAdd(name, address) },
                     enabled = address.isNotBlank(),
                     modifier = Modifier.fillMaxWidth(),
                 ) {

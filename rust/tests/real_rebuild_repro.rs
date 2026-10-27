@@ -7,9 +7,19 @@ use std::time::Instant;
 
 fn lists(dir: &str) -> Vec<FilterListInfo> {
     let specs = [
-        ("builtin_dns", "AdGuard DNS filter", ListFormat::Standard, 0u8),
+        (
+            "builtin_dns",
+            "AdGuard DNS filter",
+            ListFormat::Standard,
+            0u8,
+        ),
         ("builtin_oisd", "OISD Big", ListFormat::Hosts, 0),
-        ("builtin_stevenblack", "StevenBlack hosts", ListFormat::Hosts, 5),
+        (
+            "builtin_stevenblack",
+            "StevenBlack hosts",
+            ListFormat::Hosts,
+            5,
+        ),
     ];
     specs
         .iter()
@@ -42,7 +52,10 @@ fn rebuild_with_real_lists_reports_rules() {
     engine.rebuild(&specs, &[]);
     let elapsed = started.elapsed();
     println!("build took {elapsed:?}");
-    assert!(engine.active_rules() > 100_000, "expected a large rule count");
+    assert!(
+        engine.active_rules() > 100_000,
+        "expected a large rule count"
+    );
     assert!(engine.memory_bytes() > 1_000_000);
     // And the engine must actually block — including with all three lists
     // loaded, which is what shipped on the device.

@@ -19,7 +19,8 @@ fn blocked(engine: &Engine, host: &str) -> bool {
 
 #[test]
 fn real_adguard_dns_list_blocks_known_hosts() {
-    let path = std::env::var("ADFREE_LIST").unwrap_or_else(|_| "/tmp/opencode/lists/dns.txt".into());
+    let path =
+        std::env::var("ADFREE_LIST").unwrap_or_else(|_| "/tmp/opencode/lists/dns.txt".into());
     if !std::path::Path::new(&path).exists() {
         eprintln!("skipped: no list at {path}");
         return;
@@ -43,12 +44,30 @@ fn real_adguard_dns_list_blocks_known_hosts() {
         report.push_str(&format!("{host}: {}\n", blocked(&engine, host)));
     }
     println!("{report}");
-    assert!(blocked(&engine, "doubleclick.net"), "doubleclick.net must be blocked");
+    assert!(
+        blocked(&engine, "doubleclick.net"),
+        "doubleclick.net must be blocked"
+    );
     // `crashlytics.com` is not in the AdGuard DNS list (OISD covers it instead),
     // and `graph.facebook.com` must stay reachable for facebook.com to work.
-    assert!(blocked(&engine, "app-measurement.com"), "app-measurement.com must be blocked");
-    assert!(blocked(&engine, "sdk.appsflyer.com"), "sdk.appsflyer.com must be blocked");
-    assert!(blocked(&engine, "adservice.google.com"), "adservice.google.com must be blocked");
-    assert!(blocked(&engine, "adservice.google.com"), "adservice.google.com must be blocked");
-    assert!(!blocked(&engine, "api.github.com"), "api.github.com must be allowed");
+    assert!(
+        blocked(&engine, "app-measurement.com"),
+        "app-measurement.com must be blocked"
+    );
+    assert!(
+        blocked(&engine, "sdk.appsflyer.com"),
+        "sdk.appsflyer.com must be blocked"
+    );
+    assert!(
+        blocked(&engine, "adservice.google.com"),
+        "adservice.google.com must be blocked"
+    );
+    assert!(
+        blocked(&engine, "adservice.google.com"),
+        "adservice.google.com must be blocked"
+    );
+    assert!(
+        !blocked(&engine, "api.github.com"),
+        "api.github.com must be allowed"
+    );
 }

@@ -34,7 +34,7 @@ use base64::engine::general_purpose::STANDARD as BASE64;
 use base64::Engine as _;
 use std::collections::{BTreeSet, HashMap, HashSet, VecDeque};
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicU8, AtomicU64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicU64, AtomicU8, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, OnceLock, RwLock};
 
 /// Format of a subscription file.
@@ -166,8 +166,7 @@ enum RedirectBody {
 /// read.
 const GOOGLESYNDICATION_ADSBYGOOGLE_JS: &str =
     include_str!("../assets/redirects/googlesyndication-adsbygoogle.js");
-const GOOGLETAGSERVICES_GPT_JS: &str =
-    include_str!("../assets/redirects/googletagservices-gpt.js");
+const GOOGLETAGSERVICES_GPT_JS: &str = include_str!("../assets/redirects/googletagservices-gpt.js");
 const AMAZON_APSTAG_JS: &str = include_str!("../assets/redirects/amazon-apstag.js");
 const GOOGLE_IMA3_JS: &str = include_str!("../assets/redirects/google-ima3.js");
 const GOOGLE_ANALYTICS_JS: &str = include_str!("../assets/redirects/google-analytics.js");
@@ -441,11 +440,7 @@ impl RedirectScan {
                 else {
                     continue;
                 };
-                let name = value
-                    .split([',', ' ', '\t'])
-                    .next()
-                    .unwrap_or("")
-                    .trim();
+                let name = value.split([',', ' ', '\t']).next().unwrap_or("").trim();
                 if !name.is_empty() && !known.contains(name) {
                     self.missing.insert(name.to_string());
                 }
@@ -1466,7 +1461,7 @@ impl FilterEngine {
         std::thread::Builder::new()
             .name("adfree-filter-build".into())
             .spawn(move || {
-                        engine.rebuild(&lists, &user_rules);
+                engine.rebuild(&lists, &user_rules);
             })
             .ok();
     }
@@ -1508,11 +1503,7 @@ impl FilterEngine {
     /// Cosmetic rules that apply to `url` for a flow attributed to `apps`:
     /// the same answer as [`Self::cosmetic_resources`], plus the rules a
     /// `[$app=…]` bracket narrows to those applications.
-    pub fn cosmetic_resources_with_apps(
-        &self,
-        url: &str,
-        apps: &[String],
-    ) -> CosmeticResources {
+    pub fn cosmetic_resources_with_apps(&self, url: &str, apps: &[String]) -> CosmeticResources {
         self.cosmetic_resources_impl(url, true, apps)
     }
 
@@ -1929,15 +1920,12 @@ impl FilterEngine {
             return UrlVerdict::default();
         };
         let result = compiled.engine.check_network_request(&request);
-        let verdict = if let Some(app_rules) = compiled
-            .app_rules
-            .as_ref()
-            .filter(|_| !apps.is_empty())
-        {
-            app_merge(&compiled, app_rules, &request, result, apps, url_host(url))
-        } else {
-            url_verdict(&compiled, &result, url_host(url))
-        };
+        let verdict =
+            if let Some(app_rules) = compiled.app_rules.as_ref().filter(|_| !apps.is_empty()) {
+                app_merge(&compiled, app_rules, &request, result, apps, url_host(url))
+            } else {
+                url_verdict(&compiled, &result, url_host(url))
+            };
         self.gate_url(verdict)
     }
 
@@ -2468,7 +2456,9 @@ fn path_in_domain_parts(
     // would be a second, weaker copy of the same rule. A scriptlet shares the
     // `#%#` marker but is the side engine's business, so it stays.
     let scriptlet = matches!(marker, "#%#" | "#@%#")
-        && tail[marker.len()..].trim_start().starts_with("//scriptlet(");
+        && tail[marker.len()..]
+            .trim_start()
+            .starts_with("//scriptlet(");
     if matches!(marker, "$$" | "$@$" | "##^" | "#@^")
         || (matches!(marker, "#%#" | "#@%#") && !scriptlet)
     {
@@ -2674,9 +2664,8 @@ fn scrub_untrusted(text: String) -> (String, u32) {
         // (`#%#//scriptlet(...)`); `##+js(...)`/`#@#+js(...)` is the uBO
         // spelling the crate reads on its own. A bracket-scoped line carrying
         // either goes with them.
-        let js = trimmed.contains("#%#")
-            || trimmed.contains("##+js(")
-            || trimmed.contains("#@#+js(");
+        let js =
+            trimmed.contains("#%#") || trimmed.contains("##+js(") || trimmed.contains("#@#+js(");
         // A `#` before the `$` says the line is a cosmetic rule that mentions
         // a modifier name by accident, not a network rule: the readers' own
         // guard, shared here.
@@ -2684,23 +2673,20 @@ fn scrub_untrusted(text: String) -> (String, u32) {
             (trimmed.find('#'), trimmed.find('$')),
             (Some(hash), Some(dollar)) if hash < dollar
         );
-        let gated_modifier = !js
-            && !cosmetic_look
-            && !trimmed.starts_with(['!', '[', '#'])
-            && {
-                let rule = trimmed.strip_prefix("@@").unwrap_or(trimmed);
-                let family = split_modifier_rule(rule).is_some_and(|(_, tokens)| {
-                    tokens.iter().any(|token| {
-                        matches!(
-                            token.split('=').next().unwrap_or(token),
-                            "urltransform" | "removeparam" | "queryprune" | "removeheader" | "hls"
-                        )
-                    })
-                });
-                let replace = split_rule(rule)
-                    .is_some_and(|(_, tokens)| tokens.iter().any(|token| is_replace_token(token)));
-                family || replace
-            };
+        let gated_modifier = !js && !cosmetic_look && !trimmed.starts_with(['!', '[', '#']) && {
+            let rule = trimmed.strip_prefix("@@").unwrap_or(trimmed);
+            let family = split_modifier_rule(rule).is_some_and(|(_, tokens)| {
+                tokens.iter().any(|token| {
+                    matches!(
+                        token.split('=').next().unwrap_or(token),
+                        "urltransform" | "removeparam" | "queryprune" | "removeheader" | "hls"
+                    )
+                })
+            });
+            let replace = split_rule(rule)
+                .is_some_and(|(_, tokens)| tokens.iter().any(|token| is_replace_token(token)));
+            family || replace
+        };
         if js || gated_modifier {
             removed += 1;
             out.push('\n');
@@ -2735,9 +2721,7 @@ fn convert_adguard_cosmetics(text: String, path: &mut PathScan) -> String {
     }
     let mut out = String::with_capacity(text.len() + 64);
     for line in text.lines() {
-        match bracket_cosmetic_line(line, path)
-            .or_else(|| path_in_domain_line(line, path))
-        {
+        match bracket_cosmetic_line(line, path).or_else(|| path_in_domain_line(line, path)) {
             Some(rewritten) => out.push_str(&rewritten),
             None => {
                 // `#@#`-family lines are the cancellations the path side
@@ -2760,7 +2744,10 @@ fn convert_adguard_cosmetics(text: String, path: &mut PathScan) -> String {
 
 fn convert_adguard_line(line: &str, out: &mut String) {
     // Scriptlets first: their args may contain `#$#`-looking text.
-    for (from, to) in [("#@%#//scriptlet(", "#@#+js("), ("#%#//scriptlet(", "##+js(")] {
+    for (from, to) in [
+        ("#@%#//scriptlet(", "#@#+js("),
+        ("#%#//scriptlet(", "##+js("),
+    ] {
         if let Some(pos) = line.find(from) {
             out.push_str(&line[..pos]);
             out.push_str(to);
@@ -2769,7 +2756,12 @@ fn convert_adguard_line(line: &str, out: &mut String) {
         }
     }
     // Longer markers first: `#@$?#` must not be matched as `#@$#`.
-    for (from, to) in [("#@$?#", "#@?#"), ("#$?#", "#?#"), ("#@$#", "#@#"), ("#$#", "##")] {
+    for (from, to) in [
+        ("#@$?#", "#@?#"),
+        ("#$?#", "#?#"),
+        ("#@$#", "#@#"),
+        ("#$#", "##"),
+    ] {
         if let Some(pos) = line.find(from) {
             out.push_str(&line[..pos]);
             out.push_str(to);
@@ -2873,8 +2865,9 @@ fn scan_js_rules(text: &str, scan: &mut JsScan) {
             // scriptlet spelling stays with the crate and its side engine.
             let bracket = match pathmask::parse_bracket(line) {
                 pathmask::BracketParse::Parsed(bracket) => bracket,
-                pathmask::BracketParse::NotBracket
-                | pathmask::BracketParse::Unsupported { .. } => continue,
+                pathmask::BracketParse::NotBracket | pathmask::BracketParse::Unsupported { .. } => {
+                    continue
+                }
             };
             let Some((index, marker)) = cosmetic_marker(&bracket.rest) else {
                 continue;
@@ -2908,10 +2901,7 @@ fn scan_js_rules(text: &str, scan: &mut JsScan) {
             // The same expansion as the cosmetic scanner, but the script is
             // served here; a bracket location beside it is over-specified and
             // left to the ordinary (no-match) path below.
-            if bracket.domain.is_none()
-                && bracket.location().is_none()
-                && before.contains('/')
-            {
+            if bracket.domain.is_none() && bracket.location().is_none() && before.contains('/') {
                 match pathmask::parse_targets(before) {
                     pathmask::TargetsParse::Targets(targets) => {
                         let app = bracket.app;
@@ -3656,7 +3646,10 @@ impl ModifierFamily {
     /// Whether the family rewrites the request URL — the two the HTTPS path
     /// runs through [`FilterEngine::url_edit`].
     fn is_url(self) -> bool {
-        matches!(self, ModifierFamily::Transform | ModifierFamily::RemoveParam)
+        matches!(
+            self,
+            ModifierFamily::Transform | ModifierFamily::RemoveParam
+        )
     }
 
     /// Whether the family shapes the answer's headers — the three
@@ -4225,7 +4218,8 @@ fn scan_modifier_rules(text: &str, scan: &mut ModifierScan) {
             // value either (the reference checks the marker first): one whose
             // value is unreadable still cancels the rules it matches.
             if badfilter {
-                scan.badfilters.push(cancel_material(exception, pattern, &tokens));
+                scan.badfilters
+                    .push(cancel_material(exception, pattern, &tokens));
                 continue;
             }
             // The value is the cookie this rule is about, read into a matcher;
@@ -4321,7 +4315,8 @@ fn scan_modifier_rules(text: &str, scan: &mut ModifierScan) {
         if badfilter {
             // A `$badfilter` rule never applies itself: it waits until every
             // list has been read, then takes the rules it matches off the set.
-            scan.badfilters.push(cancel_material(exception, pattern, &tokens));
+            scan.badfilters
+                .push(cancel_material(exception, pattern, &tokens));
             continue;
         }
         if exception {
@@ -4484,8 +4479,16 @@ fn cancel_material(exception: bool, pattern: &str, tokens: &[&str]) -> CancelMat
                 denyallow = Some(value.split('|').map(str::to_string).collect());
             }
             _ => {
-                let bucket = if is_type_name(&name) { &mut types } else { &mut options };
-                let side = if negated { &mut bucket.1 } else { &mut bucket.0 };
+                let bucket = if is_type_name(&name) {
+                    &mut types
+                } else {
+                    &mut options
+                };
+                let side = if negated {
+                    &mut bucket.1
+                } else {
+                    &mut bucket.0
+                };
                 side.push(name);
             }
         }
@@ -5568,11 +5571,11 @@ impl FilterEngine {
     /// true.
     pub fn has_path_rules(&self) -> bool {
         let compiled = self.compiled();
-        compiled.path_cosmetics.as_ref().is_some_and(|path| {
-            path.rules
-                .iter()
-                .any(|rule| rule.location.is_some())
-        }) || compiled.js_rules.as_ref().is_some_and(|rules| {
+        compiled
+            .path_cosmetics
+            .as_ref()
+            .is_some_and(|path| path.rules.iter().any(|rule| rule.location.is_some()))
+            || compiled.js_rules.as_ref().is_some_and(|rules| {
                 rules
                     .rules
                     .iter()
@@ -5816,7 +5819,11 @@ impl FilterEngine {
         let request = Request::new(url, source, request_type, method).ok()?;
         // The same fast path as the URL edit: a miss means no rule of any
         // family can match, whatever the exceptions say.
-        rules.any.check_network_request(&request).redirect.as_ref()?;
+        rules
+            .any
+            .check_network_request(&request)
+            .redirect
+            .as_ref()?;
         let subdocument = request_type == "subdocument";
         let mut edit = HeaderEdit::default();
         for (rule, engine) in rules.rules.iter().zip(rules.probes.iter()) {
@@ -5883,7 +5890,11 @@ impl FilterEngine {
         let request = Request::new(url, source, request_type, method).ok()?;
         // The same fast path as the other edits: a miss on the shared engine
         // means no rule of any family can match, whatever the exceptions say.
-        rules.any.check_network_request(&request).redirect.as_ref()?;
+        rules
+            .any
+            .check_network_request(&request)
+            .redirect
+            .as_ref()?;
         let mut matched: Vec<&ModifierRule> = rules
             .rules
             .iter()
@@ -5930,7 +5941,11 @@ impl FilterEngine {
         let request = Request::new(url, source, request_type, method).ok()?;
         // The same fast path as the other edits: a miss on the shared engine
         // means no rule of any family can match, whatever the exceptions say.
-        rules.any.check_network_request(&request).redirect.as_ref()?;
+        rules
+            .any
+            .check_network_request(&request)
+            .redirect
+            .as_ref()?;
         let rules: Vec<crate::hls::HlsRule> = rules
             .rules
             .iter()
@@ -5965,12 +5980,7 @@ impl FilterEngine {
     /// The plan is shared with every other request the same page makes (the
     /// returned `Arc` is the cached one), so holding it for a response costs
     /// nothing beyond the page's own entry.
-    pub fn html_plan(
-        &self,
-        url: &str,
-        source: &str,
-        request_type: &str,
-    ) -> Option<Arc<HtmlPlan>> {
+    pub fn html_plan(&self, url: &str, source: &str, request_type: &str) -> Option<Arc<HtmlPlan>> {
         self.html_plan_for_apps(url, source, request_type, &[])
     }
 
@@ -6280,9 +6290,15 @@ fn categorise(rule: Option<&str>, host: &str) -> u8 {
         || haystack.contains("measurement")
     {
         CAT_ANALYTICS
-    } else if haystack.contains("track") || haystack.contains("pixel") || haystack.contains("beacon") {
+    } else if haystack.contains("track")
+        || haystack.contains("pixel")
+        || haystack.contains("beacon")
+    {
         CAT_TRACKER
-    } else if haystack.contains("social") || haystack.contains("facebook") || haystack.contains("twitter") {
+    } else if haystack.contains("social")
+        || haystack.contains("facebook")
+        || haystack.contains("twitter")
+    {
         CAT_SOCIAL
     } else if haystack.contains("malware")
         || haystack.contains("phish")
@@ -6294,8 +6310,6 @@ fn categorise(rule: Option<&str>, host: &str) -> u8 {
         CAT_AD
     }
 }
-
-
 
 #[cfg(test)]
 mod tests {
@@ -6369,10 +6383,7 @@ mod tests {
             rule_count: 0,
             last_error: None,
         };
-        let lists = vec![
-            list(7, "Broken", unreadable),
-            list(8, "Missing", missing),
-        ];
+        let lists = vec![list(7, "Broken", unreadable), list(8, "Missing", missing)];
         let fe = FilterEngine::new();
         fe.rebuild(&lists, &[]);
         let errors = fe.build_errors();
@@ -6419,7 +6430,12 @@ mod tests {
 
     #[test]
     fn module_switches_gate_categories_without_a_rebuild() {
-        let mut ads = temp_list("ads-module.txt", "||ads.module.test^\n", ListFormat::Standard, 1);
+        let mut ads = temp_list(
+            "ads-module.txt",
+            "||ads.module.test^\n",
+            ListFormat::Standard,
+            1,
+        );
         ads.category = CAT_AD;
         let mut tracking = temp_list(
             "tracking-module.txt",
@@ -6565,16 +6581,36 @@ mod tests {
         );
         // Same host, another path.
         assert!(
-            !fe.check_url("https://shop.test/app.js", "https://shop.test/", "script", "GET", &[]).blocked
+            !fe.check_url(
+                "https://shop.test/app.js",
+                "https://shop.test/",
+                "script",
+                "GET",
+                &[]
+            )
+            .blocked
         );
         // The source decides third-party rules, and it is the referrer.
         let fe = cosmetic_engine("||cdn.test^$third-party\n");
         assert!(
-            fe.check_url("https://cdn.test/x.js", "https://shop.test/", "script", "GET", &[])
-                .blocked
+            fe.check_url(
+                "https://cdn.test/x.js",
+                "https://shop.test/",
+                "script",
+                "GET",
+                &[]
+            )
+            .blocked
         );
         assert!(
-            !fe.check_url("https://cdn.test/x.js", "https://cdn.test/", "script", "GET", &[]).blocked
+            !fe.check_url(
+                "https://cdn.test/x.js",
+                "https://cdn.test/",
+                "script",
+                "GET",
+                &[]
+            )
+            .blocked
         );
     }
 
@@ -6880,8 +6916,7 @@ mod tests {
         assert!(fe.has_header_rules());
         assert_eq!(fe.header_rules_count(), 2);
         assert_eq!(fe.url_rules_count(), 0);
-        let edit =
-            header_of(&fe, "https://thumbs.pro/watch", "document").expect("the rule fires");
+        let edit = header_of(&fe, "https://thumbs.pro/watch", "document").expect("the rule fires");
         assert_eq!(
             edit.csp,
             vec!["script-src 'self' 'unsafe-inline'".to_string()]
@@ -7083,7 +7118,10 @@ mod tests {
         );
         // The name is exact and case-sensitive: `$cookie=ID` never names `id`.
         let fe = cosmetic_engine("||shop.test^$cookie=ID\n");
-        assert_eq!(dropped(&fe, "https://shop.test/", &["id", "ID"]), vec!["ID"]);
+        assert_eq!(
+            dropped(&fe, "https://shop.test/", &["id", "ID"]),
+            vec!["ID"]
+        );
 
         let fe = cosmetic_engine("||shop.test^$cookie=/^trac/\n");
         assert_eq!(
@@ -7125,9 +7163,7 @@ mod tests {
             );
         }
         // A page that does not match the exception keeps losing the cookie.
-        let fe = cosmetic_engine(
-            "||shop.test^$cookie=dropme\n@@||other.test^$cookie=dropme\n",
-        );
+        let fe = cosmetic_engine("||shop.test^$cookie=dropme\n@@||other.test^$cookie=dropme\n");
         assert_eq!(
             dropped(&fe, "https://shop.test/", &["dropme"]),
             vec!["dropme"]
@@ -7174,10 +7210,7 @@ mod tests {
         // modification at all — the rule stands.
         let fe = cosmetic_engine("||shop.test^$cookie=keep;maxAge=0\n");
         assert_eq!(fe.cookie_rules_count(), 1);
-        assert_eq!(
-            dropped(&fe, "https://shop.test/", &["keep"]),
-            vec!["keep"]
-        );
+        assert_eq!(dropped(&fe, "https://shop.test/", &["keep"]), vec!["keep"]);
         // A value that merely looks like a regexp is a literal name: `/foo/i`
         // is not a flag-carrying regexp, it is a cookie named that way.
         let fe = cosmetic_engine("||shop.test^$cookie=/foo/i\n");
@@ -7233,21 +7266,35 @@ mod tests {
         // A `$jsonprune` rule is not a URL, header or cookie rule, and it
         // edits instead of blocking.
         assert!(!fe.has_url_rules() && !fe.has_header_rules() && !fe.has_cookie_rules());
-        let plan = prunes(&fe, "https://api.test/graphql", "https://page.test/", "xmlhttprequest")
-            .expect("the rule covers the request");
+        let plan = prunes(
+            &fe,
+            "https://api.test/graphql",
+            "https://page.test/",
+            "xmlhttprequest",
+        )
+        .expect("the rule covers the request");
         let (body, applied) = plan
             .apply(br#"{"ads": [1, 2], "keep": 3}"#)
             .expect("the item goes");
         assert_eq!(String::from_utf8(body).expect("utf8"), r#"{"keep":3}"#);
         assert_eq!(applied.join("; "), "||api.test/graphql^$jsonprune=\\$.ads");
         // Nothing selected, nothing written: the plan says so.
-        let plan = prunes(&fe, "https://api.test/graphql", "https://page.test/", "xmlhttprequest")
-            .expect("the rule covers the request");
+        let plan = prunes(
+            &fe,
+            "https://api.test/graphql",
+            "https://page.test/",
+            "xmlhttprequest",
+        )
+        .expect("the rule covers the request");
         assert!(plan.apply(br#"{"keep": 3}"#).is_none());
         // The pattern scopes the rule to the requests it names.
-        assert!(
-            prunes(&fe, "https://api.test/other", "https://page.test/", "xmlhttprequest").is_none()
-        );
+        assert!(prunes(
+            &fe,
+            "https://api.test/other",
+            "https://page.test/",
+            "xmlhttprequest"
+        )
+        .is_none());
     }
 
     #[test]
@@ -7255,8 +7302,13 @@ mod tests {
         // The reference sorts the matching rules lexicographically by text and
         // applies each to the last one's result; `$.a` runs before `$.z`.
         let fe = cosmetic_engine("||api.test^$jsonprune=\\$.z\n||api.test^$jsonprune=\\$.a\n");
-        let plan = prunes(&fe, "https://api.test/x", "https://page.test/", "xmlhttprequest")
-            .expect("both rules cover the request");
+        let plan = prunes(
+            &fe,
+            "https://api.test/x",
+            "https://page.test/",
+            "xmlhttprequest",
+        )
+        .expect("both rules cover the request");
         let (body, applied) = plan
             .apply(br#"{"z": 1, "a": 2, "keep": 3}"#)
             .expect("both items go");
@@ -7272,20 +7324,54 @@ mod tests {
         // The reference pairs `$jsonprune` with `$xmlhttprequest`; the live
         // lists also spell `all`, every type by definition.
         let fe = cosmetic_engine("||api.test^$jsonprune=\\$.ads,xmlhttprequest\n");
-        assert!(prunes(&fe, "https://api.test/x", "https://page.test/", "xmlhttprequest").is_some());
+        assert!(prunes(
+            &fe,
+            "https://api.test/x",
+            "https://page.test/",
+            "xmlhttprequest"
+        )
+        .is_some());
         assert!(prunes(&fe, "https://api.test/x", "https://page.test/", "script").is_none());
         let fe = cosmetic_engine("||api.test^$jsonprune=\\$.ads,all\n");
         assert!(prunes(&fe, "https://api.test/x", "https://page.test/", "document").is_some());
         // Party and domain options are crate options and stay.
         let fe = cosmetic_engine("||api.test^$jsonprune=\\$.ads,~third-party\n");
-        assert!(prunes(&fe, "https://api.test/x", "https://api.test/", "xmlhttprequest").is_some());
-        assert!(prunes(&fe, "https://api.test/x", "https://other.test/", "xmlhttprequest").is_none());
+        assert!(prunes(
+            &fe,
+            "https://api.test/x",
+            "https://api.test/",
+            "xmlhttprequest"
+        )
+        .is_some());
+        assert!(prunes(
+            &fe,
+            "https://api.test/x",
+            "https://other.test/",
+            "xmlhttprequest"
+        )
+        .is_none());
         let fe = cosmetic_engine("||api.test^$jsonprune=\\$.ads,domain=page.test\n");
-        assert!(prunes(&fe, "https://api.test/x", "https://page.test/", "xmlhttprequest").is_some());
-        assert!(prunes(&fe, "https://api.test/x", "https://other.test/", "xmlhttprequest").is_none());
+        assert!(prunes(
+            &fe,
+            "https://api.test/x",
+            "https://page.test/",
+            "xmlhttprequest"
+        )
+        .is_some());
+        assert!(prunes(
+            &fe,
+            "https://api.test/x",
+            "https://other.test/",
+            "xmlhttprequest"
+        )
+        .is_none());
         // A type the compatibility list does not carry — negated or not —
         // would make the probe answer a question the list did not ask.
-        for spec in ["\\$.ads,script", "\\$.ads,~xmlhttprequest", "\\$.ads,subdocument"] {
+        for spec in [
+            "\\$.ads,script",
+            "\\$.ads,~xmlhttprequest",
+            "\\$.ads,subdocument",
+        ] {
             let fe = cosmetic_engine(&format!("||api.test^$jsonprune={spec}\n"));
             assert!(!fe.has_jsonprune_rules(), "{spec} must be dropped");
         }
@@ -7331,7 +7417,13 @@ mod tests {
         ]);
         assert!(!fe.has_jsonprune_rules());
         assert_eq!(fe.jsonprune_rules_count(), 0);
-        assert!(prunes(&fe, "https://api.test/x", "https://page.test/", "xmlhttprequest").is_none());
+        assert!(prunes(
+            &fe,
+            "https://api.test/x",
+            "https://page.test/",
+            "xmlhttprequest"
+        )
+        .is_none());
     }
 
     #[test]
@@ -7415,7 +7507,11 @@ mod tests {
         assert!(trims(&fe, url, "https://other.test/", "xmlhttprequest").is_none());
         // A type the compatibility list does not carry — negated or not —
         // would make the probe answer a question the list did not ask.
-        for spec in ["preroll,script", "preroll,~xmlhttprequest", "preroll,subdocument"] {
+        for spec in [
+            "preroll,script",
+            "preroll,~xmlhttprequest",
+            "preroll,subdocument",
+        ] {
             let fe = cosmetic_engine(&format!("||stream.test^$hls={spec}\n"));
             assert!(!fe.has_hls_rules(), "{spec} must be dropped");
         }
@@ -7486,9 +7582,7 @@ mod tests {
             "xmlhttprequest",
         )
         .expect("the rule covers the request");
-        assert!(plan
-            .apply(b"#EXTM3U\n#EXTINF:10,\npreroll.ts\n")
-            .is_some());
+        assert!(plan.apply(b"#EXTM3U\n#EXTINF:10,\npreroll.ts\n").is_some());
     }
 
     #[test]
@@ -7611,7 +7705,13 @@ mod tests {
         // A page no rule covers caches that answer too, instead of walking
         // every rule again for each of its requests.
         assert!(cuts(&fe, "https://quiet.test/p", "", "document").is_none());
-        assert!(cuts(&fe, "https://quiet.test/x.js", "https://quiet.test/p", "script").is_none());
+        assert!(cuts(
+            &fe,
+            "https://quiet.test/x.js",
+            "https://quiet.test/p",
+            "script"
+        )
+        .is_none());
     }
 
     /// Whether any `$replace` rule covers a request, the way the HTTPS path
@@ -7931,7 +8031,10 @@ mod tests {
         assert!(ima.contains("AdsManagerLoadedEvent"), "{ima}");
         assert!(ima.contains("CONTENT_RESUME_REQUESTED"), "{ima}");
         let fab = text("prevent-fab-3.2.0");
-        assert!(fab.contains("BlockAdBlock") && fab.contains("FuckAdBlock"), "{fab}");
+        assert!(
+            fab.contains("BlockAdBlock") && fab.contains("FuckAdBlock"),
+            "{fab}"
+        );
         assert!(fab.contains("_checkBait"), "{fab}");
         // Analytics and fingerprinting stubs: the globals each script exists
         // to publish have to be there, or the page breaks on the replacement.
@@ -7939,7 +8042,10 @@ mod tests {
         assert!(ga.contains("window[name] = ga"), "{ga}");
         assert!(ga.contains("dataLayer"), "{ga}");
         let ga_old = text("google-analytics-ga");
-        assert!(ga_old.contains("window._gaq") && ga_old.contains("window._gat"), "{ga_old}");
+        assert!(
+            ga_old.contains("window._gaq") && ga_old.contains("window._gat"),
+            "{ga_old}"
+        );
         let gemius = text("gemius");
         assert!(gemius.contains("window.GemiusPlayer"), "{gemius}");
         let prebid = text("prebid-ads");
@@ -7984,7 +8090,10 @@ mod tests {
         let mut seen = std::collections::HashSet::new();
         for resource in resources {
             for ident in std::iter::once(&resource.name).chain(resource.aliases.iter()) {
-                assert!(seen.insert(ident.clone()), "duplicate resource name {ident}");
+                assert!(
+                    seen.insert(ident.clone()),
+                    "duplicate resource name {ident}"
+                );
             }
         }
         // Uniqueness has to hold *across* the two registered tables too: the
@@ -8031,8 +8140,15 @@ mod tests {
                 .expect("base64"),
         )
         .expect("utf8");
-        assert!(body.contains("FuckAdBlock"), "{}", &body[..body.len().min(60)]);
-        assert!(body.contains("_checkBait"), "the neutraliser, not the library");
+        assert!(
+            body.contains("FuckAdBlock"),
+            "{}",
+            &body[..body.len().min(60)]
+        );
+        assert!(
+            body.contains("_checkBait"),
+            "the neutraliser, not the library"
+        );
 
         let v = fe.check_url(
             "https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js",
@@ -8048,7 +8164,11 @@ mod tests {
                 .expect("base64"),
         )
         .expect("utf8");
-        assert!(body.contains("window.adsbygoogle"), "{}", &body[..body.len().min(60)]);
+        assert!(
+            body.contains("window.adsbygoogle"),
+            "{}",
+            &body[..body.len().min(60)]
+        );
     }
 
     #[test]
@@ -8157,7 +8277,11 @@ mod tests {
         // A debug build is ~20x slower than the release profile shipped in the
         // APK; the threshold below what a release build actually costs (a few
         // hundred nanoseconds) so this only catches real regressions.
-        let limit = if cfg!(debug_assertions) { 30_000.0 } else { 2_000.0 };
+        let limit = if cfg!(debug_assertions) {
+            30_000.0
+        } else {
+            2_000.0
+        };
         assert!(per_query < limit, "cached query cost {per_query}ns");
         assert!(fe.cache_hits() > 9_000);
     }
@@ -8181,10 +8305,7 @@ mod tests {
             NEXT.fetch_add(1, std::sync::atomic::Ordering::SeqCst)
         );
         let fe = FilterEngine::new();
-        fe.rebuild(
-            &[temp_list(&name, body, ListFormat::Standard, 3)],
-            &[],
-        );
+        fe.rebuild(&[temp_list(&name, body, ListFormat::Standard, 3)], &[]);
         fe
     }
 
@@ -8313,7 +8434,10 @@ mod tests {
         assert!(!main.style_rules.iter().any(|(s, _)| s == ".only-tv"));
         // A query string does not make the main page another page.
         let main_query = fe.cosmetic_resources("https://shop.test/?utm_source=x");
-        assert!(main_query.style_rules.iter().any(|(s, _)| s == ".only-main"));
+        assert!(main_query
+            .style_rules
+            .iter()
+            .any(|(s, _)| s == ".only-main"));
 
         // The rule's own domain still has to match.
         let sibling = fe.cosmetic_resources("https://other.test/tv");
@@ -8339,11 +8463,7 @@ mod tests {
         // dropped, not applied to every page the URL mask names.
         let compiled = fe.compiled();
         assert_eq!(
-            compiled
-                .path_cosmetics
-                .as_ref()
-                .expect("path scan")
-                .dropped,
+            compiled.path_cosmetics.as_ref().expect("path scan").dropped,
             1
         );
 
@@ -8449,10 +8569,7 @@ mod tests {
             .style_rules
             .iter()
             .any(|(s, _)| s == ".app-mixed"));
-        assert!(shop_other
-            .style_rules
-            .iter()
-            .any(|(s, _)| s == ".app-all"));
+        assert!(shop_other.style_rules.iter().any(|(s, _)| s == ".app-all"));
         let other_tv = fe.cosmetic_resources_with_apps("https://other.test/tv", &app);
         assert!(other_tv.style_rules.iter().any(|(s, _)| s == ".app-mixed"));
         let other_other = fe.cosmetic_resources_with_apps("https://other.test/other", &app);
@@ -8504,7 +8621,10 @@ mod tests {
         ] {
             let fe = cosmetic_engine(line);
             let compiled = fe.inner.read().unwrap().clone();
-            let path = compiled.path_cosmetics.as_ref().expect("the drop is logged");
+            let path = compiled
+                .path_cosmetics
+                .as_ref()
+                .expect("the drop is logged");
             assert_eq!(path.dropped, 1, "{line}");
             assert!(path.rules.is_empty(), "{line}");
         }
@@ -8698,13 +8818,16 @@ mod tests {
 
     #[test]
     fn path_in_domain_scriptlets_are_served_on_their_path() {
-        let fe = cosmetic_engine(
-            "shop.test/tv#%#//scriptlet('set-constant', '__path_sc', 'yes')\n",
-        );
+        let fe =
+            cosmetic_engine("shop.test/tv#%#//scriptlet('set-constant', '__path_sc', 'yes')\n");
         let tv = fe.cosmetic_resources("https://shop.test/tv");
         assert!(tv.scriptlets.contains("setConstant"), "{}", tv.scriptlets);
         let other = fe.cosmetic_resources("https://shop.test/other");
-        assert!(!other.scriptlets.contains("setConstant"), "{}", other.scriptlets);
+        assert!(
+            !other.scriptlets.contains("setConstant"),
+            "{}",
+            other.scriptlets
+        );
     }
 
     #[test]
@@ -8725,10 +8848,18 @@ mod tests {
         let app = vec!["org.example.app".to_string()];
         let none = fe.cosmetic_resources_with_apps("https://shop.test/", &[]);
         assert!(!has_style(&none), "{:?}", none.style_rules);
-        assert!(!none.scriptlets.contains("setConstant"), "{}", none.scriptlets);
+        assert!(
+            !none.scriptlets.contains("setConstant"),
+            "{}",
+            none.scriptlets
+        );
         let other = fe.cosmetic_resources_with_apps("https://shop.test/", &browser);
         assert!(!has_style(&other), "{:?}", other.style_rules);
-        assert!(!other.scriptlets.contains("setConstant"), "{}", other.scriptlets);
+        assert!(
+            !other.scriptlets.contains("setConstant"),
+            "{}",
+            other.scriptlets
+        );
         let matching = fe.cosmetic_resources_with_apps("https://shop.test/", &app);
         assert!(has_style(&matching), "{:?}", matching.style_rules);
         assert!(
@@ -8740,7 +8871,11 @@ mod tests {
         // for a page nobody named, but this rule has none.
         let host = fe.cosmetic_resources_for_host_with_apps("shop.test", &app);
         assert!(has_style(&host), "{:?}", host.style_rules);
-        assert!(host.scriptlets.contains("setConstant"), "{}", host.scriptlets);
+        assert!(
+            host.scriptlets.contains("setConstant"),
+            "{}",
+            host.scriptlets
+        );
     }
 
     #[test]
@@ -8968,9 +9103,15 @@ mod tests {
         assert!(has("a.test", "window.__ab = 1;"));
         assert!(has("x.b.test", "window.__ab = 1;"), "subdomains match");
         assert!(!has("c.test", "window.__ab = 1;"));
-        assert!(has("c.test", "window.__not = 1;"), "a lone negation covers all");
+        assert!(
+            has("c.test", "window.__not = 1;"),
+            "a lone negation covers all"
+        );
         assert!(!has("no.a.test", "window.__not = 1;"), "the negation bites");
-        assert!(has("no.a.test", "window.__ab = 1;"), "the positive entry stays");
+        assert!(
+            has("no.a.test", "window.__ab = 1;"),
+            "the positive entry stays"
+        );
         assert!(has("news.com", "window.__tld = 1;"));
         assert!(has("sub.news.co.uk", "window.__tld = 1;"));
         assert!(!has("other.org", "window.__tld = 1;"));
@@ -9005,7 +9146,11 @@ mod tests {
 
         // The bracket scriptlet is the crate's: it keeps its line and still
         // runs on the host the bracket names.
-        assert!(page.scriptlets.contains("setConstant"), "{}", page.scriptlets);
+        assert!(
+            page.scriptlets.contains("setConstant"),
+            "{}",
+            page.scriptlets
+        );
     }
 
     #[test]
@@ -9046,19 +9191,15 @@ mod tests {
 
     #[test]
     fn raw_javascript_app_and_path_in_domain_combine() {
-        let fe = cosmetic_engine(
-            "[$app=org.example.app]shop.test/tv#%#window.__both = 1;\n",
-        );
+        let fe = cosmetic_engine("[$app=org.example.app]shop.test/tv#%#window.__both = 1;\n");
         assert!(fe.has_path_rules());
         let app = vec!["org.example.app".to_string()];
         let tv = fe.cosmetic_resources_with_apps("https://shop.test/tv", &app);
         assert_eq!(tv.jsrules, vec!["window.__both = 1;".to_string()]);
         let other = fe.cosmetic_resources_with_apps("https://shop.test/other", &app);
         assert!(other.jsrules.is_empty());
-        let wrong_app = fe.cosmetic_resources_with_apps(
-            "https://shop.test/tv",
-            &["com.other.app".to_string()],
-        );
+        let wrong_app =
+            fe.cosmetic_resources_with_apps("https://shop.test/tv", &["com.other.app".to_string()]);
         assert!(wrong_app.jsrules.is_empty());
     }
 
@@ -9074,7 +9215,10 @@ mod tests {
                             ||shop.test/u$urltransform=/a/b/\n";
         let trusted = cosmetic_engine(BODY);
         let compiled = trusted.inner.read().unwrap().clone();
-        assert!(compiled.js_rules.is_some(), "trusted lists keep the raw rules");
+        assert!(
+            compiled.js_rules.is_some(),
+            "trusted lists keep the raw rules"
+        );
         assert!(compiled.replace.is_some(), "trusted lists keep $replace");
         let modifiers = compiled.modifier_rules.as_ref().expect("modifier rules");
         assert_eq!(
@@ -9083,7 +9227,11 @@ mod tests {
             "$removeparam, $hls, $removeheader and $urltransform all live here"
         );
         let page = trusted.cosmetic_resources("https://example.com/");
-        assert!(page.scriptlets.contains("setConstant"), "{}", page.scriptlets);
+        assert!(
+            page.scriptlets.contains("setConstant"),
+            "{}",
+            page.scriptlets
+        );
         assert_eq!(page.jsrules.len(), 1, "{:?}", page.jsrules);
         let rewritten = trusted.check_url(
             "https://shop.test/api?secret=1&keep=2",
@@ -9120,7 +9268,10 @@ mod tests {
             "GET",
             &[],
         );
-        assert_eq!(kept.rewritten_url, None, "no removeparam for an untrusted list");
+        assert_eq!(
+            kept.rewritten_url, None,
+            "no removeparam for an untrusted list"
+        );
         assert!(!kept.blocked, "{kept:?}");
     }
 
@@ -9261,7 +9412,10 @@ mod tests {
             vec!["div[data-ad]".to_string()],
             "only the generic selector stays"
         );
-        assert!(res.procedural.is_empty(), "procedural rules are hostname-bound");
+        assert!(
+            res.procedural.is_empty(),
+            "procedural rules are hostname-bound"
+        );
         assert!(res.scriptlets.is_empty(), "scriptlets are hostname-bound");
         assert!(!res.generichide, "the class/id lookup still runs");
     }
@@ -9282,11 +9436,17 @@ mod tests {
             "$jsinject must not touch hiding: {:?}",
             passive.hide_selectors
         );
-        assert!(passive.scriptlets.is_empty(), "$jsinject must drop scriptlets");
+        assert!(
+            passive.scriptlets.is_empty(),
+            "$jsinject must drop scriptlets"
+        );
         assert!(!passive.generichide);
 
         let dead = fe.cosmetic_resources("https://dead.test/");
-        assert!(dead.is_empty(), "$document leaves nothing to inject: {dead:?}");
+        assert!(
+            dead.is_empty(),
+            "$document leaves nothing to inject: {dead:?}"
+        );
         assert!(dead.generichide, "$document covers the generic half too");
     }
 
@@ -9358,14 +9518,26 @@ mod tests {
         // The main engine never sees them: a flow nobody was attributed to
         // must not be blocked because of an app rule.
         assert!(
-            !fe.check_url("https://ads.test/x.js", "https://ads.test/", "script", "GET", &[])
-                .blocked
+            !fe.check_url(
+                "https://ads.test/x.js",
+                "https://ads.test/",
+                "script",
+                "GET",
+                &[]
+            )
+            .blocked
         );
         // Another app is not the one the rule names.
         let other = apps(&["org.other.app"]);
         assert!(
-            !fe.check_url("https://ads.test/x.js", "https://ads.test/", "script", "GET", &other)
-                .blocked
+            !fe.check_url(
+                "https://ads.test/x.js",
+                "https://ads.test/",
+                "script",
+                "GET",
+                &other
+            )
+            .blocked
         );
         let hit = fe.check_url(
             "https://ads.test/x.js",
@@ -9375,8 +9547,14 @@ mod tests {
             &apps(&["com.example.app"]),
         );
         assert!(hit.blocked, "{hit:?}");
-        assert_eq!(hit.rule_text.as_deref(), Some("||ads.test^$app=com.example.app"));
-        assert!(hit.list_name.is_some(), "the list must be reported: {hit:?}");
+        assert_eq!(
+            hit.rule_text.as_deref(),
+            Some("||ads.test^$app=com.example.app")
+        );
+        assert!(
+            hit.list_name.is_some(),
+            "the list must be reported: {hit:?}"
+        );
     }
 
     #[test]
@@ -9395,8 +9573,14 @@ mod tests {
                 .blocked
         );
         assert!(
-            !fe.check_url(url, src, "xmlhttprequest", "GET", &apps(&["com.example.app"]))
-                .blocked
+            !fe.check_url(
+                url,
+                src,
+                "xmlhttprequest",
+                "GET",
+                &apps(&["com.example.app"])
+            )
+            .blocked
         );
     }
 
@@ -9434,7 +9618,10 @@ mod tests {
             "GET",
             &apps(&["com.example.app"]),
         );
-        assert!(hit.blocked, "$important is not subject to exceptions: {hit:?}");
+        assert!(
+            hit.blocked,
+            "$important is not subject to exceptions: {hit:?}"
+        );
     }
 
     #[test]
@@ -9444,9 +9631,13 @@ mod tests {
         let src = "https://ads.test/";
         // The excluded app is left alone; everybody else is blocked.
         assert!(
-            !fe.check_url(url, src, "script", "GET", &apps(&["com.example.app"])).blocked
+            !fe.check_url(url, src, "script", "GET", &apps(&["com.example.app"]))
+                .blocked
         );
-        assert!(fe.check_url(url, src, "script", "GET", &apps(&["com.other.app"])).blocked);
+        assert!(
+            fe.check_url(url, src, "script", "GET", &apps(&["com.other.app"]))
+                .blocked
+        );
         // A flow nobody was attributed to is nobody's rule, either.
         assert!(!fe.check_url(url, src, "script", "GET", &[]).blocked);
     }
@@ -9461,26 +9652,56 @@ mod tests {
         let src = "https://page.test/";
         // `com.example.*` is a prefix match.
         assert!(
-            fe.check_url(&url("wild.test"), src, "script", "GET", &apps(&["com.example.app"]))
-                .blocked
+            fe.check_url(
+                &url("wild.test"),
+                src,
+                "script",
+                "GET",
+                &apps(&["com.example.app"])
+            )
+            .blocked
         );
         assert!(
-            !fe.check_url(&url("wild.test"), src, "script", "GET", &apps(&["com.examples"]))
-                .blocked
+            !fe.check_url(
+                &url("wild.test"),
+                src,
+                "script",
+                "GET",
+                &apps(&["com.examples"])
+            )
+            .blocked
         );
         // The regexp entries: `\$` is the end anchor after the syntax
         // unescape, and the two alternatives are one entry (the `\|`).
         assert!(
-            fe.check_url(&url("regex.test"), src, "script", "GET", &apps(&["com.other.app"]))
-                .blocked
+            fe.check_url(
+                &url("regex.test"),
+                src,
+                "script",
+                "GET",
+                &apps(&["com.other.app"])
+            )
+            .blocked
         );
         assert!(
-            fe.check_url(&url("regex.test"), src, "script", "GET", &apps(&["org.other.shop"]))
-                .blocked
+            fe.check_url(
+                &url("regex.test"),
+                src,
+                "script",
+                "GET",
+                &apps(&["org.other.shop"])
+            )
+            .blocked
         );
         assert!(
-            !fe.check_url(&url("regex.test"), src, "script", "GET", &apps(&["com.other.app2"]))
-                .blocked
+            !fe.check_url(
+                &url("regex.test"),
+                src,
+                "script",
+                "GET",
+                &apps(&["com.other.app2"])
+            )
+            .blocked
         );
     }
 
@@ -9496,11 +9717,18 @@ mod tests {
         let src = "https://shared.test/";
         // The exception of the second app cancels the block of the first.
         assert!(
-            !fe.check_url(url, src, "script", "GET", &apps(&["com.first.app", "com.second.app"]))
-                .blocked
+            !fe.check_url(
+                url,
+                src,
+                "script",
+                "GET",
+                &apps(&["com.first.app", "com.second.app"])
+            )
+            .blocked
         );
         assert!(
-            fe.check_url(url, src, "script", "GET", &apps(&["com.first.app"])).blocked
+            fe.check_url(url, src, "script", "GET", &apps(&["com.first.app"]))
+                .blocked
         );
     }
 
@@ -9514,20 +9742,44 @@ mod tests {
         // `$third-party` survives the rewrite: the app is the same, the page
         // decides.
         assert!(
-            fe.check_url(url, "https://page.test/", "script", "GET", &apps(&["com.example.app"]))
-                .blocked
+            fe.check_url(
+                url,
+                "https://page.test/",
+                "script",
+                "GET",
+                &apps(&["com.example.app"])
+            )
+            .blocked
         );
         assert!(
-            !fe.check_url(url, "https://third.test/", "script", "GET", &apps(&["com.example.app"]))
-                .blocked
+            !fe.check_url(
+                url,
+                "https://third.test/",
+                "script",
+                "GET",
+                &apps(&["com.example.app"])
+            )
+            .blocked
         );
         assert!(
-            fe.check_url("https://get.test/x.js", "https://get.test/", "script", "GET", &apps(&["com.example.app"]))
-                .blocked
+            fe.check_url(
+                "https://get.test/x.js",
+                "https://get.test/",
+                "script",
+                "GET",
+                &apps(&["com.example.app"])
+            )
+            .blocked
         );
         assert!(
-            !fe.check_url("https://get.test/x.js", "https://get.test/", "script", "POST", &apps(&["com.example.app"]))
-                .blocked
+            !fe.check_url(
+                "https://get.test/x.js",
+                "https://get.test/",
+                "script",
+                "POST",
+                &apps(&["com.example.app"])
+            )
+            .blocked
         );
     }
 
@@ -9667,10 +9919,7 @@ mod tests {
             .is_empty());
         let host_app = fe.cosmetic_resources_for_host_with_apps("shop.test", &app);
         assert!(host_app.inline_hides);
-        assert!(!host_app
-            .hide_selectors
-            .iter()
-            .any(|s| s == ".app-only"));
+        assert!(!host_app.hide_selectors.iter().any(|s| s == ".app-only"));
         let host = fe.cosmetic_resources_for_host("shop.test");
         assert!(!host.inline_hides);
         assert!(host.hide_selectors.iter().any(|s| s == ".banner"));
@@ -9748,10 +9997,7 @@ mod tests {
         assert!(other.hide_selectors.iter().any(|s| s == ".style-only"));
         assert!(other.hide_selectors.iter().any(|s| s == ".both"));
         assert!(
-            !other
-                .style_rules
-                .iter()
-                .any(|(s, _)| s == ".path-hidden"),
+            !other.style_rules.iter().any(|(s, _)| s == ".path-hidden"),
             "{:?}",
             other.style_rules
         );

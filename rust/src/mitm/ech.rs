@@ -252,9 +252,8 @@ impl EchHosts {
         let confirmed = {
             let mut evidence = self.evidence.lock().unwrap();
             if evidence.len() >= EVIDENCE_CAP && !evidence.contains_key(host) {
-                evidence.retain(|_, seen| {
-                    now_ms.saturating_sub(seen.first_ms) <= REFUSAL_WINDOW_MS
-                });
+                evidence
+                    .retain(|_, seen| now_ms.saturating_sub(seen.first_ms) <= REFUSAL_WINDOW_MS);
                 if evidence.len() >= EVIDENCE_CAP {
                     evidence.clear();
                 }
@@ -525,7 +524,10 @@ mod tests {
         ech.note_public_name("shop.test", "cloudflare-ech.test");
         ech.note_public_name("other.test", "other-ech.test");
 
-        assert!(!ech.splices("shop.test", false, 1_000), "a plain host stays terminated");
+        assert!(
+            !ech.splices("shop.test", false, 1_000),
+            "a plain host stays terminated"
+        );
         assert!(
             !ech.splices("cloudflare-ech.test", false, 1_000),
             "no exemption yet"

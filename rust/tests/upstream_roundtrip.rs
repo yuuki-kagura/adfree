@@ -47,17 +47,13 @@ fn wrap_in_ip_packet(dns: &[u8]) -> Vec<u8> {
 #[test]
 fn sends_to_the_configured_resolver_and_matches_the_reply() {
     // Fake resolver: answer a query by echoing the question.
-    let responder = std::net::UdpSocket::bind(SocketAddr::V4(SocketAddrV4::new(
-        Ipv4Addr::LOCALHOST,
-        0,
-    )))
-    .expect("bind responder");
+    let responder =
+        std::net::UdpSocket::bind(SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 0)))
+            .expect("bind responder");
     let responder_addr = responder.local_addr().expect("responder addr");
-    let client = std::net::UdpSocket::bind(SocketAddr::V4(SocketAddrV4::new(
-        Ipv4Addr::LOCALHOST,
-        0,
-    )))
-    .expect("bind client");
+    let client =
+        std::net::UdpSocket::bind(SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 0)))
+            .expect("bind client");
     client
         .set_read_timeout(Some(Duration::from_millis(200)))
         .expect("set read timeout");
@@ -106,17 +102,18 @@ fn sends_to_the_configured_resolver_and_matches_the_reply() {
     assert_eq!(&reply.message[12..], &query_named(0)[12..]);
     // The QR bit must be set.
     assert_eq!(reply.message[2] & 0x80, 0x80);
-    assert_eq!(upstream.pending_len(), 0, "matched, so pending must be empty");
+    assert_eq!(
+        upstream.pending_len(),
+        0,
+        "matched, so pending must be empty"
+    );
 
     drop(client);
 }
 
 #[test]
 fn a_non_dns_packet_is_rejected() {
-    let mut upstream = Upstream::new(SocketAddr::V4(SocketAddrV4::new(
-        Ipv4Addr::LOCALHOST,
-        53,
-    )));
+    let mut upstream = Upstream::new(SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 53)));
     // Any IP packet that does not carry UDP cannot be forwarded.
     let mut tcp_packet = wrap_in_ip_packet(&query_named(1));
     tcp_packet[9] = crate::PROTO_TCP_PLACEHOLDER;

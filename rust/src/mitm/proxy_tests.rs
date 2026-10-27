@@ -5,8 +5,8 @@
 //! on top of TLS: the response rewriter that injects scripts into HTML.
 
 use super::proxy::{
-    blocked_response, closing_response, content_hash, local_asset, origin_form, redirect_response,
-    rebuilt_head, request_facts, request_url, rewritable, swallow_body, take_local_request,
+    blocked_response, closing_response, content_hash, local_asset, origin_form, rebuilt_head,
+    redirect_response, request_facts, request_url, rewritable, swallow_body, take_local_request,
     ClientDiscard, ProxySession, RequestBody, HIDE_PATH,
 };
 use super::*;
@@ -112,8 +112,8 @@ fn build_proxy(ca: &CertificateAuthority, script: &str) -> ProxySession {
 #[test]
 fn script_request_is_answered_locally() {
     let mut buffer = b"GET /adfree-user.js HTTP/1.1\r\nHost: origin.example.com\r\n\r\n".to_vec();
-    let response =
-        take_local_request("/adfree-user.js", "let x = 1;", None, None, &mut buffer).expect("served");
+    let response = take_local_request("/adfree-user.js", "let x = 1;", None, None, &mut buffer)
+        .expect("served");
     assert!(buffer.is_empty(), "the request is consumed");
     let text = String::from_utf8(response).expect("utf8");
     assert!(text.starts_with("HTTP/1.1 200 OK\r\n"));
@@ -166,7 +166,11 @@ fn injects_into_html_and_fixes_content_length() {
 
     let body = "<html><head></head><body>ad</body></html>";
     let (out, injected) = proxy.rewrite_response(&html_response(body));
-    assert_eq!(injected, expected_tag(TEST_NONCE).len(), "the whole tag is added");
+    assert_eq!(
+        injected,
+        expected_tag(TEST_NONCE).len(),
+        "the whole tag is added"
+    );
 
     let text = String::from_utf8(out).expect("utf8");
     let new_len = body.len() + expected_tag(TEST_NONCE).len();
@@ -197,7 +201,10 @@ fn response_split_across_reads_is_reassembled() {
 
     let text = String::from_utf8(out).expect("utf8");
     let new_len = body.len() + expected_tag(TEST_NONCE).len();
-    assert!(text.contains(&format!("Content-Length: {new_len}")), "{text}");
+    assert!(
+        text.contains(&format!("Content-Length: {new_len}")),
+        "{text}"
+    );
     assert!(has_user_tag(&text));
 }
 
@@ -209,13 +216,19 @@ fn gzip_responses_are_decoded_rewritten_and_recompressed() {
     let body = "<html><head></head><body>ad</body></html>";
     let gz = http::gzip_encode(body.as_bytes()).expect("gzip");
     let mut response = Vec::new();
-    response.extend_from_slice(b"HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Encoding: gzip\r\nContent-Length: ");
+    response.extend_from_slice(
+        b"HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Encoding: gzip\r\nContent-Length: ",
+    );
     response.extend_from_slice(gz.len().to_string().as_bytes());
     response.extend_from_slice(b"\r\n\r\n");
     response.extend_from_slice(&gz);
 
     let (out, injected) = proxy.rewrite_response(&response);
-    assert_eq!(injected, expected_tag(TEST_NONCE).len(), "the tag is added to the page");
+    assert_eq!(
+        injected,
+        expected_tag(TEST_NONCE).len(),
+        "the tag is added to the page"
+    );
 
     let split = http::head_end(&out).expect("head");
     let head = String::from_utf8(out[..split].to_vec()).expect("utf8");
@@ -272,8 +285,14 @@ fn chunked_responses_become_identity_with_a_length() {
         http::parse_response_head(&out[..split]).content_length,
         Some(new_len)
     );
-    assert_eq!(out.len() - split, new_len, "the body is not chunked anymore");
-    assert!(has_user_tag(std::str::from_utf8(&out[split..]).expect("utf8")));
+    assert_eq!(
+        out.len() - split,
+        new_len,
+        "the body is not chunked anymore"
+    );
+    assert!(has_user_tag(
+        std::str::from_utf8(&out[split..]).expect("utf8")
+    ));
 }
 
 /// The regression this stage exists for: a body that arrives in several reads
@@ -302,10 +321,17 @@ fn multi_read_bodies_get_the_full_length() {
     let declared = http::parse_response_head(&out[..split])
         .content_length
         .expect("content-length");
-    assert_eq!(declared, out.len() - split, "the declared length is the real one");
+    assert_eq!(
+        declared,
+        out.len() - split,
+        "the declared length is the real one"
+    );
     let text = String::from_utf8(out[split..].to_vec()).expect("utf8");
     assert!(has_user_tag(&text));
-    assert!(text.ends_with("</body></html>"), "the body must be complete");
+    assert!(
+        text.ends_with("</body></html>"),
+        "the body must be complete"
+    );
 }
 
 #[test]
@@ -315,11 +341,13 @@ fn several_responses_on_one_connection_are_each_rewritten() {
 
     // Two keep-alive responses in one read.
     let mut response = html_response("<html><head></head><body>one</body></html>");
-    response.extend_from_slice(&html_response(
-        "<html><head></head><body>two</body></html>",
-    ));
+    response.extend_from_slice(&html_response("<html><head></head><body>two</body></html>"));
     let (out, injected) = proxy.rewrite_response(&response);
-    assert_eq!(injected, expected_tag(TEST_NONCE).len() * 2, "both bodies got a tag");
+    assert_eq!(
+        injected,
+        expected_tag(TEST_NONCE).len() * 2,
+        "both bodies got a tag"
+    );
 
     let text = String::from_utf8(out).expect("utf8");
     assert_eq!(text.matches(&user_tag_src()).count(), 2);
@@ -349,7 +377,8 @@ fn json_responses_pass_through_byte_for_byte() {
     let ca = CertificateAuthority::generate().expect("ca");
     let mut proxy = build_proxy(&ca, "/adfree-user.js");
 
-    let response = b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 7\r\n\r\n{\"a\":1}";
+    let response =
+        b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 7\r\n\r\n{\"a\":1}";
     let (out, injected) = proxy.rewrite_response(response);
     assert_eq!(injected, 0, "JSON must not be touched");
     assert_eq!(out, response, "the body must arrive unchanged");
@@ -468,7 +497,9 @@ fn a_request_and_its_response_cross_the_splice() {
     let origin_ca = CertificateAuthority::generate().expect("origin ca");
     let mut origin_roots = rustls::RootCertStore::empty();
     origin_roots
-        .add(rustls::pki_types::CertificateDer::from(origin_ca.cert_der()))
+        .add(rustls::pki_types::CertificateDer::from(
+            origin_ca.cert_der(),
+        ))
         .expect("origin root");
     let upstream_config = tls::UpstreamTls::with_roots(origin_roots);
 
@@ -569,7 +600,9 @@ fn a_pending_session_opens_from_the_client_hello() {
     let origin_ca = CertificateAuthority::generate().expect("origin ca");
     let mut origin_roots = rustls::RootCertStore::empty();
     origin_roots
-        .add(rustls::pki_types::CertificateDer::from(origin_ca.cert_der()))
+        .add(rustls::pki_types::CertificateDer::from(
+            origin_ca.cert_der(),
+        ))
         .expect("origin root");
     let upstream_config = tls::UpstreamTls::with_roots(origin_roots);
 
@@ -577,9 +610,13 @@ fn a_pending_session_opens_from_the_client_hello() {
     let resolver = Arc::new(SniCertResolver::new(Arc::new(
         CertificateAuthority::from_pem(&mitm_ca.cert_pem(), &mitm_ca.key_pem()).expect("restore"),
     )));
-    let mut proxy =
-        ProxySession::new_pending(resolver, upstream_config, "/adfree-user.js".into(), Arc::from(""))
-            .expect("pending session");
+    let mut proxy = ProxySession::new_pending(
+        resolver,
+        upstream_config,
+        "/adfree-user.js".into(),
+        Arc::from(""),
+    )
+    .expect("pending session");
     assert_eq!(proxy.captured_sni(), None, "no hostname before the hello");
 
     let origin_resolver = Arc::new(SniCertResolver::new(Arc::new(origin_ca)));
@@ -719,7 +756,9 @@ fn a_large_script_body_reaches_the_client() {
     let origin_ca = CertificateAuthority::generate().expect("origin ca");
     let mut origin_roots = rustls::RootCertStore::empty();
     origin_roots
-        .add(rustls::pki_types::CertificateDer::from(origin_ca.cert_der()))
+        .add(rustls::pki_types::CertificateDer::from(
+            origin_ca.cert_der(),
+        ))
         .expect("origin root");
     let upstream_config = tls::UpstreamTls::with_roots(origin_roots);
 
@@ -809,14 +848,13 @@ fn a_pending_session_splices_non_tls_streams_untouched() {
     let resolver = Arc::new(SniCertResolver::new(Arc::new(
         CertificateAuthority::from_pem(&ca.cert_pem(), &ca.key_pem()).expect("restore"),
     )));
-    let mut proxy =
-        ProxySession::new_pending(
-            resolver,
-            tls::UpstreamTls::system(),
-            String::new(),
-            Arc::from(""),
-        )
-            .expect("pending session");
+    let mut proxy = ProxySession::new_pending(
+        resolver,
+        tls::UpstreamTls::system(),
+        String::new(),
+        Arc::from(""),
+    )
+    .expect("pending session");
 
     let request = b"GET / HTTP/1.1\r\nHost: plain.example.com\r\n\r\n";
     let out = proxy.on_client_payload(request).expect("client step");
@@ -842,14 +880,13 @@ fn a_fragmented_client_hello_still_opens_the_session() {
     let resolver = Arc::new(SniCertResolver::new(Arc::new(
         CertificateAuthority::from_pem(&mitm_ca.cert_pem(), &mitm_ca.key_pem()).expect("restore"),
     )));
-    let mut proxy =
-        ProxySession::new_pending(
-            resolver,
-            tls::UpstreamTls::system(),
-            String::new(),
-            Arc::from(""),
-        )
-            .expect("pending session");
+    let mut proxy = ProxySession::new_pending(
+        resolver,
+        tls::UpstreamTls::system(),
+        String::new(),
+        Arc::from(""),
+    )
+    .expect("pending session");
 
     let mut browser_roots = rustls::RootCertStore::empty();
     browser_roots
@@ -957,14 +994,20 @@ fn a_long_identity_body_streams_with_the_tag_in_it() {
     let lower = head.to_lowercase();
     assert!(head.starts_with("HTTP/1.1 200 OK"), "{head}");
     assert!(lower.contains("transfer-encoding: chunked"), "{head}");
-    assert!(!lower.contains("content-length"), "framing must be chunked: {head}");
+    assert!(
+        !lower.contains("content-length"),
+        "framing must be chunked: {head}"
+    );
 
     let tag = page
         .find(&expected_tag(&nonce_in(&page)))
         .expect("the tag must be in the page");
     let head_close = page.find("</head>").expect("</head>");
     assert!(tag < head_close, "the tag must land before </head>");
-    assert!(page.ends_with("</body></html>"), "the body must be complete");
+    assert!(
+        page.ends_with("</body></html>"),
+        "the body must be complete"
+    );
     assert_eq!(page.len(), body.len() + expected_tag(TEST_NONCE).len());
 }
 
@@ -977,7 +1020,9 @@ fn a_long_gzip_body_streams_still_compressed() {
     let body = format!("<html><head><title>t</title></head><body>{filler}</body></html>");
     let gzipped = http::gzip_encode(body.as_bytes()).expect("gzip");
     let mut response = Vec::new();
-    response.extend_from_slice(b"HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Encoding: gzip\r\nContent-Length: ");
+    response.extend_from_slice(
+        b"HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Encoding: gzip\r\nContent-Length: ",
+    );
     response.extend_from_slice(gzipped.len().to_string().as_bytes());
     response.extend_from_slice(b"\r\n\r\n");
     response.extend_from_slice(&gzipped);
@@ -994,7 +1039,10 @@ fn a_long_gzip_body_streams_still_compressed() {
     let (head, page) = read_streamed(&out, true);
     let lower = head.to_lowercase();
     assert!(lower.contains("transfer-encoding: chunked"), "{head}");
-    assert!(lower.contains("content-encoding: gzip"), "must stay compressed: {head}");
+    assert!(
+        lower.contains("content-encoding: gzip"),
+        "must stay compressed: {head}"
+    );
     assert!(!lower.contains("content-length"), "{head}");
     assert!(has_user_tag(&page));
     assert!(page.ends_with("</body></html>"));
@@ -1051,7 +1099,9 @@ fn the_streamed_gzip_body_is_valid_gzip() {
     let body = format!("<html><head></head><body>{filler}</body></html>");
     let gzipped = http::gzip_encode(body.as_bytes()).expect("gzip");
     let mut response = Vec::new();
-    response.extend_from_slice(b"HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Encoding: gzip\r\nContent-Length: ");
+    response.extend_from_slice(
+        b"HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Encoding: gzip\r\nContent-Length: ",
+    );
     response.extend_from_slice(gzipped.len().to_string().as_bytes());
     response.extend_from_slice(b"\r\n\r\n");
     response.extend_from_slice(&gzipped);
@@ -1205,9 +1255,15 @@ fn answering_the_stylesheet_request_repeats_the_bytes_the_link_hashed() {
 
     let (head, compressed) = split_local(&response);
     assert!(head.starts_with("HTTP/1.1 200 OK"), "{head}");
-    assert!(head.contains("Content-Type: text/css; charset=utf-8"), "{head}");
+    assert!(
+        head.contains("Content-Type: text/css; charset=utf-8"),
+        "{head}"
+    );
     // Cacheable forever: the URL changes when the bytes do, and only then.
-    assert!(head.contains("Cache-Control: max-age=31536000, immutable"), "{head}");
+    assert!(
+        head.contains("Cache-Control: max-age=31536000, immutable"),
+        "{head}"
+    );
     assert!(head.contains("Content-Encoding: gzip"), "{head}");
     assert!(head.contains("Vary: Accept-Encoding"), "{head}");
 
@@ -1277,17 +1333,17 @@ fn the_runtime_is_served_from_a_content_addressed_url() {
 #[test]
 fn the_user_script_is_served_from_a_content_addressed_url() {
     let script = "/* big */ window.__adfree_user=\"x\";";
-    let href = format!(
-        "/adfree-user.js?h={:016x}",
-        content_hash(script.as_bytes())
-    );
-    let mut buffer = format!(
-        "GET {href} HTTP/1.1\r\nHost: origin.example.com\r\nAccept-Encoding: gzip\r\n\r\n"
-    )
-    .into_bytes();
-    let response = take_local_request("/adfree-user.js", script, None, None, &mut buffer).expect("served");
+    let href = format!("/adfree-user.js?h={:016x}", content_hash(script.as_bytes()));
+    let mut buffer =
+        format!("GET {href} HTTP/1.1\r\nHost: origin.example.com\r\nAccept-Encoding: gzip\r\n\r\n")
+            .into_bytes();
+    let response =
+        take_local_request("/adfree-user.js", script, None, None, &mut buffer).expect("served");
     let (head, compressed) = split_local(&response);
-    assert!(head.contains("Cache-Control: max-age=31536000, immutable"), "{head}");
+    assert!(
+        head.contains("Cache-Control: max-age=31536000, immutable"),
+        "{head}"
+    );
     let plain = http::decode_body(&compressed, http::Encoding::Gzip).expect("decoded");
     assert_eq!(String::from_utf8(plain).expect("utf8"), script);
 }
@@ -1414,7 +1470,9 @@ fn request_facts_know_who_wants_the_connection_closed() {
     assert!(!closes(
         b"GET / HTTP/1.0\r\nHost: a.test\r\nConnection: keep-alive\r\n\r\n"
     ));
-    assert!(closes(b"GET / HTTP/1.0\r\nHost: a.test\r\nConnection: Close\r\n\r\n"));
+    assert!(closes(
+        b"GET / HTTP/1.0\r\nHost: a.test\r\nConnection: Close\r\n\r\n"
+    ));
 
     // The marker sits before the blank line, so the head stays a head.
     let marked = closing_response(blocked_response());
@@ -1446,7 +1504,10 @@ fn request_types_follow_sec_fetch_dest() {
     assert_eq!(of("report"), "csp_report");
     assert_eq!(of("made-up"), "other");
     let head = b"GET /x HTTP/1.1\r\nHost: a.test\r\n\r\n";
-    assert_eq!(request_facts(head).expect("parseable").request_type(), "other");
+    assert_eq!(
+        request_facts(head).expect("parseable").request_type(),
+        "other"
+    );
 }
 
 /// The URL a request line and its host make, and the origin-form target a
@@ -1469,7 +1530,10 @@ fn urls_and_targets_round_trip() {
         Some("/api?keep=2")
     );
     assert_eq!(origin_form("https://shop.test").as_deref(), Some("/"));
-    assert_eq!(origin_form("https://shop.test?a=1").as_deref(), Some("/?a=1"));
+    assert_eq!(
+        origin_form("https://shop.test?a=1").as_deref(),
+        Some("/?a=1")
+    );
     assert_eq!(origin_form("not a url").as_deref(), None);
 }
 
@@ -1499,9 +1563,8 @@ fn blocked_and_redirect_answers_are_shaped_for_a_browser() {
     assert!(head.starts_with("HTTP/1.1 204 No Content\r\n"), "{head}");
     assert!(head.contains("Content-Length: 0\r\n"), "{head}");
 
-    let redirect =
-        redirect_response("data:application/javascript;base64,KGZ1bmN0aW9uKCl7fSkoKTs=")
-            .expect("decodable");
+    let redirect = redirect_response("data:application/javascript;base64,KGZ1bmN0aW9uKCl7fSkoKTs=")
+        .expect("decodable");
     let (head, body) = split_local(&redirect);
     assert!(head.starts_with("HTTP/1.1 200 OK\r\n"), "{head}");
     assert!(

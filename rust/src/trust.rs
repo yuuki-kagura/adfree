@@ -229,7 +229,11 @@ fn cert_installed(der: &[u8]) -> bool {
 
 /// Runs a command with a deadline. `su` may wait on a consent dialog, and a
 /// denied probe must not wedge the caller's IO thread forever.
-fn run_with_timeout(program: &str, args: &[&str], timeout: Duration) -> Option<std::process::Output> {
+fn run_with_timeout(
+    program: &str,
+    args: &[&str],
+    timeout: Duration,
+) -> Option<std::process::Output> {
     let mut child = Command::new(program)
         .args(args)
         .stdin(Stdio::null())
@@ -279,9 +283,7 @@ fn su_path() -> Option<String> {
 #[cfg(target_os = "android")]
 fn su_granted(su: &str) -> bool {
     run_with_timeout(su, &["-c", "id"], PROBE_TIMEOUT)
-        .map(|out| {
-            out.status.success() && String::from_utf8_lossy(&out.stdout).contains("uid=0")
-        })
+        .map(|out| out.status.success() && String::from_utf8_lossy(&out.stdout).contains("uid=0"))
         .unwrap_or(false)
 }
 
@@ -399,7 +401,9 @@ fn android_install(der: &[u8]) -> RootTrust {
         }
     };
     let installed = cert_installed(der);
-    crate::logbuf::push(&format!("root trust: install magisk={magisk} installed={installed}"));
+    crate::logbuf::push(&format!(
+        "root trust: install magisk={magisk} installed={installed}"
+    ));
     RootTrust {
         su_present: true,
         root_granted: true,
@@ -754,7 +758,10 @@ iRjL+xZqkbnzAis6uQIhAJc+z9Z5CRp5OFQT110aMAqyuGpi5rouQa7kYzl2smXB
 
     #[test]
     fn file_name_matches_openssl_subject_hash_old() {
-        assert_eq!(cert_file_name(&fixture_der()).as_deref(), Some("539aec40.0"));
+        assert_eq!(
+            cert_file_name(&fixture_der()).as_deref(),
+            Some("539aec40.0")
+        );
     }
 
     #[test]

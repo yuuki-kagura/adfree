@@ -48,7 +48,11 @@ fn client_facing_sequence_advances_with_every_payload() {
     let segs = relay.segments_for_client(b"one");
     assert_eq!(segs.len(), 1);
     let parsed = Packet::parse(&segs[0]).expect("parse");
-    assert_eq!(parsed.seq, 55_000 + 1, "first data byte follows the SYN-ACK");
+    assert_eq!(
+        parsed.seq,
+        55_000 + 1,
+        "first data byte follows the SYN-ACK"
+    );
 
     relay.segments_for_client(b"two!");
     let segs = relay.segments_for_client(b"three!");
@@ -110,7 +114,10 @@ fn every_segment_carries_a_valid_ipv4_tcp_checksum() {
 #[test]
 fn the_client_half_blocks_until_the_handshake_is_done() {
     let relay = make_relay();
-    assert!(!relay.is_established(), "a fresh relay is still handshaking");
+    assert!(
+        !relay.is_established(),
+        "a fresh relay is still handshaking"
+    );
 }
 
 #[test]

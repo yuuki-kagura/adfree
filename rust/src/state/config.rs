@@ -1,0 +1,361 @@
+//! One config path: persisted state in, engine knobs out.
+//!
+//! Kotlin used to map settings to `EngineConfig` on every change, which meant
+//! two implementations of every default and a switch that could be shown but
+//! never applied. Building the engine config here makes the persisted record
+//! the only source of truth: the UI writes a record, the core applies it.
+
+use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+
+use crate::engine::{Config, Core};
+
+use super::model::*;
+use super::StateStore;
+
+/// The per-app consequences of the firewall rules, computed once per apply.
+#[derive(Debug, Default)]
+pub struct PolicyPlan {
+    pub cellular_blocked: Vec<String>,
+    pub wifi_blocked: Vec<String>,
+    pub screen_off_blocked: Vec<String>,
+    /// Apps whose TLS is spliced instead of decrypted.
+    pub https_skip_apps: Vec<String>,
+    /// Apps kept outside the tunnel entirely.
+    pub excluded: Vec<String>,
+}
+
+pub struct Plan {
+    pub config: Config,
+    pub upstream: SocketAddr,
+    pub outcome: ConfigOutcome,
+    pub resolver: ResolverSnapshot,
+    pub policy: PolicyPlan,
+}
+
+const DEFAULT_IP: Ipv4Addr = Ipv4Addr::new(94, 140, 14, 14);
+const DEFAULT_PORT: u16 = 53;
+
+fn default_upstream() -> SocketAddr {
+    SocketAddr::new(IpAddr::V4(DEFAULT_IP), DEFAULT_PORT)
+}
+
+/// Applies the current state to the engine. Returns the warning Kotlin shows
+/// (if any); the engine always ends up with a usable resolver, so a missing or
+/// unusable provider never leaves the VPN down.
+pub fn apply(state: &StateStore, core: &Core, private_dns_strict: bool) -> ConfigOutcome {
+    let plan = build(&state.snapshot(), private_dns_strict);
+    core.set_config(plan.config);
+    core.set_app_network_policy(
+        plan.policy.cellular_blocked,
+        plan.policy.wifi_blocked,
+        plan.policy.screen_off_blocked,
+    );
+    core.set_https_skip_apps(plan.policy.https_skip_apps);
+    core.set_resolver(plan.upstream);
+    plan.outcome
+}
+
+pub fn build(snapshot: &StateSnapshot, private_dns_strict: bool) -> Plan {
+    let protection = &snapshot.protection;
+    let policy = policy(snapshot);
+    let (provider, provider_warning) = selected_provider(snapshot);
+    let (upstream, tunnel_dns, address_warning) = upstream(&provider);
+    let (proxy, proxy_warning) = proxy(&protection.proxy);
+
+    let warning = if provider_warning != ConfigWarning::None {
+        provider_warning
+    } else if address_warning != ConfigWarning::None {
+        address_warning
+    } else {
+        proxy_warning
+    };
+
+    let resolver = ResolverSnapshot {
+        tunnel_dns,
+        provider_id: provider.id.clone(),
+        warning,
+    };
+
+    let config = Config {
+        mitm_enabled: protection.is_https_filtering_enabled,
+        full_ech: protection.is_full_ech_enabled,
+        block_quic: protection.block_quic,
+        block_doh: protection.block_doh,
+        // With the system's Private DNS in strict mode the platform already
+        // owns DoT; dropping it too would also kill the user's chosen server.
+        block_dot: protection.block_dot && !private_dns_strict,
+        ad_blocking: protection.is_ad_blocking_enabled,
+        tracking_protection: protection.is_tracking_protection_enabled,
+        dns_protection: protection.is_dns_protection_enabled,
+        smart_filtering: protection.is_smart_filtering_enabled,
+        block_mode: crate::dns::BlockMode::from_u8(protection.block_mode.code()),
+        log_allowed: protection.log_allowed_requests,
+        eco_mode: protection.is_eco_battery_mode_enabled,
+        https_skip_hosts: protection.https_skip_hosts.clone(),
+        https_only_hosts: protection.https_only_hosts.clone(),
+        https_only_mode: protection.https_only_mode,
+        proxy,
+    };
+
+    Plan {
+        config,
+        upstream,
+        outcome: ConfigOutcome {
+            ok: warning == ConfigWarning::None,
+            warning,
+        },
+        resolver,
+        policy,
+    }
+}
+
+/// The selected provider, or the AdGuard default with a warning. Never fails:
+/// a resolver the user deleted must not take the tunnel down with it.
+fn selected_provider(snapshot: &StateSnapshot) -> (DnsProviderRecord, ConfigWarning) {
+    if let Some(provider) = snapshot
+        .dns
+        .provider(&snapshot.protection.selected_dns_provider_id)
+    {
+        return (provider.clone(), ConfigWarning::None);
+    }
+    crate::logbuf::push("state: selected resolver is missing, using the default");
+    (default_provider(), ConfigWarning::ProviderMissing)
+}
+
+fn default_provider() -> DnsProviderRecord {
+    builtin_dns_providers()
+        .into_iter()
+        .find(|p| p.id == "adguard_default")
+        .expect("the built-in default always exists")
+}
+
+/// Plain UDP is the only upstream the engine speaks until the encrypted
+/// transport lands; a DoT/DoH selection falls back to the default instead of
+/// silently keeping an unrelated resolver active.
+fn upstream(provider: &DnsProviderRecord) -> (SocketAddr, String, ConfigWarning) {
+    if provider.protocol != DnsProtocol::Udp {
+        crate::logbuf::push(&format!(
+            "state: resolver {} uses {:?}, not wired to the engine yet; using UDP",
+            provider.id, provider.protocol
+        ));
+        return (
+            default_upstream(),
+            DEFAULT_IP.to_string(),
+            ConfigWarning::AddressInvalid,
+        );
+    }
+    match provider.address.parse::<IpAddr>() {
+        Ok(ip) => {
+            let addr = SocketAddr::new(ip, provider.port);
+            (addr, ip.to_string(), ConfigWarning::None)
+        }
+        Err(_) => {
+            crate::logbuf::push(&format!(
+                "state: resolver {} has an unparsable address; using the default",
+                provider.id
+            ));
+            (
+                default_upstream(),
+                DEFAULT_IP.to_string(),
+                ConfigWarning::AddressInvalid,
+            )
+        }
+    }
+}
+
+fn proxy(
+    state: &ProxyState,
+) -> (
+    Option<std::sync::Arc<crate::socks5::ProxyEndpoint>>,
+    ConfigWarning,
+) {
+    if !state.enabled {
+        return (None, ConfigWarning::None);
+    }
+    let host = state.host.trim();
+    let parsed = host
+        .trim_matches(['[', ']'])
+        .parse::<IpAddr>()
+        .ok()
+        .map(crate::packet::ip_key_from);
+    match parsed {
+        Some(addr) if state.port != 0 => (
+            Some(std::sync::Arc::new(crate::socks5::ProxyEndpoint {
+                addr,
+                port: state.port,
+                username: state.username.clone(),
+                password: state.password.clone(),
+            })),
+            ConfigWarning::None,
+        ),
+        _ => {
+            crate::logbuf::push(
+                "state: proxy host must be an IPv4/IPv6 literal and the port non-zero",
+            );
+            (None, ConfigWarning::ProxyInvalid)
+        }
+    }
+}
+
+pub fn policy(snapshot: &StateSnapshot) -> PolicyPlan {
+    let mut plan = PolicyPlan::default();
+    for rule in &snapshot.firewall {
+        if !rule.filtered {
+            plan.excluded.push(rule.package_name.clone());
+        }
+        if !rule.https {
+            plan.https_skip_apps.push(rule.package_name.clone());
+        }
+    }
+    // The firewall switch owns the per-app restrictions only: tunnel routing
+    // and HTTPS filtering are separate switches and keep working when it is
+    // off. The core treats empty lists as "no restriction".
+    if snapshot.protection.is_firewall_enabled {
+        for rule in &snapshot.firewall {
+            if !rule.cellular {
+                plan.cellular_blocked.push(rule.package_name.clone());
+            }
+            if !rule.wifi {
+                plan.wifi_blocked.push(rule.package_name.clone());
+            }
+            if rule.screen_off {
+                plan.screen_off_blocked.push(rule.package_name.clone());
+            }
+        }
+    }
+    plan
+}
+
+/// Apps kept out of the tunnel (`filtered = false`), for `VpnService`.
+pub fn excluded_packages(snapshot: &StateSnapshot) -> Vec<String> {
+    policy(snapshot).excluded
+}
+
+/// What the tunnel should advertise as its DNS server, without touching the
+/// engine (the VPN builder calls this before `establish`).
+pub fn resolver_snapshot(snapshot: &StateSnapshot) -> ResolverSnapshot {
+    let (provider, provider_warning) = selected_provider(snapshot);
+    let (_, tunnel_dns, address_warning) = upstream(&provider);
+    let warning = if provider_warning != ConfigWarning::None {
+        provider_warning
+    } else {
+        address_warning
+    };
+    ResolverSnapshot {
+        tunnel_dns,
+        provider_id: provider.id.clone(),
+        warning,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn snapshot() -> StateSnapshot {
+        StateSnapshot::default()
+    }
+
+    #[test]
+    fn defaults_are_usable_without_any_warning() {
+        let plan = build(&snapshot(), false);
+        assert!(plan.outcome.ok);
+        assert_eq!(plan.resolver.tunnel_dns, "94.140.14.14");
+        assert!(plan.config.dns_protection);
+        assert!(!plan.config.mitm_enabled);
+    }
+
+    #[test]
+    fn a_missing_provider_falls_back_and_warns() {
+        let mut s = snapshot();
+        s.protection.selected_dns_provider_id = "gone".to_string();
+        let plan = build(&s, false);
+        assert!(!plan.outcome.ok);
+        assert_eq!(plan.outcome.warning, ConfigWarning::ProviderMissing);
+        assert_eq!(plan.resolver.provider_id, "adguard_default");
+        assert_eq!(plan.resolver.tunnel_dns, "94.140.14.14");
+    }
+
+    #[test]
+    fn custom_udp_resolver_sets_the_tunnel_dns() {
+        let mut s = snapshot();
+        s.dns.providers.push(DnsProviderRecord {
+            id: "mine".to_string(),
+            name: "Mine".to_string(),
+            address: "9.9.9.9".to_string(),
+            port: 5353,
+            protocol: DnsProtocol::Udp,
+            is_custom: true,
+            ..DnsProviderRecord::default()
+        });
+        s.protection.selected_dns_provider_id = "mine".to_string();
+        let plan = build(&s, false);
+        assert!(plan.outcome.ok);
+        assert_eq!(plan.resolver.tunnel_dns, "9.9.9.9");
+        assert_eq!(plan.upstream.port(), 5353);
+    }
+
+    #[test]
+    fn private_dns_strict_carves_dot_out_of_the_blocker() {
+        let s = snapshot();
+        assert!(build(&s, false).config.block_dot);
+        assert!(!build(&s, true).config.block_dot);
+    }
+
+    #[test]
+    fn firewall_switch_only_gates_network_rules() {
+        let mut s = snapshot();
+        s.firewall.push(AppFirewallRule {
+            package_name: "com.example".to_string(),
+            cellular: false,
+            wifi: false,
+            filtered: false,
+            screen_off: true,
+            https: false,
+        });
+        let on = policy(&s);
+        assert_eq!(on.cellular_blocked, vec!["com.example"]);
+        assert_eq!(on.wifi_blocked, vec!["com.example"]);
+        assert_eq!(on.screen_off_blocked, vec!["com.example"]);
+        assert_eq!(on.excluded, vec!["com.example"]);
+        assert_eq!(on.https_skip_apps, vec!["com.example"]);
+
+        s.protection.is_firewall_enabled = false;
+        let off = policy(&s);
+        assert!(off.cellular_blocked.is_empty());
+        assert!(off.wifi_blocked.is_empty());
+        assert!(off.screen_off_blocked.is_empty());
+        // Routing and HTTPS exclusion survive the firewall switch.
+        assert_eq!(off.excluded, vec!["com.example"]);
+        assert_eq!(off.https_skip_apps, vec!["com.example"]);
+    }
+
+    #[test]
+    fn a_broken_proxy_leaves_a_warning_but_keeps_direct_connections() {
+        let mut s = snapshot();
+        s.protection.proxy = ProxyState {
+            enabled: true,
+            host: "proxy.example".to_string(),
+            port: 1080,
+            ..ProxyState::default()
+        };
+        let plan = build(&s, false);
+        assert!(plan.config.proxy.is_none());
+        assert_eq!(plan.outcome.warning, ConfigWarning::ProxyInvalid);
+    }
+
+    #[test]
+    fn an_encrypted_provider_is_not_silently_kept() {
+        let mut s = snapshot();
+        let mut p = DnsProviderRecord::default();
+        p.id = "dot".to_string();
+        p.address = "dns.example".to_string();
+        p.protocol = DnsProtocol::Dot;
+        p.is_custom = true;
+        s.dns.providers.push(p);
+        s.protection.selected_dns_provider_id = "dot".to_string();
+        let plan = build(&s, false);
+        assert_eq!(plan.outcome.warning, ConfigWarning::AddressInvalid);
+        assert_eq!(plan.resolver.tunnel_dns, "94.140.14.14");
+    }
+}

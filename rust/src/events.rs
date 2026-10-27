@@ -331,7 +331,9 @@ mod tests {
             let ts = u64::from_le_bytes(out[idx..idx + 8].try_into().unwrap());
             let latency = u32::from_le_bytes(out[idx + 16..idx + 20].try_into().unwrap());
             let d_start = idx + RECORD_HEADER;
-            let domain = std::str::from_utf8(&out[d_start..d_start + dlen]).unwrap().to_string();
+            let domain = std::str::from_utf8(&out[d_start..d_start + dlen])
+                .unwrap()
+                .to_string();
             let saved = u32::from_le_bytes(out[idx + 20..idx + 24].try_into().unwrap());
             assert_eq!(saved, 0);
             assert_eq!(rlen + llen + alen, 0);
@@ -355,7 +357,9 @@ mod tests {
         assert_eq!(n, 4);
         let first_domain = {
             let dlen = out[11] as usize;
-            std::str::from_utf8(&out[24..24 + dlen]).unwrap().to_string()
+            std::str::from_utf8(&out[24..24 + dlen])
+                .unwrap()
+                .to_string()
         };
         assert_eq!(first_domain, "h6.test");
     }
@@ -363,17 +367,7 @@ mod tests {
     #[test]
     fn long_strings_are_truncated_not_panicking() {
         let long = "a".repeat(200);
-        let ev = block_event(
-            ACTION_BLOCK,
-            &long,
-            &long,
-            &long,
-            &long,
-            0,
-            1,
-            2,
-            false,
-        );
+        let ev = block_event(ACTION_BLOCK, &long, &long, &long, &long, 0, 1, 2, false);
         assert_eq!(ev.domain_len, MAX_DOMAIN as u8);
         assert_eq!(ev.rule_len, MAX_RULE as u8);
         assert_eq!(ev.list_len, MAX_LIST as u8);
@@ -381,7 +375,10 @@ mod tests {
 
     #[test]
     fn the_app_travels_with_the_event() {
-        let ev = with_app(allow_event("host.test", "1.2.3.4", 7), "com.example.browser");
+        let ev = with_app(
+            allow_event("host.test", "1.2.3.4", 7),
+            "com.example.browser",
+        );
         assert_eq!(ev.app(), "com.example.browser");
         assert_eq!(ev.domain(), "host.test");
 

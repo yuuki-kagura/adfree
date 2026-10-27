@@ -178,7 +178,11 @@ pub fn patch_txid(body: &mut [u8], txid: u16) {
 
 /// Answers a query we could not forward with the given rcode (SERVFAIL etc.).
 /// Answers immediately instead of letting the client wait for a timeout.
-pub fn synthesize_error(packet: &Packet<'_>, query: Option<&Query<'_>>, rcode: u16) -> Option<Vec<u8>> {
+pub fn synthesize_error(
+    packet: &Packet<'_>,
+    query: Option<&Query<'_>>,
+    rcode: u16,
+) -> Option<Vec<u8>> {
     let parsed;
     let query = match query {
         Some(q) => q,
@@ -955,7 +959,11 @@ mod tests {
         let mut msg = response_skeleton(2);
         add_answer(&mut msg, TYPE_HTTPS, &svcb_rdata(&[(5, &[0xab; 6])]));
         add_answer(&mut msg, TYPE_A, &[1, 2, 3, 4]);
-        assert_eq!(clamp_answer_ttl(&mut msg, 60), 2, "both records carried 300");
+        assert_eq!(
+            clamp_answer_ttl(&mut msg, 60),
+            2,
+            "both records carried 300"
+        );
         // Header (12) + question (17) + name pointer (2) + type/class (4):
         // the first record's TTL.
         assert_eq!(u32::from_be_bytes([msg[35], msg[36], msg[37], msg[38]]), 60);
