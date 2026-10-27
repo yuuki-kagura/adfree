@@ -40,6 +40,38 @@ const SHORT_TIMEOUT: Duration = Duration::from_secs(3);
 /// Writing the module or the live overlay over `su`.
 const ROOT_TIMEOUT: Duration = Duration::from_secs(60);
 
+/// Why the root-trust status is what it is. The UI owns the wording; this
+/// code is the stable part that crosses the FFI boundary.
+#[derive(uniffi::Enum, Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum TrustDetail {
+    #[default]
+    None,
+    PlatformUnsupported,
+    InvalidCa,
+    SuMissing,
+    AlreadyInstalled,
+    RootGranted,
+    RootPending,
+    PermissionDenied,
+    MagiskModuleWritten,
+    MagiskWriteFailed,
+    InstalledLive,
+    MountPending,
+    MountFailed,
+    Uninstalled,
+    UninstalledNeedsReboot,
+    UninstallFailed,
+    NeedsRoot,
+    NeedsRootToRemove,
+    TempWriteFailed,
+    InstalledLinux,
+    LinuxInstallFailed,
+    RemovedLinux,
+    LinuxRemoveFailed,
+    NoCa,
+    NoCaToRemove,
+}
+
 /// Result of a root-mode operation, shown as the UI's status line.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct RootTrust {
@@ -52,7 +84,9 @@ pub struct RootTrust {
     /// It will be active after a reboot (Magisk module written, or an old
     /// overlay still mounted after removal).
     pub needs_reboot: bool,
-    /// User-facing explanation (Vietnamese, like the settings screen).
+    /// The user-facing state; Kotlin maps it to a localized string.
+    pub detail_code: TrustDetail,
+    /// English diagnostic from the failed command, kept for logs only.
     pub detail: String,
 }
 
@@ -75,7 +109,7 @@ pub fn status(der: Option<&[u8]>) -> RootTrust {
     {
         let _ = der;
         RootTrust {
-            detail: "Nền tảng này không hỗ trợ chế độ root.".to_string(),
+            detail_code: TrustDetail::PlatformUnsupported,
             ..RootTrust::default()
         }
     }
@@ -95,7 +129,7 @@ pub fn install(der: &[u8]) -> RootTrust {
     {
         let _ = der;
         RootTrust {
-            detail: "Nền tảng này không hỗ trợ chế độ root.".to_string(),
+            detail_code: TrustDetail::PlatformUnsupported,
             ..RootTrust::default()
         }
     }
@@ -115,7 +149,7 @@ pub fn remove(der: &[u8]) -> RootTrust {
     {
         let _ = der;
         RootTrust {
-            detail: "Nền tảng này không hỗ trợ chế độ root.".to_string(),
+            detail_code: TrustDetail::PlatformUnsupported,
             ..RootTrust::default()
         }
     }
@@ -290,14 +324,14 @@ fn su_granted(su: &str) -> bool {
 #[cfg(target_os = "android")]
 fn su_script(su: &str, script: &str, timeout: Duration) -> Result<(), String> {
     let out = run_with_timeout(su, &["-c", script], timeout)
-        .ok_or_else(|| "không chạy được su".to_string())?;
+        .ok_or_else(|| "could not run su".to_string())?;
     if out.status.success() {
         return Ok(());
     }
     let err = String::from_utf8_lossy(&out.stderr);
     let err = err.lines().last().unwrap_or("").trim();
     Err(if err.is_empty() {
-        "lệnh root thất bại".to_string()
+        "root command failed".to_string()
     } else {
         err.to_string()
     })
@@ -309,21 +343,22 @@ fn android_status(der: Option<&[u8]>) -> RootTrust {
     let su = su_path();
     let installed = der.map(cert_installed).unwrap_or(false);
     let granted = ROOT_GRANTED.load(Ordering::Relaxed);
-    let detail = if installed {
-        "CA đã nằm trong system store — mọi app tin chứng chỉ.".to_string()
+    let detail_code = if installed {
+        TrustDetail::AlreadyInstalled
     } else if su.is_none() {
-        "Không thấy su: máy chưa root, dùng chứng chỉ người dùng.".to_string()
+        TrustDetail::SuMissing
     } else if granted {
-        "Có quyền root. Cài CA vào system store để Cronet và app khác tin.".to_string()
+        TrustDetail::RootGranted
     } else {
-        "Thấy su. Quyền root sẽ được hỏi khi cài.".to_string()
+        TrustDetail::RootPending
     };
     RootTrust {
         su_present: su.is_some(),
         root_granted: granted,
         installed,
         needs_reboot: false,
-        detail,
+        detail_code,
+        detail: String::new(),
     }
 }
 
@@ -332,13 +367,13 @@ fn android_install(der: &[u8]) -> RootTrust {
     use std::sync::atomic::Ordering;
     let Some(name) = cert_file_name(der) else {
         return RootTrust {
-            detail: "Chứng chỉ CA không hợp lệ.".to_string(),
+            detail_code: TrustDetail::InvalidCa,
             ..RootTrust::default()
         };
     };
     let Some(su) = su_path() else {
         return RootTrust {
-            detail: "Không tìm thấy su — máy chưa root.".to_string(),
+            detail_code: TrustDetail::SuMissing,
             ..RootTrust::default()
         };
     };
@@ -349,7 +384,8 @@ fn android_install(der: &[u8]) -> RootTrust {
             root_granted: true,
             installed: true,
             needs_reboot: false,
-            detail: "CA đã nằm trong system store.".to_string(),
+            detail_code: TrustDetail::AlreadyInstalled,
+            detail: String::new(),
         };
     }
     if !su_granted(&su) {
@@ -358,7 +394,8 @@ fn android_install(der: &[u8]) -> RootTrust {
             root_granted: false,
             installed: false,
             needs_reboot: false,
-            detail: "Quyền root bị từ chối — chưa cài được CA hệ thống.".to_string(),
+            detail_code: TrustDetail::PermissionDenied,
+            detail: String::new(),
         };
     }
     ROOT_GRANTED.store(true, Ordering::Relaxed);
@@ -372,32 +409,22 @@ fn android_install(der: &[u8]) -> RootTrust {
     .unwrap_or(false);
 
     let pem = pem_from_der(der);
-    let (outcome, needs_reboot) = if magisk {
+    let (detail_code, detail, needs_reboot) = if magisk {
         match su_script(&su, &magisk_script(&name, &pem), ROOT_TIMEOUT) {
-            Ok(()) => (
-                "Đã tạo module Magisk. Khởi động lại máy để CA có hiệu lực.".to_string(),
-                true,
-            ),
-            Err(e) => (format!("Không ghi được module Magisk: {e}"), false),
+            Ok(()) => (TrustDetail::MagiskModuleWritten, String::new(), true),
+            Err(e) => (TrustDetail::MagiskWriteFailed, e, false),
         }
     } else {
         match su_script(&su, &live_script(&name, &pem), ROOT_TIMEOUT) {
             Ok(()) => {
                 let visible = cert_installed(der);
                 if visible {
-                    (
-                        "Đã cài CA vào system store (có hiệu lực ngay).".to_string(),
-                        false,
-                    )
+                    (TrustDetail::InstalledLive, String::new(), false)
                 } else {
-                    (
-                        "Đã mount CA nhưng store chưa thấy ngay — thử lại hoặc dùng Magisk."
-                            .to_string(),
-                        false,
-                    )
+                    (TrustDetail::MountPending, String::new(), false)
                 }
             }
-            Err(e) => (format!("Không mount được CA vào system store: {e}"), false),
+            Err(e) => (TrustDetail::MountFailed, e, false),
         }
     };
     let installed = cert_installed(der);
@@ -409,7 +436,8 @@ fn android_install(der: &[u8]) -> RootTrust {
         root_granted: true,
         installed,
         needs_reboot: needs_reboot && !installed,
-        detail: outcome,
+        detail_code,
+        detail,
     }
 }
 
@@ -418,13 +446,13 @@ fn android_remove(der: &[u8]) -> RootTrust {
     use std::sync::atomic::Ordering;
     let Some(name) = cert_file_name(der) else {
         return RootTrust {
-            detail: "Chứng chỉ CA không hợp lệ.".to_string(),
+            detail_code: TrustDetail::InvalidCa,
             ..RootTrust::default()
         };
     };
     let Some(su) = su_path() else {
         return RootTrust {
-            detail: "Không tìm thấy su — máy chưa root.".to_string(),
+            detail_code: TrustDetail::SuMissing,
             ..RootTrust::default()
         };
     };
@@ -434,7 +462,8 @@ fn android_remove(der: &[u8]) -> RootTrust {
             root_granted: false,
             installed: cert_installed(der),
             needs_reboot: false,
-            detail: "Quyền root bị từ chối — chưa gỡ được.".to_string(),
+            detail_code: TrustDetail::PermissionDenied,
+            detail: String::new(),
         };
     }
     ROOT_GRANTED.store(true, Ordering::Relaxed);
@@ -458,31 +487,30 @@ echo live
         "if command -v nsenter >/dev/null 2>&1; then nsenter -t 1 -m -- sh -c {shell}; else sh -c {shell}; fi",
         shell = shell_single_quote(&script)
     );
-    let outcome = match su_script(&su, &script, ROOT_TIMEOUT) {
+    let (detail_code, detail, needs_reboot, installed) = match su_script(&su, &script, ROOT_TIMEOUT)
+    {
         Ok(()) => {
             let installed = cert_installed(der);
             if installed {
                 (
-                    "Đã gỡ CA — khởi động lại máy để bỏ hẳn.".to_string(),
+                    TrustDetail::UninstalledNeedsReboot,
+                    String::new(),
                     true,
                     installed,
                 )
             } else {
-                ("Đã gỡ CA khỏi system store.".to_string(), false, false)
+                (TrustDetail::Uninstalled, String::new(), false, false)
             }
         }
-        Err(e) => (
-            format!("Không gỡ được CA hệ thống: {e}"),
-            false,
-            cert_installed(der),
-        ),
+        Err(e) => (TrustDetail::UninstallFailed, e, false, cert_installed(der)),
     };
     RootTrust {
         su_present: true,
         root_granted: true,
-        installed: outcome.2,
-        needs_reboot: outcome.1,
-        detail: outcome.0,
+        installed,
+        needs_reboot,
+        detail_code,
+        detail,
     }
 }
 
@@ -606,19 +634,20 @@ fn linux_installed(der: Option<&[u8]>) -> bool {
 fn linux_status(der: Option<&[u8]>) -> RootTrust {
     let elevated = elevated_linux();
     let installed = linux_installed(der);
-    let detail = if installed {
-        "CA đã nằm trong system store của hệ điều hành.".to_string()
+    let detail_code = if installed {
+        TrustDetail::InstalledLinux
     } else if elevated {
-        "Có quyền root/sudo. Cài CA vào system store để mọi ứng dụng tin.".to_string()
+        TrustDetail::RootGranted
     } else {
-        "Cần quyền root hoặc sudo không mật khẩu để cài vào system store.".to_string()
+        TrustDetail::NeedsRoot
     };
     RootTrust {
         su_present: elevated,
         root_granted: elevated,
         installed,
         needs_reboot: false,
-        detail,
+        detail_code,
+        detail: String::new(),
     }
 }
 
@@ -633,7 +662,7 @@ fn linux_run(program: &str, args: &[&str]) -> Result<(), String> {
         full.extend_from_slice(args);
         run_with_timeout("sudo", &full, ROOT_TIMEOUT)
     }
-    .ok_or_else(|| format!("không chạy được {program}"))?;
+    .ok_or_else(|| format!("could not run {program}"))?;
     if out.status.success() {
         Ok(())
     } else {
@@ -653,14 +682,14 @@ fn update_linux_bundle() -> Result<(), String> {
     {
         return linux_run("update-ca-trust", &["extract"]);
     }
-    Err("không tìm thấy update-ca-certificates/update-ca-trust".to_string())
+    Err("update-ca-certificates/update-ca-trust not found".to_string())
 }
 
 #[cfg(target_os = "linux")]
 fn linux_install(der: &[u8]) -> RootTrust {
     if !elevated_linux() {
         return RootTrust {
-            detail: "Cần quyền root hoặc sudo không mật khẩu để cài CA hệ thống.".to_string(),
+            detail_code: TrustDetail::NeedsRoot,
             ..RootTrust::default()
         };
     }
@@ -670,7 +699,8 @@ fn linux_install(der: &[u8]) -> RootTrust {
         return RootTrust {
             su_present: true,
             root_granted: true,
-            detail: format!("Không ghi được tệp tạm: {e}"),
+            detail_code: TrustDetail::TempWriteFailed,
+            detail: e.to_string(),
             ..RootTrust::default()
         };
     }
@@ -684,14 +714,16 @@ fn linux_install(der: &[u8]) -> RootTrust {
             root_granted: true,
             installed: linux_installed(Some(der)),
             needs_reboot: false,
-            detail: "Đã cài CA vào system store của hệ điều hành.".to_string(),
+            detail_code: TrustDetail::InstalledLinux,
+            detail: String::new(),
         },
         Err(e) => RootTrust {
             su_present: true,
             root_granted: true,
             installed: linux_installed(Some(der)),
             needs_reboot: false,
-            detail: format!("Không cài được CA hệ thống: {e}"),
+            detail_code: TrustDetail::LinuxInstallFailed,
+            detail: e,
         },
     }
 }
@@ -700,7 +732,7 @@ fn linux_install(der: &[u8]) -> RootTrust {
 fn linux_remove(der: &[u8]) -> RootTrust {
     if !elevated_linux() {
         return RootTrust {
-            detail: "Cần quyền root hoặc sudo không mật khẩu để gỡ CA hệ thống.".to_string(),
+            detail_code: TrustDetail::NeedsRootToRemove,
             ..RootTrust::default()
         };
     }
@@ -711,14 +743,16 @@ fn linux_remove(der: &[u8]) -> RootTrust {
             root_granted: true,
             installed: linux_installed(Some(der)),
             needs_reboot: false,
-            detail: "Đã gỡ CA khỏi system store của hệ điều hành.".to_string(),
+            detail_code: TrustDetail::RemovedLinux,
+            detail: String::new(),
         },
         Err(e) => RootTrust {
             su_present: true,
             root_granted: true,
             installed: linux_installed(Some(der)),
             needs_reboot: false,
-            detail: format!("Không gỡ được CA hệ thống: {e}"),
+            detail_code: TrustDetail::LinuxRemoveFailed,
+            detail: e,
         },
     }
 }

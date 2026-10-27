@@ -1,6 +1,7 @@
 package git.shin.adfree.ui
 
 import git.shin.adfree.model.AppFirewallRule
+import git.shin.adfree.model.AppLanguage
 import git.shin.adfree.model.DnsBlockMode
 import git.shin.adfree.model.DnsProvider
 import git.shin.adfree.model.FilterList
@@ -9,6 +10,7 @@ import git.shin.adfree.model.NetworkRequestLog
 import git.shin.adfree.model.ProtectionSettings
 import git.shin.adfree.model.ProtectionStats
 import git.shin.adfree.model.ThreatAnalysisResult
+import git.shin.adfree.model.ThemeMode
 import git.shin.adfree.model.UserScriptInfo
 import git.shin.adfree.model.UserScriptStoreSort
 import git.shin.adfree.model.UserScriptStoreState
@@ -38,7 +40,7 @@ data class AdGuardUiState(
     val selectedAppFilter: String? = null,
     val aiLabState: AiLabUiState = AiLabUiState.Idle,
     val showVpnPermissionPrompt: Boolean = false,
-    val loadingMessage: String? = null,
+    val loadingMessage: UiText? = null,
     // Filters tab
     val filterSearchQuery: String = "",
     val inspectedFilterId: String? = null,
@@ -62,6 +64,8 @@ sealed interface AdGuardIntent {
     data object ToggleFirewall : AdGuardIntent
     data object ToggleEcoMode : AdGuardIntent
     data object ToggleStealth : AdGuardIntent
+    data class SetAppLanguage(val language: AppLanguage) : AdGuardIntent
+    data class SetThemeMode(val mode: ThemeMode) : AdGuardIntent
     data class ToggleBlockQuic(val enabled: Boolean) : AdGuardIntent
     data class ToggleBlockDoh(val enabled: Boolean) : AdGuardIntent
     data class ToggleBlockDot(val enabled: Boolean) : AdGuardIntent
@@ -160,7 +164,7 @@ sealed interface AdGuardIntent {
 
 /** One-off side effects. */
 sealed interface AdGuardEffect {
-    data class ShowSnackbar(val message: String) : AdGuardEffect
+    data class ShowSnackbar(val message: UiText) : AdGuardEffect
     data object RequestVpnPermission : AdGuardEffect
 }
 

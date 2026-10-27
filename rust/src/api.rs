@@ -600,12 +600,28 @@ pub fn core_log_clear() -> bool {
 
 // --------------------------------------------------------------------- assets
 
+/// Why a fetch or save failed. The UI localizes this code; `message` keeps
+/// the raw diagnostic for logs.
+#[derive(uniffi::Enum, Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum DownloadError {
+    #[default]
+    None,
+    StoreUnavailable,
+    NoUrl,
+    Http,
+    Empty,
+    Network,
+    Write,
+    TooLarge,
+}
+
 /// Result of fetching (or saving) a filter list or userscript body.
 #[derive(uniffi::Record, Clone, Debug, Default)]
 pub struct DownloadOutcome {
     pub ok: bool,
     /// Diagnostic when `ok` is false ("HTTP 404", "empty response"...).
     pub message: String,
+    pub error: DownloadError,
     /// Rule lines: filters only, 0 for scripts.
     pub line_count: i64,
     pub version: Option<String>,
@@ -630,11 +646,28 @@ pub struct AssetState {
     pub detected_format: Option<String>,
 }
 
-fn download_failure(message: &str) -> DownloadOutcome {
+fn download_failure(error: DownloadError, message: &str) -> DownloadOutcome {
     DownloadOutcome {
         ok: false,
         message: message.to_string(),
+        error,
         ..DownloadOutcome::default()
+    }
+}
+
+/// The asset layer reports failures as strings; this maps them back to the
+/// code the UI localizes without losing the diagnostic.
+fn classify_download(message: &str) -> DownloadError {
+    if message == "the list has no URL" {
+        DownloadError::NoUrl
+    } else if message == "empty response" {
+        DownloadError::Empty
+    } else if message.starts_with("HTTP ") {
+        DownloadError::Http
+    } else if message.contains("os error") {
+        DownloadError::Write
+    } else {
+        DownloadError::Network
     }
 }
 
@@ -642,6 +675,7 @@ fn to_outcome(o: crate::assets::Outcome) -> DownloadOutcome {
     DownloadOutcome {
         ok: true,
         message: String::new(),
+        error: DownloadError::None,
         line_count: o.line_count,
         version: o.version,
         updated_text: o.updated_text,
@@ -667,15 +701,18 @@ fn to_asset_state(o: crate::assets::Outcome) -> AssetState {
 /// rename. Blocking: the platform calls it off its main thread.
 #[uniffi::export]
 pub fn core_filter_fetch(id: String, url: String) -> DownloadOutcome {
-    guard(download_failure("store is not open"), || {
-        let Some(store) = crate::core().store() else {
-            return download_failure("store is not open");
-        };
-        match crate::assets::fetch(&store.filters_dir(), &id, "txt", &url, true) {
-            Ok(o) => to_outcome(o),
-            Err(e) => download_failure(&e),
-        }
-    })
+    guard(
+        download_failure(DownloadError::StoreUnavailable, "store is not open"),
+        || {
+            let Some(store) = crate::core().store() else {
+                return download_failure(DownloadError::StoreUnavailable, "store is not open");
+            };
+            match crate::assets::fetch(&store.filters_dir(), &id, "txt", &url, true) {
+                Ok(o) => to_outcome(o),
+                Err(e) => download_failure(classify_download(&e), &e),
+            }
+        },
+    )
 }
 
 /// Saves a list body the platform already has (imported from a file), with
@@ -725,62 +762,70 @@ const REQUIRE_TIMEOUT_SECS: u64 = 30;
 /// `@run-at` timing is preserved.
 #[uniffi::export]
 pub fn core_script_fetch(id: String, url: String) -> DownloadOutcome {
-    guard(download_failure("store is not open"), || {
-        let Some(store) = crate::core().store() else {
-            return download_failure("store is not open");
-        };
-        let dir = store.scripts_dir();
-        let outcome = match crate::assets::fetch(&dir, &id, "js", &url, false) {
-            Ok(o) => o,
-            Err(e) => return download_failure(&e),
-        };
-        let Some(raw) = crate::assets::read_text(&dir, &id, "js") else {
-            return to_outcome(outcome);
-        };
-        let requires = crate::mitm::script::required_urls(&raw);
-        if requires.is_empty() {
-            return to_outcome(outcome);
-        }
-
-        let mut loaded = Vec::new();
-        let mut failed = Vec::new();
-        let mut total = raw.len();
-        for require in requires {
-            match crate::assets::fetch_text(
-                &require,
-                MAX_REQUIRE_BYTES,
-                Duration::from_secs(REQUIRE_TIMEOUT_SECS),
-            ) {
-                Ok(code) => {
-                    if total.saturating_add(code.len()) > crate::mitm::script::MAX_SCRIPT_BYTES {
-                        failed.push((require, "script would exceed size limit".to_string()));
-                        continue;
-                    }
-                    total += code.len();
-                    loaded.push((require, code));
-                }
-                Err(e) => failed.push((require, e)),
+    guard(
+        download_failure(DownloadError::StoreUnavailable, "store is not open"),
+        || {
+            let Some(store) = crate::core().store() else {
+                return download_failure(DownloadError::StoreUnavailable, "store is not open");
+            };
+            let dir = store.scripts_dir();
+            let outcome = match crate::assets::fetch(&dir, &id, "js", &url, false) {
+                Ok(o) => o,
+                Err(e) => return download_failure(classify_download(&e), &e),
+            };
+            let Some(raw) = crate::assets::read_text(&dir, &id, "js") else {
+                return to_outcome(outcome);
+            };
+            let requires = crate::mitm::script::required_urls(&raw);
+            if requires.is_empty() {
+                return to_outcome(outcome);
             }
-        }
-        let combined = crate::mitm::script::embed_requires(&raw, &loaded, &failed);
-        if combined.len() > crate::mitm::script::MAX_SCRIPT_BYTES {
-            let mut out = to_outcome(outcome);
-            out.message = "userscript plus @require is too large".to_string();
-            return out;
-        }
-        if let Err(e) = crate::assets::save(&dir, &id, "js", &combined) {
-            let mut out = to_outcome(outcome);
-            out.message = e;
-            return out;
-        }
-        let mut out = crate::assets::state(&dir, &id, "js", false)
-            .map(to_outcome)
-            .unwrap_or_else(|| to_outcome(outcome));
-        if !failed.is_empty() {
-            out.message = format!("{} @require failed", failed.len());
-        }
-        out
-    })
+
+            let mut loaded = Vec::new();
+            let mut failed = Vec::new();
+            let mut total = raw.len();
+            for require in requires {
+                match crate::assets::fetch_text(
+                    &require,
+                    MAX_REQUIRE_BYTES,
+                    Duration::from_secs(REQUIRE_TIMEOUT_SECS),
+                ) {
+                    Ok(code) => {
+                        if total.saturating_add(code.len()) > crate::mitm::script::MAX_SCRIPT_BYTES
+                        {
+                            failed.push((require, "script would exceed size limit".to_string()));
+                            continue;
+                        }
+                        total += code.len();
+                        loaded.push((require, code));
+                    }
+                    Err(e) => failed.push((require, e)),
+                }
+            }
+            let combined = crate::mitm::script::embed_requires(&raw, &loaded, &failed);
+            if combined.len() > crate::mitm::script::MAX_SCRIPT_BYTES {
+                let mut out = to_outcome(outcome);
+                out.ok = false;
+                out.error = DownloadError::TooLarge;
+                out.message = "userscript plus @require is too large".to_string();
+                return out;
+            }
+            if let Err(e) = crate::assets::save(&dir, &id, "js", &combined) {
+                let mut out = to_outcome(outcome);
+                out.ok = false;
+                out.error = DownloadError::Write;
+                out.message = e;
+                return out;
+            }
+            let mut out = crate::assets::state(&dir, &id, "js", false)
+                .map(to_outcome)
+                .unwrap_or_else(|| to_outcome(outcome));
+            if !failed.is_empty() {
+                out.message = format!("{} @require failed", failed.len());
+            }
+            out
+        },
+    )
 }
 
 /// State of a userscript body, or `None` when it is not on disk.
@@ -1044,7 +1089,9 @@ pub struct RootTrustBinding {
     pub installed: bool,
     /// It becomes active after a reboot (Magisk module just written).
     pub needs_reboot: bool,
-    /// User-facing explanation.
+    /// The user-facing state; Kotlin maps it to a localized string.
+    pub detail_code: crate::trust::TrustDetail,
+    /// English diagnostic from the failed command, kept for logs only.
     pub detail: String,
 }
 
@@ -1055,6 +1102,7 @@ impl From<crate::trust::RootTrust> for RootTrustBinding {
             root_granted: value.root_granted,
             installed: value.installed,
             needs_reboot: value.needs_reboot,
+            detail_code: value.detail_code,
             detail: value.detail,
         }
     }
@@ -1089,7 +1137,7 @@ pub fn core_install_root_ca() -> RootTrustBinding {
         let der = root_ca_der();
         if der.is_empty() {
             return RootTrustBinding {
-                detail: "Chưa có CA — hãy tạo CA trước khi cài vào hệ thống.".to_string(),
+                detail_code: crate::trust::TrustDetail::NoCa,
                 ..RootTrustBinding::default()
             };
         }
@@ -1110,7 +1158,7 @@ pub fn core_remove_root_ca() -> RootTrustBinding {
         let der = root_ca_der();
         if der.is_empty() {
             return RootTrustBinding {
-                detail: "Chưa có CA để gỡ.".to_string(),
+                detail_code: crate::trust::TrustDetail::NoCaToRemove,
                 ..RootTrustBinding::default()
             };
         }

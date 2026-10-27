@@ -4,6 +4,7 @@ import android.content.Context
 import android.util.Log
 import android.content.pm.ApplicationInfo
 import android.content.pm.PackageManager
+import git.shin.adfree.R
 import git.shin.adfree.core.AssetState
 import git.shin.adfree.core.CoreEngine
 import git.shin.adfree.core.DnsProtocol
@@ -38,6 +39,8 @@ import git.shin.adfree.model.ProtectionStats
 import git.shin.adfree.model.ProtectionSettings
 import git.shin.adfree.model.ProxySettings
 import git.shin.adfree.model.ProtocolType
+import git.shin.adfree.ui.CoreText
+import git.shin.adfree.ui.UiText
 import java.io.IOException
 import java.net.URLEncoder
 import java.util.concurrent.TimeUnit
@@ -127,16 +130,15 @@ class AdGuardRepository(
     /** Rewrites persist with the resolver list; editing arrives in the DNS pass. */
     private var dnsRewrites: List<DnsRewrite> = emptyList()
 
-    private val _loadingMessage = MutableStateFlow<String?>(null)
-    val loadingMessage: StateFlow<String?> = _loadingMessage.asStateFlow()
+    private val _loadingMessage = MutableStateFlow<UiText?>(null)
+    val loadingMessage: StateFlow<UiText?> = _loadingMessage.asStateFlow()
 
     /**
-     * Shows a one-shot result message ("đã tải…", download errors) and clears it
-     * a few seconds later, so the header cannot stay stuck on "Đang tải…".
-     * The equality check keeps a newer message from being cleared by an older
-     * timer.
+     * Shows a one-shot result message and clears it a few seconds later, so
+     * the header cannot stay stuck on a progress label. The equality check
+     * keeps a newer message from being cleared by an older timer.
      */
-    private fun showTransientStatus(message: String?) {
+    private fun showTransientStatus(message: UiText?) {
         _loadingMessage.value = message
         if (message == null) return
         scope.launch {
@@ -144,6 +146,14 @@ class AdGuardRepository(
             if (_loadingMessage.value == message) _loadingMessage.value = null
         }
     }
+
+    /** Localized wording for a download outcome; diagnostics stay behind the code. */
+    private fun downloadMessage(result: DownloadResult, name: String): UiText =
+        if (result.ok) {
+            UiText.Formatted(R.string.filter_downloaded_name, name, result.lineCount)
+        } else {
+            CoreText.downloadError(result.error) ?: UiText.Raw(result.message)
+        }
 
     private val _userscripts = MutableStateFlow<List<UserScriptInfo>>(emptyList())
     val userscripts: StateFlow<List<UserScriptInfo>> = _userscripts.asStateFlow()
@@ -328,6 +338,13 @@ class AdGuardRepository(
         if (enabled) engine.markWantsStart() else engine.markWantsStop()
     }
 
+    /** In-app language; the UI applies it through AppCompat's per-app locales. */
+    fun setAppLanguage(language: git.shin.adfree.model.AppLanguage) =
+        updateSettings { it.copy(appLanguage = language) }
+
+    fun setThemeMode(mode: git.shin.adfree.model.ThemeMode) =
+        updateSettings { it.copy(themeMode = mode) }
+
     fun toggleAdBlocking(enabled: Boolean) =
         updateSettings { it.copy(isAdBlockingEnabled = enabled) }
 
@@ -421,8 +438,8 @@ class AdGuardRepository(
         val clamped = hours.coerceIn(0, 168)
         updateSettings { it.copy(filterAutoUpdateHours = clamped) }
         showTransientStatus(
-            if (clamped == 0) "Đã tắt tự động cập nhật bộ lọc"
-            else "Tự động cập nhật bộ lọc mỗi $clamped giờ",
+            if (clamped == 0) UiText.Resource(R.string.filter_auto_update_off)
+            else UiText.Formatted(R.string.filter_auto_update_every_hours, clamped),
         )
     }
 
@@ -437,21 +454,22 @@ class AdGuardRepository(
     }
 
     /** Adds/selects a resolver and returns the line the Settings snackbar shows. */
-    fun addCustomDnsProvider(name: String, address: String): String {
+    fun addCustomDnsProvider(name: String, address: String): UiText {
         val trimmed = address.trim()
-        if (trimmed.isEmpty()) return "Địa chỉ DNS trống"
+        if (trimmed.isEmpty()) return UiText.Resource(R.string.dns_address_empty)
         // The forwarder sends plain UDP; DoH/DoT need another transport and
         // arrive with their own editor. The validator is the core's.
         val validation = engine.validateDnsProvider(DnsProtocol.UDP, trimmed)
         if (!validation.valid) {
             return when (validation.error) {
-                git.shin.adfree.core.DnsError.EMPTY -> "Địa chỉ DNS trống"
-                git.shin.adfree.core.DnsError.INVALID_PORT -> "Cổng DNS không hợp lệ"
+                git.shin.adfree.core.DnsError.EMPTY -> UiText.Resource(R.string.dns_address_empty)
+                git.shin.adfree.core.DnsError.INVALID_PORT ->
+                    UiText.Resource(R.string.dns_invalid_port)
                 git.shin.adfree.core.DnsError.UNSUPPORTED_SCHEME ->
-                    "Chỉ hỗ trợ DNS UDP dạng IP (ví dụ 1.1.1.1 hoặc 1.1.1.1:53)"
+                    UiText.Resource(R.string.dns_udp_ip_only)
                 git.shin.adfree.core.DnsError.IP_V6_UDP_UNSUPPORTED ->
-                    "DNS UDP hiện chỉ hỗ trợ địa chỉ IPv4"
-                else -> "Chỉ hỗ trợ DNS UDP dạng IP (ví dụ 1.1.1.1 hoặc 1.1.1.1:53)"
+                    UiText.Resource(R.string.dns_udp_ipv4_only)
+                else -> UiText.Resource(R.string.dns_udp_ip_only)
             }
         }
         val host = validation.address
@@ -461,21 +479,21 @@ class AdGuardRepository(
         }
         if (existing != null) {
             selectDnsProvider(existing.id)
-            return "Đã chọn ${existing.name}"
+            return UiText.Formatted(R.string.dns_provider_selected, existing.name)
         }
         val provider = DnsProvider(
             id = "custom_" + System.currentTimeMillis(),
             name = name.trim().ifBlank { host },
             address = host,
             type = ProtocolType.DNS_UDP,
-            description = "Tùy chỉnh",
+            description = context.getString(R.string.dns_custom_description),
             isCustom = true,
             port = port,
         )
         _dnsProviders.update { it + provider }
         persistDnsState()
         updateSettings { it.copy(selectedDnsProviderId = provider.id) }
-        return "Đã thêm DNS tùy chỉnh: ${provider.name}"
+        return UiText.Formatted(R.string.dns_custom_added, provider.name)
     }
 
     /** Writes the resolver list (built-ins are re-merged by Rust on load). */
@@ -518,7 +536,7 @@ class AdGuardRepository(
                     version = "",
                     isOnlineSubscription = true,
                     subscriptionUrl = entry.url,
-                    lastUpdatedText = "Chưa tải",
+                    lastUpdatedText = context.getString(R.string.filter_not_loaded),
                     groupId = entry.group.id,
                     format = entry.format,
                     catalogId = entry.id,
@@ -533,14 +551,14 @@ class AdGuardRepository(
                 lists += FilterList(
                     id = stored.id,
                     name = stored.name,
-                    description = "Bộ lọc tùy chỉnh của bạn",
+                    description = context.getString(R.string.filter_custom_description),
                     ruleCount = 0,
                     isEnabled = stored.enabled,
                     category = "custom",
                     version = "",
                     isOnlineSubscription = stored.url.isNotBlank(),
                     subscriptionUrl = stored.url.ifBlank { null },
-                    lastUpdatedText = "Chưa tải",
+                    lastUpdatedText = context.getString(R.string.filter_not_loaded),
                     groupId = "custom",
                     format = stored.format.ifBlank { "standard" },
                     homepage = stored.homepage.ifBlank { null },
@@ -551,8 +569,8 @@ class AdGuardRepository(
             val rules = if (saved.userRulesConfigured) saved.userRules else starterRules
             lists += FilterList(
                 id = BUILTIN_CUSTOM,
-                name = "Quy tắc của bạn",
-                description = "Quy tắc chặn và cho phép do bạn tự viết, áp dụng cho mọi trang",
+                name = context.getString(R.string.filter_user_rules_name),
+                description = context.getString(R.string.filter_user_rules_description),
                 ruleCount = rules.size,
                 isEnabled = rules.isNotEmpty(),
                 category = "user",
@@ -608,7 +626,8 @@ class AdGuardRepository(
 
         autoUpdateRunning = true
         try {
-            _loadingMessage.value = "Đang tự động cập nhật ${stale.size} bộ lọc…"
+            _loadingMessage.value =
+                UiText.Formatted(R.string.filter_auto_update_progress, stale.size)
             var updated = 0
             for (list in stale) {
                 val result = withContext(Dispatchers.IO) { engine.downloadList(list) }
@@ -616,15 +635,19 @@ class AdGuardRepository(
                     applyDownloadResult(list.id, result)
                     updated++
                 } else {
-                    applyFailure(list.id, result.message)
+                    applyFailure(list.id, downloadMessage(result, list.name))
                 }
             }
             if (updated > 0) pushListsToEngine()
             showTransientStatus(
                 if (updated == stale.size) {
-                    "Đã tự động cập nhật ${stale.size} bộ lọc"
+                    UiText.Formatted(R.string.filter_auto_update_done, stale.size)
                 } else {
-                    "Tự động cập nhật: $updated/${stale.size} bộ lọc thành công"
+                    UiText.Formatted(
+                        R.string.filter_auto_update_partial,
+                        updated,
+                        stale.size,
+                    )
                 },
             )
         } finally {
@@ -642,7 +665,7 @@ class AdGuardRepository(
                 continue
             }
             if (!list.isEnabled || list.subscriptionUrl.isNullOrBlank()) continue
-            _loadingMessage.value = "Đang tải ${list.name}…"
+            _loadingMessage.value = UiText.Formatted(R.string.filter_downloading, list.name)
             val result = withContext(Dispatchers.IO) { engine.downloadList(list) }
             if (result.ok) {
                 applyDownloadResult(list.id, result)
@@ -651,8 +674,9 @@ class AdGuardRepository(
                 // "on" with zero rules and no trace of why. Persist the
                 // reason on the list (row + detail sheet show it) and echo
                 // the usual transient toast.
-                applyFailure(list.id, result.message)
-                showTransientStatus(result.message)
+                val message = downloadMessage(result, list.name)
+                applyFailure(list.id, message)
+                showTransientStatus(message)
             }
         }
     }
@@ -682,7 +706,7 @@ class AdGuardRepository(
                 if (it.id == listId) {
                     it.copy(
                         ruleCount = result.lineCount.toInt(),
-                        lastUpdatedText = result.updatedText ?: "Vừa tải",
+                        lastUpdatedText = result.updatedText ?: context.getString(R.string.filter_downloaded_now),
                         lastUpdatedMs = result.modifiedMs.takeIf { ms -> ms > 0 }
                             ?: System.currentTimeMillis(),
                         version = result.version ?: it.version,
@@ -700,11 +724,12 @@ class AdGuardRepository(
      * is gone: the row gets a red error line and the detail sheet an "Lỗi"
      * row, so a broken subscription never looks healthy.
      */
-    private fun applyFailure(listId: String, message: String) {
+    private fun applyFailure(listId: String, message: UiText) {
+        val text = message.resolve(context).ifBlank { context.getString(R.string.filter_download_failed) }
         _filterLists.update { current ->
             current.map {
                 if (it.id == listId) {
-                    it.copy(lastError = message.ifBlank { "Tải thất bại" })
+                    it.copy(lastError = text)
                 } else it
             }
         }
@@ -737,7 +762,7 @@ class AdGuardRepository(
                             lists.map { if (it.id == listId) it.copy(isEnabled = false) else it }
                         }
                         showTransientStatus(
-                            "Không có nội dung ${list.name}; hãy thêm lại hoặc chọn tệp khác",
+                            UiText.Formatted(R.string.filter_missing_body, list.name),
                         )
                     }
                     else -> {
@@ -746,9 +771,9 @@ class AdGuardRepository(
                         _filterLists.update { lists ->
                             lists.map { if (it.id == listId) it.copy(isEnabled = false) else it }
                         }
-                        _loadingMessage.value = "Đang tải ${list.name}…"
+                        _loadingMessage.value = UiText.Formatted(R.string.filter_downloading, list.name)
                         val result = withContext(Dispatchers.IO) { engine.downloadList(list) }
-                        showTransientStatus(result.message)
+                        showTransientStatus(downloadMessage(result, list.name))
                         if (result.ok) {
                             applyDownloadResult(list.id, result)
                             _filterLists.update { lists ->
@@ -757,7 +782,7 @@ class AdGuardRepository(
                                 }
                             }
                         } else {
-                            applyFailure(list.id, result.message)
+                            applyFailure(list.id, downloadMessage(result, list.name))
                         }
                     }
                 }
@@ -784,8 +809,8 @@ class AdGuardRepository(
             saveFilterChoices()
             pushListsToEngine()
             showTransientStatus(
-                if (trusted) "Đã tin cậy bộ lọc: scriptlet và JavaScript rule của list được phép chạy"
-                else "Đã bỏ tin cậy: rule nguy hiểm của bộ lọc bị bỏ qua",
+                if (trusted) UiText.Resource(R.string.filter_trusted)
+                else UiText.Resource(R.string.filter_untrusted),
             )
         }
     }
@@ -795,17 +820,17 @@ class AdGuardRepository(
         scope.launch {
             val list = _filterLists.value.firstOrNull { it.id == id } ?: return@launch
             if (list.subscriptionUrl.isNullOrBlank()) {
-                showTransientStatus("Bộ lọc này không có URL để cập nhật")
+                showTransientStatus(UiText.Resource(R.string.filter_no_url))
                 return@launch
             }
-            _loadingMessage.value = "Đang tải ${list.name}…"
+            _loadingMessage.value = UiText.Formatted(R.string.filter_downloading, list.name)
             val result = withContext(Dispatchers.IO) { engine.downloadList(list) }
-            showTransientStatus(result.message)
+            showTransientStatus(downloadMessage(result, list.name))
             if (result.ok) {
                 applyDownloadResult(list.id, result)
                 pushListsToEngine()
             } else {
-                applyFailure(list.id, result.message)
+                applyFailure(list.id, downloadMessage(result, list.name))
             }
         }
     }
@@ -817,10 +842,10 @@ class AdGuardRepository(
                 it.isEnabled && !it.isCustom && !it.subscriptionUrl.isNullOrBlank()
             }
             if (targets.isEmpty()) {
-                showTransientStatus("Không có bộ lọc nào để cập nhật")
+                showTransientStatus(UiText.Resource(R.string.filter_none_to_update))
                 return@launch
             }
-            _loadingMessage.value = "Đang cập nhật ${targets.size} bộ lọc…"
+            _loadingMessage.value = UiText.Formatted(R.string.filter_updating_count, targets.size)
             var failures = 0
             for (list in targets) {
                 val result = withContext(Dispatchers.IO) { engine.downloadList(list) }
@@ -828,13 +853,13 @@ class AdGuardRepository(
                     applyDownloadResult(list.id, result)
                 } else {
                     failures++
-                    applyFailure(list.id, result.message)
+                    applyFailure(list.id, downloadMessage(result, list.name))
                 }
             }
             showTransientStatus(
                 when (failures) {
-                    0 -> "Đã cập nhật ${targets.size} bộ lọc"
-                    else -> "Cập nhật xong, $failures danh sách bị lỗi"
+                    0 -> UiText.Formatted(R.string.filter_updated_count, targets.size)
+                    else -> UiText.Formatted(R.string.filter_update_finished_failures, failures)
                 }
             )
             pushListsToEngine()
@@ -849,20 +874,20 @@ class AdGuardRepository(
             // used to become a permanent broken row before the first byte
             // was ever checked.
             filterUrlError(trimmedUrl)?.let {
-                showTransientStatus(it)
+                showTransientStatus(CoreText.filterUrlError(it))
                 return@launch
             }
             if (_filterLists.value.any {
                     it.subscriptionUrl?.equals(trimmedUrl, ignoreCase = true) == true
                 }
             ) {
-                showTransientStatus("URL này đã có trong danh sách bộ lọc")
+                showTransientStatus(UiText.Resource(R.string.filter_url_duplicate))
                 return@launch
             }
             val list = FilterList(
                 id = "sub_${System.currentTimeMillis()}",
                 name = name.ifBlank { trimmedUrl.substringAfter("//").take(40) },
-                description = "Bộ lọc tùy chỉnh của bạn",
+                description = context.getString(R.string.filter_custom_description),
                 ruleCount = 0,
                 isEnabled = false,
                 category = "custom",
@@ -873,9 +898,9 @@ class AdGuardRepository(
                 isUserAdded = true,
             )
             _filterLists.update { it + list }
-            _loadingMessage.value = "Đang tải ${list.name}…"
+            _loadingMessage.value = UiText.Formatted(R.string.filter_downloading, list.name)
             val result = withContext(Dispatchers.IO) { engine.downloadList(list) }
-            showTransientStatus(result.message)
+            showTransientStatus(downloadMessage(result, list.name))
             if (result.ok) {
                 applyDownloadResult(list.id, result)
                 _filterLists.update { lists ->
@@ -884,7 +909,7 @@ class AdGuardRepository(
             } else {
                 // Keep the (now disabled) row with its reason so the list can
                 // be retried/edited without guessing what went wrong.
-                applyFailure(list.id, result.message)
+                applyFailure(list.id, downloadMessage(result, list.name))
             }
             saveFilterChoices()
             pushListsToEngine()
@@ -902,7 +927,7 @@ class AdGuardRepository(
                 }.getOrNull()
             }
             if (text.isNullOrBlank()) {
-                showTransientStatus("Không đọc được tệp đã chọn")
+                showTransientStatus(UiText.Resource(R.string.filter_file_unreadable))
                 return@launch
             }
             val displayName = withContext(Dispatchers.IO) {
@@ -917,8 +942,9 @@ class AdGuardRepository(
             }
             val list = FilterList(
                 id = "local_${System.currentTimeMillis()}",
-                name = displayName?.take(60)?.takeIf { it.isNotBlank() } ?: "Bộ lọc từ tệp",
-                description = "Bộ lọc tùy chỉnh từ tệp trong máy",
+                name = displayName?.take(60)?.takeIf { it.isNotBlank() }
+                    ?: context.getString(R.string.filter_from_file_name),
+                description = context.getString(R.string.filter_from_file_description),
                 ruleCount = 0,
                 isEnabled = true,
                 category = "custom",
@@ -928,20 +954,22 @@ class AdGuardRepository(
             )
             val state = withContext(Dispatchers.IO) { engine.saveListText(list.id, text) }
             if (state == null) {
-                showTransientStatus("Lỗi ghi tệp: không lưu được bộ lọc")
+                showTransientStatus(UiText.Resource(R.string.filter_save_failed))
                 return@launch
             }
             _filterLists.update {
                 it + list.copy(
                     ruleCount = state.lineCount.toInt(),
-                    lastUpdatedText = "Vừa nhập",
+                    lastUpdatedText = context.getString(R.string.filter_imported_now),
                     version = state.version ?: "",
                     format = state.detectedFormat ?: list.format,
                 )
             }
             saveFilterChoices()
             pushListsToEngine()
-            showTransientStatus("Đã thêm ${list.name} (${state.lineCount} quy tắc)")
+            showTransientStatus(
+                UiText.Formatted(R.string.filter_created_name, list.name, state.lineCount),
+            )
         }
     }
 
@@ -956,7 +984,7 @@ class AdGuardRepository(
         // filters, scripts); Kotlin only moves the bytes to the SAF document.
         val payload = engine.backupExport()
         if (payload.isBlank()) {
-            return BackupResult(false, "Không đọc được trạng thái để sao lưu")
+            return BackupResult(false, UiText.Resource(R.string.backup_export_failed_read))
         }
         val ok = withContext(Dispatchers.IO) {
             runCatching {
@@ -968,9 +996,9 @@ class AdGuardRepository(
             }.isSuccess
         }
         return if (ok) {
-            BackupResult(true, "Đã xuất bản sao lưu")
+            BackupResult(true, UiText.Resource(R.string.backup_export_done))
         } else {
-            BackupResult(false, "Không ghi được tệp sao lưu")
+            BackupResult(false, UiText.Resource(R.string.backup_export_write_failed))
         }
     }
 
@@ -988,36 +1016,24 @@ class AdGuardRepository(
                 val uri = android.net.Uri.parse(uriText)
                 context.contentResolver.openInputStream(uri)?.use { it.readBytes() }
             }.getOrNull()
-        } ?: return BackupResult(false, "Không đọc được tệp đã chọn")
+        } ?: return BackupResult(false, UiText.Resource(R.string.backup_import_file_unreadable))
         if (bytes.size > MAX_BACKUP_BYTES) {
-            return BackupResult(false, "Tệp quá lớn để là bản sao lưu AdFree")
+            return BackupResult(false, UiText.Resource(R.string.backup_import_too_large))
         }
         val raw = String(bytes, Charsets.UTF_8)
         // Rust replaces every collection in one transaction, so a rejected
         // file leaves the current state untouched.
         val outcome = engine.backupImport(raw)
         if (!outcome.ok) {
-            return BackupResult(false, backupErrorMessage(outcome.error))
+            return BackupResult(
+                false,
+                CoreText.backupError(outcome.error)
+                    ?: UiText.Resource(R.string.backup_error_malformed),
+            )
         }
         reloadAfterRestore()
-        return BackupResult(
-            true,
-            "Đã khôi phục cài đặt, firewall, DNS, bộ lọc và tiện ích; bật lại VPN nếu cần",
-        )
+        return BackupResult(true, UiText.Resource(R.string.backup_import_done))
     }
-
-    private fun backupErrorMessage(error: git.shin.adfree.core.BackupError): String =
-        when (error) {
-            git.shin.adfree.core.BackupError.NOT_BACKUP ->
-                "Tệp không phải bản sao lưu AdFree hợp lệ"
-            git.shin.adfree.core.BackupError.UNSUPPORTED_VERSION ->
-                "Bản sao lưu thuộc phiên bản AdFree khác"
-            git.shin.adfree.core.BackupError.MALFORMED ->
-                "Tệp sao lưu bị hỏng hoặc thiếu dữ liệu"
-            git.shin.adfree.core.BackupError.STORE_UNAVAILABLE ->
-                "Không truy cập được dữ liệu ứng dụng"
-            else -> "Không khôi phục được bản sao lưu"
-        }
 
     /** Rebuilds every in-memory flow after a restore replaced the state. */
     private fun reloadAfterRestore() {
@@ -1050,14 +1066,14 @@ class AdGuardRepository(
             val url = rawUrl.trim()
             if (url.isNotBlank()) {
                 filterUrlError(url)?.let {
-                    showTransientStatus(it)
+                    showTransientStatus(CoreText.filterUrlError(it))
                     return@launch
                 }
                 if (_filterLists.value.any {
                         it.id != id && it.subscriptionUrl?.equals(url, ignoreCase = true) == true
                     }
                 ) {
-                    showTransientStatus("URL này đã có trong danh sách bộ lọc")
+                    showTransientStatus(UiText.Resource(R.string.filter_url_duplicate))
                     return@launch
                 }
             }
@@ -1073,7 +1089,7 @@ class AdGuardRepository(
             }
             saveFilterChoices()
             pushListsToEngine()
-            showTransientStatus("Đã cập nhật $name")
+            showTransientStatus(UiText.Formatted(R.string.filter_name_updated, name))
             if (urlChanged && url.isNotBlank()) refreshSubscription(id)
         }
     }
@@ -1092,13 +1108,13 @@ class AdGuardRepository(
                     engine.filterState(it.id, withMeta = false) == null
             }
             for (list in missing) {
-                _loadingMessage.value = "Đang tải ${list.name}…"
+                _loadingMessage.value = UiText.Formatted(R.string.filter_downloading, list.name)
                 val result = withContext(Dispatchers.IO) { engine.downloadList(list) }
                 if (result.ok) applyDownloadResult(list.id, result)
             }
             saveFilterChoices()
             pushListsToEngine()
-            showTransientStatus("Đã khôi phục bộ lọc mặc định")
+            showTransientStatus(UiText.Resource(R.string.filter_restored_defaults))
         }
     }
 
@@ -1262,7 +1278,9 @@ class AdGuardRepository(
             _filterLists.update { lists ->
                 lists.map { list ->
                     val message = errors[list.stableId()] ?: return@map list
-                    list.copy(lastError = "Máy không đọc được tệp — $message")
+                    list.copy(
+                lastError = context.getString(R.string.filter_file_unreadable_detail, message),
+            )
                 }
             }
         }
@@ -1387,7 +1405,8 @@ class AdGuardRepository(
                     // catalogue downloads wait to be asked for.
                     isEnabled = state?.enabled ?: entry.builtin,
                     sizeBytes = asset?.sizeBytes ?: 0,
-                    lastUpdatedText = asset?.let { engine.dateText(it.modifiedMs) } ?: "Chưa tải",
+                    lastUpdatedText = asset?.let { engine.dateText(it.modifiedMs) }
+                        ?: context.getString(R.string.filter_not_loaded),
                     isBuiltin = entry.builtin,
                     metadata = scriptMetadata(entry.id, asset),
                 )
@@ -1401,7 +1420,8 @@ class AdGuardRepository(
                     url = state.url,
                     isEnabled = state.enabled,
                     sizeBytes = asset?.sizeBytes ?: 0,
-                    lastUpdatedText = asset?.let { engine.dateText(it.modifiedMs) } ?: "Chưa tải",
+                    lastUpdatedText = asset?.let { engine.dateText(it.modifiedMs) }
+                        ?: context.getString(R.string.filter_not_loaded),
                     isUserAdded = true,
                     metadata = scriptMetadata(state.id, asset),
                 )
@@ -1442,10 +1462,13 @@ class AdGuardRepository(
                 val missingBody = withContext(Dispatchers.IO) { engine.scriptState(id) == null }
                 if (missingBody) {
                     if (script.url.isBlank()) {
-                        showTransientStatus("Không tìm thấy nội dung ${script.name}")
+                        showTransientStatus(
+                            UiText.Formatted(R.string.script_missing_body, script.name),
+                        )
                         nextEnabled = false
                     } else {
-                        _loadingMessage.value = "Đang tải ${script.name}…"
+                        _loadingMessage.value =
+                            UiText.Formatted(R.string.script_loading, script.name)
                         val result = downloadScriptBody(script)
                         showTransientStatus(result.message)
                         nextEnabled = result.ok
@@ -1507,7 +1530,8 @@ class AdGuardRepository(
                 _scriptStore.update {
                     it.copy(
                         loading = false,
-                        error = e.message?.take(160) ?: "Không tải được kho tiện ích",
+                        error = e.message?.take(160)
+                            ?: context.getString(R.string.script_store_load_failed),
                     )
                 }
             }
@@ -1545,7 +1569,8 @@ class AdGuardRepository(
                 _scriptStore.update {
                     it.copy(
                         loadingMore = false,
-                        error = e.message?.take(160) ?: "Không tải thêm được tiện ích",
+                        error = e.message?.take(160)
+                            ?: context.getString(R.string.script_store_more_failed),
                     )
                 }
             }
@@ -1568,7 +1593,10 @@ class AdGuardRepository(
             }
             val body = response.body?.string().orEmpty()
             if (body.isBlank()) return emptyList()
-            return parseGreasyForkScripts(body)
+            return parseGreasyForkScripts(
+                body,
+                context.getString(R.string.script_greasy_fork_name),
+            )
         }
     }
 
@@ -1576,7 +1604,7 @@ class AdGuardRepository(
     fun addScript(
         name: String,
         url: String,
-        description: String = "Tiện ích tùy chỉnh của bạn",
+        description: String = context.getString(R.string.script_custom_description),
     ) {
         scope.launch {
             val trimmed = url.trim()
@@ -1589,7 +1617,9 @@ class AdGuardRepository(
                 if (!existing.isEnabled || existing.sizeBytes == 0L) {
                     toggleScript(existing.id, true)
                 } else {
-                    showTransientStatus("${existing.name} đã có trong danh sách")
+                    showTransientStatus(
+                        UiText.Formatted(R.string.script_duplicate, existing.name),
+                    )
                 }
                 return@launch
             }
@@ -1597,9 +1627,11 @@ class AdGuardRepository(
             val script = UserScriptInfo(
                 id = id,
                 name = name.ifBlank {
-                    trimmed.substringAfterLast('/').take(40).ifBlank { "Tiện ích" }
+                    trimmed.substringAfterLast('/').take(40)
+                        .ifBlank { context.getString(R.string.script_default_name) }
                 },
-                description = description.trim().take(300).ifEmpty { "Tiện ích tùy chỉnh của bạn" },
+                description = description.trim().take(300)
+                    .ifEmpty { context.getString(R.string.script_custom_description) },
                 url = trimmed,
                 isEnabled = false,
                 isUserAdded = true,
@@ -1614,11 +1646,13 @@ class AdGuardRepository(
                 if (winner != null && (!winner.isEnabled || winner.sizeBytes == 0L)) {
                     toggleScript(winner.id, true)
                 } else {
-                    showTransientStatus("${script.name} đã có trong danh sách")
+                    showTransientStatus(
+                        UiText.Formatted(R.string.script_duplicate, script.name),
+                    )
                 }
                 return@launch
             }
-            _loadingMessage.value = "Đang tải ${script.name}…"
+            _loadingMessage.value = UiText.Formatted(R.string.script_loading, script.name)
             val result = downloadScriptBody(script)
             showTransientStatus(result.message)
             if (result.ok) {
@@ -1634,7 +1668,7 @@ class AdGuardRepository(
     fun refreshScript(id: String) {
         scope.launch {
             val script = _userscripts.value.firstOrNull { it.id == id } ?: return@launch
-            _loadingMessage.value = "Đang tải ${script.name}…"
+            _loadingMessage.value = UiText.Formatted(R.string.script_loading, script.name)
             val result = downloadScriptBody(script)
             showTransientStatus(result.message)
             saveScripts()
@@ -1642,18 +1676,23 @@ class AdGuardRepository(
         }
     }
 
-    private data class ScriptDownloadResult(val ok: Boolean, val message: String)
+    private data class ScriptDownloadResult(val ok: Boolean, val message: UiText)
 
     /** Downloads one script body to the store and reports whether it is usable. */
     private suspend fun downloadScriptBody(script: UserScriptInfo): ScriptDownloadResult {
         if (script.url.isBlank()) {
-            return ScriptDownloadResult(false, "Tiện ích này không có URL")
+            return ScriptDownloadResult(false, UiText.Resource(R.string.script_no_url))
         }
         val outcome = withContext(Dispatchers.IO) { engine.scriptFetch(script.id, script.url) }
         if (!outcome.ok) {
             return ScriptDownloadResult(
                 false,
-                "Không tải được ${script.name}: ${outcome.message}",
+                CoreText.downloadError(outcome.error)
+                    ?: UiText.Formatted(
+                        R.string.script_download_failed,
+                        script.name,
+                        outcome.message,
+                    ),
             )
         }
         val body = withContext(Dispatchers.IO) { engine.scriptText(script.id) }
@@ -1671,7 +1710,11 @@ class AdGuardRepository(
         }
         return ScriptDownloadResult(
             true,
-            "Đã tải ${script.name} (${outcome.sizeBytes / 1024} KB)",
+            UiText.Formatted(
+                R.string.script_downloaded,
+                script.name,
+                outcome.sizeBytes / 1024,
+            ),
         )
     }
 
@@ -1697,7 +1740,7 @@ class AdGuardRepository(
                     .getOrNull()
             }
             if (text.isNullOrBlank()) {
-                showTransientStatus("Không đọc được tệp đã chọn")
+                showTransientStatus(UiText.Resource(R.string.script_file_unreadable))
                 return@launch
             }
             val displayName = withContext(Dispatchers.IO) {
@@ -1715,19 +1758,19 @@ class AdGuardRepository(
             val script = UserScriptInfo(
                 id = id,
                 name = base,
-                description = "Tiện ích tùy chỉnh từ tệp trong máy",
+                description = context.getString(R.string.script_from_file_description),
                 url = "",
                 isEnabled = false,
                 isUserAdded = true,
             )
             val updated = _userscripts.updateAndGet { list -> if (list.any { it.id == id }) list else list + script }
             if (updated.none { it.id == id }) {
-                showTransientStatus("$base đã có trong danh sách")
+                showTransientStatus(UiText.Formatted(R.string.script_duplicate, base))
                 return@launch
             }
             val state = withContext(Dispatchers.IO) { engine.scriptSave(id, text) }
             if (state == null) {
-                showTransientStatus("Lỗi ghi tệp: không lưu được tiện ích")
+                showTransientStatus(UiText.Resource(R.string.script_save_failed))
                 return@launch
             }
             _userscripts.update { list ->
@@ -1735,7 +1778,7 @@ class AdGuardRepository(
                     if (it.id == id) {
                         it.copy(
                             sizeBytes = state.sizeBytes,
-                            lastUpdatedText = "Vừa nhập",
+                            lastUpdatedText = context.getString(R.string.script_imported_now),
                             isEnabled = true,
                             metadata = parseUserScriptMetadata(text),
                         )
@@ -1744,7 +1787,7 @@ class AdGuardRepository(
             }
             saveScripts()
             pushScriptsToCore()
-            showTransientStatus("Đã thêm ${base}")
+            showTransientStatus(UiText.Formatted(R.string.script_added, base))
         }
     }
 
@@ -1753,15 +1796,17 @@ class AdGuardRepository(
         scope.launch {
             val trimmed = text.trim()
             if (trimmed.isBlank()) {
-                showTransientStatus("Nội dung không được trống")
+                showTransientStatus(UiText.Resource(R.string.script_empty_content))
                 return@launch
             }
-            val displayName = name.trim().ifBlank { "Tiện ích tùy chỉnh" }.take(60)
+            val displayName = name.trim()
+                .ifBlank { context.getString(R.string.script_default_custom_name) }
+                .take(60)
             val id = "script_custom_${System.currentTimeMillis()}"
             val script = UserScriptInfo(
                 id = id,
                 name = displayName,
-                description = "Tiện ích tạo từ trình soạn thảo",
+                description = context.getString(R.string.script_editor_description),
                 url = "",
                 isEnabled = false,
                 isUserAdded = true,
@@ -1769,7 +1814,7 @@ class AdGuardRepository(
             _userscripts.update { list -> list + script }
             val state = withContext(Dispatchers.IO) { engine.scriptSave(id, trimmed) }
             if (state == null) {
-                showTransientStatus("Lỗi lưu tiện ích")
+                showTransientStatus(UiText.Resource(R.string.script_save_error))
                 _userscripts.update { list -> list.filter { it.id != id } }
                 return@launch
             }
@@ -1778,7 +1823,7 @@ class AdGuardRepository(
                     if (it.id == id) {
                         it.copy(
                             sizeBytes = state.sizeBytes,
-                            lastUpdatedText = "Vừa tạo",
+                            lastUpdatedText = context.getString(R.string.script_created_now),
                             isEnabled = true,
                             metadata = parseUserScriptMetadata(trimmed),
                         )
@@ -1787,7 +1832,7 @@ class AdGuardRepository(
             }
             saveScripts()
             pushScriptsToCore()
-            showTransientStatus("Đã tạo $displayName")
+            showTransientStatus(UiText.Formatted(R.string.script_created, displayName))
         }
     }
 
@@ -1798,13 +1843,13 @@ class AdGuardRepository(
             if (!script.isUserAdded) return@launch
             val trimmed = text.trim()
             if (trimmed.isBlank()) {
-                showTransientStatus("Nội dung không được trống")
+                showTransientStatus(UiText.Resource(R.string.script_empty_content))
                 return@launch
             }
             val displayName = name.trim().ifBlank { script.name }.take(60)
             val state = withContext(Dispatchers.IO) { engine.scriptSave(id, trimmed) }
             if (state == null) {
-                showTransientStatus("Lỗi lưu tiện ích")
+                showTransientStatus(UiText.Resource(R.string.script_save_error))
                 return@launch
             }
             _userscripts.update { list ->
@@ -1815,7 +1860,7 @@ class AdGuardRepository(
                         it.copy(
                             name = displayName,
                             sizeBytes = state.sizeBytes,
-                            lastUpdatedText = "Vừa sửa",
+                            lastUpdatedText = context.getString(R.string.script_edited_now),
                             metadata = parseUserScriptMetadata(trimmed),
                         )
                     } else it
@@ -1823,7 +1868,7 @@ class AdGuardRepository(
             }
             saveScripts()
             pushScriptsToCore()
-            showTransientStatus("Đã cập nhật $displayName")
+            showTransientStatus(UiText.Formatted(R.string.script_updated, displayName))
         }
     }
 
@@ -1946,7 +1991,10 @@ internal fun mergeGreasyForkItems(
  * Parse Greasy Fork's JSON list. Kept top-level and free of Android state so a
  * JVM test can feed it a fixture without a network call.
  */
-internal fun parseGreasyForkScripts(json: String): List<UserScriptStoreItem> {
+internal fun parseGreasyForkScripts(
+    json: String,
+    fallbackName: String = "Greasy Fork userscript",
+): List<UserScriptStoreItem> {
     val array = JSONArray(json)
     val count = minOf(array.length(), GREASY_FORK_LIMIT)
     val items = ArrayList<UserScriptStoreItem>(count)
@@ -1960,7 +2008,7 @@ internal fun parseGreasyForkScripts(json: String): List<UserScriptStoreItem> {
             .orEmpty()
         items += UserScriptStoreItem(
             id = obj.optLong("id"),
-            name = obj.cleanString("name").ifEmpty { "Tiện ích Greasy Fork" },
+            name = obj.cleanString("name").ifEmpty { fallbackName },
             description = obj.cleanString("description").take(300),
             url = codeUrl,
             pageUrl = pageUrl,

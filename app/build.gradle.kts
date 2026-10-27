@@ -104,6 +104,13 @@ android {
         buildConfig = true
     }
 
+    // The app ships English and Vietnamese; the generated locale config lets
+    // Android show both in the per-app language screen.
+    androidResources {
+        generateLocaleConfig = true
+        localeFilters += listOf("en", "vi")
+    }
+
     packaging {
         jniLibs {
             // The core is already stripped by cargo; keep Android from
@@ -128,6 +135,7 @@ secrets {
 dependencies {
     implementation(platform(libs.androidx.compose.bom))
     implementation(libs.androidx.activity.compose)
+    implementation(libs.androidx.appcompat)
     implementation(libs.androidx.compose.material.icons.core)
     implementation(libs.androidx.compose.material.icons.extended)
     implementation(libs.androidx.compose.material3)

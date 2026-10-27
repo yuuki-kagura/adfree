@@ -2,6 +2,7 @@ package git.shin.adfree
 
 import android.app.Application
 import git.shin.adfree.di.AdGuardAppContainer
+import git.shin.adfree.ui.Localization
 
 class AdGuardApplication : Application() {
 
@@ -22,6 +23,9 @@ class AdGuardApplication : Application() {
         // asynchronous filter/script file refresh.
         container.repository.hydrateState()
         container.applyConfig()
+        // Rust owns the language choice; mirror it into AppCompat's per-app
+        // locales before the first Activity attaches.
+        Localization.apply(container.repository.settings.value.appLanguage)
     }
 
     companion object {

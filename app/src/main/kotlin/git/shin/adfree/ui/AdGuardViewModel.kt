@@ -3,6 +3,7 @@ package git.shin.adfree.ui
 import android.util.Log
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import git.shin.adfree.R
 import git.shin.adfree.core.ConfigWarning
 import git.shin.adfree.core.CoreEngine
 import git.shin.adfree.data.AdGuardRepository
@@ -34,9 +35,9 @@ enum class AdGuardTab { HOME, ACTIVITY, FILTERS, APPS, AI_LAB, SETTINGS }
 
 sealed interface AiLabUiState {
     data object Idle : AiLabUiState
-    data class Loading(val message: String) : AiLabUiState
+    data class Loading(val message: UiText) : AiLabUiState
     data class Success(val result: ThreatAnalysisResult) : AiLabUiState
-    data class Error(val message: String) : AiLabUiState
+    data class Error(val message: UiText) : AiLabUiState
 }
 
 /**
@@ -280,6 +281,8 @@ class AdGuardViewModel(
                 repository.toggleStealthMode(!uiState.value.settings.isStealthModeEnabled)
 
             is AdGuardIntent.ToggleBlockQuic -> repository.toggleBlockQuic(intent.enabled)
+            is AdGuardIntent.SetAppLanguage -> repository.setAppLanguage(intent.language)
+            is AdGuardIntent.SetThemeMode -> repository.setThemeMode(intent.mode)
             is AdGuardIntent.ToggleBlockDoh -> repository.toggleBlockDoh(intent.enabled)
             is AdGuardIntent.ToggleBlockDot -> repository.toggleBlockDot(intent.enabled)
             is AdGuardIntent.SetFilterAutoUpdate ->
@@ -294,7 +297,9 @@ class AdGuardViewModel(
             is AdGuardIntent.AddCustomRule -> {
                 repository.addCustomRule(intent.rule)
                 _showCustomRuleDialog.value = false
-                emit(AdGuardEffect.ShowSnackbar("Đã thêm quy tắc ${intent.rule}"))
+                emit(
+                    AdGuardEffect.ShowSnackbar(UiText.Formatted(R.string.rule_added, intent.rule)),
+                )
             }
 
             is AdGuardIntent.RemoveCustomRule -> repository.removeCustomRule(intent.rule)
@@ -302,24 +307,36 @@ class AdGuardViewModel(
                 repository.updateAllCustomRules(intent.rules)
                 // Keep the sheet open: add/delete/import are incremental edits,
                 // and the import notice would vanish with the sheet.
-                emit(AdGuardEffect.ShowSnackbar("Đã lưu ${intent.rules.size} quy tắc"))
+                emit(
+                    AdGuardEffect.ShowSnackbar(
+                        UiText.Formatted(R.string.rules_saved, intent.rules.size),
+                    ),
+                )
             }
 
             is AdGuardIntent.AddToWhitelist -> {
                 repository.addDomainToWhitelist(intent.domain)
                 _inspectedLog.value = null
-                emit(AdGuardEffect.ShowSnackbar("Đã đưa ${intent.domain} vào danh sách trắng"))
+                emit(
+                    AdGuardEffect.ShowSnackbar(
+                        UiText.Formatted(R.string.domain_whitelisted, intent.domain),
+                    ),
+                )
             }
 
             is AdGuardIntent.AddToBlacklist -> {
                 repository.addDomainToBlacklist(intent.domain)
                 _inspectedLog.value = null
-                emit(AdGuardEffect.ShowSnackbar("Đã chặn ${intent.domain}"))
+                emit(
+                    AdGuardEffect.ShowSnackbar(
+                        UiText.Formatted(R.string.domain_blocked, intent.domain),
+                    ),
+                )
             }
 
             is AdGuardIntent.SelectDnsProvider -> {
                 repository.selectDnsProvider(intent.id)
-                emit(AdGuardEffect.ShowSnackbar("Đã đổi upstream DNS"))
+                emit(AdGuardEffect.ShowSnackbar(UiText.Resource(R.string.dns_upstream_changed)))
             }
 
             is AdGuardIntent.AddCustomDnsProvider -> {
@@ -356,9 +373,9 @@ class AdGuardViewModel(
             is AdGuardIntent.RestartVpn -> {
                 if (vpnController.isVpnActive.value) {
                     vpnController.restartVpnService()
-                    emit(AdGuardEffect.ShowSnackbar("Đang khởi động lại VPN để áp dụng…"))
+                    emit(AdGuardEffect.ShowSnackbar(UiText.Resource(R.string.vpn_restarting)))
                 } else {
-                    emit(AdGuardEffect.ShowSnackbar("VPN chưa bật — thay đổi áp dụng ở lần bật sau"))
+                    emit(AdGuardEffect.ShowSnackbar(UiText.Resource(R.string.vpn_off_changes_next)))
                 }
             }
 
@@ -383,7 +400,7 @@ class AdGuardViewModel(
             is AdGuardIntent.AddCustomFilter -> {
                 repository.addCustomFilter(intent.name, intent.url)
                 _showAddFilterDialog.value = false
-                emit(AdGuardEffect.ShowSnackbar("Đang tải bộ lọc mới…"))
+                emit(AdGuardEffect.ShowSnackbar(UiText.Resource(R.string.filter_new_loading)))
             }
 
             is AdGuardIntent.ImportLocalFilter -> {
@@ -404,7 +421,7 @@ class AdGuardViewModel(
             is AdGuardIntent.InspectFilter -> _inspectedFilter.value = intent.id
             is AdGuardIntent.RestoreDefaultFilters -> {
                 repository.restoreDefaultFilters()
-                emit(AdGuardEffect.ShowSnackbar("Đã khôi phục bộ lọc mặc định"))
+                emit(AdGuardEffect.ShowSnackbar(UiText.Resource(R.string.filter_restored_defaults)))
             }
 
             is AdGuardIntent.ShowAddScriptDialog -> _showAddScriptDialog.value = intent.show
@@ -433,7 +450,11 @@ class AdGuardViewModel(
             is AdGuardIntent.LoadMoreScriptStore -> repository.loadMoreScriptStore()
             is AdGuardIntent.InstallStoreScript -> {
                 repository.addScript(intent.name, intent.url, intent.description)
-                emit(AdGuardEffect.ShowSnackbar("Đang cài ${intent.name}…"))
+                emit(
+                    AdGuardEffect.ShowSnackbar(
+                        UiText.Formatted(R.string.script_installing, intent.name),
+                    ),
+                )
             }
 
             is AdGuardIntent.ToggleScript -> repository.toggleScript(intent.id, intent.enabled)
@@ -488,13 +509,20 @@ class AdGuardViewModel(
             repository.toggleProtection(false)
             vpnController.stopVpnService()
         }
-        emit(AdGuardEffect.ShowSnackbar(if (next) "Đang bật bảo vệ" else "Đã tắt bảo vệ"))
+        emit(
+            AdGuardEffect.ShowSnackbar(
+                if (next) UiText.Resource(R.string.protection_on)
+                else UiText.Resource(R.string.protection_off),
+            ),
+        )
     }
 
     private fun handleThreatScan(domain: String) {
         if (domain.isBlank()) return
         viewModelScope.launch {
-            _aiLabState.value = AiLabUiState.Loading("Đang phân tích $domain trên thiết bị…")
+            _aiLabState.value = AiLabUiState.Loading(
+                UiText.Formatted(R.string.threat_analyzing, domain),
+            )
             val result = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) {
                 threatAnalyzer.analyze(domain)
             }
@@ -507,17 +535,8 @@ class AdGuardViewModel(
         onConfigChanged()
     }
 
-    private fun configWarningMessage(warning: ConfigWarning): String? = when (warning) {
-        ConfigWarning.NONE -> null
-        ConfigWarning.PROVIDER_MISSING ->
-            "DNS đã chọn không còn tồn tại, đã dùng AdGuard DNS mặc định"
-        ConfigWarning.ADDRESS_INVALID ->
-            "Upstream DNS đã chọn không dùng được, đã quay về AdGuard DNS"
-        ConfigWarning.PROXY_INVALID ->
-            "Proxy không hợp lệ (cần IP và cổng khác 0), đã tắt proxy"
-        ConfigWarning.STORE_UNAVAILABLE ->
-            "Không đọc được trạng thái đã lưu, đang dùng cấu hình mặc định"
-    }
+    private fun configWarningMessage(warning: ConfigWarning): UiText? =
+        CoreText.configWarning(warning)
 
     /**
      * Re-reads the system Private DNS switch and re-pushes the config: turning
@@ -698,7 +717,7 @@ class AdGuardViewModel(
         val aiLabState: AiLabUiState,
     ) {
         var showVpnPermission: Boolean = false
-        var loadingMessage: String? = null
+        var loadingMessage: UiText? = null
         var userscripts: List<UserScriptInfo> = emptyList()
         var scriptsMasterEnabled: Boolean = false
         var scriptStore: UserScriptStoreState = UserScriptStoreState()
@@ -714,7 +733,7 @@ class AdGuardViewModel(
 
     private data class UiExtras(
         val showVpnPermission: Boolean,
-        val loadingMessage: String?,
+        val loadingMessage: UiText?,
         val userscripts: List<UserScriptInfo>,
         val scriptsMasterEnabled: Boolean,
         val scriptStore: UserScriptStoreState,

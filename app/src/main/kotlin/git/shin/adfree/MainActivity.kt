@@ -1,7 +1,6 @@
 package git.shin.adfree
 
 import android.os.Bundle
-import androidx.activity.ComponentActivity
 import androidx.activity.SystemBarStyle
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -9,6 +8,7 @@ import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
+import androidx.appcompat.app.AppCompatActivity
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
@@ -50,6 +50,7 @@ import androidx.compose.runtime.saveable.rememberSaveableStateHolder
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -57,10 +58,13 @@ import androidx.compose.ui.unit.sp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LifecycleEventEffect
 import git.shin.adfree.model.ThemeMode
+import git.shin.adfree.R
 import git.shin.adfree.ui.AdGuardEffect
 import git.shin.adfree.ui.AdGuardIntent
 import git.shin.adfree.ui.AdGuardTab
 import git.shin.adfree.ui.AdGuardViewModel
+import git.shin.adfree.ui.Localization
+import git.shin.adfree.ui.UiText
 import git.shin.adfree.ui.screens.AppsManagementScreen
 import git.shin.adfree.ui.screens.FilteringHubScreen
 import git.shin.adfree.ui.screens.FilteringLogScreen
@@ -75,7 +79,7 @@ import git.shin.adfree.ui.theme.AdGuardTextMuted
 import git.shin.adfree.ui.theme.AdGuardTextSecondary
 import git.shin.adfree.ui.theme.MyApplicationTheme
 
-class MainActivity : ComponentActivity() {
+class MainActivity : AppCompatActivity() {
 
     private val viewModel: AdGuardViewModel by viewModels {
         AdGuardApplication.instance.container.provideViewModelFactory()
@@ -110,6 +114,14 @@ class MainActivity : ComponentActivity() {
             }
             MyApplicationTheme(darkTheme = darkTheme) {
                 val snackbarHostState = remember { SnackbarHostState() }
+                val context = LocalContext.current
+                // The persisted choice is applied once at startup; this keeps
+                // the UI in sync when the user picks another language.
+                LaunchedEffect(Unit) {
+                    container.repository.settings.collect {
+                        Localization.apply(it.appLanguage)
+                    }
+                }
                 // Keep each tab's own navigation (for example the Filters hub
                 // sub-screen) alive while the user visits another tab.
                 val tabStateHolder = rememberSaveableStateHolder()
@@ -119,7 +131,7 @@ class MainActivity : ComponentActivity() {
                     viewModel.effect.collect { effect ->
                         when (effect) {
                             is AdGuardEffect.ShowSnackbar -> {
-                                snackbarHostState.showSnackbar(effect.message)
+                                snackbarHostState.showSnackbar(effect.message.resolve(context))
                             }
                             is AdGuardEffect.RequestVpnPermission -> {
                                 // Handled via launcher
@@ -210,7 +222,7 @@ class MainActivity : ComponentActivity() {
 
 data class NavItem(
     val tab: AdGuardTab,
-    val label: String,
+    val label: UiText,
     val selectedIcon: ImageVector,
     val unselectedIcon: ImageVector,
     val tag: String
@@ -222,11 +234,11 @@ fun AdGuardBottomBar(
     onTabSelected: (AdGuardTab) -> Unit
 ) {
     val navItems = listOf(
-        NavItem(AdGuardTab.HOME, "Bảo vệ", Icons.Filled.Shield, Icons.Outlined.Shield, "nav_home"),
-        NavItem(AdGuardTab.ACTIVITY, "Nhật ký", Icons.AutoMirrored.Filled.ListAlt, Icons.AutoMirrored.Outlined.ListAlt, "nav_activity"),
-        NavItem(AdGuardTab.FILTERS, "Bộ lọc", Icons.Filled.Layers, Icons.Outlined.Layers, "nav_filters"),
-        NavItem(AdGuardTab.APPS, "Ứng dụng", Icons.Filled.Apps, Icons.Outlined.Apps, "nav_apps"),
-        NavItem(AdGuardTab.SETTINGS, "Cài đặt", Icons.Filled.Settings, Icons.Outlined.Settings, "nav_settings")
+        NavItem(AdGuardTab.HOME, UiText.Resource(R.string.nav_home), Icons.Filled.Shield, Icons.Outlined.Shield, "nav_home"),
+        NavItem(AdGuardTab.ACTIVITY, UiText.Resource(R.string.nav_activity), Icons.AutoMirrored.Filled.ListAlt, Icons.AutoMirrored.Outlined.ListAlt, "nav_activity"),
+        NavItem(AdGuardTab.FILTERS, UiText.Resource(R.string.nav_filters), Icons.Filled.Layers, Icons.Outlined.Layers, "nav_filters"),
+        NavItem(AdGuardTab.APPS, UiText.Resource(R.string.nav_apps), Icons.Filled.Apps, Icons.Outlined.Apps, "nav_apps"),
+        NavItem(AdGuardTab.SETTINGS, UiText.Resource(R.string.nav_settings), Icons.Filled.Settings, Icons.Outlined.Settings, "nav_settings")
     )
 
     NavigationBar(
@@ -243,12 +255,12 @@ fun AdGuardBottomBar(
                 icon = {
                     Icon(
                         imageVector = if (isSelected) item.selectedIcon else item.unselectedIcon,
-                        contentDescription = item.label
+                        contentDescription = item.label.asString()
                     )
                 },
                 label = {
                     Text(
-                        text = item.label,
+                        text = item.label.asString(),
                         fontSize = 10.sp,
                         fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal
                     )

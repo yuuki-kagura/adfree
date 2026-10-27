@@ -202,22 +202,29 @@ internal fun assetSizeLabel(bytes: Long): String = when {
 }
 
 /**
- * Error message for URL the user pasted into "Add custom filter", or `null`
- * when it is acceptable. Mirrors AdGuard's inline validation ("Enter a valid
- * URL or file path"): local files go through the file picker, so only
- * `http(s)://` with a real host counts here.
+ * Why a pasted filter URL is unusable; the UI maps the code to wording.
+ * Mirrors AdGuard's inline validation ("Enter a valid URL or file path"):
+ * local files go through the file picker, so only `http(s)://` with a real
+ * host counts here.
  */
-internal fun filterUrlError(url: String): String? {
+internal enum class FilterUrlError {
+    EMPTY,
+    TOO_LONG,
+    INVALID,
+    UNSUPPORTED_SCHEME,
+    NO_HOST,
+}
+
+internal fun filterUrlError(url: String): FilterUrlError? {
     val trimmed = url.trim()
-    if (trimmed.isEmpty()) return "Nhập URL hoặc chọn tệp trong máy"
-    if (trimmed.length > 2048) return "URL quá dài"
+    if (trimmed.isEmpty()) return FilterUrlError.EMPTY
+    if (trimmed.length > 2048) return FilterUrlError.TOO_LONG
     val parsed = runCatching { java.net.URI(trimmed) }.getOrNull()
-        ?: return "Đường dẫn không hợp lệ"
+        ?: return FilterUrlError.INVALID
     val scheme = parsed.scheme?.lowercase()
     return when {
-        scheme != "http" && scheme != "https" ->
-            "Chỉ chấp nhận URL http(s):// — dùng nút chọn tệp cho file trong máy"
-        parsed.host.isNullOrBlank() -> "URL thiếu địa chỉ máy chủ"
+        scheme != "http" && scheme != "https" -> FilterUrlError.UNSUPPORTED_SCHEME
+        parsed.host.isNullOrBlank() -> FilterUrlError.NO_HOST
         else -> null
     }
 }

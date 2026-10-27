@@ -1,4 +1,158 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">AdFree</string>
+
+    <!-- Core fallbacks (codes returned by the Rust engine) -->
+    <string name="config_warning_provider_missing">The selected DNS server no longer exists; using AdGuard DNS.</string>
+    <string name="config_warning_address_invalid">The selected DNS upstream is unusable; using AdGuard DNS.</string>
+    <string name="config_warning_proxy_invalid">The proxy needs an IP address and a non-zero port; the proxy was turned off.</string>
+    <string name="config_warning_store_unavailable">Saved state could not be read; using defaults.</string>
+
+    <string name="backup_error_not_backup">That file is not an AdFree backup.</string>
+    <string name="backup_error_unsupported_version">That backup was made by a newer version of AdFree.</string>
+    <string name="backup_error_malformed">That backup is damaged or incomplete.</string>
+    <string name="backup_error_store_unavailable">The backup store is not available right now.</string>
+
+    <string name="dns_error_empty">Enter a DNS server address.</string>
+    <string name="dns_error_invalid_address">That DNS address is not valid.</string>
+    <string name="dns_error_invalid_port">That port is not valid.</string>
+    <string name="dns_error_unsupported_scheme">Only UDP, DoT and DoH addresses are supported.</string>
+    <string name="dns_error_ipv6_udp_unsupported">Plain UDP currently supports IPv4 only.</string>
+
+    <string name="download_error_store_unavailable">The core store is not open.</string>
+    <string name="download_error_no_url">That list has no URL.</string>
+    <string name="download_error_http">The server refused the download.</string>
+    <string name="download_error_empty">The server returned an empty response.</string>
+    <string name="download_error_network">The download failed; check the connection and try again.</string>
+    <string name="download_error_write">The downloaded file could not be saved.</string>
+    <string name="download_error_too_large">The list is too large to use.</string>
+
+    <string name="trust_platform_unsupported">Root mode is not supported on this platform.</string>
+    <string name="trust_invalid_ca">The CA certificate is not valid.</string>
+    <string name="trust_su_missing">No root access found; this device can still use the user certificate.</string>
+    <string name="trust_already_installed">The CA is already in the system store.</string>
+    <string name="trust_root_granted">Root access is available; install the CA into the system store so every app trusts it.</string>
+    <string name="trust_root_pending">A root binary was found; Android will ask for permission when installing.</string>
+    <string name="trust_permission_denied">Root access was denied; the system CA was not changed.</string>
+    <string name="trust_magisk_written">Magisk module written. Reboot for the CA to take effect.</string>
+    <string name="trust_magisk_write_failed">The Magisk module could not be written.</string>
+    <string name="trust_installed_live">The CA is installed in the system store and active now.</string>
+    <string name="trust_mount_pending">The CA was mounted but the store does not see it yet; try again or use Magisk.</string>
+    <string name="trust_mount_failed">The CA could not be mounted into the system store.</string>
+    <string name="trust_uninstalled">The CA was removed from the system store.</string>
+    <string name="trust_uninstalled_reboot">The CA was removed; reboot to finish.</string>
+    <string name="trust_uninstall_failed">The CA could not be removed from the system store.</string>
+    <string name="trust_needs_root">Root or passwordless sudo is required to install the system CA.</string>
+    <string name="trust_needs_root_remove">Root or passwordless sudo is required to remove the system CA.</string>
+    <string name="trust_temp_write_failed">The temporary certificate file could not be written.</string>
+    <string name="trust_installed_linux">The CA is installed in the system store.</string>
+    <string name="trust_linux_install_failed">The system CA could not be installed.</string>
+    <string name="trust_removed_linux">The CA was removed from the system store.</string>
+    <string name="trust_linux_remove_failed">The system CA could not be removed.</string>
+    <string name="trust_no_ca">Create a CA before installing it into the system store.</string>
+    <string name="trust_no_ca_remove">There is no CA to remove.</string>
+    <string name="trust_checking_root">Checking root access…</string>
+    <string name="trust_working">Working…</string>
+
+    <!-- Settings / DNS status -->
+    <string name="filter_auto_update_off">Filter auto-update is off</string>
+    <string name="filter_auto_update_every_hours">Filters auto-update every %1$d hours</string>
+    <string name="dns_custom_description">Custom</string>
+    <string name="dns_address_empty">Enter a DNS server address</string>
+    <string name="dns_invalid_port">That DNS port is not valid</string>
+    <string name="dns_udp_ip_only">Plain UDP DNS accepts IP addresses only (for example 1.1.1.1 or 1.1.1.1:53)</string>
+    <string name="dns_udp_ipv4_only">Plain UDP DNS currently supports IPv4 addresses only</string>
+    <string name="dns_provider_selected">Selected %1$s</string>
+    <string name="dns_custom_added">Custom DNS added: %1$s</string>
+
+    <!-- Filter subscriptions -->
+    <string name="filter_url_empty">Enter a URL or pick a local file</string>
+    <string name="filter_url_too_long">That URL is too long</string>
+    <string name="filter_url_invalid">That URL is invalid</string>
+    <string name="filter_url_scheme">Only http(s):// URLs are accepted; use the file picker for local files</string>
+    <string name="filter_url_no_host">The URL has no host name</string>
+    <string name="filter_auto_update_progress">Auto-updating %1$d filters…</string>
+    <string name="filter_auto_update_done">Auto-updated %1$d filters</string>
+    <string name="filter_auto_update_partial">Auto-update: %1$d/%2$d filters succeeded</string>
+    <string name="filter_downloading">Downloading %1$s…</string>
+    <string name="filter_downloaded_now">Just updated</string>
+    <string name="filter_downloaded_name">Downloaded %1$s (%2$d rules)</string>
+    <string name="filter_download_failed">Download failed</string>
+    <string name="filter_missing_body">%1$s has no content on this device; add it again or pick another file</string>
+    <string name="filter_trusted">Filter trusted: its scriptlets and JavaScript rules may run</string>
+    <string name="filter_untrusted">Trust removed: risky rules from that filter are skipped</string>
+    <string name="filter_no_url">This filter has no URL to update from</string>
+    <string name="filter_none_to_update">There are no filters to update</string>
+    <string name="filter_updating_count">Updating %1$d filters…</string>
+    <string name="filter_updated_count">Updated %1$d filters</string>
+    <string name="filter_update_finished_failures">Update finished; %1$d lists failed</string>
+    <string name="filter_url_duplicate">That URL is already in the filter list</string>
+    <string name="filter_created_name">Added %1$s (%2$d rules)</string>
+    <string name="filter_name_updated">Updated %1$s</string>
+    <string name="filter_restored_defaults">Default filters restored</string>
+    <string name="filter_custom_description">Your custom filter</string>
+    <string name="filter_user_rules_name">Your rules</string>
+    <string name="filter_user_rules_description">Block and allow rules you wrote yourself, applied to every page</string>
+    <string name="filter_not_loaded">Not downloaded</string>
+    <string name="filter_from_file_name">Filter from file</string>
+    <string name="filter_from_file_description">Custom filter from a file on this device</string>
+    <string name="filter_file_unreadable">That file could not be read</string>
+    <string name="filter_save_failed">File write failed; the filter was not saved</string>
+    <string name="filter_imported_now">Just imported</string>
+    <string name="filter_file_unreadable_detail">The device could not read the file — %1$s</string>
+
+    <!-- Backup -->
+    <string name="backup_export_failed_read">Saved state could not be read for backup</string>
+    <string name="backup_export_done">Backup exported</string>
+    <string name="backup_export_write_failed">The backup file could not be written</string>
+    <string name="backup_import_file_unreadable">That file could not be read</string>
+    <string name="backup_import_too_large">That file is too large to be an AdFree backup</string>
+    <string name="backup_import_done">Settings, firewall, DNS, filters and userscripts restored; turn the VPN back on if needed</string>
+
+    <!-- Userscripts -->
+    <string name="script_missing_body">No content found for %1$s</string>
+    <string name="script_store_load_failed">The userscript store could not be loaded</string>
+    <string name="script_store_more_failed">More userscripts could not be loaded</string>
+    <string name="script_duplicate">%1$s is already in the list</string>
+    <string name="script_no_url">This userscript has no URL</string>
+    <string name="script_download_failed">Could not download %1$s: %2$s</string>
+    <string name="script_downloaded">Downloaded %1$s (%2$d KB)</string>
+    <string name="script_file_unreadable">That file could not be read</string>
+    <string name="script_save_failed">File write failed; the userscript was not saved</string>
+    <string name="script_added">Added %1$s</string>
+    <string name="script_empty_content">Content cannot be empty</string>
+    <string name="script_save_error">Could not save the userscript</string>
+    <string name="script_created">Created %1$s</string>
+    <string name="script_updated">Updated %1$s</string>
+    <string name="script_from_file_description">Custom userscript from a file on this device</string>
+    <string name="script_custom_description">Your custom userscript</string>
+    <string name="script_default_name">Userscript</string>
+    <string name="script_default_custom_name">Custom userscript</string>
+    <string name="script_editor_description">Userscript created in the editor</string>
+    <string name="script_greasy_fork_name">Greasy Fork userscript</string>
+    <string name="script_imported_now">Just imported</string>
+    <string name="script_created_now">Just created</string>
+    <string name="script_edited_now">Just edited</string>
+    <string name="script_loading">Downloading %1$s…</string>
+
+    <!-- ViewModel effects -->
+    <string name="protection_on">Turning protection on</string>
+    <string name="protection_off">Protection is off</string>
+    <string name="rule_added">Added rule %1$s</string>
+    <string name="rules_saved">Saved %1$d rules</string>
+    <string name="domain_whitelisted">%1$s added to the allowlist</string>
+    <string name="domain_blocked">Blocked %1$s</string>
+    <string name="dns_upstream_changed">DNS upstream changed</string>
+    <string name="filter_new_loading">Downloading the new filter…</string>
+    <string name="script_installing">Installing %1$s…</string>
+    <string name="vpn_restarting">Restarting the VPN to apply changes…</string>
+    <string name="vpn_off_changes_next">The VPN is off; changes apply the next time it starts</string>
+    <string name="threat_analyzing">Analyzing %1$s on this device…</string>
+
+    <!-- Navigation -->
+    <string name="nav_home">Protection</string>
+    <string name="nav_activity">Activity</string>
+    <string name="nav_filters">Filters</string>
+    <string name="nav_apps">Apps</string>
+    <string name="nav_settings">Settings</string>
 </resources>

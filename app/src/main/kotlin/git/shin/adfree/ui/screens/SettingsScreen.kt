@@ -1,6 +1,8 @@
 package git.shin.adfree.ui.screens
 
 import android.widget.Toast
+import androidx.compose.ui.res.stringResource
+import git.shin.adfree.R
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
@@ -76,6 +78,7 @@ import git.shin.adfree.model.normalizeHttpsHost
 import git.shin.adfree.ui.AdGuardTab
 import git.shin.adfree.ui.AdGuardIntent
 import git.shin.adfree.ui.AdGuardViewModel
+import git.shin.adfree.ui.CoreText
 import git.shin.adfree.ui.theme.AdGuardBlueDns
 import git.shin.adfree.ui.theme.AdGuardDarkBg
 import git.shin.adfree.ui.theme.AdGuardDarkOutline
@@ -645,8 +648,9 @@ internal fun HttpsFilterSection(
                     // them without splicing their traffic verbatim.
                     Spacer(modifier = Modifier.height(10.dp))
                     Text(
-                        text = if (rootBusy) "Đang xử lý…"
-                        else rootTrust?.detail ?: "Đang kiểm tra quyền root…",
+                        text = if (rootBusy) stringResource(R.string.trust_working)
+                        else rootTrust?.detailCode?.let { CoreText.trustDetail(it)?.asString() }
+                            ?: stringResource(R.string.trust_checking_root),
                         fontSize = 11.sp,
                         color = when {
                             rootBusy -> AdGuardTextMuted
@@ -669,9 +673,15 @@ internal fun HttpsFilterSection(
                                             rootBusy = false
                                             rootTrust = result
                                             caTrusted = viewModel.isCaTrusted()
-                                            result?.detail?.let {
-                                                Toast.makeText(context, it, Toast.LENGTH_LONG).show()
-                                            }
+                                                result?.detailCode?.let { code ->
+                                                    CoreText.trustDetail(code)?.let {
+                                                        Toast.makeText(
+                                                            context,
+                                                            it.resolve(context),
+                                                            Toast.LENGTH_LONG,
+                                                        ).show()
+                                                    }
+                                                }
                                         }
                                     },
                                     shape = RoundedCornerShape(8.dp),
@@ -691,8 +701,14 @@ internal fun HttpsFilterSection(
                                                 rootBusy = false
                                                 rootTrust = result
                                                 caTrusted = viewModel.isCaTrusted()
-                                                result?.detail?.let {
-                                                    Toast.makeText(context, it, Toast.LENGTH_LONG).show()
+                                                result?.detailCode?.let { code ->
+                                                    CoreText.trustDetail(code)?.let {
+                                                        Toast.makeText(
+                                                            context,
+                                                            it.resolve(context),
+                                                            Toast.LENGTH_LONG,
+                                                        ).show()
+                                                    }
                                                 }
                                             }
                                         },

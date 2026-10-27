@@ -2804,6 +2804,8 @@ data class DownloadOutcome (
      */
     var `message`: kotlin.String
     , 
+    var `error`: DownloadError
+    , 
     /**
      * Rule lines: filters only, 0 for scripts.
      */
@@ -2839,6 +2841,7 @@ public object FfiConverterTypeDownloadOutcome: FfiConverterRustBuffer<DownloadOu
         return DownloadOutcome(
             FfiConverterBoolean.read(buf),
             FfiConverterString.read(buf),
+            FfiConverterTypeDownloadError.read(buf),
             FfiConverterLong.read(buf),
             FfiConverterOptionalString.read(buf),
             FfiConverterOptionalString.read(buf),
@@ -2851,6 +2854,7 @@ public object FfiConverterTypeDownloadOutcome: FfiConverterRustBuffer<DownloadOu
     override fun allocationSize(value: DownloadOutcome) = (
             FfiConverterBoolean.allocationSize(value.`ok`) +
             FfiConverterString.allocationSize(value.`message`) +
+            FfiConverterTypeDownloadError.allocationSize(value.`error`) +
             FfiConverterLong.allocationSize(value.`lineCount`) +
             FfiConverterOptionalString.allocationSize(value.`version`) +
             FfiConverterOptionalString.allocationSize(value.`updatedText`) +
@@ -2862,6 +2866,7 @@ public object FfiConverterTypeDownloadOutcome: FfiConverterRustBuffer<DownloadOu
     override fun write(value: DownloadOutcome, buf: ByteBuffer) {
             FfiConverterBoolean.write(value.`ok`, buf)
             FfiConverterString.write(value.`message`, buf)
+            FfiConverterTypeDownloadError.write(value.`error`, buf)
             FfiConverterLong.write(value.`lineCount`, buf)
             FfiConverterOptionalString.write(value.`version`, buf)
             FfiConverterOptionalString.write(value.`updatedText`, buf)
@@ -3708,7 +3713,12 @@ data class RootTrustBinding (
     var `needsReboot`: kotlin.Boolean
     , 
     /**
-     * User-facing explanation.
+     * The user-facing state; Kotlin maps it to a localized string.
+     */
+    var `detailCode`: TrustDetail
+    , 
+    /**
+     * English diagnostic from the failed command, kept for logs only.
      */
     var `detail`: kotlin.String
     
@@ -3731,6 +3741,7 @@ public object FfiConverterTypeRootTrustBinding: FfiConverterRustBuffer<RootTrust
             FfiConverterBoolean.read(buf),
             FfiConverterBoolean.read(buf),
             FfiConverterBoolean.read(buf),
+            FfiConverterTypeTrustDetail.read(buf),
             FfiConverterString.read(buf),
         )
     }
@@ -3740,6 +3751,7 @@ public object FfiConverterTypeRootTrustBinding: FfiConverterRustBuffer<RootTrust
             FfiConverterBoolean.allocationSize(value.`rootGranted`) +
             FfiConverterBoolean.allocationSize(value.`installed`) +
             FfiConverterBoolean.allocationSize(value.`needsReboot`) +
+            FfiConverterTypeTrustDetail.allocationSize(value.`detailCode`) +
             FfiConverterString.allocationSize(value.`detail`)
     )
 
@@ -3748,6 +3760,7 @@ public object FfiConverterTypeRootTrustBinding: FfiConverterRustBuffer<RootTrust
             FfiConverterBoolean.write(value.`rootGranted`, buf)
             FfiConverterBoolean.write(value.`installed`, buf)
             FfiConverterBoolean.write(value.`needsReboot`, buf)
+            FfiConverterTypeTrustDetail.write(value.`detailCode`, buf)
             FfiConverterString.write(value.`detail`, buf)
     }
 }
@@ -4414,6 +4427,50 @@ public object FfiConverterTypeDnsProtocol: FfiConverterRustBuffer<DnsProtocol> {
 
 
 
+/**
+ * Why a fetch or save failed. The UI localizes this code; `message` keeps
+ * the raw diagnostic for logs.
+ */
+
+enum class DownloadError {
+    
+    NONE,
+    STORE_UNAVAILABLE,
+    NO_URL,
+    HTTP,
+    EMPTY,
+    NETWORK,
+    WRITE,
+    TOO_LARGE;
+
+    
+
+
+    companion object
+}
+
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeDownloadError: FfiConverterRustBuffer<DownloadError> {
+    override fun read(buf: ByteBuffer) = try {
+        DownloadError.values()[buf.getInt() - 1]
+    } catch (e: IndexOutOfBoundsException) {
+        throw RuntimeException("invalid enum value, something is very wrong!!", e)
+    }
+
+    override fun allocationSize(value: DownloadError) = 4UL
+
+    override fun write(value: DownloadError, buf: ByteBuffer) {
+        buf.putInt(value.ordinal + 1)
+    }
+}
+
+
+
+
+
 
 enum class ThemeMode {
     
@@ -4441,6 +4498,67 @@ public object FfiConverterTypeThemeMode: FfiConverterRustBuffer<ThemeMode> {
     override fun allocationSize(value: ThemeMode) = 4UL
 
     override fun write(value: ThemeMode, buf: ByteBuffer) {
+        buf.putInt(value.ordinal + 1)
+    }
+}
+
+
+
+
+
+/**
+ * Why the root-trust status is what it is. The UI owns the wording; this
+ * code is the stable part that crosses the FFI boundary.
+ */
+
+enum class TrustDetail {
+    
+    NONE,
+    PLATFORM_UNSUPPORTED,
+    INVALID_CA,
+    SU_MISSING,
+    ALREADY_INSTALLED,
+    ROOT_GRANTED,
+    ROOT_PENDING,
+    PERMISSION_DENIED,
+    MAGISK_MODULE_WRITTEN,
+    MAGISK_WRITE_FAILED,
+    INSTALLED_LIVE,
+    MOUNT_PENDING,
+    MOUNT_FAILED,
+    UNINSTALLED,
+    UNINSTALLED_NEEDS_REBOOT,
+    UNINSTALL_FAILED,
+    NEEDS_ROOT,
+    NEEDS_ROOT_TO_REMOVE,
+    TEMP_WRITE_FAILED,
+    INSTALLED_LINUX,
+    LINUX_INSTALL_FAILED,
+    REMOVED_LINUX,
+    LINUX_REMOVE_FAILED,
+    NO_CA,
+    NO_CA_TO_REMOVE;
+
+    
+
+
+    companion object
+}
+
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeTrustDetail: FfiConverterRustBuffer<TrustDetail> {
+    override fun read(buf: ByteBuffer) = try {
+        TrustDetail.values()[buf.getInt() - 1]
+    } catch (e: IndexOutOfBoundsException) {
+        throw RuntimeException("invalid enum value, something is very wrong!!", e)
+    }
+
+    override fun allocationSize(value: TrustDetail) = 4UL
+
+    override fun write(value: TrustDetail, buf: ByteBuffer) {
         buf.putInt(value.ordinal + 1)
     }
 }

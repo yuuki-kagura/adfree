@@ -286,17 +286,27 @@ class CoreEngine {
      * Downloads one subscription into the store (`filters/<id>.txt`).
      *
      * The core owns the network call, the temp-file write, the rename and the
-     * header parsing; this only turns the outcome into UI wording. Blocking,
-     * so call it off the main thread.
+     * header parsing. The returned error code is what the UI localizes;
+     * [DownloadResult.message] stays a diagnostic. Blocking, so call it off
+     * the main thread.
      */
     fun downloadList(list: git.shin.adfree.model.FilterList): DownloadResult {
-        val url = list.subscriptionUrl ?: return DownloadResult(false, "Danh sách này không có URL")
+        val url = list.subscriptionUrl
+            ?: return DownloadResult(false, git.shin.adfree.core.DownloadError.NO_URL)
         val outcome = runCatching { git.shin.adfree.core.coreFilterFetch(list.id, url) }
-            .getOrElse { return DownloadResult(false, "Lỗi: ${it.javaClass.simpleName}") }
-        if (!outcome.ok) return DownloadResult(false, "Không tải được: ${outcome.message}")
+            .getOrElse {
+                return DownloadResult(
+                    false,
+                    git.shin.adfree.core.DownloadError.NETWORK,
+                    it.javaClass.simpleName,
+                )
+            }
+        if (!outcome.ok) {
+            return DownloadResult(false, outcome.error, outcome.message)
+        }
         return DownloadResult(
             ok = true,
-            message = "Đã tải ${list.name} (${outcome.lineCount} quy tắc)",
+            error = git.shin.adfree.core.DownloadError.NONE,
             lineCount = outcome.lineCount,
             version = outcome.version,
             updatedText = outcome.updatedText,
@@ -336,6 +346,7 @@ class CoreEngine {
                     detectedFormat = null,
                     sizeBytes = 0,
                     modifiedMs = 0,
+                    error = git.shin.adfree.core.DownloadError.NETWORK,
                 )
             }
 
@@ -645,7 +656,10 @@ class CoreEngine {
 /** Result of downloading a subscription or userscript. */
 data class DownloadResult(
     val ok: Boolean,
-    val message: String,
+    /** Code the UI localizes; [DownloadError.NONE] on success. */
+    val error: git.shin.adfree.core.DownloadError,
+    /** Diagnostic detail, never shown as-is in a localized UI. */
+    val message: String = "",
     val lineCount: Long = 0,
     val version: String? = null,
     val updatedText: String? = null,

@@ -20,30 +20,30 @@ class FilterUrlErrorTest {
 
     @Test
     fun `empty means pick a file or type a url`() {
-        assertEquals("Nhập URL hoặc chọn tệp trong máy", filterUrlError(""))
-        assertEquals("Nhập URL hoặc chọn tệp trong máy", filterUrlError("   "))
+        assertEquals(FilterUrlError.EMPTY, filterUrlError(""))
+        assertEquals(FilterUrlError.EMPTY, filterUrlError("   "))
     }
 
     @Test
     fun `non http schemes are rejected`() {
         // Local files go through the file picker like the other schemes.
         assertEquals(
-            "Chỉ chấp nhận URL http(s):// — dùng nút chọn tệp cho file trong máy",
+            FilterUrlError.UNSUPPORTED_SCHEME,
             filterUrlError("file:///sdcard/list.txt"),
         )
         assertEquals(
-            "Chỉ chấp nhận URL http(s):// — dùng nút chọn tệp cho file trong máy",
+            FilterUrlError.UNSUPPORTED_SCHEME,
             filterUrlError("ftp://example.org/list.txt"),
         )
     }
 
     @Test
     fun `garbage and hostless urls are rejected`() {
-        assertEquals("Đường dẫn không hợp lệ", filterUrlError("not a real url"))
+        assertEquals(FilterUrlError.INVALID, filterUrlError("not a real url"))
         // `URI("https://")` throws outright, so it lands in the parse-error
         // bucket; authority present but empty keeps the hostless message.
-        assertEquals("Đường dẫn không hợp lệ", filterUrlError("https://"))
-        assertEquals("URL thiếu địa chỉ máy chủ", filterUrlError("https:///only-path"))
-        assertEquals("URL quá dài", filterUrlError("https://a" + "b".repeat(2100) + ".org/x"))
+        assertEquals(FilterUrlError.INVALID, filterUrlError("https://"))
+        assertEquals(FilterUrlError.NO_HOST, filterUrlError("https:///only-path"))
+        assertEquals(FilterUrlError.TOO_LONG, filterUrlError("https://a" + "b".repeat(2100) + ".org/x"))
     }
 }

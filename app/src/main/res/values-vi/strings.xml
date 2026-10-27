@@ -1,0 +1,158 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">AdFree</string>
+
+    <!-- Core fallbacks (codes returned by the Rust engine) -->
+    <string name="config_warning_provider_missing">DNS đã chọn không còn tồn tại, đã dùng AdGuard DNS mặc định.</string>
+    <string name="config_warning_address_invalid">Upstream DNS đã chọn không dùng được, đã quay về AdGuard DNS.</string>
+    <string name="config_warning_proxy_invalid">Proxy cần IP và cổng khác 0; đã tắt proxy.</string>
+    <string name="config_warning_store_unavailable">Không đọc được trạng thái đã lưu, đang dùng cấu hình mặc định.</string>
+
+    <string name="backup_error_not_backup">Tệp này không phải bản sao lưu của AdFree.</string>
+    <string name="backup_error_unsupported_version">Bản sao lưu được tạo bởi phiên bản AdFree mới hơn.</string>
+    <string name="backup_error_malformed">Bản sao lưu bị hỏng hoặc thiếu dữ liệu.</string>
+    <string name="backup_error_store_unavailable">Kho sao lưu hiện không khả dụng.</string>
+
+    <string name="dns_error_empty">Hãy nhập địa chỉ máy chủ DNS.</string>
+    <string name="dns_error_invalid_address">Địa chỉ DNS không hợp lệ.</string>
+    <string name="dns_error_invalid_port">Cổng không hợp lệ.</string>
+    <string name="dns_error_unsupported_scheme">Chỉ hỗ trợ địa chỉ UDP, DoT và DoH.</string>
+    <string name="dns_error_ipv6_udp_unsupported">UDP thường hiện chỉ hỗ trợ IPv4.</string>
+
+    <string name="download_error_store_unavailable">Kho dữ liệu của core chưa mở.</string>
+    <string name="download_error_no_url">Bộ lọc này không có URL.</string>
+    <string name="download_error_http">Máy chủ từ chối tải xuống.</string>
+    <string name="download_error_empty">Máy chủ trả về nội dung rỗng.</string>
+    <string name="download_error_network">Tải xuống thất bại; hãy kiểm tra kết nối và thử lại.</string>
+    <string name="download_error_write">Không lưu được tệp đã tải.</string>
+    <string name="download_error_too_large">Danh sách quá lớn để sử dụng.</string>
+
+    <string name="trust_platform_unsupported">Nền tảng này không hỗ trợ chế độ root.</string>
+    <string name="trust_invalid_ca">Chứng chỉ CA không hợp lệ.</string>
+    <string name="trust_su_missing">Không thấy su: máy chưa root, dùng chứng chỉ người dùng.</string>
+    <string name="trust_already_installed">CA đã nằm trong system store.</string>
+    <string name="trust_root_granted">Có quyền root. Cài CA vào system store để mọi app tin chứng chỉ.</string>
+    <string name="trust_root_pending">Thấy su. Quyền root sẽ được hỏi khi cài.</string>
+    <string name="trust_permission_denied">Quyền root bị từ chối — chưa thay đổi CA hệ thống.</string>
+    <string name="trust_magisk_written">Đã tạo module Magisk. Khởi động lại máy để CA có hiệu lực.</string>
+    <string name="trust_magisk_write_failed">Không ghi được module Magisk.</string>
+    <string name="trust_installed_live">Đã cài CA vào system store (có hiệu lực ngay).</string>
+    <string name="trust_mount_pending">Đã mount CA nhưng store chưa thấy ngay — thử lại hoặc dùng Magisk.</string>
+    <string name="trust_mount_failed">Không mount được CA vào system store.</string>
+    <string name="trust_uninstalled">Đã gỡ CA khỏi system store.</string>
+    <string name="trust_uninstalled_reboot">Đã gỡ CA — khởi động lại máy để bỏ hẳn.</string>
+    <string name="trust_uninstall_failed">Không gỡ được CA khỏi system store.</string>
+    <string name="trust_needs_root">Cần quyền root hoặc sudo không mật khẩu để cài CA hệ thống.</string>
+    <string name="trust_needs_root_remove">Cần quyền root hoặc sudo không mật khẩu để gỡ CA hệ thống.</string>
+    <string name="trust_temp_write_failed">Không ghi được tệp chứng chỉ tạm.</string>
+    <string name="trust_installed_linux">Đã cài CA vào system store của hệ điều hành.</string>
+    <string name="trust_linux_install_failed">Không cài được CA hệ thống.</string>
+    <string name="trust_removed_linux">Đã gỡ CA khỏi system store của hệ điều hành.</string>
+    <string name="trust_linux_remove_failed">Không gỡ được CA hệ thống.</string>
+    <string name="trust_no_ca">Chưa có CA — hãy tạo CA trước khi cài vào hệ thống.</string>
+    <string name="trust_no_ca_remove">Chưa có CA để gỡ.</string>
+    <string name="trust_checking_root">Đang kiểm tra quyền root…</string>
+    <string name="trust_working">Đang xử lý…</string>
+
+    <!-- Settings / DNS status -->
+    <string name="filter_auto_update_off">Đã tắt tự động cập nhật bộ lọc</string>
+    <string name="filter_auto_update_every_hours">Tự động cập nhật bộ lọc mỗi %1$d giờ</string>
+    <string name="dns_custom_description">Tùy chỉnh</string>
+    <string name="dns_address_empty">Địa chỉ DNS trống</string>
+    <string name="dns_invalid_port">Cổng DNS không hợp lệ</string>
+    <string name="dns_udp_ip_only">Chỉ hỗ trợ DNS UDP dạng IP (ví dụ 1.1.1.1 hoặc 1.1.1.1:53)</string>
+    <string name="dns_udp_ipv4_only">DNS UDP hiện chỉ hỗ trợ địa chỉ IPv4</string>
+    <string name="dns_provider_selected">Đã chọn %1$s</string>
+    <string name="dns_custom_added">Đã thêm DNS tùy chỉnh: %1$s</string>
+
+    <!-- Filter subscriptions -->
+    <string name="filter_url_empty">Nhập URL hoặc chọn tệp trong máy</string>
+    <string name="filter_url_too_long">URL quá dài</string>
+    <string name="filter_url_invalid">Đường dẫn không hợp lệ</string>
+    <string name="filter_url_scheme">Chỉ chấp nhận URL http(s):// — dùng nút chọn tệp cho file trong máy</string>
+    <string name="filter_url_no_host">URL thiếu địa chỉ máy chủ</string>
+    <string name="filter_auto_update_progress">Đang tự động cập nhật %1$d bộ lọc…</string>
+    <string name="filter_auto_update_done">Đã tự động cập nhật %1$d bộ lọc</string>
+    <string name="filter_auto_update_partial">Tự động cập nhật: %1$d/%2$d bộ lọc thành công</string>
+    <string name="filter_downloading">Đang tải %1$s…</string>
+    <string name="filter_downloaded_now">Vừa tải</string>
+    <string name="filter_downloaded_name">Đã tải %1$s (%2$d quy tắc)</string>
+    <string name="filter_download_failed">Tải thất bại</string>
+    <string name="filter_missing_body">Không có nội dung %1$s; hãy thêm lại hoặc chọn tệp khác</string>
+    <string name="filter_trusted">Đã tin cậy bộ lọc: scriptlet và JavaScript rule của list được phép chạy</string>
+    <string name="filter_untrusted">Đã bỏ tin cậy: rule nguy hiểm của bộ lọc bị bỏ qua</string>
+    <string name="filter_no_url">Bộ lọc này không có URL để cập nhật</string>
+    <string name="filter_none_to_update">Không có bộ lọc nào để cập nhật</string>
+    <string name="filter_updating_count">Đang cập nhật %1$d bộ lọc…</string>
+    <string name="filter_updated_count">Đã cập nhật %1$d bộ lọc</string>
+    <string name="filter_update_finished_failures">Cập nhật xong, %1$d danh sách bị lỗi</string>
+    <string name="filter_url_duplicate">URL này đã có trong danh sách bộ lọc</string>
+    <string name="filter_created_name">Đã thêm %1$s (%2$d quy tắc)</string>
+    <string name="filter_name_updated">Đã cập nhật %1$s</string>
+    <string name="filter_restored_defaults">Đã khôi phục bộ lọc mặc định</string>
+    <string name="filter_custom_description">Bộ lọc tùy chỉnh của bạn</string>
+    <string name="filter_user_rules_name">Quy tắc của bạn</string>
+    <string name="filter_user_rules_description">Quy tắc chặn và cho phép do bạn tự viết, áp dụng cho mọi trang</string>
+    <string name="filter_not_loaded">Chưa tải</string>
+    <string name="filter_from_file_name">Bộ lọc từ tệp</string>
+    <string name="filter_from_file_description">Bộ lọc tùy chỉnh từ tệp trong máy</string>
+    <string name="filter_file_unreadable">Không đọc được tệp đã chọn</string>
+    <string name="filter_save_failed">Lỗi ghi tệp: không lưu được bộ lọc</string>
+    <string name="filter_imported_now">Vừa nhập</string>
+    <string name="filter_file_unreadable_detail">Máy không đọc được tệp — %1$s</string>
+
+    <!-- Backup -->
+    <string name="backup_export_failed_read">Không đọc được trạng thái để sao lưu</string>
+    <string name="backup_export_done">Đã xuất bản sao lưu</string>
+    <string name="backup_export_write_failed">Không ghi được tệp sao lưu</string>
+    <string name="backup_import_file_unreadable">Không đọc được tệp đã chọn</string>
+    <string name="backup_import_too_large">Tệp quá lớn để là bản sao lưu AdFree</string>
+    <string name="backup_import_done">Đã khôi phục cài đặt, firewall, DNS, bộ lọc và tiện ích; bật lại VPN nếu cần</string>
+
+    <!-- Userscripts -->
+    <string name="script_missing_body">Không tìm thấy nội dung %1$s</string>
+    <string name="script_store_load_failed">Không tải được kho tiện ích</string>
+    <string name="script_store_more_failed">Không tải thêm được tiện ích</string>
+    <string name="script_duplicate">%1$s đã có trong danh sách</string>
+    <string name="script_no_url">Tiện ích này không có URL</string>
+    <string name="script_download_failed">Không tải được %1$s: %2$s</string>
+    <string name="script_downloaded">Đã tải %1$s (%2$d KB)</string>
+    <string name="script_file_unreadable">Không đọc được tệp đã chọn</string>
+    <string name="script_save_failed">Lỗi ghi tệp: không lưu được tiện ích</string>
+    <string name="script_added">Đã thêm %1$s</string>
+    <string name="script_empty_content">Nội dung không được trống</string>
+    <string name="script_save_error">Lỗi lưu tiện ích</string>
+    <string name="script_created">Đã tạo %1$s</string>
+    <string name="script_updated">Đã cập nhật %1$s</string>
+    <string name="script_from_file_description">Tiện ích tùy chỉnh từ tệp trong máy</string>
+    <string name="script_custom_description">Tiện ích tùy chỉnh của bạn</string>
+    <string name="script_default_name">Tiện ích</string>
+    <string name="script_default_custom_name">Tiện ích tùy chỉnh</string>
+    <string name="script_editor_description">Tiện ích tạo từ trình soạn thảo</string>
+    <string name="script_greasy_fork_name">Tiện ích Greasy Fork</string>
+    <string name="script_imported_now">Vừa nhập</string>
+    <string name="script_created_now">Vừa tạo</string>
+    <string name="script_edited_now">Vừa sửa</string>
+    <string name="script_loading">Đang tải %1$s…</string>
+
+    <!-- ViewModel effects -->
+    <string name="protection_on">Đang bật bảo vệ</string>
+    <string name="protection_off">Đã tắt bảo vệ</string>
+    <string name="rule_added">Đã thêm quy tắc %1$s</string>
+    <string name="rules_saved">Đã lưu %1$d quy tắc</string>
+    <string name="domain_whitelisted">Đã đưa %1$s vào danh sách trắng</string>
+    <string name="domain_blocked">Đã chặn %1$s</string>
+    <string name="dns_upstream_changed">Đã đổi upstream DNS</string>
+    <string name="filter_new_loading">Đang tải bộ lọc mới…</string>
+    <string name="script_installing">Đang cài %1$s…</string>
+    <string name="vpn_restarting">Đang khởi động lại VPN để áp dụng…</string>
+    <string name="vpn_off_changes_next">VPN chưa bật — thay đổi áp dụng ở lần bật sau</string>
+    <string name="threat_analyzing">Đang phân tích %1$s trên thiết bị…</string>
+
+    <!-- Navigation -->
+    <string name="nav_home">Bảo vệ</string>
+    <string name="nav_activity">Nhật ký</string>
+    <string name="nav_filters">Bộ lọc</string>
+    <string name="nav_apps">Ứng dụng</string>
+    <string name="nav_settings">Cài đặt</string>
+</resources>

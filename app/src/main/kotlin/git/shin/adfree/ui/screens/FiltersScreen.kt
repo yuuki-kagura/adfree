@@ -97,6 +97,7 @@ import git.shin.adfree.model.filterMatchesQuery
 import git.shin.adfree.model.filterUrlError
 import git.shin.adfree.ui.AdGuardIntent
 import git.shin.adfree.ui.AdGuardViewModel
+import git.shin.adfree.ui.CoreText
 import git.shin.adfree.ui.theme.AdGuardBlueDns
 import git.shin.adfree.ui.theme.AdGuardDarkBg
 import git.shin.adfree.ui.theme.AdGuardDarkOutline
@@ -253,7 +254,7 @@ fun FiltersScreen(
                         )
                         Spacer(modifier = Modifier.width(8.dp))
                         Text(
-                            text = message,
+                            text = message.asString(),
                             fontSize = 11.sp,
                             color = AdGuardTextPrimary,
                             modifier = Modifier.weight(1f),
@@ -994,7 +995,11 @@ private fun AddFilterDialog(
                 // path": reported at the field, not only after pressing Add.
                 filterUrlError(url)?.let { error ->
                     Spacer(modifier = Modifier.height(4.dp))
-                    Text(error, fontSize = 11.sp, color = AdGuardRedBlocked)
+                    Text(
+                        CoreText.filterUrlError(error).asString(),
+                        fontSize = 11.sp,
+                        color = AdGuardRedBlocked,
+                    )
                 }
 
                 Spacer(modifier = Modifier.height(4.dp))
@@ -1075,7 +1080,11 @@ private fun EditCustomFilterDialog(
                 )
                 urlError?.let {
                     Spacer(modifier = Modifier.height(4.dp))
-                    Text(it, fontSize = 11.sp, color = AdGuardRedBlocked)
+                    Text(
+                        CoreText.filterUrlError(it).asString(),
+                        fontSize = 11.sp,
+                        color = AdGuardRedBlocked,
+                    )
                 }
                 Spacer(modifier = Modifier.height(8.dp))
                 Text(

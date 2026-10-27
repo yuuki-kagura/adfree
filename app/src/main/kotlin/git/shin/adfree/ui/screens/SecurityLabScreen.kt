@@ -261,7 +261,7 @@ fun SecurityLabScreen(
                         )
                         Spacer(modifier = Modifier.height(16.dp))
                         Text(
-                            text = labState.message,
+                            text = labState.message.asString(),
                             fontSize = 13.sp,
                             fontWeight = FontWeight.SemiBold,
                             color = AdGuardTextPrimary
@@ -295,7 +295,11 @@ fun SecurityLabScreen(
                     ) {
                         Icon(Icons.Default.Warning, contentDescription = null, tint = AdGuardRedBlocked)
                         Spacer(modifier = Modifier.width(12.dp))
-                        Text(text = labState.message, color = AdGuardRedBlocked, fontSize = 13.sp)
+                        Text(
+                            text = labState.message.asString(),
+                            color = AdGuardRedBlocked,
+                            fontSize = 13.sp,
+                        )
                     }
                 }
             }
