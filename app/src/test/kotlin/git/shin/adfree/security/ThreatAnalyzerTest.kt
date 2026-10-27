@@ -1,6 +1,8 @@
 package git.shin.adfree.security
 
 import git.shin.adfree.model.ThreatAnalysisResult
+import git.shin.adfree.model.ThreatCategory
+import git.shin.adfree.model.ThreatRiskLevel
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -90,9 +92,8 @@ class ThreatAnalyzerTest {
         val result = ThreatAnalysisResult(
             domain = "ads.example.com",
             riskScore = 72,
-            riskLevel = "Cao",
-            category = "Bất thường",
-            summary = "…",
+            riskLevel = ThreatRiskLevel.MEDIUM,
+            category = ThreatCategory.SUSPICIOUS,
             suggestedRules = listOf("||ads.example.com^"),
             isBlockedByFilters = true,
             matchedRule = "||ads.example.com^",

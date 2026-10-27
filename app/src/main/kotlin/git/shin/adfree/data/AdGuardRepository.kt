@@ -1758,6 +1758,7 @@ class AdGuardRepository(
                 }.getOrNull()
             }
             val base = scriptNameFromFile(displayName)
+                .ifBlank { context.getString(R.string.script_from_file_name) }
             val id = "script_local_${System.currentTimeMillis()}"
             val script = UserScriptInfo(
                 id = id,

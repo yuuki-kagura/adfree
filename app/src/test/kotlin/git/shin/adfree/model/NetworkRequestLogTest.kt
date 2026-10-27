@@ -75,10 +75,10 @@ class NetworkRequestLogTest {
     }
 
     @Test
-    fun `category index maps to the ui label`() {
+    fun `category index maps to the ui category`() {
         val tracker = NetworkRequestLog.from(event(CoreActions.TCP_RESET.toInt()))
         assertEquals(RequestCategory.AD, tracker.category)
-        assertEquals("Tracker & Telemetry", RequestCategory.TRACKER.label)
+        assertEquals(RequestCategory.TRACKER, RequestCategory.fromIndex(1))
     }
 
     @Test

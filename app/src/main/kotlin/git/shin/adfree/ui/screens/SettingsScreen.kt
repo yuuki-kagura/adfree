@@ -182,11 +182,11 @@ fun SettingsScreen(
                     .horizontalScroll(rememberScrollState()),
                 horizontalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                git.shin.adfree.model.DnsBlockMode.entries.forEach { mode ->
+                DnsBlockMode.entries.forEach { mode ->
                     FilterChip(
                         selected = state.settings.blockMode == mode,
                         onClick = { viewModel.onIntent(AdGuardIntent.SetBlockMode(mode)) },
-                        label = { Text(mode.label, fontSize = 11.sp) },
+                        label = { Text(blockModeLabel(mode), fontSize = 11.sp) },
                         colors = FilterChipDefaults.filterChipColors(
                             selectedContainerColor = AdGuardGreenPrimary,
                             selectedLabelColor = AdGuardOnAccent,
@@ -318,6 +318,15 @@ fun SettingsScreen(
 private fun autoUpdateLabel(hours: Int): String =
     if (hours <= 0) stringResource(R.string.settings_auto_update_off)
     else stringResource(R.string.settings_auto_update_hours, hours)
+
+@Composable
+private fun blockModeLabel(mode: DnsBlockMode): String = stringResource(
+    when (mode) {
+        DnsBlockMode.NXDOMAIN -> R.string.settings_block_mode_nxdomain
+        DnsBlockMode.ZERO_IP -> R.string.settings_block_mode_zero
+        DnsBlockMode.REFUSED -> R.string.settings_block_mode_refused
+    }
+)
 
 /** Export/restore the two core blobs without including device-local scripts. */@Composable
 private fun BackupSection(

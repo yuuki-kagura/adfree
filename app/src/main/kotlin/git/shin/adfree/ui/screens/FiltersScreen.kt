@@ -799,7 +799,7 @@ private fun FilterRow(
                 text = stringResource(
                     R.string.filters_row_meta,
                     "%,d".format(list.ruleCount),
-                    list.lastUpdatedText,
+                    list.lastUpdatedText.ifBlank { stringResource(R.string.filter_not_updated) },
                 ),
                 fontSize = 11.sp,
                 color = AdGuardTextMuted,
@@ -1344,7 +1344,10 @@ fun FilterDetailSheet(
         if (list.sizeBytes > 0L) {
             InfoRow(stringResource(R.string.filters_info_size), assetSizeLabel(list.sizeBytes))
         }
-        InfoRow(stringResource(R.string.ext_detail_updated), list.lastUpdatedText)
+        InfoRow(
+            stringResource(R.string.ext_detail_updated),
+            list.lastUpdatedText.ifBlank { stringResource(R.string.filter_not_updated) },
+        )
         if (list.version.isNotBlank()) {
             InfoRow(stringResource(R.string.ext_detail_version), list.version.take(24))
         }

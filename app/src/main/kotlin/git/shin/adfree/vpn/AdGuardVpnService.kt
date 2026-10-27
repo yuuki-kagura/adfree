@@ -21,6 +21,7 @@ import android.util.Log
 import androidx.core.app.NotificationCompat
 import git.shin.adfree.AdGuardApplication
 import git.shin.adfree.BuildConfig
+import git.shin.adfree.R
 import git.shin.adfree.core.CoreEngine
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -216,7 +217,7 @@ class AdGuardVpnService : VpnService() {
             .ifBlank { "94.140.14.14" }
 
         val builder = Builder()
-            .setSession("AdFree Protection")
+            .setSession(getString(R.string.vpn_session_name))
             .addAddress(TUN_ADDRESS, TUN_PREFIX)
             .addDnsServer(tunnelDns)
             .addRoute(ROUTE_IPV4, ROUTE_PREFIX)
@@ -344,10 +345,10 @@ class AdGuardVpnService : VpnService() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             val channel = NotificationChannel(
                 NOTIFICATION_CHANNEL_ID,
-                "Trạng thái bảo vệ AdFree",
+                getString(R.string.vpn_channel_name),
                 NotificationManager.IMPORTANCE_LOW,
             ).apply {
-                description = "Chỉ báo AdFree đang lọc lưu lượng mạng"
+                description = getString(R.string.vpn_channel_description)
                 setShowBadge(false)
             }
             getSystemService(NotificationManager::class.java)?.createNotificationChannel(channel)
@@ -356,8 +357,8 @@ class AdGuardVpnService : VpnService() {
 
     private fun buildStatusNotification(): Notification =
         NotificationCompat.Builder(this, NOTIFICATION_CHANNEL_ID)
-            .setContentTitle("AdFree đang bảo vệ")
-            .setContentText("Lọc quảng cáo & tracker mức DNS")
+            .setContentTitle(getString(R.string.vpn_notification_title))
+            .setContentText(getString(R.string.vpn_notification_text))
             .setSmallIcon(android.R.drawable.stat_sys_download)
             .setOngoing(true)
             .setPriority(NotificationCompat.PRIORITY_LOW)

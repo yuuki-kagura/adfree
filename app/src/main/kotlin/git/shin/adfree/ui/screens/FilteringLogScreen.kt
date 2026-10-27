@@ -71,6 +71,7 @@ import androidx.compose.ui.unit.sp
 import git.shin.adfree.R
 import git.shin.adfree.model.FilterStatus
 import git.shin.adfree.model.NetworkRequestLog
+import git.shin.adfree.model.ProtocolType
 import git.shin.adfree.model.RequestCategory
 import git.shin.adfree.ui.AdGuardIntent
 import git.shin.adfree.ui.AdGuardTab
@@ -446,6 +447,19 @@ private fun logActionLabel(status: FilterStatus): String = when (status) {
 }
 
 @Composable
+private fun protocolLabel(protocol: ProtocolType): String = stringResource(
+    when (protocol) {
+        ProtocolType.DNS_UDP -> R.string.protocol_dns_udp
+        ProtocolType.DNS_DOT -> R.string.protocol_dns_dot
+        ProtocolType.DNS_DOH -> R.string.protocol_dns_doh
+        ProtocolType.HTTPS -> R.string.protocol_https
+        ProtocolType.QUIC -> R.string.protocol_quic
+        ProtocolType.TCP -> R.string.protocol_tcp
+        ProtocolType.UDP -> R.string.protocol_udp
+    }
+)
+
+@Composable
 private fun requestCategoryLabel(category: RequestCategory): String = when (category) {
     RequestCategory.AD -> stringResource(R.string.log_category_ad)
     RequestCategory.TRACKER -> stringResource(R.string.log_category_tracker)
@@ -638,7 +652,11 @@ fun PacketInspectionSheetContent(
                 )
                 Spacer(modifier = Modifier.height(4.dp))
                 Text(
-                    text = stringResource(R.string.log_ip_protocol, log.ipAddress, log.protocol.label),
+                    text = stringResource(
+                        R.string.log_ip_protocol,
+                        log.ipAddress,
+                        protocolLabel(log.protocol),
+                    ),
                     fontSize = 12.sp,
                     color = AdGuardTextSecondary
                 )

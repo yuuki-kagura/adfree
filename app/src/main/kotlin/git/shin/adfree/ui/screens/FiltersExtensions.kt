@@ -666,15 +666,15 @@ private fun ScriptRow(
     onToggle: () -> Unit,
     onClick: () -> Unit,
 ) {
+    val updatedText = script.lastUpdatedText.ifBlank {
+        stringResource(R.string.filter_not_loaded)
+    }
     val meta = when {
-        script.isBuiltin -> stringResource(
-            R.string.ext_builtin_meta,
-            script.lastUpdatedText,
-        )
+        script.isBuiltin -> stringResource(R.string.ext_builtin_meta, updatedText)
         script.sizeBytes > 0 -> stringResource(
             R.string.ext_size_meta,
             script.sizeBytes / 1024,
-            script.lastUpdatedText,
+            updatedText,
         )
         else -> stringResource(R.string.ext_not_downloaded_meta)
     }
@@ -891,7 +891,10 @@ fun ScriptDetailSheet(
             if (script.sizeBytes > 0) "${script.sizeBytes / 1024} KB"
             else stringResource(R.string.filter_not_loaded),
         )
-        ScriptInfoRow(stringResource(R.string.ext_detail_updated), script.lastUpdatedText)
+        ScriptInfoRow(
+            stringResource(R.string.ext_detail_updated),
+            script.lastUpdatedText.ifBlank { stringResource(R.string.filter_not_loaded) },
+        )
 
         // Header fields are what tells a user whether a script touches more
         // than the page it was installed for. Show them only when present.

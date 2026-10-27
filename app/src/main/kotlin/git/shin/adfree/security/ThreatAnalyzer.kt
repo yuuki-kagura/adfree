@@ -2,8 +2,9 @@ package git.shin.adfree.security
 
 import git.shin.adfree.core.CoreEngine
 import git.shin.adfree.data.AdGuardRepository
-import git.shin.adfree.model.RequestCategory
 import git.shin.adfree.model.ThreatAnalysisResult
+import git.shin.adfree.model.ThreatCategory
+import git.shin.adfree.model.ThreatRiskLevel
 import java.util.Locale
 
 /**
@@ -27,9 +28,8 @@ class ThreatAnalyzer(
             return ThreatAnalysisResult(
                 domain = domain,
                 riskScore = 0,
-                riskLevel = "Không xác định",
-                category = "Trống",
-                summary = "Nhập một domain để phân tích.",
+                riskLevel = ThreatRiskLevel.UNKNOWN,
+                category = ThreatCategory.EMPTY,
                 suggestedRules = emptyList(),
             )
         }
@@ -37,11 +37,10 @@ class ThreatAnalyzer(
         val (blocked, rule, list) = repository.checkHost(host)
         val score = riskScore(host)
         val category = when {
-            blocked -> "Đã bị bộ lọc của bạn chặn"
-            score >= 60 -> "Bất thường"
-            else -> "Chưa rõ"
+            blocked -> ThreatCategory.FILTER_BLOCKED
+            score >= 60 -> ThreatCategory.SUSPICIOUS
+            else -> ThreatCategory.UNKNOWN
         }
-        val summary = buildSummary(host, blocked, rule, list, score)
 
         val rules = mutableListOf("||$host^")
         if (score >= 60) rules += "||$host^\$important"
@@ -50,9 +49,8 @@ class ThreatAnalyzer(
         return ThreatAnalysisResult(
             domain = host,
             riskScore = score,
-            riskLevel = riskLevel(score),
+            riskLevel = ThreatRiskLevel.fromScore(score),
             category = category,
-            summary = summary,
             suggestedRules = rules,
             isBlockedByFilters = blocked,
             matchedRule = rule.ifBlank { null },
@@ -103,39 +101,6 @@ class ThreatAnalyzer(
         if (host.length > 60) score += 10
 
         return score.coerceIn(0, 100)
-    }
-
-    private fun riskLevel(score: Int): String = when {
-        score >= 75 -> "Cao"
-        score >= 50 -> "Trung bình"
-        score >= 25 -> "Thấp"
-        else -> "An toàn"
-    }
-
-    private fun buildSummary(
-        host: String,
-        blocked: Boolean,
-        rule: String,
-        list: String,
-        score: Int,
-    ): String {
-        val parts = mutableListOf<String>()
-        parts += if (blocked) {
-            "Bộ lọc hiện tại đã chặn domain này"
-        } else {
-            "Bộ lọc hiện tại không chặn domain này"
-        }
-        if (rule.isNotBlank()) parts += "quy tắc: $rule"
-        if (list.isNotBlank()) parts += "từ danh sách: $list"
-        parts += when {
-            score >= 75 -> "Có nhiều đặc điểm của ad network / tracker (từ khoá, cấu trúc host)."
-            score >= 50 -> "Có một vài dấu hiệu theo dõi."
-            score >= 25 -> "Ít dấu hiệu bất thường."
-            else -> "Không thấy dấu hiệu theo dõi."
-        }
-        // The screen already shows the on-device note in its footer.
-        val text = parts.joinToString(separator = "; ")
-        return if (text.endsWith(".")) text else "$text."
     }
 
     private companion object {

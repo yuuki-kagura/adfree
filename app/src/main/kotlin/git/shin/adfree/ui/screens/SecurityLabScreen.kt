@@ -59,6 +59,8 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import git.shin.adfree.R
 import git.shin.adfree.model.ThreatAnalysisResult
+import git.shin.adfree.model.ThreatCategory
+import git.shin.adfree.model.ThreatRiskLevel
 import git.shin.adfree.ui.AdGuardIntent
 import git.shin.adfree.ui.AdGuardViewModel
 import git.shin.adfree.ui.AiLabUiState
@@ -348,6 +350,55 @@ fun ScienceLabIntroCard() {
 }
 
 @Composable
+private fun threatRiskLabel(level: ThreatRiskLevel): String = stringResource(
+    when (level) {
+        ThreatRiskLevel.UNKNOWN -> R.string.lab_risk_unknown
+        ThreatRiskLevel.SAFE -> R.string.lab_risk_safe
+        ThreatRiskLevel.LOW -> R.string.lab_risk_low
+        ThreatRiskLevel.MEDIUM -> R.string.lab_risk_medium
+        ThreatRiskLevel.HIGH -> R.string.lab_risk_high
+    }
+)
+
+@Composable
+private fun threatCategoryLabel(category: ThreatCategory): String = stringResource(
+    when (category) {
+        ThreatCategory.EMPTY -> R.string.lab_category_empty
+        ThreatCategory.FILTER_BLOCKED -> R.string.lab_category_blocked
+        ThreatCategory.SUSPICIOUS -> R.string.lab_category_suspicious
+        ThreatCategory.UNKNOWN -> R.string.lab_category_unknown
+    }
+)
+
+@Composable
+private fun threatSummary(result: ThreatAnalysisResult): String {
+    if (result.category == ThreatCategory.EMPTY) {
+        return stringResource(R.string.lab_summary_empty)
+    }
+    val parts = buildList {
+        add(
+            stringResource(
+                if (result.isBlockedByFilters) R.string.lab_summary_blocked
+                else R.string.lab_summary_not_blocked,
+            ),
+        )
+        result.matchedRule?.let { add(stringResource(R.string.lab_summary_rule, it)) }
+        result.matchedList?.let { add(stringResource(R.string.lab_summary_list, it)) }
+        add(
+            stringResource(
+                when (result.riskLevel) {
+                    ThreatRiskLevel.HIGH -> R.string.lab_trait_high
+                    ThreatRiskLevel.MEDIUM -> R.string.lab_trait_medium
+                    ThreatRiskLevel.LOW -> R.string.lab_trait_low
+                    else -> R.string.lab_trait_none
+                },
+            ),
+        )
+    }
+    return parts.joinToString(separator = "; ")
+}
+
+@Composable
 fun ThreatResultCard(
     result: ThreatAnalysisResult,
     onAddRule: (String) -> Unit
@@ -380,7 +431,7 @@ fun ThreatResultCard(
                         color = AdGuardTextPrimary
                     )
                     Text(
-                        text = result.category,
+                        text = threatCategoryLabel(result.category),
                         fontSize = 12.sp,
                         color = AdGuardTextSecondary
                     )
@@ -402,7 +453,7 @@ fun ThreatResultCard(
                             color = riskColor
                         )
                         Text(
-                            text = result.riskLevel.uppercase(),
+                            text = threatRiskLabel(result.riskLevel).uppercase(),
                             fontSize = 10.sp,
                             fontWeight = FontWeight.Bold,
                             color = riskColor
@@ -424,7 +475,7 @@ fun ThreatResultCard(
             Spacer(modifier = Modifier.height(6.dp))
 
             Text(
-                text = result.summary,
+                text = threatSummary(result),
                 fontSize = 13.sp,
                 color = AdGuardTextPrimary,
                 lineHeight = 18.sp

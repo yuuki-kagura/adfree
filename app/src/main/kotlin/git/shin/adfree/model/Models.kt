@@ -7,15 +7,15 @@ enum class FilterStatus {
     WHITELISTED,
 }
 
-/** Display label for a rule group — the order matches the Rust core enum. */
-enum class RequestCategory(val label: String, val index: Int) {
-    AD("Advertising", 0),
-    TRACKER("Tracker & Telemetry", 1),
-    ANALYTICS("Analytics", 2),
-    SOCIAL("Social Widget", 3),
-    ANNOYANCE("Annoyances", 4),
-    MALWARE("Malware & Phishing", 5),
-    CUSTOM("Custom Rule", 6);
+/** Rule group — the order matches the Rust core enum; the UI localizes it. */
+enum class RequestCategory(val index: Int) {
+    AD(0),
+    TRACKER(1),
+    ANALYTICS(2),
+    SOCIAL(3),
+    ANNOYANCE(4),
+    MALWARE(5),
+    CUSTOM(6);
 
     companion object {
         fun fromIndex(index: Int): RequestCategory =
@@ -23,14 +23,14 @@ enum class RequestCategory(val label: String, val index: Int) {
     }
 }
 
-enum class ProtocolType(val label: String) {
-    DNS_UDP("DNS UDP/53"),
-    DNS_DOT("DNS-over-TLS"),
-    DNS_DOH("DNS-over-HTTPS"),
-    HTTPS("HTTPS / 443"),
-    QUIC("QUIC / HTTP3"),
-    TCP("TCP"),
-    UDP("UDP"),
+enum class ProtocolType {
+    DNS_UDP,
+    DNS_DOT,
+    DNS_DOH,
+    HTTPS,
+    QUIC,
+    TCP,
+    UDP,
 }
 
 /**
@@ -100,11 +100,11 @@ object CoreActions {
 // The remaining models.
 // ---------------------------------------------------------------------------
 
-/// How a blocked domain is answered.
-enum class DnsBlockMode(val label: String, val code: UInt) {
-    NXDOMAIN("NXDOMAIN (không tồn tại)", 0u),
-    ZERO_IP("0.0.0.0", 1u),
-    REFUSED("REFUSED", 2u),
+/// How a blocked domain is answered; the UI localizes the label.
+enum class DnsBlockMode(val code: UInt) {
+    NXDOMAIN(0u),
+    ZERO_IP(1u),
+    REFUSED(2u),
 }
 
 /**
@@ -124,7 +124,8 @@ data class FilterList(
     val customRules: List<String> = emptyList(),
     val subscriptionUrl: String? = null,
     val isOnlineSubscription: Boolean = false,
-    val lastUpdatedText: String = "Chưa cập nhật",
+    /** Empty until the row has a timestamp; the UI supplies "not updated". */
+    val lastUpdatedText: String = "",
     /** File timestamp of the body on disk, 0 while nothing has been downloaded. */
     val lastUpdatedMs: Long = 0,
     /** Body size reported by the core, 0 while nothing is on disk. */
@@ -181,7 +182,7 @@ internal fun scriptNameFromFile(displayName: String?): String =
         ?.trim()
         ?.take(60)
         ?.takeIf { it.isNotBlank() }
-        ?: "Tiện ích từ tệp"
+        .orEmpty()
 
 /**
  * "1.9 MB"-style label for a filter body. The decimal point is pinned to
@@ -237,7 +238,8 @@ data class UserScriptInfo(
     val url: String,
     val isEnabled: Boolean,
     val sizeBytes: Long = 0,
-    val lastUpdatedText: String = "Chưa tải",
+    /** Empty until the body is on disk; the UI supplies "not downloaded". */
+    val lastUpdatedText: String = "",
     val isUserAdded: Boolean = false,
     /** Shipped with the app: no URL to refresh, cannot be deleted. */
     val isBuiltin: Boolean = false,
@@ -455,13 +457,38 @@ enum class ThemeMode {
     LIGHT,
 }
 
+/** Risk band for a scanned host; the UI localizes the label. */
+enum class ThreatRiskLevel {
+    UNKNOWN,
+    SAFE,
+    LOW,
+    MEDIUM,
+    HIGH;
+
+    companion object {
+        fun fromScore(score: Int): ThreatRiskLevel = when {
+            score >= 75 -> HIGH
+            score >= 50 -> MEDIUM
+            score >= 25 -> LOW
+            else -> SAFE
+        }
+    }
+}
+
+/** How the analyzer described the host; the UI localizes the wording. */
+enum class ThreatCategory {
+    EMPTY,
+    FILTER_BLOCKED,
+    SUSPICIOUS,
+    UNKNOWN,
+}
+
 /** Result of scanning one domain on the Security Lab screen (no AI/API key). */
 data class ThreatAnalysisResult(
     val domain: String,
     val riskScore: Int,
-    val riskLevel: String,
-    val category: String,
-    val summary: String,
+    val riskLevel: ThreatRiskLevel,
+    val category: ThreatCategory,
     val suggestedRules: List<String>,
     val isBlockedByFilters: Boolean = false,
     val matchedRule: String? = null,

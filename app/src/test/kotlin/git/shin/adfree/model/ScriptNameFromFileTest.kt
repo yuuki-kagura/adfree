@@ -13,10 +13,11 @@ class ScriptNameFromFileTest {
     }
 
     @Test
-    fun fallsBackWhenThePickerHasNoName() {
-        assertEquals("Tiện ích từ tệp", scriptNameFromFile(null))
-        assertEquals("Tiện ích từ tệp", scriptNameFromFile("   "))
-        assertEquals("Tiện ích từ tệp", scriptNameFromFile(".user.js"))
+    fun returnsBlankWhenThePickerHasNoName() {
+        // The repository substitutes the localized fallback.
+        assertEquals("", scriptNameFromFile(null))
+        assertEquals("", scriptNameFromFile("   "))
+        assertEquals("", scriptNameFromFile(".user.js"))
     }
 
     @Test

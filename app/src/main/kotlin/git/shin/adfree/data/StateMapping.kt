@@ -192,9 +192,7 @@ internal fun CoreDnsProvider.toModel(): DnsProvider = DnsProvider(
     name = name,
     address = address,
     type = protocol.toModel(),
-    description = description.ifBlank {
-        builtinDnsDescription(descriptionKey).ifBlank { if (isCustom) "Tùy chỉnh" else "" }
-    },
+    description = description,
     isCustom = isCustom,
     port = port.toInt(),
     descriptionKey = descriptionKey,
@@ -210,18 +208,4 @@ private fun CoreDnsProtocol.toModel(): ProtocolType = when (this) {
     CoreDnsProtocol.UDP -> ProtocolType.DNS_UDP
     CoreDnsProtocol.DOT -> ProtocolType.DNS_DOT
     CoreDnsProtocol.DOH -> ProtocolType.DNS_DOH
-}
-
-/**
- * Built-in resolver descriptions live in Rust as resource keys. Until the
- * localization pass maps them to `@StringRes`, this supplies the Vietnamese
- * copy the app shipped with.
- */
-internal fun builtinDnsDescription(key: String): String = when (key) {
-    "dns_desc_adguard_default" -> "Chặn quảng cáo & tracker mặc định của AdGuard"
-    "dns_desc_adguard_family" -> "Chặn nội dung người lớn, bật SafeSearch"
-    "dns_desc_cloudflare" -> "Nhanh, riêng tư, không ghi log"
-    "dns_desc_quad9" -> "Chặn domain độc hại theo dữ liệu IBM X-Force"
-    "dns_desc_google" -> "Resolver toàn cầu"
-    else -> ""
 }

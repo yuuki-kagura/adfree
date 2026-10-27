@@ -94,6 +94,7 @@
     <string name="filter_user_rules_name">Quy tắc của bạn</string>
     <string name="filter_user_rules_description">Quy tắc chặn và cho phép do bạn tự viết, áp dụng cho mọi trang</string>
     <string name="filter_not_loaded">Chưa tải</string>
+    <string name="filter_not_updated">Chưa cập nhật</string>
     <string name="filter_from_file_name">Bộ lọc từ tệp</string>
     <string name="filter_from_file_description">Bộ lọc tùy chỉnh từ tệp trong máy</string>
     <string name="filter_file_unreadable">Không đọc được tệp đã chọn</string>
@@ -124,6 +125,7 @@
     <string name="script_save_error">Lỗi lưu tiện ích</string>
     <string name="script_created">Đã tạo %1$s</string>
     <string name="script_updated">Đã cập nhật %1$s</string>
+    <string name="script_from_file_name">Tiện ích từ tệp</string>
     <string name="script_from_file_description">Tiện ích tùy chỉnh từ tệp trong máy</string>
     <string name="script_custom_description">Tiện ích tùy chỉnh của bạn</string>
     <string name="script_default_name">Tiện ích</string>
@@ -147,6 +149,11 @@
     <string name="script_installing">Đang cài %1$s…</string>
     <string name="vpn_restarting">Đang khởi động lại VPN để áp dụng…</string>
     <string name="vpn_off_changes_next">VPN chưa bật — thay đổi áp dụng ở lần bật sau</string>
+    <string name="vpn_session_name">Bảo vệ AdFree</string>
+    <string name="vpn_channel_name">Trạng thái bảo vệ AdFree</string>
+    <string name="vpn_channel_description">Chỉ báo AdFree đang lọc lưu lượng mạng</string>
+    <string name="vpn_notification_title">AdFree đang bảo vệ</string>
+    <string name="vpn_notification_text">Lọc quảng cáo &amp; tracker mức DNS</string>
     <string name="threat_analyzing">Đang phân tích %1$s trên thiết bị…</string>
 
     <!-- Navigation -->
@@ -225,6 +232,24 @@
     <string name="lab_suggested_rules">Quy tắc gợi ý</string>
     <string name="lab_add">Thêm</string>
     <string name="lab_offline">Phân tích chạy hoàn toàn trên thiết bị, không cần mạng.</string>
+    <string name="lab_risk_unknown">Không xác định</string>
+    <string name="lab_risk_safe">An toàn</string>
+    <string name="lab_risk_low">Thấp</string>
+    <string name="lab_risk_medium">Trung bình</string>
+    <string name="lab_risk_high">Cao</string>
+    <string name="lab_category_empty">Trống</string>
+    <string name="lab_category_blocked">Đã bị bộ lọc của bạn chặn</string>
+    <string name="lab_category_suspicious">Bất thường</string>
+    <string name="lab_category_unknown">Chưa rõ</string>
+    <string name="lab_summary_empty">Nhập một domain để phân tích.</string>
+    <string name="lab_summary_blocked">Bộ lọc hiện tại đã chặn domain này</string>
+    <string name="lab_summary_not_blocked">Bộ lọc hiện tại không chặn domain này</string>
+    <string name="lab_summary_rule">quy tắc: %1$s</string>
+    <string name="lab_summary_list">từ danh sách: %1$s</string>
+    <string name="lab_trait_high">Có nhiều đặc điểm của ad network / tracker (từ khoá, cấu trúc host).</string>
+    <string name="lab_trait_medium">Có một vài dấu hiệu theo dõi.</string>
+    <string name="lab_trait_low">Ít dấu hiệu bất thường.</string>
+    <string name="lab_trait_none">Không thấy dấu hiệu theo dõi.</string>
 
     <!-- Filtering hub -->
     <string name="hub_subtitle">Danh sách lọc, tiện ích trang và đường mạng</string>
@@ -512,6 +537,16 @@
     <string name="settings_smart_filtering_title">Lọc thông minh</string>
     <string name="settings_smart_filtering_subtitle">Host bị chặn liên tục được tạm cho qua 60 giây để app ngừng retry tốn CPU</string>
     <string name="settings_block_mode_title">Trả lời khi chặn</string>
+    <string name="settings_block_mode_nxdomain">NXDOMAIN (không tồn tại)</string>
+    <string name="settings_block_mode_zero">0.0.0.0</string>
+    <string name="settings_block_mode_refused">REFUSED</string>
+    <string name="protocol_dns_udp">DNS UDP/53</string>
+    <string name="protocol_dns_dot">DNS-over-TLS</string>
+    <string name="protocol_dns_doh">DNS-over-HTTPS</string>
+    <string name="protocol_https">HTTPS / 443</string>
+    <string name="protocol_quic">QUIC / HTTP3</string>
+    <string name="protocol_tcp">TCP</string>
+    <string name="protocol_udp">UDP</string>
     <string name="settings_auto_update_title">Tự động cập nhật bộ lọc</string>
     <string name="settings_auto_update_subtitle">Chỉ kiểm tra khi mở app — không đánh thức radio hay chạy nền. List bật và đã tải sẽ được làm mới khi quá hạn.</string>
     <string name="settings_auto_update_off">Tắt</string>

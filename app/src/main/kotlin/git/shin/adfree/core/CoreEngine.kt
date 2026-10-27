@@ -339,7 +339,7 @@ class CoreEngine {
             .getOrElse {
                 git.shin.adfree.core.DownloadOutcome(
                     ok = false,
-                    message = "Lỗi: ${it.javaClass.simpleName}",
+                    message = it.javaClass.simpleName,
                     lineCount = 0,
                     version = null,
                     updatedText = null,

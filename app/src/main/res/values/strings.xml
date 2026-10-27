@@ -94,6 +94,7 @@
     <string name="filter_user_rules_name">Your rules</string>
     <string name="filter_user_rules_description">Block and allow rules you wrote yourself, applied to every page</string>
     <string name="filter_not_loaded">Not downloaded</string>
+    <string name="filter_not_updated">Not updated yet</string>
     <string name="filter_from_file_name">Filter from file</string>
     <string name="filter_from_file_description">Custom filter from a file on this device</string>
     <string name="filter_file_unreadable">That file could not be read</string>
@@ -124,6 +125,7 @@
     <string name="script_save_error">Could not save the userscript</string>
     <string name="script_created">Created %1$s</string>
     <string name="script_updated">Updated %1$s</string>
+    <string name="script_from_file_name">Userscript from file</string>
     <string name="script_from_file_description">Custom userscript from a file on this device</string>
     <string name="script_custom_description">Your custom userscript</string>
     <string name="script_default_name">Userscript</string>
@@ -147,6 +149,11 @@
     <string name="script_installing">Installing %1$s…</string>
     <string name="vpn_restarting">Restarting the VPN to apply changes…</string>
     <string name="vpn_off_changes_next">The VPN is off; changes apply the next time it starts</string>
+    <string name="vpn_session_name">AdFree protection</string>
+    <string name="vpn_channel_name">AdFree protection status</string>
+    <string name="vpn_channel_description">Shows when AdFree is filtering your traffic</string>
+    <string name="vpn_notification_title">AdFree is protecting you</string>
+    <string name="vpn_notification_text">Filtering ads and trackers at the DNS level</string>
     <string name="threat_analyzing">Analyzing %1$s on this device…</string>
 
     <!-- Navigation -->
@@ -225,6 +232,24 @@
     <string name="lab_suggested_rules">Suggested rules</string>
     <string name="lab_add">Add</string>
     <string name="lab_offline">Analysis runs entirely on this device; no network needed.</string>
+    <string name="lab_risk_unknown">Unknown</string>
+    <string name="lab_risk_safe">Safe</string>
+    <string name="lab_risk_low">Low</string>
+    <string name="lab_risk_medium">Medium</string>
+    <string name="lab_risk_high">High</string>
+    <string name="lab_category_empty">Empty</string>
+    <string name="lab_category_blocked">Already blocked by your filters</string>
+    <string name="lab_category_suspicious">Unusual</string>
+    <string name="lab_category_unknown">Unclear</string>
+    <string name="lab_summary_empty">Enter a domain to analyze.</string>
+    <string name="lab_summary_blocked">Your filters already block this domain</string>
+    <string name="lab_summary_not_blocked">Your filters do not block this domain</string>
+    <string name="lab_summary_rule">rule: %1$s</string>
+    <string name="lab_summary_list">from list: %1$s</string>
+    <string name="lab_trait_high">Many ad-network or tracker traits (keywords, host structure).</string>
+    <string name="lab_trait_medium">Some tracking signals.</string>
+    <string name="lab_trait_low">Few unusual signals.</string>
+    <string name="lab_trait_none">No tracking signals found.</string>
 
     <!-- Filtering hub -->
     <string name="hub_subtitle">Filter lists, page extensions and the network path</string>
@@ -512,6 +537,16 @@
     <string name="settings_smart_filtering_title">Smart filtering</string>
     <string name="settings_smart_filtering_subtitle">Repeatedly blocked hosts are let through for 60 seconds so apps stop retrying</string>
     <string name="settings_block_mode_title">Block response</string>
+    <string name="settings_block_mode_nxdomain">NXDOMAIN (not found)</string>
+    <string name="settings_block_mode_zero">0.0.0.0</string>
+    <string name="settings_block_mode_refused">REFUSED</string>
+    <string name="protocol_dns_udp">DNS UDP/53</string>
+    <string name="protocol_dns_dot">DNS-over-TLS</string>
+    <string name="protocol_dns_doh">DNS-over-HTTPS</string>
+    <string name="protocol_https">HTTPS / 443</string>
+    <string name="protocol_quic">QUIC / HTTP3</string>
+    <string name="protocol_tcp">TCP</string>
+    <string name="protocol_udp">UDP</string>
     <string name="settings_auto_update_title">Automatic filter updates</string>
     <string name="settings_auto_update_subtitle">Checked only when the app opens — no waking the radio or running in the background. Enabled lists that were downloaded are refreshed when due.</string>
     <string name="settings_auto_update_off">Off</string>
