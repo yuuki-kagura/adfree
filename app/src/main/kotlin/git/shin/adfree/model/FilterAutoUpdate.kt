@@ -18,7 +18,3 @@ fun filterUpdateDue(lastUpdatedMs: Long, nowMs: Long, hours: Int): Boolean {
     val interval = hours.toLong() * 60L * 60L * 1000L
     return nowMs - lastUpdatedMs >= interval
 }
-
-/** Label for the settings chips; 0 means "off". */
-fun filterAutoUpdateLabel(hours: Int): String =
-    if (hours <= 0) "Tắt" else "$hours giờ"

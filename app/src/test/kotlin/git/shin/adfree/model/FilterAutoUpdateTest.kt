@@ -1,6 +1,5 @@
 package git.shin.adfree.model
 
-import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -38,12 +37,5 @@ class FilterAutoUpdateTest {
     @Test
     fun `a future timestamp is ignored instead of treated as old`() {
         assertFalse(filterUpdateDue(now + hour, now, 24))
-    }
-
-    @Test
-    fun `labels say off or hours`() {
-        assertEquals("Tắt", filterAutoUpdateLabel(0))
-        assertEquals("6 giờ", filterAutoUpdateLabel(6))
-        assertEquals("72 giờ", filterAutoUpdateLabel(72))
     }
 }

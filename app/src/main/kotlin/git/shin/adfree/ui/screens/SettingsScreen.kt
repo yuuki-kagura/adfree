@@ -73,7 +73,6 @@ import git.shin.adfree.model.DnsBlockMode
 import git.shin.adfree.model.DnsProvider
 import git.shin.adfree.model.ProtectionSettings
 import git.shin.adfree.model.caNotAfterMs
-import git.shin.adfree.model.filterAutoUpdateLabel
 import git.shin.adfree.model.normalizeHttpsHost
 import git.shin.adfree.ui.AdGuardTab
 import git.shin.adfree.ui.AdGuardIntent
@@ -130,13 +129,13 @@ fun SettingsScreen(
     ) {
         Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp)) {
             Text(
-                text = "Cài đặt",
+                text = stringResource(R.string.nav_settings),
                 fontSize = 19.sp,
                 fontWeight = FontWeight.Bold,
                 color = AdGuardTextPrimary,
             )
             Text(
-                text = "Ghi log, lọc thông minh, tàng hình và sao lưu",
+                text = stringResource(R.string.settings_subtitle),
                 fontSize = 12.sp,
                 color = AdGuardTextMuted
             )
@@ -152,8 +151,8 @@ fun SettingsScreen(
 
             SettingsSwitch(
                 icon = Icons.Default.Visibility,
-                title = "Ghi log cả request hợp lệ",
-                subtitle = "Tắt để tiết kiệm CPU: chỉ ghi lại những gì bị chặn",
+                title = stringResource(R.string.settings_log_allowed_title),
+                subtitle = stringResource(R.string.settings_log_allowed_subtitle),
                 checked = state.settings.logAllowedRequests,
                 onCheckedChange = { viewModel.onIntent(AdGuardIntent.ToggleLogAllowed(it)) }
             )
@@ -162,8 +161,8 @@ fun SettingsScreen(
 
             SettingsSwitch(
                 icon = Icons.Default.Refresh,
-                title = "Lọc thông minh",
-                subtitle = "Host bị chặn liên tục được tạm cho qua 60 giây để app ngừng retry tốn CPU",
+                title = stringResource(R.string.settings_smart_filtering_title),
+                subtitle = stringResource(R.string.settings_smart_filtering_subtitle),
                 checked = state.settings.isSmartFilteringEnabled,
                 onCheckedChange = { viewModel.onIntent(AdGuardIntent.ToggleSmartFiltering(it)) }
             )
@@ -171,7 +170,7 @@ fun SettingsScreen(
             Spacer(modifier = Modifier.height(10.dp))
 
             Text(
-                text = "Trả lời khi chặn",
+                text = stringResource(R.string.settings_block_mode_title),
                 fontSize = 12.sp,
                 fontWeight = FontWeight.Bold,
                 color = AdGuardTextSecondary,
@@ -199,14 +198,13 @@ fun SettingsScreen(
             Spacer(modifier = Modifier.height(18.dp))
 
             Text(
-                text = "Tự động cập nhật bộ lọc",
+                text = stringResource(R.string.settings_auto_update_title),
                 fontSize = 12.sp,
                 fontWeight = FontWeight.Bold,
                 color = AdGuardTextSecondary,
             )
             Text(
-                text = "Chỉ kiểm tra khi mở app — không đánh thức radio hay chạy nền. " +
-                    "List bật và đã tải sẽ được làm mới khi quá hạn.",
+                text = stringResource(R.string.settings_auto_update_subtitle),
                 fontSize = 11.sp,
                 color = AdGuardTextMuted,
                 modifier = Modifier.padding(top = 2.dp, bottom = 6.dp),
@@ -222,7 +220,7 @@ fun SettingsScreen(
                     FilterChip(
                         selected = state.settings.filterAutoUpdateHours == hours,
                         onClick = { viewModel.onIntent(AdGuardIntent.SetFilterAutoUpdate(hours)) },
-                        label = { Text(filterAutoUpdateLabel(hours), fontSize = 11.sp) },
+                        label = { Text(autoUpdateLabel(hours), fontSize = 11.sp) },
                         colors = FilterChipDefaults.filterChipColors(
                             selectedContainerColor = AdGuardGreenPrimary,
                             selectedLabelColor = AdGuardOnAccent,
@@ -234,27 +232,27 @@ fun SettingsScreen(
             Spacer(modifier = Modifier.height(24.dp))
 
             Text(
-                text = "Chế độ tàng hình",
+                text = stringResource(R.string.settings_stealth_title),
                 fontSize = 14.sp,
                 fontWeight = FontWeight.Bold,
                 color = AdGuardTextPrimary
             )
             Spacer(modifier = Modifier.height(10.dp))
             StealthToggleRow(
-                title = "Xoá tham số tracking (utm_*, fbclid)",
-                subtitle = "Chỉ áp dụng khi bật lọc HTTPS",
+                title = stringResource(R.string.settings_stealth_utm_title),
+                subtitle = stringResource(R.string.settings_stealth_utm_subtitle),
                 isChecked = state.settings.stripUtmTracking,
                 onCheckedChange = { viewModel.onIntent(AdGuardIntent.UpdateStealth(stripUtm = it)) }
             )
             StealthToggleRow(
-                title = "Chặn rò rỉ WebRTC",
-                subtitle = "Ngăn WebRTC leak IP thật",
+                title = stringResource(R.string.settings_stealth_webrtc_title),
+                subtitle = stringResource(R.string.settings_stealth_webrtc_subtitle),
                 isChecked = state.settings.blockWebRtcLeaks,
                 onCheckedChange = { viewModel.onIntent(AdGuardIntent.UpdateStealth(blockWebRtc = it)) }
             )
             StealthToggleRow(
-                title = "Chặn cookie bên thứ ba",
-                subtitle = "Giảm theo dõi chéo giữa các site",
+                title = stringResource(R.string.settings_stealth_cookies_title),
+                subtitle = stringResource(R.string.settings_stealth_cookies_subtitle),
                 isChecked = state.settings.blockThirdPartyCookies,
                 onCheckedChange = { viewModel.onIntent(AdGuardIntent.UpdateStealth(blockCookies = it)) }
             )
@@ -277,8 +275,8 @@ fun SettingsScreen(
             // A diagnostic screen rather than a daily tab: reachable from here.
             SettingsLink(
                 icon = Icons.Default.Science,
-                title = "Phòng thí nghiệm bảo mật",
-                subtitle = "Quét một tên miền qua engine để xem luồng phân tích",
+                title = stringResource(R.string.settings_lab_title),
+                subtitle = stringResource(R.string.settings_lab_subtitle),
                 onClick = { viewModel.onIntent(AdGuardIntent.SelectTab(AdGuardTab.AI_LAB)) }
             )
 
@@ -289,11 +287,10 @@ fun SettingsScreen(
     pendingRestoreUri?.let { uri ->
         AlertDialog(
             onDismissRequest = { pendingRestoreUri = null },
-            title = { Text("Khôi phục bản sao lưu?") },
+            title = { Text(stringResource(R.string.settings_restore_title)) },
             text = {
                 Text(
-                    "Cài đặt, bộ lọc đang bật, bộ lọc tự thêm và quy tắc sẽ bị " +
-                        "thay bằng nội dung tệp. Userscript trên máy này được giữ nguyên.",
+                    stringResource(R.string.settings_restore_body),
                     fontSize = 12.sp,
                 )
             },
@@ -304,20 +301,25 @@ fun SettingsScreen(
                         viewModel.onIntent(AdGuardIntent.ImportBackup(uri))
                     },
                 ) {
-                    Text("Khôi phục", color = AdGuardOrangeWarning)
+                    Text(stringResource(R.string.settings_restore_confirm), color = AdGuardOrangeWarning)
                 }
             },
             dismissButton = {
                 TextButton(onClick = { pendingRestoreUri = null }) {
-                    Text("Huỷ")
+                    Text(stringResource(R.string.common_cancel))
                 }
             },
         )
     }
 }
 
-/** Export/restore the two core blobs without including device-local scripts. */
+/** Label for the auto-update chips; 0 means "off". */
 @Composable
+private fun autoUpdateLabel(hours: Int): String =
+    if (hours <= 0) stringResource(R.string.settings_auto_update_off)
+    else stringResource(R.string.settings_auto_update_hours, hours)
+
+/** Export/restore the two core blobs without including device-local scripts. */@Composable
 private fun BackupSection(
     onExport: () -> Unit,
     onImport: () -> Unit,
@@ -329,14 +331,13 @@ private fun BackupSection(
     ) {
         Column(modifier = Modifier.padding(14.dp)) {
             Text(
-                text = "Sao lưu & khôi phục",
+                text = stringResource(R.string.settings_backup_title),
                 fontSize = 13.sp,
                 fontWeight = FontWeight.Bold,
                 color = AdGuardTextPrimary,
             )
             Text(
-                text = "Gồm cài đặt, bộ lọc đang bật, bộ lọc tự thêm và quy tắc. " +
-                    "Userscript ở lại thiết bị.",
+                text = stringResource(R.string.settings_backup_body),
                 fontSize = 11.sp,
                 color = AdGuardTextMuted,
                 modifier = Modifier.padding(top = 2.dp),
@@ -348,14 +349,14 @@ private fun BackupSection(
                     modifier = Modifier.weight(1f),
                     shape = RoundedCornerShape(8.dp),
                 ) {
-                    Text("Xuất tệp", fontSize = 11.sp, color = AdGuardGreenLight)
+                    Text(stringResource(R.string.rules_export), fontSize = 11.sp, color = AdGuardGreenLight)
                 }
                 OutlinedButton(
                     onClick = onImport,
                     modifier = Modifier.weight(1f),
                     shape = RoundedCornerShape(8.dp),
                 ) {
-                    Text("Khôi phục", fontSize = 11.sp, color = AdGuardOrangeWarning)
+                    Text(stringResource(R.string.settings_restore_confirm), fontSize = 11.sp, color = AdGuardOrangeWarning)
                 }
             }
         }
@@ -488,14 +489,13 @@ internal fun HttpsFilterSection(
 
     Column {
         Text(
-            text = "Lọc HTTPS",
+            text = stringResource(R.string.settings_https_title),
             fontSize = 14.sp,
             fontWeight = FontWeight.Bold,
             color = AdGuardTextPrimary
         )
         Text(
-            text = "Tự ký chứng chỉ để đọc và chèn script vào trang HTTPS. " +
-                "Cần cài chứng chỉ CA vào hệ thống.",
+            text = stringResource(R.string.settings_https_body),
             fontSize = 11.sp,
             color = AdGuardTextMuted
         )
@@ -503,8 +503,8 @@ internal fun HttpsFilterSection(
 
         SettingsSwitch(
             icon = Icons.Default.Lock,
-            title = "Bật lọc HTTPS",
-            subtitle = "Giải mã HTTPS để lọc quảng cáo và chèn script",
+            title = stringResource(R.string.settings_https_enable_title),
+            subtitle = stringResource(R.string.settings_https_enable_subtitle),
             checked = httpsEnabled,
             onCheckedChange = { enabled ->
                 if (enabled && !caTrusted) {
@@ -530,9 +530,8 @@ internal fun HttpsFilterSection(
         // showing the default until the next tap.
         SettingsSwitch(
             icon = Icons.Default.Visibility,
-            title = "ECH đầy đủ",
-            subtitle = "Cho trình duyệt tự mã hoá ECH end-to-end. Host dùng ECH sẽ " +
-                "được nối thẳng, không lọc được.",
+            title = stringResource(R.string.settings_ech_title),
+            subtitle = stringResource(R.string.settings_ech_subtitle),
             checked = fullEchEnabled,
             onCheckedChange = { enabled -> viewModel.setFullEch(enabled) }
         )
@@ -566,21 +565,24 @@ internal fun HttpsFilterSection(
                 ) {
                     Column {
                         Text(
-                            text = if (status?.hasCa == true) "CA đã tạo" else "Chưa có CA",
+                            text = if (status?.hasCa == true) stringResource(R.string.settings_ca_created)
+                            else stringResource(R.string.settings_ca_missing),
                             fontSize = 13.sp,
                             fontWeight = FontWeight.Bold,
                             color = if (status?.hasCa == true) AdGuardGreenLight else AdGuardTextSecondary,
                         )
                         Text(
-                            text = status?.fingerprint?.take(23)?.let { "Vân tay: $it…" }
-                                ?: "Nhấn Tạo CA để bắt đầu",
+                            text = status?.fingerprint?.take(23)?.let {
+                                stringResource(R.string.settings_ca_fingerprint, it)
+                            } ?: stringResource(R.string.settings_ca_create_hint),
                             fontSize = 10.sp,
                             color = AdGuardTextMuted,
                             fontFamily = FontFamily.Monospace,
                         )
                         Text(
-                            text = if (caTrusted) "Chứng chỉ: đã cài đặt"
-                                else "Chứng chỉ: chưa cài đặt",
+                            text = stringResource(
+                                if (caTrusted) R.string.settings_ca_trusted else R.string.settings_ca_untrusted
+                            ),
                             fontSize = 11.sp,
                             color = if (caTrusted) AdGuardGreenLight else AdGuardOrangeWarning,
                         )
@@ -593,9 +595,9 @@ internal fun HttpsFilterSection(
                             val daysLeft = (caExpiryMs - now) / 86_400_000L
                             Text(
                                 text = if (expired) {
-                                    "Hạn CA: đã hết hạn (${formatCertDate(caExpiryMs)})"
+                                    stringResource(R.string.settings_ca_expired, formatCertDate(caExpiryMs))
                                 } else {
-                                    "Hạn CA: ${formatCertDate(caExpiryMs)} (còn $daysLeft ngày)"
+                                    stringResource(R.string.settings_ca_expiry, formatCertDate(caExpiryMs), daysLeft)
                                 },
                                 fontSize = 11.sp,
                                 color = when {
@@ -616,7 +618,11 @@ internal fun HttpsFilterSection(
                         },
                         shape = RoundedCornerShape(8.dp),
                     ) {
-                        Text(if (status?.hasCa == true) "Tạo lại" else "Tạo CA", fontSize = 11.sp)
+                        Text(
+                            if (status?.hasCa == true) stringResource(R.string.settings_ca_recreate)
+                            else stringResource(R.string.settings_ca_create),
+                            fontSize = 11.sp,
+                        )
                     }
                 }
 
@@ -632,13 +638,13 @@ internal fun HttpsFilterSection(
                             },
                             shape = RoundedCornerShape(8.dp),
                         ) {
-                            Text("Cài chứng chỉ", fontSize = 11.sp)
+                            Text(stringResource(R.string.settings_ca_install), fontSize = 11.sp)
                         }
                         OutlinedButton(
                             onClick = { showCert = true },
                             shape = RoundedCornerShape(8.dp),
                         ) {
-                            Text("Xem PEM", fontSize = 11.sp)
+                            Text(stringResource(R.string.settings_ca_view_pem), fontSize = 11.sp)
                         }
                     }
 
@@ -687,8 +693,10 @@ internal fun HttpsFilterSection(
                                     shape = RoundedCornerShape(8.dp),
                                 ) {
                                     Text(
-                                        if (trust.installed) "Cài lại CA hệ thống"
-                                        else "Cài CA hệ thống (root)",
+                                        stringResource(
+                                            if (trust.installed) R.string.settings_ca_reinstall_system
+                                            else R.string.settings_ca_install_system
+                                        ),
                                         fontSize = 11.sp,
                                     )
                                 }
@@ -714,7 +722,7 @@ internal fun HttpsFilterSection(
                                         },
                                         shape = RoundedCornerShape(8.dp),
                                     ) {
-                                        Text("Gỡ CA hệ thống", fontSize = 11.sp)
+                                        Text(stringResource(R.string.settings_ca_remove_system), fontSize = 11.sp)
                                     }
                                 }
                             }
@@ -724,9 +732,12 @@ internal fun HttpsFilterSection(
 
                 Spacer(modifier = Modifier.height(8.dp))
                 Text(
-                    text = "Giai đoạn: ${status?.stage ?: "—"} " +
-                        "• ${status?.scriptCount ?: 0} script • " +
-                        "${status?.leavesIssued ?: 0} cert đã cấp",
+                    text = stringResource(
+                        R.string.settings_ca_stage,
+                        status?.stage ?: "—",
+                        status?.scriptCount ?: 0,
+                        status?.leavesIssued ?: 0
+                    ),
                     fontSize = 11.sp,
                     color = AdGuardTextMuted,
                 )
@@ -736,7 +747,7 @@ internal fun HttpsFilterSection(
                     modifier = Modifier.padding(top = 8.dp),
                     shape = RoundedCornerShape(8.dp),
                 ) {
-                    Text("Quản lý tiện ích", fontSize = 11.sp)
+                    Text(stringResource(R.string.settings_manage_scripts), fontSize = 11.sp)
                 }
             }
         }
@@ -747,7 +758,10 @@ internal fun HttpsFilterSection(
     }
     addTarget?.let { target ->
         HttpsHostDialog(
-            title = if (target == HttpsListTarget.SKIP) "Bỏ qua lọc HTTPS" else "Chỉ lọc trang này",
+            title = stringResource(
+                if (target == HttpsListTarget.SKIP) R.string.settings_https_dialog_title_skip
+                else R.string.settings_https_dialog_title_only
+            ),
             onDismiss = { addTarget = null },
             onAdd = { host ->
                 if (target == HttpsListTarget.SKIP) {
@@ -764,20 +778,17 @@ internal fun HttpsFilterSection(
                 pendingEnable = false
                 showCertGate = false
             },
-            title = { Text("Cần cài chứng chỉ", fontSize = 16.sp) },
+            title = { Text(stringResource(R.string.settings_cert_gate_title), fontSize = 16.sp) },
             text = {
                 Column {
                     Text(
-                        "Lọc HTTPS cần chứng chỉ của AdFree để giải mã kết nối. " +
-                            "AdFree sẽ lưu tệp chứng chỉ vào Downloads rồi mở Cài đặt.",
+                        stringResource(R.string.settings_cert_gate_body),
                         fontSize = 12.sp,
                         color = AdGuardTextSecondary,
                     )
                     Spacer(modifier = Modifier.height(8.dp))
                     Text(
-                        "Trong Cài đặt chọn: Bảo mật & quyền riêng tư → Cài đặt bảo " +
-                            "mật khác → Mã hóa & thông tin xác thực → Cài đặt chứng " +
-                            "chỉ → Chứng chỉ CA,\nrồi chọn tệp AdFree-CA.crt trong Downloads.",
+                        stringResource(R.string.settings_cert_gate_steps),
                         fontSize = 12.sp,
                         color = AdGuardTextSecondary,
                     )
@@ -789,12 +800,15 @@ internal fun HttpsFilterSection(
                     val saved = viewModel.installCertificate()
                     Toast.makeText(
                         context,
-                        if (saved != null) "Đã lưu $saved vào Downloads"
-                        else "Không lưu được chứng chỉ",
+                        if (saved != null) {
+                            context.getString(R.string.settings_cert_saved, saved)
+                        } else {
+                            context.getString(R.string.settings_cert_save_failed)
+                        },
                         Toast.LENGTH_SHORT,
                     ).show()
                 }) {
-                    Text("Mở Cài đặt")
+                    Text(stringResource(R.string.settings_cert_gate_open))
                 }
             },
             dismissButton = {
@@ -802,7 +816,7 @@ internal fun HttpsFilterSection(
                     pendingEnable = false
                     showCertGate = false
                 }) {
-                    Text("Để sau")
+                    Text(stringResource(R.string.settings_cert_gate_later))
                 }
             },
         )
@@ -814,12 +828,11 @@ private fun CertificateDialog(pem: String, onDismiss: () -> Unit) {
     val clipboard = LocalClipboardManager.current
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("CA của AdFree", fontSize = 16.sp) },
+        title = { Text(stringResource(R.string.settings_cert_dialog_title), fontSize = 16.sp) },
         text = {
             Column {
                 Text(
-                    text = "Lưu thành ca.pem rồi cài qua Cài đặt → Bảo mật → " +
-                        "Mã hóa & thông tin xác thực → Cài chứng chỉ.",
+                    text = stringResource(R.string.settings_cert_dialog_body),
                     fontSize = 12.sp,
                     color = AdGuardTextSecondary,
                 )
@@ -839,9 +852,9 @@ private fun CertificateDialog(pem: String, onDismiss: () -> Unit) {
             TextButton(onClick = {
                 clipboard.setText(AnnotatedString(pem))
                 onDismiss()
-            }) { Text("Copy") }
+            }) { Text(stringResource(R.string.settings_copy)) }
         },
-        dismissButton = { TextButton(onClick = onDismiss) { Text("Đóng") } },
+        dismissButton = { TextButton(onClick = onDismiss) { Text(stringResource(R.string.common_close)) } },
     )
 }
 
@@ -862,13 +875,13 @@ internal fun DnsProviderSection(
 
     Column {
         Text(
-            text = "Máy chủ DNS",
+            text = stringResource(R.string.settings_dns_title),
             fontSize = 14.sp,
             fontWeight = FontWeight.Bold,
             color = AdGuardTextPrimary,
         )
         Text(
-            text = "Resolver AdFree dùng để phân giải tên miền trước khi lọc.",
+            text = stringResource(R.string.settings_dns_body),
             fontSize = 11.sp,
             color = AdGuardTextMuted,
         )
@@ -895,21 +908,21 @@ internal fun DnsProviderSection(
                 Spacer(modifier = Modifier.width(12.dp))
                 Column(modifier = Modifier.weight(1f)) {
                     Text(
-                        text = selected?.name ?: "Chưa chọn resolver",
+                        text = selected?.name ?: stringResource(R.string.settings_dns_unset_name),
                         fontSize = 13.sp,
                         fontWeight = FontWeight.Bold,
                         color = AdGuardTextPrimary,
                     )
                     Text(
-                        text = selected?.address ?: "Nhấn để chọn máy chủ DNS",
+                        text = selected?.address ?: stringResource(R.string.settings_dns_unset_address),
                         fontSize = 11.sp,
                         color = AdGuardTextMuted,
                     )
                     if (selected?.isCustom == true) {
-                        Text("Tùy chỉnh", fontSize = 10.sp, color = AdGuardBlueDns)
+                        Text(stringResource(R.string.settings_dns_custom), fontSize = 10.sp, color = AdGuardBlueDns)
                     }
                 }
-                Text("Đổi", fontSize = 12.sp, color = AdGuardBlueDns)
+                Text(stringResource(R.string.settings_dns_change), fontSize = 12.sp, color = AdGuardBlueDns)
             }
         }
     }
@@ -944,7 +957,7 @@ private fun DnsProviderDialog(
 
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("Máy chủ DNS", fontSize = 16.sp) },
+        title = { Text(stringResource(R.string.settings_dns_title), fontSize = 16.sp) },
         text = {
             Column(
                 modifier = Modifier
@@ -976,7 +989,7 @@ private fun DnsProviderDialog(
                                 fontFamily = FontFamily.Monospace,
                             )
                             if (provider.isCustom) {
-                                Text("Tùy chỉnh", fontSize = 10.sp, color = AdGuardBlueDns)
+                                Text(stringResource(R.string.settings_dns_custom), fontSize = 10.sp, color = AdGuardBlueDns)
                             }
                         }
                     }
@@ -984,7 +997,7 @@ private fun DnsProviderDialog(
 
                 Spacer(modifier = Modifier.height(12.dp))
                 Text(
-                    text = "Thêm resolver",
+                    text = stringResource(R.string.settings_dns_add_title),
                     fontSize = 12.sp,
                     fontWeight = FontWeight.Bold,
                     color = AdGuardTextSecondary,
@@ -993,7 +1006,7 @@ private fun DnsProviderDialog(
                 OutlinedTextField(
                     value = name,
                     onValueChange = { name = it },
-                    label = { Text("Tên", fontSize = 11.sp) },
+                    label = { Text(stringResource(R.string.settings_dns_name_label), fontSize = 11.sp) },
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth(),
                 )
@@ -1001,8 +1014,8 @@ private fun DnsProviderDialog(
                 OutlinedTextField(
                     value = address,
                     onValueChange = { address = it },
-                    label = { Text("Địa chỉ IPv4/IPv6", fontSize = 11.sp) },
-                    placeholder = { Text("1.1.1.1 hoặc 1.1.1.1:53", fontSize = 11.sp) },
+                    label = { Text(stringResource(R.string.settings_dns_address_label), fontSize = 11.sp) },
+                    placeholder = { Text(stringResource(R.string.settings_dns_address_hint), fontSize = 11.sp) },
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth(),
                 )
@@ -1014,12 +1027,12 @@ private fun DnsProviderDialog(
                     enabled = address.isNotBlank(),
                     modifier = Modifier.fillMaxWidth(),
                 ) {
-                    Text("Thêm và chọn", fontSize = 12.sp)
+                    Text(stringResource(R.string.settings_dns_add), fontSize = 12.sp)
                 }
             }
         },
         confirmButton = {
-            TextButton(onClick = onDismiss) { Text("Đóng") }
+            TextButton(onClick = onDismiss) { Text(stringResource(R.string.common_close)) }
         },
     )
 }
@@ -1034,14 +1047,14 @@ private fun EngineInfoSection(buildMs: Long) {
     ) {
         Column(modifier = Modifier.padding(14.dp)) {
             Text(
-                text = "Trạng thái engine",
+                text = stringResource(R.string.settings_engine_title),
                 fontSize = 11.sp,
                 fontWeight = FontWeight.Bold,
                 color = AdGuardTextSecondary,
             )
             Spacer(modifier = Modifier.height(6.dp))
             Text(
-                text = "Biên dịch bộ lọc: $buildMs ms",
+                text = stringResource(R.string.settings_engine_build, buildMs),
                 fontSize = 12.sp,
                 color = AdGuardTextPrimary,
             )
@@ -1177,14 +1190,13 @@ private fun HttpsWebsiteSection(
     ) {
         Column(modifier = Modifier.padding(14.dp)) {
             Text(
-                text = "Trang web & HTTPS",
+                text = stringResource(R.string.settings_https_sites_title),
                 fontSize = 13.sp,
                 fontWeight = FontWeight.Bold,
                 color = AdGuardTextPrimary,
             )
             Text(
-                text = "Chọn trang không bị giải mã, hoặc chỉ giải mã một số trang. " +
-                    "Trang bị bỏ qua sẽ không lọc được quảng cáo và script.",
+                text = stringResource(R.string.settings_https_sites_body),
                 fontSize = 11.sp,
                 color = AdGuardTextMuted,
             )
@@ -1194,13 +1206,13 @@ private fun HttpsWebsiteSection(
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Column(modifier = Modifier.weight(1f)) {
                     Text(
-                        text = "Chỉ lọc các trang trong danh sách",
+                        text = stringResource(R.string.settings_https_only_title),
                         fontSize = 12.sp,
                         fontWeight = FontWeight.Bold,
                         color = AdGuardTextPrimary,
                     )
                     Text(
-                        text = "Mọi trang khác được nối thẳng, không giải mã.",
+                        text = stringResource(R.string.settings_https_only_subtitle),
                         fontSize = 11.sp,
                         color = AdGuardTextMuted,
                     )
@@ -1213,12 +1225,14 @@ private fun HttpsWebsiteSection(
             }
 
             HttpsHostList(
-                label = if (settings.httpsOnlyMode) "Chỉ giải mã các trang này" else "Trang bỏ qua lọc",
-                hint = if (settings.httpsOnlyMode) {
-                    "Danh sách trắng của chế độ chỉ lọc."
-                } else {
-                    "Ngân hàng, trang dùng chứng chỉ riêng…"
-                },
+                label = stringResource(
+                    if (settings.httpsOnlyMode) R.string.settings_https_only_list
+                    else R.string.settings_https_skip_list
+                ),
+                hint = stringResource(
+                    if (settings.httpsOnlyMode) R.string.settings_https_only_hint
+                    else R.string.settings_https_skip_hint
+                ),
                 hosts = if (settings.httpsOnlyMode) settings.httpsOnlyHosts else settings.httpsSkipHosts,
                 onAdd = if (settings.httpsOnlyMode) onAddOnly else onAddSkip,
                 onRemove = if (settings.httpsOnlyMode) onRemoveOnly else onRemoveSkip,
@@ -1226,16 +1240,15 @@ private fun HttpsWebsiteSection(
 
             if (settings.httpsOnlyMode) {
                 HttpsHostList(
-                    label = "Luôn bỏ qua",
-                    hint = "Các trang này không bao giờ bị giải mã, kể cả khi nằm trong danh sách trên.",
+                    label = stringResource(R.string.settings_https_always_skip),
+                    hint = stringResource(R.string.settings_https_always_skip_hint),
                     hosts = settings.httpsSkipHosts,
                     onAdd = onAddSkip,
                     onRemove = onRemoveSkip,
                 )
             } else if (settings.httpsOnlyHosts.isNotEmpty()) {
                 Text(
-                    text = "${settings.httpsOnlyHosts.size} trang đang chờ trong danh sách " +
-                        "\"chỉ lọc\" — bật công tắc trên để dùng.",
+                    text = stringResource(R.string.settings_https_pending, settings.httpsOnlyHosts.size),
                     fontSize = 11.sp,
                     color = AdGuardTextMuted,
                     modifier = Modifier.padding(top = 8.dp),
@@ -1256,20 +1269,20 @@ private fun HttpsHostList(
     Column(modifier = Modifier.padding(top = 10.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text(
-                text = "$label (${hosts.size})",
+                text = stringResource(R.string.settings_list_header, label, hosts.size),
                 fontSize = 11.sp,
                 fontWeight = FontWeight.Bold,
                 color = AdGuardTextSecondary,
                 modifier = Modifier.weight(1f),
             )
             TextButton(onClick = onAdd) {
-                Text("Thêm", fontSize = 11.sp, color = AdGuardGreenLight)
+                Text(stringResource(R.string.settings_https_add), fontSize = 11.sp, color = AdGuardGreenLight)
             }
         }
         Text(hint, fontSize = 11.sp, color = AdGuardTextMuted)
         if (hosts.isEmpty()) {
             Text(
-                text = "Chưa có trang nào.",
+                text = stringResource(R.string.settings_https_empty),
                 fontSize = 11.sp,
                 color = AdGuardTextMuted,
                 modifier = Modifier.padding(top = 4.dp),
@@ -1292,7 +1305,7 @@ private fun HttpsHostList(
                     IconButton(onClick = { onRemove(host) }, modifier = Modifier.size(28.dp)) {
                         Icon(
                             Icons.Default.Close,
-                            contentDescription = "Xóa $host",
+                            contentDescription = stringResource(R.string.settings_https_remove, host),
                             tint = AdGuardTextMuted,
                             modifier = Modifier.size(14.dp),
                         )
@@ -1317,7 +1330,7 @@ private fun HttpsHostDialog(
         text = {
             Column {
                 Text(
-                    text = "Nhập tên miền, ví dụ example.com, *.example.com hoặc dán URL.",
+                    text = stringResource(R.string.settings_https_dialog_body),
                     fontSize = 12.sp,
                     color = AdGuardTextSecondary,
                 )
@@ -1339,7 +1352,7 @@ private fun HttpsHostDialog(
                 )
                 if (value.isNotBlank() && normalized == null) {
                     Text(
-                        text = "Tên miền không hợp lệ (chỉ hỗ trợ ký tự ASCII; dùng dạng xn-- cho tên quốc tế).",
+                        text = stringResource(R.string.settings_https_dialog_invalid),
                         fontSize = 11.sp,
                         color = AdGuardOrangeWarning,
                         modifier = Modifier.padding(top = 4.dp),
@@ -1357,11 +1370,11 @@ private fun HttpsHostDialog(
                 },
                 enabled = normalized != null,
             ) {
-                Text("Thêm", color = AdGuardGreenLight)
+                Text(stringResource(R.string.settings_https_add), color = AdGuardGreenLight)
             }
         },
         dismissButton = {
-            TextButton(onClick = onDismiss) { Text("Hủy", color = AdGuardTextSecondary) }
+            TextButton(onClick = onDismiss) { Text(stringResource(R.string.common_cancel), color = AdGuardTextSecondary) }
         },
     )
 }
