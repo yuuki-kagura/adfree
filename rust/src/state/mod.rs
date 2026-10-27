@@ -207,11 +207,7 @@ impl StateStore {
         value.user_rules_configured = true;
         value.enabled_catalog_ids = dedupe(value.enabled_catalog_ids);
         value.trusted_ids = dedupe(value.trusted_ids);
-        value.custom = value
-            .custom
-            .into_iter()
-            .filter(|f| !f.id.trim().is_empty())
-            .collect();
+        value.custom.retain(|f| !f.id.trim().is_empty());
         if !write_row(&self.store, KEY_FILTERS, &value) {
             return false;
         }
@@ -219,13 +215,8 @@ impl StateStore {
         true
     }
 
-    pub fn save_scripts(&self, value: ScriptState) -> bool {
-        let mut value = value;
-        value.scripts = value
-            .scripts
-            .into_iter()
-            .filter(|s| !s.id.trim().is_empty())
-            .collect();
+    pub fn save_scripts(&self, mut value: ScriptState) -> bool {
+        value.scripts.retain(|s| !s.id.trim().is_empty());
         if !write_row(&self.store, KEY_SCRIPTS, &value) {
             return false;
         }

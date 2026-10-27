@@ -383,7 +383,7 @@ impl Default for FilterChoice {
 }
 
 /// The user's deviations from the catalogue (which is code in Kotlin).
-#[derive(uniffi::Record, Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(uniffi::Record, Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct FilterState {
     /// False means "never chosen": the caller applies catalogue defaults.
@@ -397,20 +397,7 @@ pub struct FilterState {
     pub user_rules_configured: bool,
 }
 
-impl Default for FilterState {
-    fn default() -> Self {
-        FilterState {
-            catalog_configured: false,
-            enabled_catalog_ids: Vec::new(),
-            trusted_ids: Vec::new(),
-            custom: Vec::new(),
-            user_rules: Vec::new(),
-            user_rules_configured: false,
-        }
-    }
-}
-
-#[derive(uniffi::Record, Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(uniffi::Record, Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct ScriptRecord {
     pub id: String,
@@ -418,18 +405,6 @@ pub struct ScriptRecord {
     pub description: String,
     pub url: String,
     pub enabled: bool,
-}
-
-impl Default for ScriptRecord {
-    fn default() -> Self {
-        ScriptRecord {
-            id: String::new(),
-            name: String::new(),
-            description: String::new(),
-            url: String::new(),
-            enabled: false,
-        }
-    }
 }
 
 #[derive(uniffi::Record, Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

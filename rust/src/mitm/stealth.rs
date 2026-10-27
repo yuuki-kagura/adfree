@@ -163,7 +163,7 @@ pub fn is_stun_datagram(payload: &[u8]) -> bool {
         return false;
     }
     let len = u16::from_be_bytes([payload[2], payload[3]]) as usize;
-    len % 4 == 0 && len + 20 <= payload.len()
+    len.is_multiple_of(4) && len + 20 <= payload.len()
 }
 
 #[cfg(test)]
@@ -182,8 +182,7 @@ mod tests {
     #[test]
     fn an_utm_parameter_is_matched_by_prefix() {
         assert_eq!(
-            strip_tracking_params("https://a.test/?utm_campaign=x&keep=1&utm_content=y")
-                .as_deref(),
+            strip_tracking_params("https://a.test/?utm_campaign=x&keep=1&utm_content=y").as_deref(),
             Some("https://a.test/?keep=1")
         );
     }
@@ -205,16 +204,40 @@ mod tests {
 
     #[test]
     fn a_cross_site_fetch_is_third_party() {
-        assert!(is_third_party("cdn.test", Some("https://shop.test/"), Some("cross-site")));
-        assert!(!is_third_party("cdn.test", Some("https://shop.test/"), Some("same-site")));
-        assert!(!is_third_party("cdn.test", Some("https://shop.test/"), Some("same-origin")));
+        assert!(is_third_party(
+            "cdn.test",
+            Some("https://shop.test/"),
+            Some("cross-site")
+        ));
+        assert!(!is_third_party(
+            "cdn.test",
+            Some("https://shop.test/"),
+            Some("same-site")
+        ));
+        assert!(!is_third_party(
+            "cdn.test",
+            Some("https://shop.test/"),
+            Some("same-origin")
+        ));
     }
 
     #[test]
     fn the_referrer_decides_when_the_fetch_header_is_missing() {
-        assert!(!is_third_party("www.shop.test", Some("https://shop.test/page"), None));
-        assert!(!is_third_party("static.shop.test", Some("https://www.shop.test/"), None));
-        assert!(is_third_party("tracker.test", Some("https://shop.test/"), None));
+        assert!(!is_third_party(
+            "www.shop.test",
+            Some("https://shop.test/page"),
+            None
+        ));
+        assert!(!is_third_party(
+            "static.shop.test",
+            Some("https://www.shop.test/"),
+            None
+        ));
+        assert!(is_third_party(
+            "tracker.test",
+            Some("https://shop.test/"),
+            None
+        ));
         assert!(!is_third_party("shop.test", None, None));
     }
 

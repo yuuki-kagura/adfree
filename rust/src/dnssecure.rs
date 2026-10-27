@@ -374,8 +374,10 @@ fn remember_addresses(host: &str, addresses: &[IpAddr]) {
     );
 }
 
-fn address_cache() -> &'static Mutex<HashMap<String, (Vec<IpAddr>, u64)>> {
-    static CACHE: OnceLock<Mutex<HashMap<String, (Vec<IpAddr>, u64)>>> = OnceLock::new();
+type AddressCache = Mutex<HashMap<String, (Vec<IpAddr>, u64)>>;
+
+fn address_cache() -> &'static AddressCache {
+    static CACHE: OnceLock<AddressCache> = OnceLock::new();
     CACHE.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
@@ -619,7 +621,7 @@ fn dot_exchange(
     let mut header = [0u8; 2];
     tls.read_exact(&mut header).map_err(read_error)?;
     let length = u16::from_be_bytes(header) as usize;
-    if length < 12 || length > MAX_RESPONSE {
+    if !(12..=MAX_RESPONSE).contains(&length) {
         return Err(SecureError::Response("implausible DNS length".into()));
     }
     let mut answer = vec![0u8; length];

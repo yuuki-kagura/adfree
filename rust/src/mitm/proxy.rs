@@ -1282,20 +1282,14 @@ impl ProxySession {
                         let old_end = head_end;
                         head_end = rebuilt.len();
                         buffer.splice(..old_end, rebuilt);
-                        crate::logbuf::push(&format!(
-                            "mitm {host}: tracking parameters stripped"
-                        ));
+                        crate::logbuf::push(&format!("mitm {host}: tracking parameters stripped"));
                     }
                 }
             }
         }
 
         if stealth.blocks_third_party_cookies()
-            && crate::mitm::stealth::is_third_party(
-                &host,
-                referer.as_deref(),
-                site.as_deref(),
-            )
+            && crate::mitm::stealth::is_third_party(&host, referer.as_deref(), site.as_deref())
         {
             if let Some(fixed) = http::drop_headers(&buffer[..head_end], &["cookie".to_string()]) {
                 let old_end = head_end;
@@ -2043,8 +2037,7 @@ impl ProxySession {
                     // its cookies, so the answer may not hand it new ones.
                     // A `set-cookie` names one cookie, so the whole line goes.
                     if req.block_cookies {
-                        if let Some(fixed) =
-                            http::drop_headers(&head, &["set-cookie".to_string()])
+                        if let Some(fixed) = http::drop_headers(&head, &["set-cookie".to_string()])
                         {
                             head = fixed;
                             let host = self.captured.as_deref().unwrap_or("?");

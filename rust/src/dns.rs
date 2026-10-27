@@ -297,6 +297,7 @@ pub fn build_query(qname: &str, qtype: u16, txid: u16) -> Option<Vec<u8>> {
     write_name(&mut body, qname)?;
     body.extend_from_slice(&qtype.to_be_bytes());
     body.extend_from_slice(&1u16.to_be_bytes()); // class IN
+
     // OPT: root name, type 41, UDP payload size, extended rcode/version/flags,
     // empty rdata.
     body.push(0);
@@ -319,9 +320,11 @@ pub fn answer_message(query: &Query<'_>, answers: &[IpAddr], ttl: u32) -> Option
     }
     let records: Vec<&IpAddr> = answers
         .iter()
-        .filter(|ip| match (query.qtype, ip) {
-            (TYPE_A, IpAddr::V4(_)) | (TYPE_AAAA, IpAddr::V6(_)) => true,
-            _ => false,
+        .filter(|ip| {
+            matches!(
+                (query.qtype, ip),
+                (TYPE_A, IpAddr::V4(_)) | (TYPE_AAAA, IpAddr::V6(_))
+            )
         })
         .collect();
     if records.is_empty() {

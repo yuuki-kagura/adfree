@@ -876,7 +876,11 @@ pub fn set_header_value(head: &[u8], name: &str, value: &str) -> Option<Vec<u8>>
             continue;
         }
         let original = String::from_utf8_lossy(&line[..name_end]);
-        let ending = if line.ends_with(b"\r\n") { "\r\n" } else { "\n" };
+        let ending = if line.ends_with(b"\r\n") {
+            "\r\n"
+        } else {
+            "\n"
+        };
         out.extend_from_slice(format!("{original}: {value}{ending}").as_bytes());
         changed = true;
     }

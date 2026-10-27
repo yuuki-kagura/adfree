@@ -397,7 +397,7 @@ mod tests {
         assert_eq!(p.https_skip_hosts, vec!["bank.example"]);
         assert!(p.proxy.enabled);
         assert_eq!(p.proxy.port, 1080);
-        assert!(p.safe_search == false);
+        assert!(!p.safe_search);
     }
 
     #[test]

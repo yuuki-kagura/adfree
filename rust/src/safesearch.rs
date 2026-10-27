@@ -69,7 +69,6 @@ fn engine_at(host: &str, engine: &str) -> bool {
         )
 }
 
-
 /// `example.com` itself or any subdomain of it.
 fn matches_apex(host: &str, apex: &str) -> bool {
     host == apex || host.ends_with(&format!(".{apex}"))
