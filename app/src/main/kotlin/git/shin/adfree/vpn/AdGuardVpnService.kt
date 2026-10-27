@@ -23,10 +23,14 @@ import git.shin.adfree.AdGuardApplication
 import git.shin.adfree.BuildConfig
 import git.shin.adfree.R
 import git.shin.adfree.core.CoreEngine
+import git.shin.adfree.ui.Localization
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.drop
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 import java.io.File
 import java.util.concurrent.ConcurrentHashMap
@@ -153,6 +157,20 @@ class AdGuardVpnService : VpnService() {
                 addDataScheme("package")
             },
         )
+        // The service outlives the Activity: follow language changes so the
+        // channel and foreground notification do not keep the old wording.
+        serviceScope.launch {
+            container.repository.settings
+                .map { it.appLanguage }
+                .distinctUntilChanged()
+                .drop(1)
+                .collect {
+                    if (isRunning) {
+                        createNotificationChannel()
+                        promoteToForeground(NOTIFICATION_ID, buildStatusNotification())
+                    }
+                }
+        }
         val request = NetworkRequest.Builder()
             .addCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
             .addCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED)
@@ -217,7 +235,7 @@ class AdGuardVpnService : VpnService() {
             .ifBlank { "94.140.14.14" }
 
         val builder = Builder()
-            .setSession(getString(R.string.vpn_session_name))
+            .setSession(localizedContext().getString(R.string.vpn_session_name))
             .addAddress(TUN_ADDRESS, TUN_PREFIX)
             .addDnsServer(tunnelDns)
             .addRoute(ROUTE_IPV4, ROUTE_PREFIX)
@@ -341,29 +359,39 @@ class AdGuardVpnService : VpnService() {
         container.coreEngine.markScreenOn()
     }
 
+    /**
+     * A service outlives the Activity, so it has to resolve its own wording
+     * instead of inheriting the Activity's per-app locale.
+     */
+    private fun localizedContext(): Context =
+        Localization.wrap(this, container.repository.settings.value.appLanguage)
+
     private fun createNotificationChannel() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            val ui = localizedContext()
             val channel = NotificationChannel(
                 NOTIFICATION_CHANNEL_ID,
-                getString(R.string.vpn_channel_name),
+                ui.getString(R.string.vpn_channel_name),
                 NotificationManager.IMPORTANCE_LOW,
             ).apply {
-                description = getString(R.string.vpn_channel_description)
+                description = ui.getString(R.string.vpn_channel_description)
                 setShowBadge(false)
             }
             getSystemService(NotificationManager::class.java)?.createNotificationChannel(channel)
         }
     }
 
-    private fun buildStatusNotification(): Notification =
-        NotificationCompat.Builder(this, NOTIFICATION_CHANNEL_ID)
-            .setContentTitle(getString(R.string.vpn_notification_title))
-            .setContentText(getString(R.string.vpn_notification_text))
+    private fun buildStatusNotification(): Notification {
+        val ui = localizedContext()
+        return NotificationCompat.Builder(this, NOTIFICATION_CHANNEL_ID)
+            .setContentTitle(ui.getString(R.string.vpn_notification_title))
+            .setContentText(ui.getString(R.string.vpn_notification_text))
             .setSmallIcon(android.R.drawable.stat_sys_download)
             .setOngoing(true)
             .setPriority(NotificationCompat.PRIORITY_LOW)
             .setCategory(NotificationCompat.CATEGORY_SERVICE)
             .build()
+    }
 
     companion object {
         const val ACTION_START_VPN = "com.adfree.START_VPN"

@@ -612,7 +612,11 @@
     <string name="log_category_custom">Quy tắc tuỳ chỉnh</string>
 
     <!-- Settings -->
-    <string name="settings_subtitle">Ghi log, lọc thông minh, tàng hình và sao lưu</string>
+    <string name="settings_subtitle">Ngôn ngữ, ghi log, lọc thông minh, tàng hình và sao lưu</string>
+    <string name="settings_language_title">Ngôn ngữ ứng dụng</string>
+    <string name="settings_language_system">Theo hệ thống</string>
+    <string name="settings_language_english">English</string>
+    <string name="settings_language_vietnamese">Tiếng Việt</string>
     <string name="settings_log_allowed_title">Ghi log cả request hợp lệ</string>
     <string name="settings_log_allowed_subtitle">Tắt để tiết kiệm CPU: chỉ ghi lại những gì bị chặn</string>
     <string name="settings_smart_filtering_title">Lọc thông minh</string>

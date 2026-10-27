@@ -69,6 +69,7 @@ import androidx.compose.ui.unit.sp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LifecycleEventEffect
 import git.shin.adfree.core.MitmStatus
+import git.shin.adfree.model.AppLanguage
 import git.shin.adfree.model.DnsBlockMode
 import git.shin.adfree.model.DnsProvider
 import git.shin.adfree.model.ProtectionSettings
@@ -148,6 +149,13 @@ fun SettingsScreen(
                 .padding(horizontal = 16.dp)
         ) {
         Spacer(modifier = Modifier.height(8.dp))
+
+            LanguageSection(
+                selected = state.settings.appLanguage,
+                onSelect = { viewModel.onIntent(AdGuardIntent.SetAppLanguage(it)) },
+            )
+
+            Spacer(modifier = Modifier.height(18.dp))
 
             SettingsSwitch(
                 icon = Icons.Default.Visibility,
@@ -325,6 +333,49 @@ private fun blockModeLabel(mode: DnsBlockMode): String = stringResource(
         DnsBlockMode.NXDOMAIN -> R.string.settings_block_mode_nxdomain
         DnsBlockMode.ZERO_IP -> R.string.settings_block_mode_zero
         DnsBlockMode.REFUSED -> R.string.settings_block_mode_refused
+    }
+)
+
+/** In-app language; AppCompat recreates the activity when the choice changes. */
+@Composable
+private fun LanguageSection(
+    selected: AppLanguage,
+    onSelect: (AppLanguage) -> Unit,
+) {
+    Text(
+        text = stringResource(R.string.settings_language_title),
+        fontSize = 12.sp,
+        fontWeight = FontWeight.Bold,
+        color = AdGuardTextSecondary,
+        modifier = Modifier.padding(bottom = 6.dp),
+    )
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .horizontalScroll(rememberScrollState())
+            .testTag("settings_language_chips"),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        AppLanguage.entries.forEach { language ->
+            FilterChip(
+                selected = selected == language,
+                onClick = { onSelect(language) },
+                label = { Text(appLanguageLabel(language), fontSize = 11.sp) },
+                colors = FilterChipDefaults.filterChipColors(
+                    selectedContainerColor = AdGuardGreenPrimary,
+                    selectedLabelColor = AdGuardOnAccent,
+                ),
+            )
+        }
+    }
+}
+
+@Composable
+private fun appLanguageLabel(language: AppLanguage): String = stringResource(
+    when (language) {
+        AppLanguage.SYSTEM -> R.string.settings_language_system
+        AppLanguage.ENGLISH -> R.string.settings_language_english
+        AppLanguage.VIETNAMESE -> R.string.settings_language_vietnamese
     }
 )
 

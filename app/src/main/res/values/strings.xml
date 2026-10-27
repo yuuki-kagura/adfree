@@ -612,7 +612,11 @@
     <string name="log_category_custom">Custom rule</string>
 
     <!-- Settings -->
-    <string name="settings_subtitle">Logging, smart filtering, stealth and backups</string>
+    <string name="settings_subtitle">Language, logging, smart filtering, stealth and backups</string>
+    <string name="settings_language_title">App language</string>
+    <string name="settings_language_system">System default</string>
+    <string name="settings_language_english">English</string>
+    <string name="settings_language_vietnamese">Tiếng Việt</string>
     <string name="settings_log_allowed_title">Log allowed requests too</string>
     <string name="settings_log_allowed_subtitle">Turn off to save CPU: only blocked requests are recorded</string>
     <string name="settings_smart_filtering_title">Smart filtering</string>
