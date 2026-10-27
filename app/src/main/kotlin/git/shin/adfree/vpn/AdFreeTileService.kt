@@ -34,6 +34,13 @@ class AdFreeTileService : TileService() {
     private fun toggle() {
         val controller = container.vpnController
         if (controller.isVpnActive.value) {
+            // A paused tunnel is still up: tapping resumes filtering instead
+            // of tearing the VPN down.
+            if (controller.isPaused()) {
+                controller.setPaused(false)
+                updateTile()
+                return
+            }
             container.repository.toggleProtection(false)
             controller.stopVpnService()
             updateTile()
@@ -50,13 +57,20 @@ class AdFreeTileService : TileService() {
 
     private fun updateTile() {
         val tile = qsTile ?: return
-        val active = container.vpnController.isVpnActive.value
+        val state = vpnUiState(
+            active = container.vpnController.isVpnActive.value,
+            paused = container.vpnController.isPaused(),
+        )
         val ui = Localization.wrap(this, container.repository.settings.value.appLanguage)
-        tile.state = if (active) Tile.STATE_ACTIVE else Tile.STATE_INACTIVE
+        tile.state = if (state == VpnUiState.OFF) Tile.STATE_INACTIVE else Tile.STATE_ACTIVE
         tile.label = ui.getString(R.string.app_name)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             tile.subtitle = ui.getString(
-                if (active) R.string.tile_state_on else R.string.tile_state_off,
+                when (state) {
+                    VpnUiState.OFF -> R.string.tile_state_off
+                    VpnUiState.ON -> R.string.tile_state_on
+                    VpnUiState.PAUSED -> R.string.tile_state_paused
+                },
             )
         }
         tile.updateTile()

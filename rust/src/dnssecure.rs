@@ -34,8 +34,14 @@ use crate::state::model::{DnsProbeError, DnsProtocol};
 const BOOTSTRAP_V4: Ipv4Addr = Ipv4Addr::new(94, 140, 14, 14);
 const BOOTSTRAP_V6: std::net::Ipv6Addr =
     std::net::Ipv6Addr::new(0x2606, 0x4700, 0x4700, 0, 0, 0, 0, 0x1111);
-const CONNECT_TIMEOUT_MS: i32 = 4_000;
 const IO_TIMEOUT: Duration = Duration::from_secs(5);
+/// Total time one query may spend across attempts. Past this the client gets
+/// SERVFAIL and its own retry policy takes over — a resolver that is down must
+/// not hold the pending slot for long.
+const QUERY_BUDGET: Duration = Duration::from_secs(12);
+/// One retry after a transport failure (connect or timeout). TLS and response
+/// errors are deterministic, so repeating them only wastes the budget.
+const MAX_ATTEMPTS: usize = 2;
 const BOOTSTRAP_TIMEOUT: Duration = Duration::from_millis(2_500);
 const MAX_HEADER_LINE: usize = 8 * 1024;
 const MAX_RESPONSE: usize = 65_535;
@@ -274,33 +280,49 @@ pub fn exchange_with(
     if message.len() < 12 || message.len() > MAX_RESPONSE {
         return Err(SecureError::Response("bad query size".into()));
     }
+    let deadline = std::time::Instant::now() + QUERY_BUDGET;
     let name = server_name(&resolver.host)?;
     let addresses = resolve(&resolver.host, resolver.port, protector)?;
     let mut last = SecureError::Connect("no address".into());
-    for address in addresses {
-        let stream = match connect(address, protector) {
-            Ok(stream) => stream,
-            Err(error) => {
-                last = error;
-                continue;
+    for attempt in 0..MAX_ATTEMPTS {
+        for address in &addresses {
+            let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+            if remaining.is_zero() {
+                return Err(SecureError::Timeout);
             }
-        };
-        let connection = ClientConnection::new(config.clone(), name.clone())
-            .map_err(|error| SecureError::Tls(error.to_string()))?;
-        let mut tls = StreamOwned::new(connection, stream);
-        let outcome = match resolver.protocol {
-            DnsProtocol::Doh => doh_exchange(&mut tls, resolver, message),
-            _ => dot_exchange(&mut tls, message),
-        };
-        match outcome {
-            Ok(answer) => {
-                if answer.len() < 12 || answer[0] != message[0] || answer[1] != message[1] {
-                    last = SecureError::Response("transaction id mismatch".into());
+            let stream = match connect(*address, protector, remaining) {
+                Ok(stream) => stream,
+                Err(error) => {
+                    last = error;
                     continue;
                 }
-                return Ok(answer);
+            };
+            let connection = ClientConnection::new(config.clone(), name.clone())
+                .map_err(|error| SecureError::Tls(error.to_string()))?;
+            let mut tls = StreamOwned::new(connection, stream);
+            let outcome = match resolver.protocol {
+                DnsProtocol::Doh => doh_exchange(&mut tls, resolver, message),
+                _ => dot_exchange(&mut tls, message),
+            };
+            match outcome {
+                Ok(answer) => {
+                    if answer.len() < 12 || answer[0] != message[0] || answer[1] != message[1] {
+                        last = SecureError::Response("transaction id mismatch".into());
+                        continue;
+                    }
+                    return Ok(answer);
+                }
+                Err(error) => last = error,
             }
-            Err(error) => last = error,
+        }
+        if !matches!(last, SecureError::Timeout | SecureError::Connect(_)) {
+            break;
+        }
+        if attempt + 1 < MAX_ATTEMPTS {
+            crate::logbuf::push(&format!(
+                "dns: {} retrying after {last:?}",
+                resolver.label()
+            ));
         }
     }
     Err(last)
@@ -470,6 +492,7 @@ fn read_bootstrap(socket: &UdpSocket, query: &[u8]) -> Result<Vec<IpAddr>, Secur
 fn connect(
     address: SocketAddr,
     protector: Option<&dyn SocketProtector>,
+    timeout: Duration,
 ) -> Result<TcpStream, SecureError> {
     let (family, storage, length) = sockaddr(address);
     let fd = unsafe { libc::socket(family, libc::SOCK_STREAM | libc::SOCK_CLOEXEC, 0) };
@@ -499,7 +522,13 @@ fn connect(
             events: libc::POLLOUT,
             revents: 0,
         };
-        let ready = unsafe { libc::poll(&mut pfd, 1, CONNECT_TIMEOUT_MS) };
+        let ready = unsafe {
+            libc::poll(
+                &mut pfd,
+                1,
+                timeout.as_millis().clamp(1, i32::MAX as u128) as i32,
+            )
+        };
         if ready <= 0 {
             unsafe { libc::close(fd) };
             return Err(SecureError::Timeout);
@@ -531,10 +560,10 @@ fn connect(
 
     let stream = unsafe { TcpStream::from_raw_fd(fd) };
     stream
-        .set_read_timeout(Some(IO_TIMEOUT))
+        .set_read_timeout(Some(timeout))
         .map_err(|error| SecureError::Connect(error.to_string()))?;
     stream
-        .set_write_timeout(Some(IO_TIMEOUT))
+        .set_write_timeout(Some(timeout))
         .map_err(|error| SecureError::Connect(error.to_string()))?;
     Ok(stream)
 }

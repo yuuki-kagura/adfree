@@ -1,0 +1,32 @@
+package git.shin.adfree.vpn
+
+/**
+ * What the notification and the Quick Settings tile show. Pause is a runtime
+ * state only: the persisted protection switch stays on, the tunnel stays up,
+ * and the next process resumes filtering.
+ */
+enum class VpnUiState { OFF, ON, PAUSED }
+
+fun vpnUiState(active: Boolean, paused: Boolean): VpnUiState = when {
+    !active -> VpnUiState.OFF
+    paused -> VpnUiState.PAUSED
+    else -> VpnUiState.ON
+}
+
+/**
+ * Broadcasts the VPN service understands. The constants live outside the
+ * service so JVM tests can assert them without loading an Android class.
+ */
+object VpnActions {
+    const val START = "com.adfree.START_VPN"
+    const val STOP = "com.adfree.STOP_VPN"
+    const val PAUSE = "com.adfree.PAUSE_VPN"
+    const val RESUME = "com.adfree.RESUME_VPN"
+
+    /** Stop from the notification: the stored protection switch goes off. */
+    const val DISABLE = "com.adfree.DISABLE_PROTECTION"
+}
+
+/** The pause/resume button the notification shows for [paused]. */
+fun vpnToggleAction(paused: Boolean): String =
+    if (paused) VpnActions.RESUME else VpnActions.PAUSE

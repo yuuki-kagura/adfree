@@ -499,6 +499,22 @@ pub fn core_apply_config(private_dns_strict: bool) -> crate::state::model::Confi
     )
 }
 
+/// Pauses or resumes filtering while the tunnel keeps running. Transient:
+/// the persisted protection record is untouched, and a process restart
+/// resumes filtering.
+#[uniffi::export]
+pub fn core_set_protection_paused(paused: bool) -> bool {
+    guard(false, || {
+        crate::core().set_paused(paused);
+        true
+    })
+}
+
+#[uniffi::export]
+pub fn core_is_protection_paused() -> bool {
+    guard(false, || crate::core().is_paused())
+}
+
 /// What `VpnService.Builder.addDnsServer` should use. Safe to call before the
 /// store is open: it answers with the built-in default.
 #[uniffi::export]

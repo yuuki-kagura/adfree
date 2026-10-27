@@ -40,6 +40,11 @@ pub struct Plan {
 const DEFAULT_IP: Ipv4Addr = Ipv4Addr::new(94, 140, 14, 14);
 const DEFAULT_PORT: u16 = 53;
 
+/// DNS server advertised inside the tunnel when the upstream is encrypted.
+/// The engine intercepts every UDP query on port 53, so this address never
+/// needs a listener of its own; it only has to be routable through the TUN.
+const TUNNEL_DNS: &str = "10.111.222.1";
+
 fn default_upstream() -> SocketAddr {
     SocketAddr::new(IpAddr::V4(DEFAULT_IP), DEFAULT_PORT)
 }
@@ -197,7 +202,7 @@ fn upstream(
                 Some(resolver) => (
                     default_upstream(),
                     Some(resolver),
-                    DEFAULT_IP.to_string(),
+                    TUNNEL_DNS.to_string(),
                     ConfigWarning::None,
                 ),
                 None => {
@@ -317,6 +322,26 @@ mod tests {
         assert_eq!(plan.resolver.tunnel_dns, "94.140.14.14");
         assert!(plan.config.dns_protection);
         assert!(!plan.config.mitm_enabled);
+    }
+
+    #[test]
+    fn encrypted_upstreams_advertise_the_tunnel_address() {
+        let mut s = snapshot();
+        s.dns.providers.push(DnsProviderRecord {
+            id: "doh_test".to_string(),
+            name: "DoH".to_string(),
+            address: "https://dns.example/dns-query".to_string(),
+            port: 443,
+            protocol: DnsProtocol::Doh,
+            description: String::new(),
+            description_key: String::new(),
+            is_custom: true,
+        });
+        s.protection.selected_dns_provider_id = "doh_test".to_string();
+        let plan = build(&s, false);
+        assert!(plan.secure.is_some());
+        assert_eq!(plan.resolver.tunnel_dns, "10.111.222.1");
+        assert_eq!(resolver_snapshot(&s).tunnel_dns, "10.111.222.1");
     }
 
     #[test]
@@ -468,8 +493,9 @@ mod tests {
         assert_eq!(secure.protocol, DnsProtocol::Dot);
         assert_eq!(secure.host, "dns.example");
         assert_eq!(secure.port, 853);
-        // The tunnel still needs an IP: apps inside it speak plain DNS.
-        assert_eq!(dot.resolver.tunnel_dns, "94.140.14.14");
+        // The tunnel still needs an IP: apps inside it speak plain DNS, and
+        // the engine answers this reserved one.
+        assert_eq!(dot.resolver.tunnel_dns, "10.111.222.1");
 
         s.protection.selected_dns_provider_id = "doh".to_string();
         let doh = build(&s, false);

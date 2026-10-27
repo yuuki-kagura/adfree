@@ -1941,6 +1941,7 @@ impl ProxySession {
         // `$hls`).
         if self.script_src.is_empty()
             && self.cosmetic.is_none()
+            && !self.stealth.blocks_web_rtc()
             && !self.head_requests.iter().any(|req| {
                 req.headers.is_some()
                     || req.cookies.is_some()
@@ -2068,10 +2069,13 @@ impl ProxySession {
                         http::Encoding::Identity | http::Encoding::Gzip | http::Encoding::Deflate
                     );
                     let editable = decodable && framing.is_some() && !req.info.http10;
-                    // Injection has something to do only when the page runtime
-                    // or the cosmetic rules are in play; a connection that is
-                    // here for header edits alone must not hold bodies back.
-                    let can_inject = !self.script_src.is_empty() || self.cosmetic.is_some();
+                    // Injection has something to do only when the page runtime,
+                    // the cosmetic rules or the WebRTC guard are in play; a
+                    // connection that is here for header edits alone must not
+                    // hold bodies back.
+                    let can_inject = !self.script_src.is_empty()
+                        || self.cosmetic.is_some()
+                        || self.stealth.blocks_web_rtc();
                     let html_edit = can_inject && info.html && renderable && editable;
                     // `$replace`, `$jsonprune` and `$hls` only ever look at
                     // text bodies: media, images and downloads travel
@@ -2709,6 +2713,19 @@ impl ProxySession {
                     http::script_tag(&local_asset(&runtime), false, nonce).as_bytes(),
                 );
             }
+        }
+        if self.stealth.blocks_web_rtc() {
+            // Inline rather than served: the guard is tiny and has to run
+            // before the page's own scripts. The nonce keeps a strict
+            // `script-src` from dropping it.
+            out.extend_from_slice(
+                format!(
+                    "<script{}>{}</script>",
+                    http::nonce_attr(nonce),
+                    crate::mitm::stealth::WEBRTC_GUARD
+                )
+                .as_bytes(),
+            );
         }
         if !self.script_src.is_empty() {
             // Not deferred: `@run-at document-start` only means anything if

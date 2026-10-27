@@ -27,7 +27,9 @@ Hiện trạng trước khi làm:
 Việc cần làm:
 
 1. `StealthConfig` trong Rust + map từ `ProtectionState` sang `Config`.
-2. WebRTC: chặn STUN/TURN ở tầng packet (UDP + TCP).
+2. WebRTC: chặn STUN/TURN ở tầng packet (UDP + TCP) và chèn scriptlet
+   `WEBRTC_GUARD` vào trang HTML khi HTTPS filtering bật — scriptlet bỏ các
+   `a=candidate:… typ host` khỏi SDP và sự kiện `icecandidate`.
 3. UTM: bỏ tham số tracking khỏi request HTTPS khi MITM bật.
 4. Cookie bên thứ ba: bỏ `Cookie` của request cross-site và `Set-Cookie` của
    response tương ứng.
@@ -43,7 +45,11 @@ Việc cần làm:
 
 - **DoT/DoH** (`rust/src/dnssecure.rs`): TCP mở qua socket protector, ALPN
   `dot` hoặc `http/1.1`, DoH POST tối giản. Resolver dạng hostname lấy địa chỉ
-  qua UDP bootstrap được bảo vệ, cache địa chỉ 10 phút.
+  qua UDP bootstrap được bảo vệ, cache địa chỉ 10 phút. Hai worker mã hoá; mỗi
+  truy vấn có ngân sách 12 giây và **một lần thử lại** khi connect/timeout
+  (lỗi TLS/chứng chỉ không thử lại).
+- **Tunnel DNS**: khi upstream là DoT/DoH, `tunnel_dns` trả `10.111.222.1`
+  (engine bắt mọi truy vấn UDP:53 nên địa chỉ này không cần listener riêng).
 - **Rewrites**: chạy trước filter list; luật A chỉ trả A, AAAA chỉ trả AAAA;
   exact thắng wildcard. Hostname được Rust validate chặt
   (`DnsRewriteValidation`), UI chỉ map mã lỗi sang chuỗi.
@@ -57,6 +63,9 @@ Giới hạn:
 
 - DoH mới hỗ trợ HTTP/1.1; endpoint chỉ có HTTP/2 (ví dụ Quad9) báo
   `Unsupported`.
+- Mỗi truy vấn mở kết nối TLS mới (`Connection: close`); chưa tái dùng
+  connection có idle timeout như plan — đổi lại là đơn giản và tránh tranh
+  chấp transaction id giữa các worker.
 - Chưa kiểm tra trên thiết bị vì không có emulator/adb; đã chạy 676 test Rust,
   unit test Kotlin, `lintDebug` và `assembleDebug`.
 
@@ -68,15 +77,20 @@ Giới hạn:
   (WorkManager) với ràng buộc có mạng và pin không yếu; đổi khoảng thời gian
   hoặc tắt tự cập nhật sẽ đồng bộ lại lịch. Worker chỉ tải list đã quá hạn,
   dùng chung đường tải với foreground và trả về số list đã làm mới.
-- **Thông báo**: thông báo bảo vệ có content intent mở app và action "Tạm
-  dừng" (lưu trạng thái tắt, khác với stop khi khởi động lại tunnel). Khi
-  worker làm mới được ít nhất một list, nó đăng một thông báo ưu tiên thấp
+- **Thông báo**: thông báo bảo vệ có content intent mở app và hai action.
+  "Tạm dừng"/"Tiếp tục" là **pause tạm thời** (`core_set_protection_paused`,
+  không ghi state), tunnel vẫn chạy và bộ lọc tắt cho tới khi resume hoặc
+  tiến trình chết; "Dừng" ghi `isProtectionActive = false` rồi tắt tunnel.
+  Khi worker làm mới được ít nhất một list, nó đăng một thông báo ưu tiên thấp
   mở thẳng tab Filters.
-- **Quick Settings tile**: bật/tắt tunnel ngay từ khay; nếu chưa có consent
-  VPN thì mở `MainActivity` với `ACTION_ENABLE_PROTECTION` để hệ thống hỏi.
+- **Quick Settings tile**: bật/tắt tunnel ngay từ khay; tile hiển thị trạng
+  thái "đã tạm dừng" và chạm để resume; nếu chưa có consent VPN thì mở
+  `MainActivity` với `ACTION_ENABLE_PROTECTION` để hệ thống hỏi.
 - **Tự khởi động**: công tắc trong Settings, `BootReceiver` nhận
-  `BOOT_COMPLETED`/`MY_PACKAGE_REPLACED` và chỉ bật lại khi người dùng đã bật
-  `autoStart` và bảo vệ đang bật trước đó.
+  `BOOT_COMPLETED`/`MY_PACKAGE_REPLACED` và cả `QUICKBOOT_POWERON` (AOSP/HTC)
+  khi người dùng đã bật `autoStart` và bảo vệ đang bật trước đó. Nếu Android
+  12+ từ chối `startForegroundService` từ nền, app đăng thông báo
+  "chạm để mở app" thay vì thất bại im lặng.
 - **Quyền thông báo**: Android 13+ hỏi `POST_NOTIFICATIONS` một lần, có lưu
   cờ để không hỏi lại.
 

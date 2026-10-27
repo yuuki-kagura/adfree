@@ -190,9 +190,18 @@ class AdGuardVpnService : VpnService() {
                 return START_NOT_STICKY
             }
             ACTION_PAUSE_VPN -> {
-                // Pause comes from the notification, so it has to survive a
-                // restart. ACTION_STOP_VPN is only used while reconfiguring
-                // the tunnel, where the remembered state must stay "on".
+                // Pause is transient: the tunnel and the persisted protection
+                // switch stay as they are, only the filtering gates close.
+                setPaused(true)
+                return START_STICKY
+            }
+            ACTION_RESUME_VPN -> {
+                setPaused(false)
+                return START_STICKY
+            }
+            ACTION_DISABLE_PROTECTION -> {
+                // The notification's stop button: the user is done, so the
+                // remembered state has to say so.
                 container.repository.toggleProtection(false)
                 stopVpn()
                 return START_NOT_STICKY
@@ -204,6 +213,9 @@ class AdGuardVpnService : VpnService() {
 
     private fun startVpn() {
         if (isRunning) return
+        // A fresh tunnel always starts filtering: pause is a runtime state of
+        // one session, never a persisted preference.
+        container.coreEngine.setProtectionPaused(false)
         // `isRunning` only turns true once `establish()` returns, so two starts
         // in quick succession (the launcher plus an explicit ACTION_START_VPN)
         // would both get past it and race: two `establish()` calls, and two
@@ -395,6 +407,7 @@ class AdGuardVpnService : VpnService() {
 
     private fun buildStatusNotification(): Notification {
         val ui = localizedContext()
+        val paused = container.coreEngine.isProtectionPaused()
         val open = PendingIntent.getActivity(
             this,
             0,
@@ -405,23 +418,49 @@ class AdGuardVpnService : VpnService() {
             },
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
         )
-        val pause = PendingIntent.getService(
+        val toggle = PendingIntent.getService(
             this,
             1,
             Intent(this, AdGuardVpnService::class.java).apply {
-                action = ACTION_PAUSE_VPN
+                action = vpnToggleAction(paused)
+            },
+            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
+        )
+        val stop = PendingIntent.getService(
+            this,
+            2,
+            Intent(this, AdGuardVpnService::class.java).apply {
+                action = ACTION_DISABLE_PROTECTION
             },
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
         )
         return NotificationCompat.Builder(this, NOTIFICATION_CHANNEL_ID)
-            .setContentTitle(ui.getString(R.string.vpn_notification_title))
-            .setContentText(ui.getString(R.string.vpn_notification_text))
+            .setContentTitle(
+                ui.getString(
+                    if (paused) R.string.vpn_notification_paused_title
+                    else R.string.vpn_notification_title,
+                ),
+            )
+            .setContentText(
+                ui.getString(
+                    if (paused) R.string.vpn_notification_paused_text
+                    else R.string.vpn_notification_text,
+                ),
+            )
             .setSmallIcon(R.drawable.ic_qs_shield)
             .setContentIntent(open)
             .addAction(
                 R.drawable.ic_qs_shield,
-                ui.getString(R.string.vpn_notification_pause),
-                pause,
+                ui.getString(
+                    if (paused) R.string.vpn_notification_resume
+                    else R.string.vpn_notification_pause,
+                ),
+                toggle,
+            )
+            .addAction(
+                R.drawable.ic_qs_shield,
+                ui.getString(R.string.vpn_notification_stop),
+                stop,
             )
             .setOngoing(true)
             .setPriority(NotificationCompat.PRIORITY_LOW)
@@ -429,17 +468,28 @@ class AdGuardVpnService : VpnService() {
             .build()
     }
 
+    /** Applies the transient pause and redraws the foreground notification. */
+    private fun setPaused(paused: Boolean) {
+        container.coreEngine.setProtectionPaused(paused)
+        if (isRunning || establishing.get()) {
+            promoteToForeground(NOTIFICATION_ID, buildStatusNotification())
+        }
+        container.vpnController.onPauseChanged()
+    }
+
     companion object {
-        const val ACTION_START_VPN = "com.adfree.START_VPN"
-        const val ACTION_STOP_VPN = "com.adfree.STOP_VPN"
-        const val ACTION_PAUSE_VPN = "com.adfree.PAUSE_VPN"
+        const val ACTION_START_VPN = VpnActions.START
+        const val ACTION_STOP_VPN = VpnActions.STOP
+        const val ACTION_PAUSE_VPN = VpnActions.PAUSE
+        const val ACTION_RESUME_VPN = VpnActions.RESUME
+        const val ACTION_DISABLE_PROTECTION = VpnActions.DISABLE
         private const val TAG = "AdGuardVpnService"
         /** adbd's package: kept out of the tunnel so tooling survives. */
         private const val SHELL_PACKAGE = "com.android.shell"
 
         /** See [onStartCommand]: presence means "capture the shell too". */
         private const val CAPTURE_SHELL_MARKER = "capture-shell"
-        private const val NOTIFICATION_CHANNEL_ID = "adfree_status"
+        const val NOTIFICATION_CHANNEL_ID = "adfree_status"
         private const val NOTIFICATION_ID = 1001
         private const val TUN_ADDRESS = "10.111.42.1"
         private const val TUN_PREFIX = 32

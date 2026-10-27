@@ -767,6 +767,8 @@ internal object IntegrityCheckingUniffiLib {
     ): Int
     external fun uniffi_adfree_core_checksum_func_core_install_root_ca(
     ): Int
+    external fun uniffi_adfree_core_checksum_func_core_is_protection_paused(
+    ): Int
     external fun uniffi_adfree_core_checksum_func_core_is_running(
     ): Int
     external fun uniffi_adfree_core_checksum_func_core_log_clear(
@@ -818,6 +820,8 @@ internal object IntegrityCheckingUniffiLib {
     external fun uniffi_adfree_core_checksum_func_core_set_lists_async(
     ): Int
     external fun uniffi_adfree_core_checksum_func_core_set_network_type(
+    ): Int
+    external fun uniffi_adfree_core_checksum_func_core_set_protection_paused(
     ): Int
     external fun uniffi_adfree_core_checksum_func_core_set_screen_off(
     ): Int
@@ -937,6 +941,8 @@ internal object UniffiLib {
     ): Int
     external fun uniffi_adfree_core_fn_func_core_install_root_ca(uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
+    external fun uniffi_adfree_core_fn_func_core_is_protection_paused(uniffi_out_err: UniffiRustCallStatus, 
+    ): Byte
     external fun uniffi_adfree_core_fn_func_core_is_running(uniffi_out_err: UniffiRustCallStatus, 
     ): Byte
     external fun uniffi_adfree_core_fn_func_core_log_clear(uniffi_out_err: UniffiRustCallStatus, 
@@ -989,6 +995,8 @@ internal object UniffiLib {
     ): Byte
     external fun uniffi_adfree_core_fn_func_core_set_network_type(`kind`: Byte,uniffi_out_err: UniffiRustCallStatus, 
     ): Unit
+    external fun uniffi_adfree_core_fn_func_core_set_protection_paused(`paused`: Byte,uniffi_out_err: UniffiRustCallStatus, 
+    ): Byte
     external fun uniffi_adfree_core_fn_func_core_set_screen_off(`screenOff`: Byte,uniffi_out_err: UniffiRustCallStatus, 
     ): Unit
     external fun uniffi_adfree_core_fn_func_core_set_scripts(`scripts`: RustBuffer.ByValue,`enabled`: Byte,uniffi_out_err: UniffiRustCallStatus, 
@@ -1208,6 +1216,9 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
     if ((lib.uniffi_adfree_core_checksum_func_core_install_root_ca() and 0xFFFF) != 37100) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
+    if ((lib.uniffi_adfree_core_checksum_func_core_is_protection_paused() and 0xFFFF) != 39068) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
     if ((lib.uniffi_adfree_core_checksum_func_core_is_running() and 0xFFFF) != 16453) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
@@ -1284,6 +1295,9 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if ((lib.uniffi_adfree_core_checksum_func_core_set_network_type() and 0xFFFF) != 22213) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if ((lib.uniffi_adfree_core_checksum_func_core_set_protection_paused() and 0xFFFF) != 43855) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if ((lib.uniffi_adfree_core_checksum_func_core_set_screen_off() and 0xFFFF) != 60122) {
@@ -5519,6 +5533,16 @@ public object FfiConverterSequenceTypeUidApps: FfiConverterRustBuffer<List<UidAp
     )
     }
     
+ fun `coreIsProtectionPaused`(): kotlin.Boolean {
+            return FfiConverterBoolean.lift(
+    uniffiRustCall() { _status ->
+    UniffiLib.uniffi_adfree_core_fn_func_core_is_protection_paused(
+    
+        _status)
+}
+    )
+    }
+    
  fun `coreIsRunning`(): kotlin.Boolean {
             return FfiConverterBoolean.lift(
     uniffiRustCall() { _status ->
@@ -5878,6 +5902,22 @@ public object FfiConverterSequenceTypeUidApps: FfiConverterRustBuffer<List<UidAp
         FfiConverterUByte.lower(`kind`),_status)
 }
     
+    
+
+        /**
+         * Pauses or resumes filtering while the tunnel keeps running. Transient:
+         * the persisted protection record is untouched, and a process restart
+         * resumes filtering.
+         */ fun `coreSetProtectionPaused`(`paused`: kotlin.Boolean): kotlin.Boolean {
+            return FfiConverterBoolean.lift(
+    uniffiRustCall() { _status ->
+    UniffiLib.uniffi_adfree_core_fn_func_core_set_protection_paused(
+    
+        
+        FfiConverterBoolean.lower(`paused`),_status)
+}
+    )
+    }
     
  fun `coreSetScreenOff`(`screenOff`: kotlin.Boolean)
         = 

@@ -14,6 +14,75 @@ use crate::filter::url_host;
 pub const DISGUISED_USER_AGENT: &str = "Mozilla/5.0 (Linux; Android 10; K) \
 AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36";
 
+/// The scriptlet injected into pages when WebRTC blocking is on.
+///
+/// Packet-level drops only stop STUN/TURN traffic; a page can still learn the
+/// device's private address from the `host` ICE candidates the browser puts in
+/// its own SDP. This guard removes those candidates before they reach the
+/// page, for both `setLocalDescription` and the `icecandidate` events.
+pub const WEBRTC_GUARD: &str = r#"
+(() => {
+  'use strict';
+  const RTC = window.RTCPeerConnection;
+  if (!RTC || !RTC.prototype) return;
+  const proto = RTC.prototype;
+  const isHost = (line) =>
+    typeof line === 'string' &&
+    line.indexOf('a=candidate:') === 0 &&
+    / typ host(\s|$)/.test(line);
+  const cleanSdp = (sdp) => {
+    if (typeof sdp !== 'string') return sdp;
+    const sep = sdp.indexOf('\r\n') >= 0 ? '\r\n' : '\n';
+    return sdp.split(/\r\n|\n/).filter((line) => !isHost(line)).join(sep);
+  };
+  const setLocal = proto.setLocalDescription;
+  if (setLocal) {
+    proto.setLocalDescription = function (description, ...rest) {
+      try {
+        if (description && typeof description === 'object' && typeof description.sdp === 'string') {
+          description = { ...description, sdp: cleanSdp(description.sdp) };
+        }
+      } catch { /* leave it alone */ }
+      return setLocal.call(this, description, ...rest);
+    };
+  }
+  const dropHost = (event) => {
+    try {
+      const candidate = event && event.candidate && event.candidate.candidate;
+      return isHost(candidate) || / typ host(\s|$)/.test(candidate || '');
+    } catch { return false; }
+  };
+  const add = proto.addEventListener;
+  if (add) {
+    proto.addEventListener = function (type, listener, ...rest) {
+      if (type === 'icecandidate' && typeof listener === 'function') {
+        const wrapped = function (event) {
+          if (dropHost(event)) return;
+          return listener.call(this, event);
+        };
+        return add.call(this, type, wrapped, ...rest);
+      }
+      return add.call(this, type, listener, ...rest);
+    };
+  }
+  const onIce = Object.getOwnPropertyDescriptor(proto, 'onicecandidate');
+  if (onIce && onIce.set && onIce.get) {
+    Object.defineProperty(proto, 'onicecandidate', {
+      configurable: true,
+      enumerable: onIce.enumerable,
+      get: onIce.get,
+      set: function (fn) {
+        if (typeof fn !== 'function') return onIce.set.call(this, fn);
+        return onIce.set.call(this, function (event) {
+          if (dropHost(event)) return;
+          return fn.call(this, event);
+        });
+      },
+    });
+  }
+})();
+"#;
+
 /// Query parameters whose only job is to name the campaign that sent a
 /// visitor. `utm_*` is matched by prefix; the rest are the one-off click ids
 /// the big ad networks add.
@@ -263,5 +332,13 @@ mod tests {
         assert!(is_webrtc_port(19302));
         assert!(!is_webrtc_port(443));
         assert!(!is_webrtc_port(53));
+    }
+
+    #[test]
+    fn the_webrtc_guard_covers_sdp_and_candidate_events() {
+        assert!(WEBRTC_GUARD.contains("setLocalDescription"));
+        assert!(WEBRTC_GUARD.contains("icecandidate"));
+        assert!(WEBRTC_GUARD.contains("onicecandidate"));
+        assert!(WEBRTC_GUARD.contains("typ host"));
     }
 }

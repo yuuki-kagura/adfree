@@ -21,11 +21,7 @@ class BootReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context?, intent: Intent?) {
         if (context == null) return
         val action = intent?.action ?: return
-        if (action != Intent.ACTION_BOOT_COMPLETED &&
-            action != Intent.ACTION_MY_PACKAGE_REPLACED
-        ) {
-            return
-        }
+        if (action !in BOOT_ACTIONS) return
         val app = context.applicationContext as? AdGuardApplication ?: return
         val container = app.container
         if (!shouldStartOnBoot(
@@ -41,5 +37,13 @@ class BootReceiver : BroadcastReceiver() {
 
     private companion object {
         const val TAG = "BootReceiver"
+
+        /** AOSP plus the vendor broadcasts some ROMs send instead of boot. */
+        val BOOT_ACTIONS = setOf(
+            Intent.ACTION_BOOT_COMPLETED,
+            Intent.ACTION_MY_PACKAGE_REPLACED,
+            "android.intent.action.QUICKBOOT_POWERON",
+            "com.htc.intent.action.QUICKBOOT_POWERON",
+        )
     }
 }

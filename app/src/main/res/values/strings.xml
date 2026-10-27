@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="app_name">AdFree</string>
+    <string name="app_name" translatable="false">AdFree</string>
 
     <!-- Core fallbacks (codes returned by the Rust engine) -->
     <string name="config_warning_provider_missing">The selected DNS server no longer exists; using AdGuard DNS.</string>
@@ -246,8 +246,15 @@
     <string name="vpn_notification_title">AdFree is protecting you</string>
     <string name="vpn_notification_text">Filtering ads and trackers at the DNS level</string>
     <string name="vpn_notification_pause">Pause</string>
+    <string name="vpn_notification_paused_title">Protection paused</string>
+    <string name="vpn_notification_paused_text">The VPN is on; ads and trackers are not filtered</string>
+    <string name="vpn_notification_resume">Resume</string>
+    <string name="vpn_notification_stop">Stop</string>
+    <string name="vpn_start_blocked_title">AdFree could not start</string>
+    <string name="vpn_start_blocked_text">Tap to open AdFree and restart protection</string>
     <string name="tile_state_on">Protection on</string>
     <string name="tile_state_off">Protection off</string>
+    <string name="tile_state_paused">Protection paused</string>
     <string name="notification_channel_updates">Filter updates</string>
     <string name="notification_channel_updates_description">Results of automatic filter refreshes</string>
     <string name="notification_filter_update_title">Filters updated</string>
@@ -750,9 +757,9 @@
     <string name="settings_dns_summary">%1$s · %2$s</string>
     <string name="settings_dns_test">Test</string>
     <string name="settings_dns_testing">Testing…</string>
-    <string name="dns_protocol_udp">UDP</string>
-    <string name="dns_protocol_dot">DoT</string>
-    <string name="dns_protocol_doh">DoH</string>
+    <string name="dns_protocol_udp" translatable="false">UDP</string>
+    <string name="dns_protocol_dot" translatable="false">DoT</string>
+    <string name="dns_protocol_doh" translatable="false">DoH</string>
     <string name="settings_dns_add">Add and select</string>
     <string name="settings_engine_title">Engine status</string>
     <string name="settings_engine_build">Filter compile: %1$d ms</string>

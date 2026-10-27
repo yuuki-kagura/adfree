@@ -21,14 +21,18 @@ object FilterUpdateScheduler {
     private const val UNIQUE_WORK = "adfree-filter-auto-update"
     private const val TAG = "filter-auto-update"
 
+    /** The unique work period, or null when background refresh is off. */
+    internal fun periodicHours(hours: Int): Long? = hours.takeIf { it > 0 }?.toLong()
+
     fun sync(context: Context, hours: Int) {
         val workManager = WorkManager.getInstance(context)
-        if (hours <= 0) {
+        val period = periodicHours(hours)
+        if (period == null) {
             workManager.cancelUniqueWork(UNIQUE_WORK)
             return
         }
         val request = PeriodicWorkRequestBuilder<FilterUpdateWorker>(
-            hours.toLong(),
+            period,
             TimeUnit.HOURS,
         )
             .setConstraints(

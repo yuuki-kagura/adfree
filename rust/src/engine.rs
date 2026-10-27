@@ -60,7 +60,7 @@ const FORWARD_WAIT_MS: i32 = 1_000;
 /// Parallel encrypted-DNS exchanges. A DoH query is a TLS handshake plus one
 /// request, so a single worker would serialize a page load; more than a
 /// handful only burns battery.
-const SECURE_DNS_WORKERS: usize = 3;
+const SECURE_DNS_WORKERS: usize = 2;
 
 /// Queries allowed in flight on an encrypted transport. Beyond this the
 /// client gets SERVFAIL, which its resolver can retry, instead of a queue
@@ -422,6 +422,11 @@ pub struct Core {
     /// kernel's own table in [`crate::uidmap`].
     uid_lookup: RwLock<Option<Arc<dyn crate::api::ConnectionUidLookup>>>,
     screen_off: AtomicBool,
+    /// Transient pause from the notification: the tunnel stays up and every
+    /// filtering module is off until the user resumes or the process ends.
+    /// Deliberately not persisted — "protection on" in the store is the user's
+    /// choice, which a pause must not overwrite.
+    paused: AtomicBool,
     running: AtomicBool,
     tun_fd: AtomicI32,
     tx_counter: AtomicU64,
@@ -565,6 +570,7 @@ impl Core {
             uid_apps: RwLock::new(FxHashMap::default()),
             uid_lookup: RwLock::new(None),
             screen_off: AtomicBool::new(false),
+            paused: AtomicBool::new(false),
             running: AtomicBool::new(false),
             tun_fd: AtomicI32::new(-1),
             tx_counter: AtomicU64::new(0),
@@ -696,9 +702,18 @@ impl Core {
             old.ad_blocking != cfg.ad_blocking || old.tracking_protection != cfg.tracking_protection
         };
         // The filter engine owns the hot-path copy so a module switch takes
-        // effect on the next packet without recompiling the lists.
-        self.filter
-            .set_module_flags(cfg.ad_blocking, cfg.tracking_protection, cfg.dns_protection);
+        // effect on the next packet without recompiling the lists. A transient
+        // pause wins over the persisted switches: `set_paused` restores them
+        // from this config when the user resumes.
+        if self.is_paused() {
+            self.filter.set_module_flags(false, false, false);
+        } else {
+            self.filter.set_module_flags(
+                cfg.ad_blocking,
+                cfg.tracking_protection,
+                cfg.dns_protection,
+            );
+        }
         self.smart.lock().unwrap().set_enabled(cfg.smart_filtering);
         *self.https_hosts.write().unwrap() = HttpsHosts {
             skip: Arc::new(crate::mitm::hosts::HostPatterns::new(
@@ -824,6 +839,33 @@ impl Core {
 
     pub fn is_screen_off(&self) -> bool {
         self.screen_off.load(Ordering::Relaxed)
+    }
+
+    /// Pauses or resumes filtering without tearing the tunnel down.
+    ///
+    /// Pausing is transient by design: the persisted protection record is the
+    /// user's choice and is never rewritten here. Every module gate reads the
+    /// flag, and the filter engine's module flags are switched with it, so the
+    /// next lookup is answered unfiltered instead of paying for a rebuild.
+    pub fn set_paused(&self, paused: bool) {
+        self.paused.store(paused, Ordering::Relaxed);
+        let (ads, tracking, dns) = {
+            let cfg = self.cfg.read().unwrap();
+            if paused {
+                (false, false, false)
+            } else {
+                (cfg.ad_blocking, cfg.tracking_protection, cfg.dns_protection)
+            }
+        };
+        self.filter.set_module_flags(ads, tracking, dns);
+        // A paused engine still forwards DNS and UDP: every worker sleeps on
+        // this fd, so nothing more is needed, but a wake keeps the UI's first
+        // stats tick from waiting out the idle poll.
+        self.wake();
+    }
+
+    pub fn is_paused(&self) -> bool {
+        self.paused.load(Ordering::Relaxed)
     }
 
     pub fn set_resolver(&self, addr: SocketAddr) {
@@ -1235,16 +1277,18 @@ impl Core {
         };
 
         let cfg = self.cfg.read().unwrap().clone();
+        let paused = self.is_paused();
         if pkt.proto == PROTO_UDP && pkt.dst_port == 53 {
             self.stats.inc(&self.stats.packets_dns);
             self.handle_dns(&pkt, &cfg, &mut out);
-        } else if pkt.proto == PROTO_UDP && pkt.dst_port == 443 && cfg.block_quic {
+        } else if pkt.proto == PROTO_UDP && pkt.dst_port == 443 && cfg.block_quic && !paused {
             // QUIC/HTTP3 cannot be filtered without breaking TLS; dropping it
             // sends the client back to TCP where we can see the host.
             self.stats.inc(&self.stats.quic_dropped);
-        } else if pkt.proto == PROTO_UDP && pkt.dst_port == 853 && cfg.block_dot {
+        } else if pkt.proto == PROTO_UDP && pkt.dst_port == 853 && cfg.block_dot && !paused {
             self.stats.inc(&self.stats.udp_dropped);
         } else if pkt.proto == PROTO_UDP
+            && !paused
             && cfg.stealth.blocks_web_rtc()
             && (crate::mitm::stealth::is_webrtc_port(pkt.dst_port)
                 || crate::mitm::stealth::is_stun_datagram(pkt.l4_payload()))
@@ -1961,6 +2005,9 @@ impl Core {
     }
 
     fn tcp_blocked(&self, pkt: &Packet<'_>, cfg: &Config) -> bool {
+        if self.is_paused() {
+            return false;
+        }
         let Some(dst) = pkt.dst_ip() else {
             return false;
         };
@@ -1991,6 +2038,9 @@ impl Core {
     }
 
     fn udp_blocked(&self, pkt: &Packet<'_>, cfg: &Config) -> bool {
+        if self.is_paused() {
+            return false;
+        }
         let Some(dst) = pkt.dst_ip() else {
             return false;
         };
@@ -2188,7 +2238,10 @@ impl Core {
             // a cold one forwards the filtered host and answers the client
             // when that reply lands.
             let mut forwarded = false;
-            if cfg.safe_search && matches!(query.qtype, dns::TYPE_A | dns::TYPE_AAAA) {
+            if cfg.safe_search
+                && !self.is_paused()
+                && matches!(query.qtype, dns::TYPE_A | dns::TYPE_AAAA)
+            {
                 if let Some(safe_host) = crate::safesearch::safe_host(host) {
                     let addresses = self.cached_safe_search(safe_host, now_ms());
                     if let Some(addresses) = addresses {
@@ -3027,7 +3080,7 @@ impl Core {
     /// DNS layer's deferral of `$redirect` hosts read the same gate, so a host
     /// is never let through on the promise of a filter that is not there.
     fn mitm_ready(&self, cfg: &Config) -> bool {
-        cfg.mitm_enabled && self.mitm_ca.read().unwrap().has_ca()
+        cfg.mitm_enabled && !self.is_paused() && self.mitm_ca.read().unwrap().has_ca()
     }
 
     /// Overrides the upstream trust anchors. The engine's end-to-end tests use
@@ -3904,6 +3957,30 @@ mod tests {
         let core = Core::new();
         assert!(core.handle_packet(&[]).is_empty());
         assert!(core.handle_packet(&[0u8; 5]).is_empty());
+    }
+
+    /// Pause is a runtime gate, not a settings edit: the persisted switches
+    /// stay on, the anti-bypass drops stop, and resuming restores both.
+    #[test]
+    fn pause_is_transient_and_stops_the_anti_bypass_drops() {
+        let core = Core::new();
+        core.set_config(Config::default());
+        assert!(!core.is_paused());
+
+        core.handle_packet(&udp_packet(50000, [142, 250, 185, 194], 443));
+        assert_eq!(core.stats().quic_dropped.load(Ordering::Relaxed), 1);
+
+        core.set_paused(true);
+        assert!(core.is_paused());
+        core.handle_packet(&udp_packet(50001, [142, 250, 185, 194], 443));
+        assert_eq!(core.stats().quic_dropped.load(Ordering::Relaxed), 1);
+        let cfg = core.config();
+        assert!(cfg.ad_blocking && cfg.tracking_protection && cfg.dns_protection);
+
+        core.set_paused(false);
+        assert!(!core.is_paused());
+        core.handle_packet(&udp_packet(50002, [142, 250, 185, 194], 443));
+        assert_eq!(core.stats().quic_dropped.load(Ordering::Relaxed), 2);
     }
 
     /// Minimal IPv4 TCP SYN; only the fields `Packet::parse` reads matter.

@@ -1,6 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="app_name">AdFree</string>
 
     <!-- Core fallbacks (codes returned by the Rust engine) -->
     <string name="config_warning_provider_missing">DNS đã chọn không còn tồn tại, đã dùng AdGuard DNS mặc định.</string>
@@ -246,8 +245,15 @@
     <string name="vpn_notification_title">AdFree đang bảo vệ</string>
     <string name="vpn_notification_text">Lọc quảng cáo &amp; tracker mức DNS</string>
     <string name="vpn_notification_pause">Tạm dừng</string>
+    <string name="vpn_notification_paused_title">Đã tạm dừng bảo vệ</string>
+    <string name="vpn_notification_paused_text">VPN vẫn bật; quảng cáo &amp; tracker chưa bị lọc</string>
+    <string name="vpn_notification_resume">Tiếp tục</string>
+    <string name="vpn_notification_stop">Dừng</string>
+    <string name="vpn_start_blocked_title">AdFree không thể khởi động</string>
+    <string name="vpn_start_blocked_text">Chạm để mở AdFree và bật lại bảo vệ</string>
     <string name="tile_state_on">Đang bảo vệ</string>
     <string name="tile_state_off">Đang tắt</string>
+    <string name="tile_state_paused">Đã tạm dừng bảo vệ</string>
     <string name="notification_channel_updates">Cập nhật bộ lọc</string>
     <string name="notification_channel_updates_description">Kết quả làm mới bộ lọc tự động</string>
     <string name="notification_filter_update_title">Đã cập nhật bộ lọc</string>
@@ -750,9 +756,6 @@
     <string name="settings_dns_summary">%1$s · %2$s</string>
     <string name="settings_dns_test">Kiểm tra</string>
     <string name="settings_dns_testing">Đang kiểm tra…</string>
-    <string name="dns_protocol_udp">UDP</string>
-    <string name="dns_protocol_dot">DoT</string>
-    <string name="dns_protocol_doh">DoH</string>
     <string name="settings_dns_add">Thêm và chọn</string>
     <string name="settings_engine_title">Trạng thái engine</string>
     <string name="settings_engine_build">Biên dịch bộ lọc: %1$d ms</string>

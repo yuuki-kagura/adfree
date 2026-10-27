@@ -117,6 +117,17 @@ class CoreEngine {
 
     fun setScreenOff(off: Boolean) = runCatching { git.shin.adfree.core.coreSetScreenOff(off) }
 
+    /**
+     * Pauses filtering without ending the tunnel. Transient: the persisted
+     * protection record is untouched and a process restart filters again.
+     */
+    fun setProtectionPaused(paused: Boolean) {
+        runCatching { git.shin.adfree.core.coreSetProtectionPaused(paused) }
+    }
+
+    fun isProtectionPaused(): Boolean =
+        runCatching { git.shin.adfree.core.coreIsProtectionPaused() }.getOrDefault(false)
+
     // ------------------------------------------------------------ typed state
 
     /**
