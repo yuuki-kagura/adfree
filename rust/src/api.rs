@@ -536,6 +536,29 @@ pub fn core_validate_dns_provider(
     })
 }
 
+/// Checks that a resolver answers a small query. Runs synchronously, so the
+/// caller must keep it off the UI thread (a DoH failure can take seconds).
+#[uniffi::export]
+pub fn core_probe_dns(
+    protocol: crate::state::model::DnsProtocol,
+    address: String,
+) -> crate::state::model::DnsProbeResult {
+    guard(Default::default(), || {
+        crate::core().probe_dns(protocol, &address)
+    })
+}
+
+/// Validates one DNS rewrite row and returns the values to persist.
+#[uniffi::export]
+pub fn core_validate_dns_rewrite(
+    host: String,
+    answer: String,
+) -> crate::state::model::DnsRewriteValidation {
+    guard(Default::default(), || {
+        crate::dnsrewrite::validate(&host, &answer)
+    })
+}
+
 /// The whole state as a v2 backup file. Empty when the store is not open.
 #[uniffi::export]
 pub fn core_backup_export() -> String {

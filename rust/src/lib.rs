@@ -22,6 +22,7 @@ pub mod assets;
 pub mod conntrack;
 pub mod dns;
 pub mod dnsrewrite;
+pub mod dnssecure;
 pub mod engine;
 pub mod events;
 pub mod filter;

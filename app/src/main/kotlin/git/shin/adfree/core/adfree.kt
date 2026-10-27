@@ -777,6 +777,8 @@ internal object IntegrityCheckingUniffiLib {
     ): Int
     external fun uniffi_adfree_core_checksum_func_core_mitm_status(
     ): Int
+    external fun uniffi_adfree_core_checksum_func_core_probe_dns(
+    ): Int
     external fun uniffi_adfree_core_checksum_func_core_protect_sockets(
     ): Int
     external fun uniffi_adfree_core_checksum_func_core_protection_save(
@@ -840,6 +842,8 @@ internal object IntegrityCheckingUniffiLib {
     external fun uniffi_adfree_core_checksum_func_core_uid_for_port(
     ): Int
     external fun uniffi_adfree_core_checksum_func_core_validate_dns_provider(
+    ): Int
+    external fun uniffi_adfree_core_checksum_func_core_validate_dns_rewrite(
     ): Int
     external fun uniffi_adfree_core_checksum_func_core_version(
     ): Int
@@ -943,6 +947,8 @@ internal object UniffiLib {
     ): RustBuffer.ByValue
     external fun uniffi_adfree_core_fn_func_core_mitm_status(uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
+    external fun uniffi_adfree_core_fn_func_core_probe_dns(`protocol`: RustBuffer.ByValue,`address`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    ): RustBuffer.ByValue
     external fun uniffi_adfree_core_fn_func_core_protect_sockets(`fds`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): Unit
     external fun uniffi_adfree_core_fn_func_core_protection_save(`value`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
@@ -1006,6 +1012,8 @@ internal object UniffiLib {
     external fun uniffi_adfree_core_fn_func_core_uid_for_port(`port`: Short,uniffi_out_err: UniffiRustCallStatus, 
     ): Int
     external fun uniffi_adfree_core_fn_func_core_validate_dns_provider(`protocol`: RustBuffer.ByValue,`address`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    ): RustBuffer.ByValue
+    external fun uniffi_adfree_core_fn_func_core_validate_dns_rewrite(`host`: RustBuffer.ByValue,`answer`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
     external fun uniffi_adfree_core_fn_func_core_version(uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
@@ -1215,6 +1223,9 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
     if ((lib.uniffi_adfree_core_checksum_func_core_mitm_status() and 0xFFFF) != 1875) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
+    if ((lib.uniffi_adfree_core_checksum_func_core_probe_dns() and 0xFFFF) != 50993) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
     if ((lib.uniffi_adfree_core_checksum_func_core_protect_sockets() and 0xFFFF) != 13156) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
@@ -1309,6 +1320,9 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if ((lib.uniffi_adfree_core_checksum_func_core_validate_dns_provider() and 0xFFFF) != 452) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if ((lib.uniffi_adfree_core_checksum_func_core_validate_dns_rewrite() and 0xFFFF) != 11374) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if ((lib.uniffi_adfree_core_checksum_func_core_version() and 0xFFFF) != 2808) {
@@ -2580,6 +2594,52 @@ public object FfiConverterTypeConfigOutcome: FfiConverterRustBuffer<ConfigOutcom
 
 
 
+data class DnsProbeResult (
+    var `ok`: kotlin.Boolean
+    , 
+    /**
+     * Round trip measured by the probe, in milliseconds.
+     */
+    var `latencyMs`: kotlin.UInt
+    , 
+    var `error`: DnsProbeError
+    
+){
+    
+
+    
+
+    
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeDnsProbeResult: FfiConverterRustBuffer<DnsProbeResult> {
+    override fun read(buf: ByteBuffer): DnsProbeResult {
+        return DnsProbeResult(
+            FfiConverterBoolean.read(buf),
+            FfiConverterUInt.read(buf),
+            FfiConverterTypeDnsProbeError.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: DnsProbeResult) = (
+            FfiConverterBoolean.allocationSize(value.`ok`) +
+            FfiConverterUInt.allocationSize(value.`latencyMs`) +
+            FfiConverterTypeDnsProbeError.allocationSize(value.`error`)
+    )
+
+    override fun write(value: DnsProbeResult, buf: ByteBuffer) {
+            FfiConverterBoolean.write(value.`ok`, buf)
+            FfiConverterUInt.write(value.`latencyMs`, buf)
+            FfiConverterTypeDnsProbeError.write(value.`error`, buf)
+    }
+}
+
+
+
 data class DnsProviderRecord (
     var `id`: kotlin.String
     , 
@@ -2693,6 +2753,60 @@ public object FfiConverterTypeDnsRewrite: FfiConverterRustBuffer<DnsRewrite> {
     override fun write(value: DnsRewrite, buf: ByteBuffer) {
             FfiConverterString.write(value.`host`, buf)
             FfiConverterString.write(value.`answer`, buf)
+    }
+}
+
+
+
+data class DnsRewriteValidation (
+    var `valid`: kotlin.Boolean
+    , 
+    /**
+     * Canonical host: lower-case, no trailing dot, `*.` kept for wildcards.
+     */
+    var `host`: kotlin.String
+    , 
+    /**
+     * Canonical IP literal.
+     */
+    var `answer`: kotlin.String
+    , 
+    var `error`: DnsRewriteError
+    
+){
+    
+
+    
+
+    
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeDnsRewriteValidation: FfiConverterRustBuffer<DnsRewriteValidation> {
+    override fun read(buf: ByteBuffer): DnsRewriteValidation {
+        return DnsRewriteValidation(
+            FfiConverterBoolean.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterTypeDnsRewriteError.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: DnsRewriteValidation) = (
+            FfiConverterBoolean.allocationSize(value.`valid`) +
+            FfiConverterString.allocationSize(value.`host`) +
+            FfiConverterString.allocationSize(value.`answer`) +
+            FfiConverterTypeDnsRewriteError.allocationSize(value.`error`)
+    )
+
+    override fun write(value: DnsRewriteValidation, buf: ByteBuffer) {
+            FfiConverterBoolean.write(value.`valid`, buf)
+            FfiConverterString.write(value.`host`, buf)
+            FfiConverterString.write(value.`answer`, buf)
+            FfiConverterTypeDnsRewriteError.write(value.`error`, buf)
     }
 }
 
@@ -4392,6 +4506,55 @@ public object FfiConverterTypeDnsError: FfiConverterRustBuffer<DnsError> {
 
 
 
+/**
+ * Why a resolver probe failed; the UI owns the wording.
+ */
+
+enum class DnsProbeError {
+    
+    NONE,
+    ADDRESS_INVALID,
+    /**
+     * The transport exists but the endpoint does not speak it (for example
+     * an HTTP/2-only DoH server).
+     */
+    UNSUPPORTED,
+    /**
+     * The tunnel is running and the app refused to protect the probe socket.
+     */
+    PROTECTED_SOCKET,
+    NETWORK,
+    TIMEOUT,
+    BAD_RESPONSE;
+
+    
+
+
+    companion object
+}
+
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeDnsProbeError: FfiConverterRustBuffer<DnsProbeError> {
+    override fun read(buf: ByteBuffer) = try {
+        DnsProbeError.values()[buf.getInt() - 1]
+    } catch (e: IndexOutOfBoundsException) {
+        throw RuntimeException("invalid enum value, something is very wrong!!", e)
+    }
+
+    override fun allocationSize(value: DnsProbeError) = 4UL
+
+    override fun write(value: DnsProbeError, buf: ByteBuffer) {
+        buf.putInt(value.ordinal + 1)
+    }
+}
+
+
+
+
+
 
 enum class DnsProtocol {
     
@@ -4419,6 +4582,46 @@ public object FfiConverterTypeDnsProtocol: FfiConverterRustBuffer<DnsProtocol> {
     override fun allocationSize(value: DnsProtocol) = 4UL
 
     override fun write(value: DnsProtocol, buf: ByteBuffer) {
+        buf.putInt(value.ordinal + 1)
+    }
+}
+
+
+
+
+
+/**
+ * Why a rewrite row was rejected; the UI owns the wording.
+ */
+
+enum class DnsRewriteError {
+    
+    NONE,
+    HOST_EMPTY,
+    HOST_INVALID,
+    ANSWER_EMPTY,
+    ANSWER_INVALID;
+
+    
+
+
+    companion object
+}
+
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeDnsRewriteError: FfiConverterRustBuffer<DnsRewriteError> {
+    override fun read(buf: ByteBuffer) = try {
+        DnsRewriteError.values()[buf.getInt() - 1]
+    } catch (e: IndexOutOfBoundsException) {
+        throw RuntimeException("invalid enum value, something is very wrong!!", e)
+    }
+
+    override fun allocationSize(value: DnsRewriteError) = 4UL
+
+    override fun write(value: DnsRewriteError, buf: ByteBuffer) {
         buf.putInt(value.ordinal + 1)
     }
 }
@@ -5383,6 +5586,22 @@ public object FfiConverterSequenceTypeUidApps: FfiConverterRustBuffer<List<UidAp
     
 
         /**
+         * Checks that a resolver answers a small query. Runs synchronously, so the
+         * caller must keep it off the UI thread (a DoH failure can take seconds).
+         */ fun `coreProbeDns`(`protocol`: DnsProtocol, `address`: kotlin.String): DnsProbeResult {
+            return FfiConverterTypeDnsProbeResult.lift(
+    uniffiRustCall() { _status ->
+    UniffiLib.uniffi_adfree_core_fn_func_core_probe_dns(
+    
+        
+        FfiConverterTypeDnsProtocol.lower(`protocol`),
+        FfiConverterString.lower(`address`),_status)
+}
+    )
+    }
+    
+
+        /**
          * Hands over upstream UDP sockets that the app has already protected. The engine
          * forwards every non-blocked DNS query through them.
          */ fun `coreProtectSockets`(`fds`: List<kotlin.Int>)
@@ -5815,6 +6034,21 @@ public object FfiConverterSequenceTypeUidApps: FfiConverterRustBuffer<List<UidAp
         
         FfiConverterTypeDnsProtocol.lower(`protocol`),
         FfiConverterString.lower(`address`),_status)
+}
+    )
+    }
+    
+
+        /**
+         * Validates one DNS rewrite row and returns the values to persist.
+         */ fun `coreValidateDnsRewrite`(`host`: kotlin.String, `answer`: kotlin.String): DnsRewriteValidation {
+            return FfiConverterTypeDnsRewriteValidation.lift(
+    uniffiRustCall() { _status ->
+    UniffiLib.uniffi_adfree_core_fn_func_core_validate_dns_rewrite(
+    
+        
+        FfiConverterString.lower(`host`),
+        FfiConverterString.lower(`answer`),_status)
 }
     )
     }

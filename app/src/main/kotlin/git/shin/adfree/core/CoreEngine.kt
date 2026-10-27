@@ -182,6 +182,35 @@ class CoreEngine {
                 )
             }
 
+    /** Same validator the resolver uses, so a rewrite cannot be saved half-valid. */
+    fun validateDnsRewrite(
+        host: String,
+        answer: String,
+    ): git.shin.adfree.core.DnsRewriteValidation =
+        runCatching { git.shin.adfree.core.coreValidateDnsRewrite(host, answer) }
+            .getOrElse {
+                git.shin.adfree.core.DnsRewriteValidation(
+                    valid = false,
+                    host = host,
+                    answer = answer,
+                    error = git.shin.adfree.core.DnsRewriteError.ANSWER_INVALID,
+                )
+            }
+
+    /** Blocking resolver probe; call it off the UI thread. */
+    fun probeDns(
+        protocol: git.shin.adfree.core.DnsProtocol,
+        address: String,
+    ): git.shin.adfree.core.DnsProbeResult =
+        runCatching { git.shin.adfree.core.coreProbeDns(protocol, address) }
+            .getOrElse {
+                git.shin.adfree.core.DnsProbeResult(
+                    ok = false,
+                    latencyMs = 0u,
+                    error = git.shin.adfree.core.DnsProbeError.NETWORK,
+                )
+            }
+
     fun backupExport(): String =
         runCatching { git.shin.adfree.core.coreBackupExport() }.getOrDefault("")
 

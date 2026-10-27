@@ -357,6 +357,28 @@ data class DnsProvider(
 )
 
 /**
+ * The host is answered with [answer] before the filter lists run. A `*.`
+ * prefix matches subdomains only; both strings are the canonical values the
+ * core validator returned when the row was saved.
+ */
+data class DnsRewriteRule(
+    val host: String,
+    val answer: String,
+)
+
+/**
+ * The address in the form the core validator accepts, including [DnsProvider.port].
+ *
+ * DoH already stores a complete URL; the other transports keep the port in a
+ * separate field, so it has to be appended (with brackets around IPv6).
+ */
+fun DnsProvider.probeAddress(): String = when (type) {
+    ProtocolType.DNS_UDP, ProtocolType.DNS_DOT ->
+        if (address.contains(':')) "[$address]:$port" else "$address:$port"
+    else -> address
+}
+
+/**
  * All figures come from the Rust engine.
  *
  * Fields used to be hardcoded ("batteryConservedPercent = 14.2f"). Now

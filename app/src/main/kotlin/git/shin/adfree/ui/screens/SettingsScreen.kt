@@ -11,6 +11,7 @@ import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -36,6 +37,7 @@ import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.Icon
@@ -68,17 +70,21 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LifecycleEventEffect
+import git.shin.adfree.core.DnsRewriteValidation
 import git.shin.adfree.core.MitmStatus
 import git.shin.adfree.model.AppLanguage
 import git.shin.adfree.model.DnsBlockMode
 import git.shin.adfree.model.DnsProvider
+import git.shin.adfree.model.DnsRewriteRule
 import git.shin.adfree.model.ProtectionSettings
+import git.shin.adfree.model.ProtocolType
 import git.shin.adfree.model.caNotAfterMs
 import git.shin.adfree.model.normalizeHttpsHost
 import git.shin.adfree.ui.AdGuardTab
 import git.shin.adfree.ui.AdGuardIntent
 import git.shin.adfree.ui.AdGuardViewModel
 import git.shin.adfree.ui.CoreText
+import git.shin.adfree.ui.UiText
 import git.shin.adfree.ui.theme.AdGuardBlueDns
 import git.shin.adfree.ui.theme.AdGuardDarkBg
 import git.shin.adfree.ui.theme.AdGuardDarkOutline
@@ -938,13 +944,18 @@ private fun CertificateDialog(pem: String, onDismiss: () -> Unit) {
  * Resolver selection. The list is real state from the repository, including
  * custom resolvers restored from the settings blob; before this section it
  * existed only as an orphan intent with no screen.
+ *
+ * The Test button sends one query through the selected transport; it runs on
+ * the repository's IO dispatcher and reports back through the snackbar.
  */
 @Composable
 internal fun DnsProviderSection(
     providers: List<DnsProvider>,
     selectedId: String,
+    isProbing: Boolean,
     onSelect: (String) -> Unit,
-    onAdd: (String, String) -> Unit,
+    onAdd: (String, String, ProtocolType) -> Unit,
+    onProbe: (String) -> Unit,
 ) {
     var showDialog by remember { mutableStateOf(false) }
     val selected = providers.firstOrNull { it.id == selectedId } ?: providers.firstOrNull()
@@ -989,16 +1000,51 @@ internal fun DnsProviderSection(
                         fontWeight = FontWeight.Bold,
                         color = AdGuardTextPrimary,
                     )
-                    Text(
-                        text = selected?.address ?: stringResource(R.string.settings_dns_unset_address),
-                        fontSize = 11.sp,
-                        color = AdGuardTextMuted,
-                    )
+                    if (selected != null) {
+                        Text(
+                            text = stringResource(
+                                R.string.settings_dns_summary,
+                                protocolLabel(selected.type),
+                                selected.address,
+                            ),
+                            fontSize = 11.sp,
+                            color = AdGuardTextMuted,
+                        )
+                    } else {
+                        Text(
+                            text = stringResource(R.string.settings_dns_unset_address),
+                            fontSize = 11.sp,
+                            color = AdGuardTextMuted,
+                        )
+                    }
                     if (selected?.isCustom == true) {
                         Text(stringResource(R.string.settings_dns_custom), fontSize = 10.sp, color = AdGuardBlueDns)
                     }
                 }
-                Text(stringResource(R.string.settings_dns_change), fontSize = 12.sp, color = AdGuardBlueDns)
+                Column(horizontalAlignment = Alignment.End) {
+                    Text(stringResource(R.string.settings_dns_change), fontSize = 12.sp, color = AdGuardBlueDns)
+                    if (selected != null) {
+                        TextButton(
+                            onClick = { onProbe(selected.id) },
+                            enabled = !isProbing,
+                            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp),
+                        ) {
+                            if (isProbing) {
+                                CircularProgressIndicator(
+                                    modifier = Modifier.size(14.dp),
+                                    strokeWidth = 2.dp,
+                                    color = AdGuardBlueDns,
+                                )
+                            } else {
+                                Text(
+                                    text = stringResource(R.string.settings_dns_test),
+                                    fontSize = 11.sp,
+                                    color = AdGuardBlueDns,
+                                )
+                            }
+                        }
+                    }
+                }
             }
         }
     }
@@ -1012,8 +1058,8 @@ internal fun DnsProviderSection(
                 onSelect(it)
                 showDialog = false
             },
-            onAdd = { name, address ->
-                onAdd(name, address)
+            onAdd = { name, address, type ->
+                onAdd(name, address, type)
                 showDialog = false
             },
         )
@@ -1026,10 +1072,11 @@ private fun DnsProviderDialog(
     selectedId: String,
     onDismiss: () -> Unit,
     onSelect: (String) -> Unit,
-    onAdd: (String, String) -> Unit,
+    onAdd: (String, String, ProtocolType) -> Unit,
 ) {
     var name by remember { mutableStateOf("") }
     var address by remember { mutableStateOf("") }
+    var protocol by remember { mutableStateOf(ProtocolType.DNS_UDP) }
 
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -1059,7 +1106,11 @@ private fun DnsProviderDialog(
                                 color = AdGuardTextPrimary,
                             )
                             Text(
-                                text = provider.address,
+                                text = stringResource(
+                                    R.string.settings_dns_summary,
+                                    protocolLabel(provider.type),
+                                    provider.address,
+                                ),
                                 fontSize = 11.sp,
                                 color = AdGuardTextMuted,
                                 fontFamily = FontFamily.Monospace,
@@ -1079,6 +1130,34 @@ private fun DnsProviderDialog(
                     color = AdGuardTextSecondary,
                 )
                 Spacer(modifier = Modifier.height(6.dp))
+                Text(
+                    text = stringResource(R.string.settings_dns_protocol_label),
+                    fontSize = 11.sp,
+                    color = AdGuardTextMuted,
+                )
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    listOf(
+                        ProtocolType.DNS_UDP,
+                        ProtocolType.DNS_DOT,
+                        ProtocolType.DNS_DOH,
+                    ).forEach { type ->
+                        FilterChip(
+                            selected = protocol == type,
+                            onClick = { protocol = type },
+                            label = { Text(protocolLabel(type), fontSize = 11.sp) },
+                            colors = FilterChipDefaults.filterChipColors(
+                                selectedContainerColor = AdGuardGreenPrimary,
+                                selectedLabelColor = AdGuardOnAccent,
+                            ),
+                        )
+                    }
+                }
+                Spacer(modifier = Modifier.height(6.dp))
                 OutlinedTextField(
                     value = name,
                     onValueChange = { name = it },
@@ -1091,7 +1170,18 @@ private fun DnsProviderDialog(
                     value = address,
                     onValueChange = { address = it },
                     label = { Text(stringResource(R.string.settings_dns_address_label), fontSize = 11.sp) },
-                    placeholder = { Text(stringResource(R.string.settings_dns_address_hint), fontSize = 11.sp) },
+                    placeholder = {
+                        Text(
+                            text = stringResource(
+                                when (protocol) {
+                                    ProtocolType.DNS_DOT -> R.string.settings_dns_address_hint_dot
+                                    ProtocolType.DNS_DOH -> R.string.settings_dns_address_hint_doh
+                                    else -> R.string.settings_dns_address_hint
+                                },
+                            ),
+                            fontSize = 11.sp,
+                        )
+                    },
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth(),
                 )
@@ -1099,7 +1189,7 @@ private fun DnsProviderDialog(
                 Button(
                     // The core validates the address; a rejection is shown
                     // in the snackbar by the repository.
-                    onClick = { onAdd(name, address) },
+                    onClick = { onAdd(name, address, protocol) },
                     enabled = address.isNotBlank(),
                     modifier = Modifier.fillMaxWidth(),
                 ) {
@@ -1109,6 +1199,194 @@ private fun DnsProviderDialog(
         },
         confirmButton = {
             TextButton(onClick = onDismiss) { Text(stringResource(R.string.common_close)) }
+        },
+    )
+}
+
+@Composable
+private fun protocolLabel(type: ProtocolType): String = stringResource(
+    when (type) {
+        ProtocolType.DNS_DOT -> R.string.dns_protocol_dot
+        ProtocolType.DNS_DOH -> R.string.dns_protocol_doh
+        else -> R.string.dns_protocol_udp
+    },
+)
+
+/**
+ * DNS rewrites: explicit answers that run before the filter lists.
+ *
+ * Validation is the core's; the dialog only turns the returned code into
+ * localized copy and keeps the sheet open until the row is acceptable.
+ */
+@Composable
+internal fun DnsRewriteSection(
+    rewrites: List<DnsRewriteRule>,
+    validate: (String, String) -> DnsRewriteValidation,
+    onAdd: (String, String) -> Unit,
+    onRemove: (String) -> Unit,
+) {
+    var showDialog by remember { mutableStateOf(false) }
+
+    Column {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = stringResource(R.string.network_rewrites_title),
+                    fontSize = 14.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = AdGuardTextPrimary,
+                )
+                Text(
+                    text = stringResource(R.string.network_rewrites_subtitle),
+                    fontSize = 11.sp,
+                    color = AdGuardTextMuted,
+                )
+            }
+            TextButton(onClick = { showDialog = true }) {
+                Text(stringResource(R.string.network_rewrites_add), fontSize = 12.sp)
+            }
+        }
+        Spacer(modifier = Modifier.height(6.dp))
+        Card(
+            modifier = Modifier.fillMaxWidth(),
+            shape = RoundedCornerShape(12.dp),
+            colors = CardDefaults.cardColors(containerColor = AdGuardDarkSurface),
+        ) {
+            Column(modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp)) {
+                if (rewrites.isEmpty()) {
+                    Text(
+                        text = stringResource(R.string.network_rewrites_empty),
+                        fontSize = 11.sp,
+                        color = AdGuardTextMuted,
+                        modifier = Modifier.padding(vertical = 6.dp),
+                    )
+                } else {
+                    rewrites.forEach { rule ->
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    text = rule.host,
+                                    fontSize = 12.sp,
+                                    fontFamily = FontFamily.Monospace,
+                                    color = AdGuardTextPrimary,
+                                )
+                                Text(
+                                    text = rule.answer,
+                                    fontSize = 11.sp,
+                                    fontFamily = FontFamily.Monospace,
+                                    color = AdGuardTextMuted,
+                                )
+                            }
+                            TextButton(onClick = { onRemove(rule.host) }) {
+                                Text(
+                                    text = stringResource(R.string.network_rewrites_remove),
+                                    fontSize = 11.sp,
+                                    color = AdGuardRedBlocked,
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    if (showDialog) {
+        DnsRewriteDialog(
+            validate = validate,
+            onAdd = onAdd,
+            onDismiss = { showDialog = false },
+        )
+    }
+}
+
+@Composable
+private fun DnsRewriteDialog(
+    validate: (String, String) -> DnsRewriteValidation,
+    onAdd: (String, String) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    var host by remember { mutableStateOf("") }
+    var answer by remember { mutableStateOf("") }
+    var error by remember { mutableStateOf<UiText?>(null) }
+
+    fun save() {
+        val checked = validate(host, answer)
+        if (!checked.valid) {
+            error = CoreText.dnsRewriteError(checked.error)
+            return
+        }
+        error = null
+        onAdd(checked.host, checked.answer)
+        onDismiss()
+    }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = {
+            Text(stringResource(R.string.network_rewrites_add_title), fontSize = 16.sp)
+        },
+        text = {
+            Column {
+                OutlinedTextField(
+                    value = host,
+                    onValueChange = {
+                        host = it
+                        error = null
+                    },
+                    label = {
+                        Text(stringResource(R.string.network_rewrites_host_label), fontSize = 11.sp)
+                    },
+                    placeholder = {
+                        Text(stringResource(R.string.network_rewrites_host_hint), fontSize = 11.sp)
+                    },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                Spacer(modifier = Modifier.height(6.dp))
+                OutlinedTextField(
+                    value = answer,
+                    onValueChange = {
+                        answer = it
+                        error = null
+                    },
+                    label = {
+                        Text(stringResource(R.string.network_rewrites_answer_label), fontSize = 11.sp)
+                    },
+                    placeholder = {
+                        Text(stringResource(R.string.network_rewrites_answer_hint), fontSize = 11.sp)
+                    },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                error?.let {
+                    Spacer(modifier = Modifier.height(6.dp))
+                    Text(
+                        text = it.asString(),
+                        fontSize = 11.sp,
+                        color = AdGuardRedBlocked,
+                    )
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(
+                onClick = { save() },
+                enabled = host.isNotBlank() && answer.isNotBlank(),
+            ) {
+                Text(stringResource(R.string.network_rewrites_save), fontSize = 12.sp)
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text(stringResource(R.string.common_close))
+            }
         },
     )
 }

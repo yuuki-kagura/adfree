@@ -509,6 +509,53 @@ pub struct DnsValidation {
     pub error: DnsError,
 }
 
+/// Why a rewrite row was rejected; the UI owns the wording.
+#[derive(uniffi::Enum, Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DnsRewriteError {
+    #[default]
+    None,
+    HostEmpty,
+    HostInvalid,
+    AnswerEmpty,
+    AnswerInvalid,
+}
+
+#[derive(uniffi::Record, Debug, Clone, PartialEq, Eq, Default)]
+pub struct DnsRewriteValidation {
+    pub valid: bool,
+    /// Canonical host: lower-case, no trailing dot, `*.` kept for wildcards.
+    pub host: String,
+    /// Canonical IP literal.
+    pub answer: String,
+    pub error: DnsRewriteError,
+}
+
+/// Why a resolver probe failed; the UI owns the wording.
+#[derive(uniffi::Enum, Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DnsProbeError {
+    #[default]
+    None,
+    AddressInvalid,
+    /// The transport exists but the endpoint does not speak it (for example
+    /// an HTTP/2-only DoH server).
+    Unsupported,
+    /// The tunnel is running and the app refused to protect the probe socket.
+    ProtectedSocket,
+    Network,
+    Timeout,
+    BadResponse,
+}
+
+#[derive(uniffi::Record, Debug, Clone, PartialEq, Eq, Default)]
+pub struct DnsProbeResult {
+    pub ok: bool,
+    /// Round trip measured by the probe, in milliseconds.
+    pub latency_ms: u32,
+    pub error: DnsProbeError,
+}
+
 #[derive(uniffi::Enum, Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum BackupError {

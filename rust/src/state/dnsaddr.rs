@@ -63,10 +63,13 @@ fn normalize_udp(text: &str) -> Result<(String, u16), DnsError> {
 }
 
 fn normalize_dot(text: &str) -> Result<(String, u16), DnsError> {
-    let text = text
-        .strip_prefix("tls://")
-        .or_else(|| text.strip_prefix("TLS://"))
-        .unwrap_or(text);
+    let text = match text
+        .get(..6)
+        .filter(|prefix| prefix.eq_ignore_ascii_case("tls://"))
+    {
+        Some(_) => &text[6..],
+        None => text,
+    };
     let text = text.trim_end_matches('/');
     if text.contains('/') {
         return Err(DnsError::InvalidAddress);
@@ -185,6 +188,10 @@ mod tests {
         assert_eq!(
             normalize(DnsProtocol::Dot, "[2606:4700::1111]:8853").unwrap(),
             ("2606:4700::1111".to_string(), 8853)
+        );
+        assert_eq!(
+            normalize(DnsProtocol::Dot, "TLS://dns.example").unwrap(),
+            ("dns.example".to_string(), 853)
         );
     }
 

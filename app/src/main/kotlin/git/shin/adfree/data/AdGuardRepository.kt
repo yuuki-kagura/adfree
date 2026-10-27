@@ -7,8 +7,7 @@ import android.content.pm.PackageManager
 import git.shin.adfree.R
 import git.shin.adfree.core.AssetState
 import git.shin.adfree.core.CoreEngine
-import git.shin.adfree.core.DnsProtocol
-import git.shin.adfree.core.DnsRewrite
+import git.shin.adfree.core.DnsProbeResult
 import git.shin.adfree.core.DnsState
 import git.shin.adfree.core.DownloadResult
 import git.shin.adfree.core.FilterChoice
@@ -22,11 +21,13 @@ import git.shin.adfree.model.AppCategory
 import git.shin.adfree.model.AppFirewallRule
 import git.shin.adfree.model.DnsBlockMode
 import git.shin.adfree.model.DnsProvider
+import git.shin.adfree.model.DnsRewriteRule
 import git.shin.adfree.model.FilterList
 import git.shin.adfree.model.FilterStatus
 import git.shin.adfree.model.filterUpdateDue
 import git.shin.adfree.model.filterUrlError
 import git.shin.adfree.model.normalizeHttpsHost
+import git.shin.adfree.model.probeAddress
 import git.shin.adfree.model.scriptNameFromFile
 import git.shin.adfree.model.UserScriptInfo
 import git.shin.adfree.model.UserScriptMetadata
@@ -128,8 +129,8 @@ class AdGuardRepository(
     private val _dnsProviders = MutableStateFlow<List<DnsProvider>>(emptyList())
     val dnsProviders: StateFlow<List<DnsProvider>> = _dnsProviders.asStateFlow()
 
-    /** Rewrites persist with the resolver list; editing arrives in the DNS pass. */
-    private var dnsRewrites: List<DnsRewrite> = emptyList()
+    private val _dnsRewrites = MutableStateFlow<List<DnsRewriteRule>>(emptyList())
+    val dnsRewrites: StateFlow<List<DnsRewriteRule>> = _dnsRewrites.asStateFlow()
 
     private val _loadingMessage = MutableStateFlow<UiText?>(null)
     val loadingMessage: StateFlow<UiText?> = _loadingMessage.asStateFlow()
@@ -196,7 +197,7 @@ class AdGuardRepository(
     fun hydrateState() {
         val snapshot = engine.stateLoad()
         _dnsProviders.value = snapshot.dns.providers.map { it.toModel() }
-        dnsRewrites = snapshot.dns.rewrites
+        _dnsRewrites.value = snapshot.dns.rewrites.map { it.toModel() }
         _scriptsMasterEnabled.value = snapshot.scripts.master
         // Enumerating installed apps is binder work; keep it off the caller
         // (the Application's main thread) while the rest hydrates at once.
@@ -434,6 +435,10 @@ class AdGuardRepository(
      */
     fun toggleBlockDot(enabled: Boolean) = updateSettings { it.copy(blockDot = enabled) }
 
+    /** Forces the safe variants on the major search engines. */
+    fun toggleSafeSearch(enabled: Boolean) =
+        updateSettings { it.copy(safeSearch = enabled) }
+
     /** Refresh interval for subscriptions, in hours; 0 turns it off. */
     fun setFilterAutoUpdate(hours: Int) {
         val clamped = hours.coerceIn(0, 168)
@@ -455,28 +460,24 @@ class AdGuardRepository(
     }
 
     /** Adds/selects a resolver and returns the line the Settings snackbar shows. */
-    fun addCustomDnsProvider(name: String, address: String): UiText {
+    fun addCustomDnsProvider(
+        name: String,
+        address: String,
+        type: ProtocolType = ProtocolType.DNS_UDP,
+    ): UiText {
         val trimmed = address.trim()
         if (trimmed.isEmpty()) return UiText.Resource(R.string.dns_address_empty)
-        // The forwarder sends plain UDP; DoH/DoT need another transport and
-        // arrive with their own editor. The validator is the core's.
-        val validation = engine.validateDnsProvider(DnsProtocol.UDP, trimmed)
+        // The core owns the rules for every transport, so the form and the
+        // forwarder cannot disagree about what a DoT or DoH address is.
+        val protocol = type.toDnsProtocol()
+        val validation = engine.validateDnsProvider(protocol, trimmed)
         if (!validation.valid) {
-            return when (validation.error) {
-                git.shin.adfree.core.DnsError.EMPTY -> UiText.Resource(R.string.dns_address_empty)
-                git.shin.adfree.core.DnsError.INVALID_PORT ->
-                    UiText.Resource(R.string.dns_invalid_port)
-                git.shin.adfree.core.DnsError.UNSUPPORTED_SCHEME ->
-                    UiText.Resource(R.string.dns_udp_ip_only)
-                git.shin.adfree.core.DnsError.IP_V6_UDP_UNSUPPORTED ->
-                    UiText.Resource(R.string.dns_udp_ipv4_only)
-                else -> UiText.Resource(R.string.dns_udp_ip_only)
-            }
+            return UiText.Resource(providerError(type, validation.error))
         }
         val host = validation.address
         val port = validation.port.toInt()
         val existing = _dnsProviders.value.firstOrNull {
-            it.address == host && it.port == port && it.type == ProtocolType.DNS_UDP
+            it.address == host && it.port == port && it.type == type
         }
         if (existing != null) {
             selectDnsProvider(existing.id)
@@ -486,7 +487,7 @@ class AdGuardRepository(
             id = "custom_" + System.currentTimeMillis(),
             name = name.trim().ifBlank { host },
             address = host,
-            type = ProtocolType.DNS_UDP,
+            type = type,
             description = context.getString(R.string.dns_custom_description),
             isCustom = true,
             port = port,
@@ -497,12 +498,76 @@ class AdGuardRepository(
         return UiText.Formatted(R.string.dns_custom_added, provider.name)
     }
 
+    private fun providerError(type: ProtocolType, error: git.shin.adfree.core.DnsError): Int =
+        when (error) {
+            git.shin.adfree.core.DnsError.EMPTY -> R.string.dns_address_empty
+            git.shin.adfree.core.DnsError.INVALID_PORT -> R.string.dns_invalid_port
+            git.shin.adfree.core.DnsError.UNSUPPORTED_SCHEME -> when (type) {
+                ProtocolType.DNS_UDP -> R.string.dns_udp_ip_only
+                ProtocolType.DNS_DOT -> R.string.dns_dot_format
+                else -> R.string.dns_doh_format
+            }
+            git.shin.adfree.core.DnsError.IP_V6_UDP_UNSUPPORTED -> R.string.dns_udp_ipv4_only
+            else -> when (type) {
+                ProtocolType.DNS_UDP -> R.string.dns_udp_ip_only
+                ProtocolType.DNS_DOT -> R.string.dns_dot_format
+                else -> R.string.dns_doh_format
+            }
+        }
+
+    /** Sends one probe query to a saved resolver; `null` when it disappeared. */
+    suspend fun probeDnsProvider(id: String): DnsProbeResult? = withContext(Dispatchers.IO) {
+        val provider = _dnsProviders.value.firstOrNull { it.id == id }
+            ?: return@withContext null
+        engine.probeDns(provider.type.toDnsProtocol(), provider.probeAddress())
+    }
+
+    /** Adds or updates a rewrite and returns the line the snackbar shows. */
+    fun addDnsRewrite(host: String, answer: String): UiText {
+        val checked = engine.validateDnsRewrite(host, answer)
+        if (!checked.valid) {
+            return UiText.Resource(
+                when (checked.error) {
+                    git.shin.adfree.core.DnsRewriteError.HOST_EMPTY ->
+                        R.string.dns_rewrite_error_host_empty
+                    git.shin.adfree.core.DnsRewriteError.HOST_INVALID ->
+                        R.string.dns_rewrite_error_host_invalid
+                    git.shin.adfree.core.DnsRewriteError.ANSWER_EMPTY ->
+                        R.string.dns_rewrite_error_answer_empty
+                    git.shin.adfree.core.DnsRewriteError.ANSWER_INVALID ->
+                        R.string.dns_rewrite_error_answer_invalid
+                    else -> R.string.dns_rewrite_error_host_invalid
+                },
+            )
+        }
+        val rule = DnsRewriteRule(host = checked.host, answer = checked.answer)
+        val updated = _dnsRewrites.value.any { it.host.equals(rule.host, ignoreCase = true) }
+        _dnsRewrites.update { current ->
+            current.filterNot { it.host.equals(rule.host, ignoreCase = true) } + rule
+        }
+        persistDnsState()
+        onConfigApplied()
+        return UiText.Formatted(
+            if (updated) R.string.dns_rewrite_updated else R.string.dns_rewrite_added,
+            rule.host,
+        )
+    }
+
+    fun removeDnsRewrite(host: String) {
+        if (_dnsRewrites.value.none { it.host.equals(host, ignoreCase = true) }) return
+        _dnsRewrites.update { current ->
+            current.filterNot { it.host.equals(host, ignoreCase = true) }
+        }
+        persistDnsState()
+        onConfigApplied()
+    }
+
     /** Writes the resolver list (built-ins are re-merged by Rust on load). */
     private fun persistDnsState() {
         engine.saveDns(
             DnsState(
                 providers = _dnsProviders.value.map { it.toCoreRecord() },
-                rewrites = dnsRewrites,
+                rewrites = _dnsRewrites.value.map { it.toCore() },
             )
         )
     }

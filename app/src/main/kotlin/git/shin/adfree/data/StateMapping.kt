@@ -5,6 +5,7 @@ import git.shin.adfree.core.AppLanguage as CoreAppLanguage
 import git.shin.adfree.core.DnsBlockMode as CoreDnsBlockMode
 import git.shin.adfree.core.DnsProtocol as CoreDnsProtocol
 import git.shin.adfree.core.DnsProviderRecord as CoreDnsProvider
+import git.shin.adfree.core.DnsRewrite as CoreDnsRewrite
 import git.shin.adfree.core.ProtectionState as CoreProtectionState
 import git.shin.adfree.core.ProxyState as CoreProxyState
 import git.shin.adfree.core.ThemeMode as CoreThemeMode
@@ -12,6 +13,7 @@ import git.shin.adfree.model.AppFirewallRule
 import git.shin.adfree.model.AppLanguage
 import git.shin.adfree.model.DnsBlockMode
 import git.shin.adfree.model.DnsProvider
+import git.shin.adfree.model.DnsRewriteRule
 import git.shin.adfree.model.ProtectionSettings
 import git.shin.adfree.model.ProtocolType
 import git.shin.adfree.model.ProxySettings
@@ -209,3 +211,16 @@ private fun CoreDnsProtocol.toModel(): ProtocolType = when (this) {
     CoreDnsProtocol.DOT -> ProtocolType.DNS_DOT
     CoreDnsProtocol.DOH -> ProtocolType.DNS_DOH
 }
+
+internal fun CoreDnsRewrite.toModel(): DnsRewriteRule = DnsRewriteRule(
+    host = host,
+    answer = answer,
+)
+
+internal fun DnsRewriteRule.toCore(): CoreDnsRewrite = CoreDnsRewrite(
+    host = host,
+    answer = answer,
+)
+
+/** The core protocol for a resolver form; only the DNS transports are valid. */
+internal fun ProtocolType.toDnsProtocol(): CoreDnsProtocol = toCore()

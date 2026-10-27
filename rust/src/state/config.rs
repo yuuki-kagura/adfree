@@ -26,7 +26,10 @@ pub struct PolicyPlan {
 
 pub struct Plan {
     pub config: Config,
+    /// Plain UDP resolver; unused when `secure` is set.
     pub upstream: SocketAddr,
+    /// DoT/DoH transport selected by the provider, if any.
+    pub secure: Option<crate::dnssecure::SecureResolver>,
     pub outcome: ConfigOutcome,
     pub resolver: ResolverSnapshot,
     pub policy: PolicyPlan,
@@ -55,6 +58,7 @@ pub fn apply(state: &StateStore, core: &Core, private_dns_strict: bool) -> Confi
     );
     core.set_https_skip_apps(plan.policy.https_skip_apps);
     core.set_resolver(plan.upstream);
+    core.set_secure_resolver(plan.secure);
     plan.outcome
 }
 
@@ -62,7 +66,7 @@ pub fn build(snapshot: &StateSnapshot, private_dns_strict: bool) -> Plan {
     let protection = &snapshot.protection;
     let policy = policy(snapshot);
     let (provider, provider_warning) = selected_provider(snapshot);
-    let (upstream, tunnel_dns, address_warning) = upstream(&provider);
+    let (upstream, secure, tunnel_dns, address_warning) = upstream(&provider);
     let (proxy, proxy_warning) = proxy(&protection.proxy);
 
     let warning = if provider_warning != ConfigWarning::None {
@@ -118,6 +122,7 @@ pub fn build(snapshot: &StateSnapshot, private_dns_strict: bool) -> Plan {
     Plan {
         config,
         upstream,
+        secure,
         outcome: ConfigOutcome {
             ok: warning == ConfigWarning::None,
             warning,
@@ -148,36 +153,65 @@ fn default_provider() -> DnsProviderRecord {
         .expect("the built-in default always exists")
 }
 
-/// Plain UDP is the only upstream the engine speaks until the encrypted
-/// transport lands; a DoT/DoH selection falls back to the default instead of
-/// silently keeping an unrelated resolver active.
-fn upstream(provider: &DnsProviderRecord) -> (SocketAddr, String, ConfigWarning) {
-    if provider.protocol != DnsProtocol::Udp {
-        crate::logbuf::push(&format!(
-            "state: resolver {} uses {:?}, not wired to the engine yet; using UDP",
-            provider.id, provider.protocol
-        ));
-        return (
-            default_upstream(),
-            DEFAULT_IP.to_string(),
-            ConfigWarning::AddressInvalid,
-        );
-    }
-    match provider.address.parse::<IpAddr>() {
-        Ok(ip) => {
-            let addr = SocketAddr::new(ip, provider.port);
-            (addr, ip.to_string(), ConfigWarning::None)
-        }
-        Err(_) => {
-            crate::logbuf::push(&format!(
-                "state: resolver {} has an unparsable address; using the default",
-                provider.id
-            ));
-            (
-                default_upstream(),
-                DEFAULT_IP.to_string(),
-                ConfigWarning::AddressInvalid,
-            )
+/// The resolver the engine should use.
+///
+/// UDP keeps the plain forwarder. DoT/DoH build a secure transport and leave
+/// the tunnel advertising the AdGuard address, because `VpnService` only
+/// accepts an IP there and apps inside the tunnel still speak plain DNS.
+/// A provider the transport cannot parse falls back to the default with a
+/// warning instead of silently keeping an unrelated resolver active.
+fn upstream(
+    provider: &DnsProviderRecord,
+) -> (
+    SocketAddr,
+    Option<crate::dnssecure::SecureResolver>,
+    String,
+    ConfigWarning,
+) {
+    match provider.protocol {
+        DnsProtocol::Udp => match provider.address.parse::<IpAddr>() {
+            Ok(ip) => {
+                let addr = SocketAddr::new(ip, provider.port);
+                (addr, None, ip.to_string(), ConfigWarning::None)
+            }
+            Err(_) => {
+                crate::logbuf::push(&format!(
+                    "state: resolver {} has an unparsable address; using the default",
+                    provider.id
+                ));
+                (
+                    default_upstream(),
+                    None,
+                    DEFAULT_IP.to_string(),
+                    ConfigWarning::AddressInvalid,
+                )
+            }
+        },
+        DnsProtocol::Dot | DnsProtocol::Doh => {
+            match crate::dnssecure::SecureResolver::from_parts(
+                provider.protocol,
+                &provider.address,
+                provider.port,
+            ) {
+                Some(resolver) => (
+                    default_upstream(),
+                    Some(resolver),
+                    DEFAULT_IP.to_string(),
+                    ConfigWarning::None,
+                ),
+                None => {
+                    crate::logbuf::push(&format!(
+                        "state: resolver {} uses {:?} with an unusable address; using UDP",
+                        provider.id, provider.protocol
+                    ));
+                    (
+                        default_upstream(),
+                        None,
+                        DEFAULT_IP.to_string(),
+                        ConfigWarning::AddressInvalid,
+                    )
+                }
+            }
         }
     }
 }
@@ -254,7 +288,7 @@ pub fn excluded_packages(snapshot: &StateSnapshot) -> Vec<String> {
 /// engine (the VPN builder calls this before `establish`).
 pub fn resolver_snapshot(snapshot: &StateSnapshot) -> ResolverSnapshot {
     let (provider, provider_warning) = selected_provider(snapshot);
-    let (_, tunnel_dns, address_warning) = upstream(&provider);
+    let (_, _, tunnel_dns, address_warning) = upstream(&provider);
     let warning = if provider_warning != ConfigWarning::None {
         provider_warning
     } else {
@@ -407,17 +441,60 @@ mod tests {
     }
 
     #[test]
-    fn an_encrypted_provider_is_not_silently_kept() {
+    fn encrypted_providers_select_the_secure_transport() {
         let mut s = snapshot();
-        let mut p = DnsProviderRecord::default();
-        p.id = "dot".to_string();
-        p.address = "dns.example".to_string();
-        p.protocol = DnsProtocol::Dot;
-        p.is_custom = true;
-        s.dns.providers.push(p);
+        s.dns.providers.push(DnsProviderRecord {
+            id: "dot".to_string(),
+            address: "tls://dns.example".to_string(),
+            port: 853,
+            protocol: DnsProtocol::Dot,
+            is_custom: true,
+            ..DnsProviderRecord::default()
+        });
+        s.dns.providers.push(DnsProviderRecord {
+            id: "doh".to_string(),
+            address: "https://dns.example/dns-query".to_string(),
+            port: 443,
+            protocol: DnsProtocol::Doh,
+            is_custom: true,
+            ..DnsProviderRecord::default()
+        });
+
         s.protection.selected_dns_provider_id = "dot".to_string();
+        let dot = build(&s, false);
+        assert!(dot.outcome.ok);
+        let secure = dot.secure.as_ref().expect("DoT transport");
+        assert_eq!(secure.protocol, DnsProtocol::Dot);
+        assert_eq!(secure.host, "dns.example");
+        assert_eq!(secure.port, 853);
+        // The tunnel still needs an IP: apps inside it speak plain DNS.
+        assert_eq!(dot.resolver.tunnel_dns, "94.140.14.14");
+
+        s.protection.selected_dns_provider_id = "doh".to_string();
+        let doh = build(&s, false);
+        assert!(doh.outcome.ok);
+        let secure = doh.secure.as_ref().expect("DoH transport");
+        assert_eq!(secure.protocol, DnsProtocol::Doh);
+        assert_eq!(secure.path, "/dns-query");
+        assert_eq!(secure.port, 443);
+    }
+
+    #[test]
+    fn an_unusable_encrypted_provider_falls_back_and_warns() {
+        let mut s = snapshot();
+        s.dns.providers.push(DnsProviderRecord {
+            id: "bad".to_string(),
+            address: "dns.example".to_string(),
+            port: 443,
+            protocol: DnsProtocol::Doh,
+            is_custom: true,
+            ..DnsProviderRecord::default()
+        });
+        s.protection.selected_dns_provider_id = "bad".to_string();
         let plan = build(&s, false);
+        assert!(plan.secure.is_none());
         assert_eq!(plan.outcome.warning, ConfigWarning::AddressInvalid);
         assert_eq!(plan.resolver.tunnel_dns, "94.140.14.14");
+        assert_eq!(plan.upstream.port(), 53);
     }
 }

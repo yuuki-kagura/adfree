@@ -4,6 +4,9 @@ import git.shin.adfree.R
 import git.shin.adfree.core.BackupError
 import git.shin.adfree.core.ConfigWarning
 import git.shin.adfree.core.DnsError
+import git.shin.adfree.core.DnsProbeError
+import git.shin.adfree.core.DnsProbeResult
+import git.shin.adfree.core.DnsRewriteError
 import git.shin.adfree.core.DownloadError
 import git.shin.adfree.core.TrustDetail
 import git.shin.adfree.model.FilterUrlError
@@ -37,6 +40,32 @@ object CoreText {
         DnsError.INVALID_PORT -> UiText.Resource(R.string.dns_error_invalid_port)
         DnsError.UNSUPPORTED_SCHEME -> UiText.Resource(R.string.dns_error_unsupported_scheme)
         DnsError.IP_V6_UDP_UNSUPPORTED -> UiText.Resource(R.string.dns_error_ipv6_udp_unsupported)
+    }
+
+    fun dnsRewriteError(error: DnsRewriteError): UiText? = when (error) {
+        DnsRewriteError.NONE -> null
+        DnsRewriteError.HOST_EMPTY -> UiText.Resource(R.string.dns_rewrite_error_host_empty)
+        DnsRewriteError.HOST_INVALID -> UiText.Resource(R.string.dns_rewrite_error_host_invalid)
+        DnsRewriteError.ANSWER_EMPTY -> UiText.Resource(R.string.dns_rewrite_error_answer_empty)
+        DnsRewriteError.ANSWER_INVALID -> UiText.Resource(R.string.dns_rewrite_error_answer_invalid)
+    }
+
+    /** One line for the probe result: latency on success, the reason on failure. */
+    fun dnsProbeResult(result: DnsProbeResult): UiText =
+        if (result.ok) {
+            UiText.Formatted(R.string.dns_probe_ok, result.latencyMs.toInt())
+        } else {
+            dnsProbeError(result.error) ?: UiText.Resource(R.string.dns_probe_failed)
+        }
+
+    private fun dnsProbeError(error: DnsProbeError): UiText? = when (error) {
+        DnsProbeError.NONE -> null
+        DnsProbeError.ADDRESS_INVALID -> UiText.Resource(R.string.dns_probe_address_invalid)
+        DnsProbeError.UNSUPPORTED -> UiText.Resource(R.string.dns_probe_unsupported)
+        DnsProbeError.PROTECTED_SOCKET -> UiText.Resource(R.string.dns_probe_protected_socket)
+        DnsProbeError.NETWORK -> UiText.Resource(R.string.dns_probe_network)
+        DnsProbeError.TIMEOUT -> UiText.Resource(R.string.dns_probe_timeout)
+        DnsProbeError.BAD_RESPONSE -> UiText.Resource(R.string.dns_probe_bad_response)
     }
 
     fun downloadError(error: DownloadError): UiText? = when (error) {

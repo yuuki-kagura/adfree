@@ -4,11 +4,13 @@ import git.shin.adfree.model.AppFirewallRule
 import git.shin.adfree.model.AppLanguage
 import git.shin.adfree.model.DnsBlockMode
 import git.shin.adfree.model.DnsProvider
+import git.shin.adfree.model.DnsRewriteRule
 import git.shin.adfree.model.FilterList
 import git.shin.adfree.model.FilterStatus
 import git.shin.adfree.model.NetworkRequestLog
 import git.shin.adfree.model.ProtectionSettings
 import git.shin.adfree.model.ProtectionStats
+import git.shin.adfree.model.ProtocolType
 import git.shin.adfree.model.ThreatAnalysisResult
 import git.shin.adfree.model.ThemeMode
 import git.shin.adfree.model.UserScriptInfo
@@ -28,6 +30,8 @@ data class AdGuardUiState(
     /** package -> display name for every installed app, regardless of the Apps tab filter. */
     val appNames: Map<String, String> = emptyMap(),
     val dnsProviders: List<DnsProvider> = emptyList(),
+    val dnsRewrites: List<DnsRewriteRule> = emptyList(),
+    val isDnsProbeRunning: Boolean = false,
     val isVpnActive: Boolean = false,
     val inspectedLog: NetworkRequestLog? = null,
     val searchQuery: String = "",
@@ -69,6 +73,7 @@ sealed interface AdGuardIntent {
     data class ToggleBlockQuic(val enabled: Boolean) : AdGuardIntent
     data class ToggleBlockDoh(val enabled: Boolean) : AdGuardIntent
     data class ToggleBlockDot(val enabled: Boolean) : AdGuardIntent
+    data class ToggleSafeSearch(val enabled: Boolean) : AdGuardIntent
     data class ToggleSmartFiltering(val enabled: Boolean) : AdGuardIntent
     /** Subscription refresh interval in hours; 0 turns it off. */
     data class SetFilterAutoUpdate(val hours: Int) : AdGuardIntent
@@ -83,7 +88,14 @@ sealed interface AdGuardIntent {
     data class AddToWhitelist(val domain: String) : AdGuardIntent
     data class AddToBlacklist(val domain: String) : AdGuardIntent
     data class SelectDnsProvider(val id: String) : AdGuardIntent
-    data class AddCustomDnsProvider(val name: String, val address: String) : AdGuardIntent
+    data class AddCustomDnsProvider(
+        val name: String,
+        val address: String,
+        val type: ProtocolType = ProtocolType.DNS_UDP,
+    ) : AdGuardIntent
+    data class ProbeDnsProvider(val id: String) : AdGuardIntent
+    data class AddDnsRewrite(val host: String, val answer: String) : AdGuardIntent
+    data class RemoveDnsRewrite(val host: String) : AdGuardIntent
     data class UpdateAppFirewall(
         val packageName: String,
         val cellular: Boolean? = null,

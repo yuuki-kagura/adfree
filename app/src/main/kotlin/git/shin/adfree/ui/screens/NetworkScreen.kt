@@ -16,6 +16,7 @@ import androidx.compose.material.icons.filled.Bolt
 import androidx.compose.material.icons.filled.Dns
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.Public
+import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
@@ -123,6 +124,16 @@ fun NetworkScreen(
 
             Spacer(modifier = Modifier.height(24.dp))
 
+            SettingsSwitch(
+                icon = Icons.Default.Search,
+                title = stringResource(R.string.network_safe_search_title),
+                subtitle = stringResource(R.string.network_safe_search_subtitle),
+                checked = state.settings.safeSearch,
+                onCheckedChange = { viewModel.onIntent(AdGuardIntent.ToggleSafeSearch(it)) },
+            )
+
+            Spacer(modifier = Modifier.height(24.dp))
+
             ProxySection(
                 viewModel = viewModel,
                 saved = state.settings.proxy,
@@ -133,10 +144,23 @@ fun NetworkScreen(
             DnsProviderSection(
                 providers = state.dnsProviders,
                 selectedId = state.settings.selectedDnsProviderId,
+                isProbing = state.isDnsProbeRunning,
                 onSelect = { viewModel.onIntent(AdGuardIntent.SelectDnsProvider(it)) },
-                onAdd = { name, address ->
-                    viewModel.onIntent(AdGuardIntent.AddCustomDnsProvider(name, address))
+                onAdd = { name, address, type ->
+                    viewModel.onIntent(AdGuardIntent.AddCustomDnsProvider(name, address, type))
                 },
+                onProbe = { viewModel.onIntent(AdGuardIntent.ProbeDnsProvider(it)) },
+            )
+
+            Spacer(modifier = Modifier.height(24.dp))
+
+            DnsRewriteSection(
+                rewrites = state.dnsRewrites,
+                validate = viewModel::validateDnsRewrite,
+                onAdd = { host, answer ->
+                    viewModel.onIntent(AdGuardIntent.AddDnsRewrite(host, answer))
+                },
+                onRemove = { viewModel.onIntent(AdGuardIntent.RemoveDnsRewrite(it)) },
             )
 
             Spacer(modifier = Modifier.height(24.dp))

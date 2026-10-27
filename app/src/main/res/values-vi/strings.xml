@@ -19,6 +19,20 @@
     <string name="dns_error_unsupported_scheme">Chỉ hỗ trợ địa chỉ UDP, DoT và DoH.</string>
     <string name="dns_error_ipv6_udp_unsupported">UDP thường hiện chỉ hỗ trợ IPv4.</string>
 
+    <string name="dns_rewrite_error_host_empty">Hãy nhập tên miền.</string>
+    <string name="dns_rewrite_error_host_invalid">Tên miền không hợp lệ.</string>
+    <string name="dns_rewrite_error_answer_empty">Hãy nhập địa chỉ IP.</string>
+    <string name="dns_rewrite_error_answer_invalid">Địa chỉ IP không hợp lệ.</string>
+
+    <string name="dns_probe_ok">Resolver phản hồi trong %1$d ms</string>
+    <string name="dns_probe_failed">Resolver không phản hồi.</string>
+    <string name="dns_probe_address_invalid">Hãy kiểm tra địa chỉ resolver trước.</string>
+    <string name="dns_probe_unsupported">Máy chủ này không hỗ trợ giao thức đã chọn.</string>
+    <string name="dns_probe_protected_socket">Đường hầm đã chặn kết nối kiểm tra.</string>
+    <string name="dns_probe_network">Lỗi mạng khi kiểm tra resolver.</string>
+    <string name="dns_probe_timeout">Resolver hết thời gian chờ.</string>
+    <string name="dns_probe_bad_response">Resolver trả về câu trả lời không hợp lệ.</string>
+
     <string name="download_error_store_unavailable">Kho dữ liệu của core chưa mở.</string>
     <string name="download_error_no_url">Bộ lọc này không có URL.</string>
     <string name="download_error_http">Máy chủ từ chối tải xuống.</string>
@@ -64,6 +78,11 @@
     <string name="dns_udp_ipv4_only">DNS UDP hiện chỉ hỗ trợ địa chỉ IPv4</string>
     <string name="dns_provider_selected">Đã chọn %1$s</string>
     <string name="dns_custom_added">Đã thêm DNS tùy chỉnh: %1$s</string>
+    <string name="dns_dot_format">Dùng tls://host hoặc host:853 (ví dụ tls://dns.adguard-dns.com).</string>
+    <string name="dns_doh_format">Dùng URL https:// đầy đủ (ví dụ https://dns.adguard-dns.com/dns-query).</string>
+    <string name="dns_rewrite_added">Đã thêm ghi đè: %1$s</string>
+    <string name="dns_rewrite_updated">Đã cập nhật ghi đè: %1$s</string>
+    <string name="dns_rewrite_removed">Đã xóa ghi đè: %1$s</string>
 
     <!-- Filter subscriptions -->
     <string name="filter_url_empty">Nhập URL hoặc chọn tệp trong máy</string>
@@ -272,6 +291,19 @@
     <string name="network_dot_title">Chặn DNS mã hóa (DoT)</string>
     <string name="network_dot_subtitle">Chặn DNS-over-TLS (cổng 853) để client không đi vòng qua bộ lọc</string>
     <string name="network_dot_private_dns">Private DNS nghiêm ngặt đang bật: hệ thống giữ resolver riêng, cổng 853 không bị chặn.</string>
+    <string name="network_safe_search_title">Tìm kiếm an toàn</string>
+    <string name="network_safe_search_subtitle">Buộc kết quả an toàn trên Google, Bing và YouTube</string>
+    <string name="network_rewrites_title">Ghi đè DNS</string>
+    <string name="network_rewrites_subtitle">Trả lời các host đã chọn bằng địa chỉ của bạn, trước danh sách lọc.</string>
+    <string name="network_rewrites_empty">Chưa có ghi đè nào</string>
+    <string name="network_rewrites_add">Thêm ghi đè</string>
+    <string name="network_rewrites_add_title">Thêm ghi đè DNS</string>
+    <string name="network_rewrites_host_label">Tên miền</string>
+    <string name="network_rewrites_host_hint">nas.home hoặc *.lan</string>
+    <string name="network_rewrites_answer_label">Địa chỉ</string>
+    <string name="network_rewrites_answer_hint">192.168.1.10</string>
+    <string name="network_rewrites_save">Lưu</string>
+    <string name="network_rewrites_remove">Xóa</string>
     <string name="network_proxy_title">Đường ra của lưu lượng</string>
     <string name="network_proxy_subtitle">Gửi luồng TCP qua một proxy SOCKS5 thay vì kết nối trực tiếp.</string>
     <string name="network_socks_title">SOCKS5 proxy</string>
@@ -694,9 +726,18 @@
     <string name="settings_dns_custom">Tùy chỉnh</string>
     <string name="settings_dns_change">Đổi</string>
     <string name="settings_dns_add_title">Thêm resolver</string>
+    <string name="settings_dns_protocol_label">Giao thức</string>
     <string name="settings_dns_name_label">Tên</string>
-    <string name="settings_dns_address_label">Địa chỉ IPv4/IPv6</string>
+    <string name="settings_dns_address_label">Địa chỉ</string>
     <string name="settings_dns_address_hint">1.1.1.1 hoặc 1.1.1.1:53</string>
+    <string name="settings_dns_address_hint_dot">tls://dns.adguard-dns.com</string>
+    <string name="settings_dns_address_hint_doh">https://dns.adguard-dns.com/dns-query</string>
+    <string name="settings_dns_summary">%1$s · %2$s</string>
+    <string name="settings_dns_test">Kiểm tra</string>
+    <string name="settings_dns_testing">Đang kiểm tra…</string>
+    <string name="dns_protocol_udp">UDP</string>
+    <string name="dns_protocol_dot">DoT</string>
+    <string name="dns_protocol_doh">DoH</string>
     <string name="settings_dns_add">Thêm và chọn</string>
     <string name="settings_engine_title">Trạng thái engine</string>
     <string name="settings_engine_build">Biên dịch bộ lọc: %1$d ms</string>

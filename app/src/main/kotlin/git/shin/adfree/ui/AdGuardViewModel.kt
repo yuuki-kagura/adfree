@@ -81,6 +81,7 @@ class AdGuardViewModel(
     private val _selectedAppFilter = MutableStateFlow<String?>(null)
     private val _aiLabState = MutableStateFlow<AiLabUiState>(AiLabUiState.Idle)
     private val _showVpnPermissionPrompt = MutableStateFlow(false)
+    private val _dnsProbeRunning = MutableStateFlow(false)
 
     /**
      * Android's Private DNS sends lookups past the tunnel resolver. The Home
@@ -115,9 +116,15 @@ class AdGuardViewModel(
             _statusFilter,
             repository.filterLists,
             repository.appFirewallRules,
-            repository.dnsProviders,
+            combine(
+                repository.dnsProviders,
+                repository.dnsRewrites,
+                _dnsProbeRunning,
+            ) { providers, rewrites, probing -> UiDns(providers, rewrites, probing) },
             vpnController.isVpnActive,
-        ) { status, filters, apps, dns, active -> UiPartB(status, filters, apps, dns, active) },
+        ) { status, filters, apps, dns, active ->
+            UiPartB(status, filters, apps, dns.providers, dns.rewrites, dns.probing, active)
+        },
         combine(
             _inspectedLog,
             _showCustomRuleDialog,
@@ -204,6 +211,8 @@ class AdGuardViewModel(
             // filtered down to something else.
             appNames = b.apps.associate { it.packageName to it.appName },
             dnsProviders = b.dns,
+            dnsRewrites = b.rewrites,
+            isDnsProbeRunning = b.isProbing,
             isVpnActive = b.isVpnActive,
             inspectedLog = c.inspected,
             searchQuery = a.query,
@@ -287,6 +296,7 @@ class AdGuardViewModel(
             is AdGuardIntent.SetThemeMode -> repository.setThemeMode(intent.mode)
             is AdGuardIntent.ToggleBlockDoh -> repository.toggleBlockDoh(intent.enabled)
             is AdGuardIntent.ToggleBlockDot -> repository.toggleBlockDot(intent.enabled)
+            is AdGuardIntent.ToggleSafeSearch -> repository.toggleSafeSearch(intent.enabled)
             is AdGuardIntent.SetFilterAutoUpdate ->
                 repository.setFilterAutoUpdate(intent.hours)
             is AdGuardIntent.ToggleSmartFiltering ->
@@ -342,8 +352,28 @@ class AdGuardViewModel(
             }
 
             is AdGuardIntent.AddCustomDnsProvider -> {
-                val message = repository.addCustomDnsProvider(intent.name, intent.address)
+                val message = repository.addCustomDnsProvider(
+                    intent.name,
+                    intent.address,
+                    intent.type,
+                )
                 emit(AdGuardEffect.ShowSnackbar(message))
+            }
+
+            is AdGuardIntent.ProbeDnsProvider -> probeDnsProvider(intent.id)
+
+            is AdGuardIntent.AddDnsRewrite -> {
+                val message = repository.addDnsRewrite(intent.host, intent.answer)
+                emit(AdGuardEffect.ShowSnackbar(message))
+            }
+
+            is AdGuardIntent.RemoveDnsRewrite -> {
+                repository.removeDnsRewrite(intent.host)
+                emit(
+                    AdGuardEffect.ShowSnackbar(
+                        UiText.Formatted(R.string.dns_rewrite_removed, intent.host),
+                    ),
+                )
             }
 
             is AdGuardIntent.UpdateAppFirewall -> {
@@ -517,6 +547,31 @@ class AdGuardViewModel(
                 else UiText.Resource(R.string.protection_off),
             ),
         )
+    }
+
+    /** The rewrite editor's inline check; the repository re-runs it on save. */
+    fun validateDnsRewrite(
+        host: String,
+        answer: String,
+    ): git.shin.adfree.core.DnsRewriteValidation =
+        coreEngine.validateDnsRewrite(host, answer)
+
+    private fun probeDnsProvider(id: String) {
+        if (_dnsProbeRunning.value) return
+        _dnsProbeRunning.value = true
+        viewModelScope.launch {
+            val result = try {
+                repository.probeDnsProvider(id)
+            } finally {
+                _dnsProbeRunning.value = false
+            }
+            emit(
+                AdGuardEffect.ShowSnackbar(
+                    result?.let { CoreText.dnsProbeResult(it) }
+                        ?: UiText.Resource(R.string.dns_probe_failed),
+                ),
+            )
+        }
     }
 
     private fun handleThreatScan(domain: String) {
@@ -693,7 +748,15 @@ class AdGuardViewModel(
         val filters: List<git.shin.adfree.model.FilterList>,
         val apps: List<AppFirewallRule>,
         val dns: List<git.shin.adfree.model.DnsProvider>,
+        val rewrites: List<git.shin.adfree.model.DnsRewriteRule>,
+        val isProbing: Boolean,
         val isVpnActive: Boolean,
+    )
+
+    private data class UiDns(
+        val providers: List<git.shin.adfree.model.DnsProvider>,
+        val rewrites: List<git.shin.adfree.model.DnsRewriteRule>,
+        val probing: Boolean,
     )
 
     private data class UiPartC(

@@ -7,6 +7,8 @@
 
 use std::net::IpAddr;
 
+use super::state::model::{DnsRewriteError, DnsRewriteValidation};
+
 /// One parsed `host -> address` rule.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DnsRewriteRule {
@@ -22,22 +24,18 @@ impl DnsRewriteRule {
     /// not an IP literal: the settings form validates the same way, so a bad
     /// row can only come from an older build or a hand-edited store.
     pub fn parse(host: &str, answer: &str) -> Option<DnsRewriteRule> {
-        let host = host.trim().trim_end_matches('.').to_ascii_lowercase();
-        if host.is_empty() || host == "*" {
+        let checked = validate(host, answer);
+        if !checked.valid {
             return None;
         }
-        let (wildcard, host) = match host.strip_prefix("*.") {
+        let (wildcard, host) = match checked.host.strip_prefix("*.") {
             Some(rest) => (true, rest.to_string()),
-            None => (false, host),
+            None => (false, checked.host),
         };
-        if host.is_empty() {
-            return None;
-        }
-        let address = answer.trim().parse::<IpAddr>().ok()?;
         Some(DnsRewriteRule {
             host,
             wildcard,
-            address,
+            address: checked.answer.parse().ok()?,
         })
     }
 
@@ -50,11 +48,71 @@ impl DnsRewriteRule {
     }
 }
 
+/// Checks one editor row and returns the canonical values to persist.
+///
+/// The same function backs [`DnsRewriteRule::parse`], so the form cannot
+/// accept a rule the engine would later drop.
+pub fn validate(host: &str, answer: &str) -> DnsRewriteValidation {
+    let mut out = DnsRewriteValidation {
+        host: host.trim().trim_end_matches('.').to_ascii_lowercase(),
+        answer: answer.trim().to_string(),
+        ..DnsRewriteValidation::default()
+    };
+    if out.host.is_empty() {
+        out.error = DnsRewriteError::HostEmpty;
+        return out;
+    }
+    let (wildcard, base) = match out.host.strip_prefix("*.") {
+        Some(rest) => (true, rest),
+        None => (false, out.host.as_str()),
+    };
+    if !valid_hostname(base) {
+        out.error = DnsRewriteError::HostInvalid;
+        return out;
+    }
+    if out.answer.is_empty() {
+        out.error = DnsRewriteError::AnswerEmpty;
+        return out;
+    }
+    let Ok(address) = out.answer.parse::<IpAddr>() else {
+        out.error = DnsRewriteError::AnswerInvalid;
+        return out;
+    };
+    out.valid = true;
+    out.host = if wildcard {
+        format!("*.{base}")
+    } else {
+        base.to_string()
+    };
+    out.answer = address.to_string();
+    out
+}
+
+/// DNS name syntax without IDNA: a rewrite is entered in ASCII, which keeps a
+/// stored rule identical to what the packet path compares against.
+fn valid_hostname(host: &str) -> bool {
+    if host.is_empty() || host.len() > 253 {
+        return false;
+    }
+    host.split('.').all(|label| {
+        !label.is_empty()
+            && label.len() <= 63
+            && !label.starts_with('-')
+            && !label.ends_with('-')
+            && label
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-' || byte == b'_')
+    })
+}
+
 /// The address a host is rewritten to, if any. An exact rule wins over a
 /// wildcard; between wildcards the most specific (longest) host wins.
 pub fn lookup(rules: &[DnsRewriteRule], host: &str) -> Option<IpAddr> {
     let host = host.trim_end_matches('.').to_ascii_lowercase();
-    if let Some(rule) = rules.iter().find(|rule| !rule.wildcard && rule.host == host) {
+    if let Some(rule) = rules
+        .iter()
+        .find(|rule| !rule.wildcard && rule.host == host)
+    {
         return Some(rule.address);
     }
     rules
@@ -96,10 +154,7 @@ mod tests {
 
     #[test]
     fn an_exact_rule_wins_over_a_wildcard() {
-        let rules = vec![
-            rule("*.home", "10.0.0.2"),
-            rule("router.home", "10.0.0.1"),
-        ];
+        let rules = vec![rule("*.home", "10.0.0.2"), rule("router.home", "10.0.0.1")];
         assert_eq!(
             lookup(&rules, "router.home"),
             Some(IpAddr::V4(Ipv4Addr::new(10, 0, 0, 1)))
@@ -116,5 +171,48 @@ mod tests {
         assert!(DnsRewriteRule::parse("host", "not-an-address").is_none());
         assert!(DnsRewriteRule::parse("", "10.0.0.1").is_none());
         assert!(DnsRewriteRule::parse("*.", "10.0.0.1").is_none());
+    }
+
+    #[test]
+    fn the_editor_gets_canonical_values_and_a_reason() {
+        let checked = validate(" NAS.Home. ", " 192.168.1.10 ");
+        assert!(checked.valid);
+        assert_eq!(checked.host, "nas.home");
+        assert_eq!(checked.answer, "192.168.1.10");
+        assert_eq!(checked.error, DnsRewriteError::None);
+
+        let wildcard = validate("*.Lan", "fd00::1");
+        assert!(wildcard.valid);
+        assert_eq!(wildcard.host, "*.lan");
+        assert_eq!(wildcard.answer, "fd00::1");
+
+        assert_eq!(validate("", "10.0.0.1").error, DnsRewriteError::HostEmpty);
+        assert_eq!(
+            validate("bad host", "10.0.0.1").error,
+            DnsRewriteError::HostInvalid
+        );
+        assert_eq!(
+            validate("*.", "10.0.0.1").error,
+            DnsRewriteError::HostInvalid
+        );
+        assert_eq!(validate("nas.home", "").error, DnsRewriteError::AnswerEmpty);
+        assert_eq!(
+            validate("nas.home", "not-an-address").error,
+            DnsRewriteError::AnswerInvalid
+        );
+    }
+
+    #[test]
+    fn a_label_may_not_start_or_end_with_a_hyphen() {
+        assert!(DnsRewriteRule::parse("-nas.home", "10.0.0.1").is_none());
+        assert!(DnsRewriteRule::parse("nas-.home", "10.0.0.1").is_none());
+        assert!(DnsRewriteRule::parse("nas.home-", "10.0.0.1").is_none());
+    }
+
+    #[test]
+    fn a_hostname_longer_than_the_dns_limit_is_rejected() {
+        let long = "a".repeat(64);
+        assert!(DnsRewriteRule::parse(&format!("{long}.home"), "10.0.0.1").is_none());
+        assert!(DnsRewriteRule::parse(&"a".repeat(254), "10.0.0.1").is_none());
     }
 }

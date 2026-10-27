@@ -39,7 +39,9 @@ use crate::util::{now_ms, now_ns};
 use std::collections::HashSet;
 use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
 use std::os::unix::io::RawFd;
-use std::sync::atomic::{AtomicBool, AtomicI32, AtomicU16, AtomicU64, AtomicU8, Ordering};
+use std::sync::atomic::{
+    AtomicBool, AtomicI32, AtomicU16, AtomicU64, AtomicU8, AtomicUsize, Ordering,
+};
 use std::sync::{Arc, Mutex, OnceLock, RwLock};
 
 /// Read size for the TUN descriptor.
@@ -54,6 +56,16 @@ const POLL_TIMEOUT_MS: i32 = 250;
 /// socket, a flow socket); this timeout only paces reaping and idle expiry,
 /// so it can be generous without costing latency.
 const FORWARD_WAIT_MS: i32 = 1_000;
+
+/// Parallel encrypted-DNS exchanges. A DoH query is a TLS handshake plus one
+/// request, so a single worker would serialize a page load; more than a
+/// handful only burns battery.
+const SECURE_DNS_WORKERS: usize = 3;
+
+/// Queries allowed in flight on an encrypted transport. Beyond this the
+/// client gets SERVFAIL, which its resolver can retry, instead of a queue
+/// that keeps growing while the network is down.
+const SECURE_DNS_IN_FLIGHT: usize = 64;
 
 /// Rough upstream cost of one blocked request; only used for the "data saved"
 /// figure shown in the UI.
@@ -369,6 +381,22 @@ pub struct Core {
     /// SafeSearch addresses, keyed by the filtered host: the extra lookup is
     /// an RTT the next query for the same engine should not pay.
     safe_cache: Mutex<FxHashMap<String, SafeCacheEntry>>,
+    /// Encrypted resolver selected by the user; `None` means the plain UDP
+    /// forwarder owns the queries.
+    secure_resolver: RwLock<Option<crate::dnssecure::SecureResolver>>,
+    /// One channel per encrypted-DNS worker. A query is handed to a worker
+    /// and never blocks the packet path.
+    secure_jobs: Mutex<Vec<std::sync::mpsc::Sender<crate::dnssecure::SecureJob>>>,
+    /// Receivers stay here until [`Core::start`] launches the workers: tests
+    /// construct cores without ever starting a session, and should not spawn
+    /// threads that wait forever.
+    secure_receivers: Mutex<Vec<std::sync::mpsc::Receiver<crate::dnssecure::SecureJob>>>,
+    secure_replies: Mutex<std::sync::mpsc::Receiver<crate::dnssecure::SecureReply>>,
+    secure_replies_tx: std::sync::mpsc::Sender<crate::dnssecure::SecureReply>,
+    secure_next: AtomicUsize,
+    /// Queries handed to an encrypted transport and not answered yet. Capped
+    /// so an unreachable resolver cannot grow the queue without bound.
+    secure_outstanding: AtomicUsize,
     doh_ips: RwLock<CidrSet>,
     stats: Arc<Stats>,
     events: Mutex<EventLog>,
@@ -498,6 +526,14 @@ impl Default for Core {
 impl Core {
     pub fn new() -> Self {
         let resolver = SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::new(94, 140, 14, 14), 53));
+        let (secure_replies_tx, secure_replies) = std::sync::mpsc::channel();
+        let mut secure_jobs = Vec::with_capacity(SECURE_DNS_WORKERS);
+        let mut secure_receivers = Vec::with_capacity(SECURE_DNS_WORKERS);
+        for _ in 0..SECURE_DNS_WORKERS {
+            let (jobs, receivers) = std::sync::mpsc::channel();
+            secure_jobs.push(jobs);
+            secure_receivers.push(receivers);
+        }
         Core {
             cfg: RwLock::new(Config::default()),
             filter: Arc::new(FilterEngine::new()),
@@ -509,6 +545,13 @@ impl Core {
             smart: Mutex::new(crate::smart::SmartFilter::new(true)),
             dns_rewrites: RwLock::new(Vec::new()),
             safe_cache: Mutex::new(FxHashMap::default()),
+            secure_resolver: RwLock::new(None),
+            secure_jobs: Mutex::new(secure_jobs),
+            secure_receivers: Mutex::new(secure_receivers),
+            secure_replies: Mutex::new(secure_replies),
+            secure_replies_tx,
+            secure_next: AtomicUsize::new(0),
+            secure_outstanding: AtomicUsize::new(0),
             doh_ips: RwLock::new(default_doh_cidrs()),
             stats: Arc::new(Stats::new()),
             events: Mutex::new(EventLog::default()),
@@ -800,6 +843,140 @@ impl Core {
         *self.dns_rewrites.write().unwrap() = rules;
     }
 
+    /// Selects the transport upstream queries use. `None` restores the plain
+    /// UDP forwarder; a `Some` value bypasses it entirely.
+    pub fn set_secure_resolver(&self, resolver: Option<crate::dnssecure::SecureResolver>) {
+        *self.secure_resolver.write().unwrap() = resolver;
+    }
+
+    /// Sends one `example.com` query to a resolver the user is editing.
+    ///
+    /// The settings screen runs this on its own IO thread: a DoH endpoint can
+    /// take seconds to fail. While the tunnel is up the probe socket has to
+    /// bypass it, which is the same protector the forwarder uses; before the
+    /// first connect there is no tunnel to loop back into.
+    pub fn probe_dns(
+        &self,
+        protocol: crate::state::model::DnsProtocol,
+        raw: &str,
+    ) -> crate::state::model::DnsProbeResult {
+        use crate::state::model::{DnsProbeError, DnsProbeResult, DnsProtocol};
+
+        let started = now_ms();
+        let fail = |error: DnsProbeError| DnsProbeResult {
+            ok: false,
+            latency_ms: now_ms().saturating_sub(started) as u32,
+            error,
+        };
+        let (address, port) = match crate::state::dnsaddr::normalize(protocol, raw) {
+            Ok(parts) => parts,
+            Err(_) => return fail(DnsProbeError::AddressInvalid),
+        };
+        let protector = self.socket_protector.lock().unwrap().clone();
+        let protector = if self.is_running() {
+            match protector {
+                Some(protector) => Some(protector),
+                None => return fail(DnsProbeError::ProtectedSocket),
+            }
+        } else {
+            None
+        };
+
+        let txid = (now_ms() & 0x7fff) as u16;
+        let query = match dns::build_query("example.com", dns::TYPE_A, txid) {
+            Some(query) => query,
+            None => return fail(DnsProbeError::BadResponse),
+        };
+        let outcome = match protocol {
+            DnsProtocol::Udp => crate::dnssecure::probe_udp(&address, port, protector.as_deref()),
+            DnsProtocol::Dot | DnsProtocol::Doh => {
+                match crate::dnssecure::SecureResolver::from_parts(protocol, &address, port) {
+                    Some(resolver) => {
+                        crate::dnssecure::exchange(&resolver, &query, protector.as_deref())
+                    }
+                    None => Err(crate::dnssecure::SecureError::Address),
+                }
+            }
+        };
+        match outcome {
+            Ok(_) => DnsProbeResult {
+                ok: true,
+                latency_ms: now_ms().saturating_sub(started) as u32,
+                error: DnsProbeError::None,
+            },
+            Err(error) => {
+                crate::logbuf::push(&format!("dns probe {raw}: {error:?}"));
+                fail(error.probe_error())
+            }
+        }
+    }
+
+    /// Launches the encrypted-DNS workers for this session. The receivers are
+    /// taken once: a later `start()` reuses the workers already running.
+    fn start_secure_workers(&self) {
+        let receivers = std::mem::take(&mut *self.secure_receivers.lock().unwrap());
+        for (index, receiver) in receivers.into_iter().enumerate() {
+            let replies = self.secure_replies_tx.clone();
+            let wake_fd = self.wake_fd;
+            if let Ok(_worker) = std::thread::Builder::new()
+                .name(format!("adfree-secure-dns-{index}"))
+                .stack_size(256 * 1024)
+                .spawn(move || crate::dnssecure::worker_loop(receiver, replies, wake_fd))
+            {
+                // Dropping the handle detaches the worker: it lives for the
+                // process, so a session restart never leaves queued queries
+                // with no thread to answer them.
+            }
+        }
+    }
+
+    /// Hands one already-framed query to a worker. False when no worker can
+    /// take it (the tunnel has not started yet, or the channel closed).
+    fn enqueue_secure(&self, job: crate::dnssecure::SecureJob) -> bool {
+        let senders = self.secure_jobs.lock().unwrap();
+        if senders.is_empty() {
+            return false;
+        }
+        let index = self.secure_next.fetch_add(1, Ordering::Relaxed) % senders.len();
+        senders[index].send(job).is_ok()
+    }
+
+    /// Answers that finished on an encrypted transport since the last pass.
+    fn take_secure_replies(&self) -> Vec<crate::dnssecure::SecureReply> {
+        self.secure_replies.lock().unwrap().try_iter().collect()
+    }
+
+    fn handle_secure_reply(&self, reply: crate::dnssecure::SecureReply) {
+        self.secure_outstanding.fetch_sub(1, Ordering::Relaxed);
+        if reply.message.is_empty() {
+            self.fail_pending(&reply.pending);
+            return;
+        }
+        let upstream_reply = crate::upstream::Reply {
+            pending: reply.pending,
+            // Only the UDP path uses the slot; a secure answer has none.
+            socket: 0,
+            message: reply.message,
+        };
+        self.handle_reply(&upstream_reply);
+    }
+
+    /// The client of a query that will never be answered gets SERVFAIL at
+    /// once. SafeSearch clients wait on a filtered-host lookup, so they take
+    /// the same path as an expired UDP pending.
+    fn fail_pending(&self, pending: &crate::upstream::Pending) {
+        self.stats.inc(&self.stats.dns_timeouts);
+        let Some(pkt) = Packet::parse(&pending.packet) else {
+            return;
+        };
+        let Some(query) = dns::parse_query(pkt.l4_payload()) else {
+            return;
+        };
+        if let Some(err) = dns::synthesize_error(&pkt, Some(&query), dns::RCODE_SERVFAIL) {
+            self.write_raw(&err);
+        }
+    }
+
     /// Addresses from a fresh SafeSearch answer, or `None` when the cached
     /// entry lapsed. The lock is never held across the packet work below.
     fn cached_safe_search(&self, safe_host: &str, now_ms: u64) -> Option<Vec<std::net::IpAddr>> {
@@ -956,6 +1133,7 @@ impl Core {
         // its poll timeout, so this blocks for a few hundred milliseconds at
         // most (and not at all when the tunnel was already down).
         self.join_workers();
+        self.start_secure_workers();
         self.tun_fd.store(tun_fd, Ordering::SeqCst);
         self.running.store(true, Ordering::SeqCst);
         let statics: &'static Core = core();
@@ -2038,12 +2216,7 @@ impl Core {
     /// `safe_host` sends the question to the filtered host instead of the one
     /// the client asked; the reply becomes a synthetic answer for the original
     /// name (see [`Self::handle_reply`]).
-    fn forward_query(
-        &self,
-        pkt: &Packet<'_>,
-        query: Option<&Query<'_>>,
-        safe_host: Option<&str>,
-    ) {
+    fn forward_query(&self, pkt: &Packet<'_>, query: Option<&Query<'_>>, safe_host: Option<&str>) {
         let Some(query) = query else {
             // Without a question there is nothing to forward: answer SERVFAIL
             // so the client fails fast instead of timing out.
@@ -2058,6 +2231,10 @@ impl Core {
         // transaction id is patched inside it, and `Upstream::send` strips the
         // headers for the wire.
         let host = query.qname.as_str();
+        if let Some(resolver) = self.secure_resolver.read().unwrap().clone() {
+            self.forward_secure(pkt, query, safe_host, resolver);
+            return;
+        }
         // Spread queries over the socket pool deterministically, so a host keeps
         // using the same socket (friendlier to the kernel's flow cache).
         let socket = (hash_str(host) as usize) % crate::upstream::SOCKET_POOL_PUB;
@@ -2108,6 +2285,98 @@ impl Core {
             // lands instead of after its idle wait.
             self.wake();
         }
+    }
+
+    /// Sends a query over DoT/DoH. The exchange is blocking, so it goes to a
+    /// worker and the answer comes back through [`Core::handle_secure_reply`];
+    /// the packet path only pays for the channel send.
+    fn forward_secure(
+        &self,
+        pkt: &Packet<'_>,
+        query: &Query<'_>,
+        safe_host: Option<&str>,
+        resolver: crate::dnssecure::SecureResolver,
+    ) {
+        if self.secure_outstanding.load(Ordering::Relaxed) >= SECURE_DNS_IN_FLIGHT {
+            self.stats.inc(&self.stats.dns_timeouts);
+            crate::logbuf::push("dns secure: too many queries in flight, answering SERVFAIL");
+            if let Some(err) = dns::synthesize_error(pkt, Some(query), dns::RCODE_SERVFAIL) {
+                self.write_raw(&err);
+            }
+            return;
+        }
+        // A descriptor created without `protect()` would send the handshake
+        // back into the tunnel. The app installs the protector before the
+        // tunnel starts, so a missing one is a real failure, not a fallback.
+        let protector = match self.socket_protector.lock().unwrap().clone() {
+            Some(protector) => protector,
+            None => {
+                self.stats.inc(&self.stats.dns_timeouts);
+                crate::logbuf::push("dns secure: no socket protector installed");
+                if let Some(err) = dns::synthesize_error(pkt, Some(query), dns::RCODE_SERVFAIL) {
+                    self.write_raw(&err);
+                }
+                return;
+            }
+        };
+
+        let txid = self.upstream.lock().unwrap().alloc_txid();
+        let message = match safe_host {
+            Some(safe_host) => dns::build_query(safe_host, query.qtype, txid),
+            None => {
+                let mut message = pkt.l4_payload().to_vec();
+                if message.len() >= 12 {
+                    message[0] = (txid >> 8) as u8;
+                    message[1] = (txid & 0xff) as u8;
+                    Some(message)
+                } else {
+                    None
+                }
+            }
+        };
+        let Some(message) = message else {
+            self.stats.inc(&self.stats.dns_timeouts);
+            crate::logbuf::push(&format!(
+                "dns secure: {host} produced no query",
+                host = query.qname.as_str()
+            ));
+            if let Some(err) = dns::synthesize_error(pkt, Some(query), dns::RCODE_SERVFAIL) {
+                self.write_raw(&err);
+            }
+            return;
+        };
+
+        let pending = crate::upstream::Pending {
+            client_txid: query.id,
+            // The secure transport has no socket-pool slot; the field is
+            // unused by `handle_reply`.
+            socket: 0,
+            packet: pkt.raw.to_vec(),
+            sent_ms: now_ms(),
+            purpose: if safe_host.is_some() {
+                crate::upstream::Purpose::SafeSearch
+            } else {
+                crate::upstream::Purpose::Client
+            },
+            safe_host: safe_host.unwrap_or("").to_string(),
+        };
+        let job = crate::dnssecure::SecureJob {
+            resolver,
+            message,
+            pending,
+            protector,
+        };
+        if !self.enqueue_secure(job) {
+            self.stats.inc(&self.stats.dns_timeouts);
+            crate::logbuf::push("dns secure: no worker is running");
+            if let Some(err) = dns::synthesize_error(pkt, Some(query), dns::RCODE_SERVFAIL) {
+                self.write_raw(&err);
+            }
+            return;
+        }
+        self.secure_outstanding.fetch_add(1, Ordering::Relaxed);
+        self.stats.inc(&self.stats.dns_queries);
+        self.stats.inc(&self.stats.packets_forwarded);
     }
 
     /// A SafeSearch lookup timed out: the client that was waiting on it gets
@@ -2972,6 +3241,7 @@ fn forwarder_loop(core: &'static Core) {
     while core.is_running() {
         replies.clear();
         let now = now_ms();
+        let mut answered = false;
 
         // Answers that are already on the wire. The DNS sockets are part of
         // the wait set below, so a reply ends the wait and is read here right
@@ -2986,9 +3256,21 @@ fn forwarder_loop(core: &'static Core) {
         for reply in &replies {
             core.handle_reply(reply);
         }
+        answered |= !replies.is_empty();
+        // Encrypted transports answer through their own channel; the worker
+        // pokes the wake fd, so this drains soon after the wait below.
+        for reply in core.take_secure_replies() {
+            core.handle_secure_reply(reply);
+            answered = true;
+        }
 
         // The single blocking point of the loop.
         core.wait_for_events(FORWARD_WAIT_MS);
+
+        for reply in core.take_secure_replies() {
+            core.handle_secure_reply(reply);
+            answered = true;
+        }
 
         // Relayed connections: whatever the real server answered has been
         // spliced back to the client by the wait itself, and finished relays
@@ -2998,7 +3280,7 @@ fn forwarder_loop(core: &'static Core) {
         // Idle NAT mappings are retired here too, for the same reason.
         core.udp_nat.lock().unwrap().expire(now);
 
-        if replies.is_empty() {
+        if !answered {
             core.conntrack.lock().unwrap().expire(now);
         }
     }
@@ -3965,11 +4247,7 @@ mod tests {
         assert_eq!(dns_reply_rcode(&core, "www.google.com"), Some(SERVFAIL));
 
         let address = "216.239.32.32".parse::<std::net::IpAddr>().unwrap();
-        core.remember_safe_search(
-            "forcesafesearch.google.com",
-            &[(address, 120)],
-            now_ms(),
-        );
+        core.remember_safe_search("forcesafesearch.google.com", &[(address, 120)], now_ms());
         assert_eq!(
             dns_reply_addresses(&core, dns_query_packet("www.google.com")),
             vec![address]
@@ -3987,6 +4265,114 @@ mod tests {
         let raw = out.first()?;
         let pkt = Packet::parse(raw)?;
         pkt.l4_payload().get(3).map(|flags| flags & 0x0f)
+    }
+
+    #[test]
+    fn an_encrypted_query_without_a_protector_fails_fast() {
+        const SERVFAIL: u8 = 2;
+        let core = Core::new();
+        core.set_secure_resolver(Some(
+            crate::dnssecure::SecureResolver::from_parts(
+                crate::state::model::DnsProtocol::Dot,
+                "127.0.0.1",
+                853,
+            )
+            .expect("resolver"),
+        ));
+        // No protector: connecting would send the handshake into the tunnel.
+        assert_eq!(dns_reply_rcode(&core, "example.com"), Some(SERVFAIL));
+    }
+
+    #[test]
+    fn a_failed_secure_exchange_answers_servfail() {
+        const SERVFAIL: u8 = 2;
+
+        // A port nobody listens on: the worker's connect is refused at once.
+        let listener = std::net::TcpListener::bind(("127.0.0.1", 0)).expect("bind");
+        let port = listener.local_addr().expect("address").port();
+        drop(listener);
+
+        let core = Core::new();
+        core.set_socket_protector(Arc::new(AllowAll));
+        core.set_secure_resolver(Some(
+            crate::dnssecure::SecureResolver::from_parts(
+                crate::state::model::DnsProtocol::Dot,
+                "127.0.0.1",
+                port,
+            )
+            .expect("resolver"),
+        ));
+        core.start_secure_workers();
+        assert!(core
+            .handle_packet(&dns_query_packet("example.com"))
+            .is_empty());
+
+        let reply = wait_for_secure_reply(&core);
+        core.handle_secure_reply(reply);
+        let out = core.take_outbox();
+        let lowest = out
+            .first()
+            .and_then(|raw| Packet::parse(raw))
+            .and_then(|pkt| pkt.l4_payload().get(3).map(|flags| flags & 0x0f));
+        assert_eq!(lowest, Some(SERVFAIL));
+    }
+
+    #[test]
+    fn a_secure_answer_is_rewritten_for_the_client() {
+        const NOERROR: u8 = 0;
+
+        let core = Core::new();
+        let query_packet = dns_query_packet("example.com");
+        let address = "203.0.113.5".parse::<std::net::IpAddr>().unwrap();
+        let message = {
+            let packet = Packet::parse(&query_packet).expect("packet");
+            let query = dns::parse_query(packet.l4_payload()).expect("query");
+            let message = dns::answer_message(&query, &[address], 60).expect("answer");
+            core.secure_outstanding.store(1, Ordering::Relaxed);
+            core.handle_secure_reply(crate::dnssecure::SecureReply {
+                pending: crate::upstream::Pending {
+                    client_txid: query.id,
+                    socket: 0,
+                    packet: query_packet.clone(),
+                    sent_ms: now_ms(),
+                    purpose: crate::upstream::Purpose::Client,
+                    safe_host: String::new(),
+                },
+                message: message.clone(),
+            });
+            message
+        };
+        assert!(!message.is_empty());
+
+        let out = core.take_outbox();
+        let raw = out.first().expect("answer packet");
+        let pkt = Packet::parse(raw).expect("packet");
+        assert_eq!(dns::answer_addresses(pkt.l4_payload()), vec![(address, 60)]);
+        assert_eq!(
+            pkt.l4_payload().get(3).map(|flags| flags & 0x0f),
+            Some(NOERROR)
+        );
+    }
+
+    #[test]
+    fn the_probe_rejects_an_address_the_form_cannot_use() {
+        let core = Core::new();
+        let result = core.probe_dns(crate::state::model::DnsProtocol::Doh, "1.1.1.1");
+        assert!(!result.ok);
+        assert_eq!(
+            result.error,
+            crate::state::model::DnsProbeError::AddressInvalid
+        );
+    }
+
+    fn wait_for_secure_reply(core: &Core) -> crate::dnssecure::SecureReply {
+        for _ in 0..500 {
+            if let Some(reply) = core.take_secure_replies().into_iter().next() {
+                return reply;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        panic!("the encrypted-DNS worker never answered");
     }
 
     struct AllowAll;

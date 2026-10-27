@@ -19,6 +19,20 @@
     <string name="dns_error_unsupported_scheme">Only UDP, DoT and DoH addresses are supported.</string>
     <string name="dns_error_ipv6_udp_unsupported">Plain UDP currently supports IPv4 only.</string>
 
+    <string name="dns_rewrite_error_host_empty">Enter a host name.</string>
+    <string name="dns_rewrite_error_host_invalid">That host name is not valid.</string>
+    <string name="dns_rewrite_error_answer_empty">Enter an IP address.</string>
+    <string name="dns_rewrite_error_answer_invalid">That IP address is not valid.</string>
+
+    <string name="dns_probe_ok">Resolver answered in %1$d ms</string>
+    <string name="dns_probe_failed">The resolver did not answer.</string>
+    <string name="dns_probe_address_invalid">Check the resolver address first.</string>
+    <string name="dns_probe_unsupported">This server does not support the selected protocol.</string>
+    <string name="dns_probe_protected_socket">The tunnel blocked the test connection.</string>
+    <string name="dns_probe_network">Network error while testing the resolver.</string>
+    <string name="dns_probe_timeout">The resolver timed out.</string>
+    <string name="dns_probe_bad_response">The resolver returned an invalid answer.</string>
+
     <string name="download_error_store_unavailable">The core store is not open.</string>
     <string name="download_error_no_url">That list has no URL.</string>
     <string name="download_error_http">The server refused the download.</string>
@@ -64,6 +78,11 @@
     <string name="dns_udp_ipv4_only">Plain UDP DNS currently supports IPv4 addresses only</string>
     <string name="dns_provider_selected">Selected %1$s</string>
     <string name="dns_custom_added">Custom DNS added: %1$s</string>
+    <string name="dns_dot_format">Use tls://host or host:853 (for example tls://dns.adguard-dns.com).</string>
+    <string name="dns_doh_format">Use a full https:// URL (for example https://dns.adguard-dns.com/dns-query).</string>
+    <string name="dns_rewrite_added">Rewrite added: %1$s</string>
+    <string name="dns_rewrite_updated">Rewrite updated: %1$s</string>
+    <string name="dns_rewrite_removed">Rewrite removed: %1$s</string>
 
     <!-- Filter subscriptions -->
     <string name="filter_url_empty">Enter a URL or pick a local file</string>
@@ -272,6 +291,19 @@
     <string name="network_dot_title">Block encrypted DNS (DoT)</string>
     <string name="network_dot_subtitle">Blocks DNS-over-TLS (port 853) so clients cannot bypass the filter</string>
     <string name="network_dot_private_dns">Strict Private DNS is on: the system keeps its own resolver, so port 853 is not blocked.</string>
+    <string name="network_safe_search_title">Safe Search</string>
+    <string name="network_safe_search_subtitle">Force safe results on Google, Bing and YouTube</string>
+    <string name="network_rewrites_title">DNS rewrites</string>
+    <string name="network_rewrites_subtitle">Answer chosen hosts with your own address, before the filter lists.</string>
+    <string name="network_rewrites_empty">No rewrites yet</string>
+    <string name="network_rewrites_add">Add rewrite</string>
+    <string name="network_rewrites_add_title">Add DNS rewrite</string>
+    <string name="network_rewrites_host_label">Host</string>
+    <string name="network_rewrites_host_hint">nas.home or *.lan</string>
+    <string name="network_rewrites_answer_label">Address</string>
+    <string name="network_rewrites_answer_hint">192.168.1.10</string>
+    <string name="network_rewrites_save">Save</string>
+    <string name="network_rewrites_remove">Remove</string>
     <string name="network_proxy_title">Traffic routing</string>
     <string name="network_proxy_subtitle">Send TCP flows through a SOCKS5 proxy instead of connecting directly.</string>
     <string name="network_socks_title">SOCKS5 proxy</string>
@@ -694,9 +726,18 @@
     <string name="settings_dns_custom">Custom</string>
     <string name="settings_dns_change">Change</string>
     <string name="settings_dns_add_title">Add resolver</string>
+    <string name="settings_dns_protocol_label">Protocol</string>
     <string name="settings_dns_name_label">Name</string>
-    <string name="settings_dns_address_label">IPv4/IPv6 address</string>
+    <string name="settings_dns_address_label">Address</string>
     <string name="settings_dns_address_hint">1.1.1.1 or 1.1.1.1:53</string>
+    <string name="settings_dns_address_hint_dot">tls://dns.adguard-dns.com</string>
+    <string name="settings_dns_address_hint_doh">https://dns.adguard-dns.com/dns-query</string>
+    <string name="settings_dns_summary">%1$s · %2$s</string>
+    <string name="settings_dns_test">Test</string>
+    <string name="settings_dns_testing">Testing…</string>
+    <string name="dns_protocol_udp">UDP</string>
+    <string name="dns_protocol_dot">DoT</string>
+    <string name="dns_protocol_doh">DoH</string>
     <string name="settings_dns_add">Add and select</string>
     <string name="settings_engine_title">Engine status</string>
     <string name="settings_engine_build">Filter compile: %1$d ms</string>
