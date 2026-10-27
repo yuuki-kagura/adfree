@@ -150,6 +150,8 @@ dependencies {
     implementation(libs.kotlinx.coroutines.core)
     implementation(libs.logging.interceptor)
     implementation(libs.okhttp)
+    // Periodic filter refresh while the app is not open.
+    implementation(libs.androidx.work.runtime.ktx)
 
     // uniffi's Kotlin bindings use JNA to call into the native library.
     implementation(libs.jna) {

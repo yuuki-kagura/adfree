@@ -245,6 +245,13 @@
     <string name="vpn_channel_description">Shows when AdFree is filtering your traffic</string>
     <string name="vpn_notification_title">AdFree is protecting you</string>
     <string name="vpn_notification_text">Filtering ads and trackers at the DNS level</string>
+    <string name="vpn_notification_pause">Pause</string>
+    <string name="tile_state_on">Protection on</string>
+    <string name="tile_state_off">Protection off</string>
+    <string name="notification_channel_updates">Filter updates</string>
+    <string name="notification_channel_updates_description">Results of automatic filter refreshes</string>
+    <string name="notification_filter_update_title">Filters updated</string>
+    <string name="notification_filter_update_text">Refreshed %1$d lists</string>
     <string name="threat_analyzing">Analyzing %1$s on this device…</string>
 
     <!-- Navigation -->
@@ -665,9 +672,11 @@
     <string name="protocol_tcp">TCP</string>
     <string name="protocol_udp">UDP</string>
     <string name="settings_auto_update_title">Automatic filter updates</string>
-    <string name="settings_auto_update_subtitle">Checked only when the app opens — no waking the radio or running in the background. Enabled lists that were downloaded are refreshed when due.</string>
+    <string name="settings_auto_update_subtitle">Refreshed in the background when the network is available and the battery is not low. Enabled lists that were downloaded are refreshed when due.</string>
     <string name="settings_auto_update_off">Off</string>
     <string name="settings_auto_update_hours">%1$d h</string>
+    <string name="settings_autostart_title">Start on boot</string>
+    <string name="settings_autostart_subtitle">Restore protection after the device restarts</string>
     <string name="settings_stealth_title">Stealth mode</string>
     <string name="settings_stealth_master_title">Enable stealth mode</string>
     <string name="settings_stealth_master_subtitle">Apply the options below to filtered HTTPS traffic</string>

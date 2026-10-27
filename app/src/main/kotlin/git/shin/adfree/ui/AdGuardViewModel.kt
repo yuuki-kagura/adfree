@@ -299,6 +299,8 @@ class AdGuardViewModel(
             is AdGuardIntent.ToggleSafeSearch -> repository.toggleSafeSearch(intent.enabled)
             is AdGuardIntent.SetFilterAutoUpdate ->
                 repository.setFilterAutoUpdate(intent.hours)
+            is AdGuardIntent.ToggleAutoStart ->
+                repository.toggleAutoStart(intent.enabled)
             is AdGuardIntent.ToggleSmartFiltering ->
                 repository.toggleSmartFiltering(intent.enabled)
             is AdGuardIntent.ToggleLogAllowed -> repository.toggleLogAllowed(intent.enabled)
@@ -522,6 +524,23 @@ class AdGuardViewModel(
             is AdGuardIntent.DismissVpnPermission -> _showVpnPermissionPrompt.value = false
         }
     }
+
+    /**
+     * Quick Settings entry point. A tile cannot raise the system VPN consent
+     * dialog itself, so it opens this Activity and the prompt flag does it.
+     */
+    fun enableProtectionFromShortcut() {
+        if (vpnController.isVpnActive.value) return
+        repository.toggleProtection(true)
+        if (vpnController.prepareIfNeeded() != null) {
+            _showVpnPermissionPrompt.value = true
+        } else {
+            vpnController.startVpnService()
+        }
+    }
+
+    /** Update notification tapped: the refreshed lists live on the Filters tab. */
+    fun openFilters() = onIntent(AdGuardIntent.SelectTab(AdGuardTab.FILTERS))
 
     private fun toggleProtection() {
         // The switch follows the VPN itself, not a remembered flag: the flag

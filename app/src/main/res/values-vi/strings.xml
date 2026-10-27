@@ -245,6 +245,13 @@
     <string name="vpn_channel_description">Chỉ báo AdFree đang lọc lưu lượng mạng</string>
     <string name="vpn_notification_title">AdFree đang bảo vệ</string>
     <string name="vpn_notification_text">Lọc quảng cáo &amp; tracker mức DNS</string>
+    <string name="vpn_notification_pause">Tạm dừng</string>
+    <string name="tile_state_on">Đang bảo vệ</string>
+    <string name="tile_state_off">Đang tắt</string>
+    <string name="notification_channel_updates">Cập nhật bộ lọc</string>
+    <string name="notification_channel_updates_description">Kết quả làm mới bộ lọc tự động</string>
+    <string name="notification_filter_update_title">Đã cập nhật bộ lọc</string>
+    <string name="notification_filter_update_text">Đã làm mới %1$d danh sách</string>
     <string name="threat_analyzing">Đang phân tích %1$s trên thiết bị…</string>
 
     <!-- Navigation -->
@@ -665,9 +672,11 @@
     <string name="protocol_tcp">TCP</string>
     <string name="protocol_udp">UDP</string>
     <string name="settings_auto_update_title">Tự động cập nhật bộ lọc</string>
-    <string name="settings_auto_update_subtitle">Chỉ kiểm tra khi mở app — không đánh thức radio hay chạy nền. List bật và đã tải sẽ được làm mới khi quá hạn.</string>
+    <string name="settings_auto_update_subtitle">Tự làm mới ở chế độ nền khi có mạng và pin không yếu. List bật và đã tải sẽ được làm mới khi quá hạn.</string>
     <string name="settings_auto_update_off">Tắt</string>
     <string name="settings_auto_update_hours">%1$d giờ</string>
+    <string name="settings_autostart_title">Tự khởi động khi bật máy</string>
+    <string name="settings_autostart_subtitle">Bật lại bảo vệ sau khi khởi động máy</string>
     <string name="settings_stealth_title">Chế độ tàng hình</string>
     <string name="settings_stealth_master_title">Bật chế độ tàng hình</string>
     <string name="settings_stealth_master_subtitle">Áp dụng các tuỳ chọn bên dưới cho lưu lượng HTTPS đã lọc</string>

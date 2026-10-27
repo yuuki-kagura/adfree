@@ -43,9 +43,11 @@ import git.shin.adfree.model.ProxySettings
 import git.shin.adfree.model.ProtocolType
 import git.shin.adfree.ui.CoreText
 import git.shin.adfree.ui.UiText
+import git.shin.adfree.work.FilterUpdateScheduler
 import java.io.IOException
 import java.net.URLEncoder
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -171,9 +173,10 @@ class AdGuardRepository(
     private var filterBuildJob: Job? = null
 
     /** Guards the launch/resume subscription refresh against a double start. */
-    private var autoUpdateRunning = false
+    private val autoUpdateRunning = AtomicBoolean(false)
 
     /** Last time a stale-list scan ran; throttles ON_RESUME checks. */
+    @Volatile
     private var lastAutoUpdateCheckMs = 0L
 
     private val scriptStoreClient by lazy {
@@ -214,6 +217,10 @@ class AdGuardRepository(
             engine.saveProtection(settings.toCoreState())
         }
         _settings.value = settings
+        // WorkManager keeps the periodic refresh across reboots and updates.
+        // Syncing at startup also schedules it for users upgrading from a
+        // build that only checked while the app was open.
+        FilterUpdateScheduler.sync(context, settings.filterAutoUpdateHours)
         loadFilterState(snapshot.filters)
         loadScriptsState(snapshot.scripts)
     }
@@ -340,6 +347,10 @@ class AdGuardRepository(
         if (enabled) engine.markWantsStart() else engine.markWantsStop()
     }
 
+    /** Restores the tunnel after a reboot when protection was on. */
+    fun toggleAutoStart(enabled: Boolean) =
+        updateSettings { it.copy(autoStart = enabled) }
+
     /** In-app language; the UI applies it through AppCompat's per-app locales. */
     fun setAppLanguage(language: git.shin.adfree.model.AppLanguage) =
         updateSettings { it.copy(appLanguage = language) }
@@ -443,6 +454,7 @@ class AdGuardRepository(
     fun setFilterAutoUpdate(hours: Int) {
         val clamped = hours.coerceIn(0, 168)
         updateSettings { it.copy(filterAutoUpdateHours = clamped) }
+        FilterUpdateScheduler.sync(context, clamped)
         showTransientStatus(
             if (clamped == 0) UiText.Resource(R.string.filter_auto_update_off)
             else UiText.Formatted(R.string.filter_auto_update_every_hours, clamped),
@@ -655,7 +667,7 @@ class AdGuardRepository(
             // After the first compile so the engine is usable while the
             // refresh runs; only lists whose body is already on disk and
             // older than the configured interval are touched.
-            autoUpdateStaleLists()
+            updateStaleLists(reportToUi = true)
         }
     }
 
@@ -663,39 +675,49 @@ class AdGuardRepository(
      * Re-checks stale subscriptions when the activity comes back to the
      * foreground (for example after a long session or a day in Recents).
      *
-     * There is still no worker, alarm or wake lock: the check only runs while
-     * the user is already looking at the app. The 30-minute throttle keeps a
-     * failed download from retrying on every tab switch or dialog dismissal.
+     * The worker now handles refreshes while the app is closed; this stays as
+     * the catch-up path for a device where WorkManager has not run yet. The
+     * 30-minute throttle keeps a failed download from retrying on every tab
+     * switch or dialog dismissal.
      */
     fun autoUpdateIfStale() {
         val now = System.currentTimeMillis()
         if (now - lastAutoUpdateCheckMs < AUTO_UPDATE_RESUME_MIN_INTERVAL_MS) return
         lastAutoUpdateCheckMs = now
-        scope.launch { autoUpdateStaleLists() }
+        scope.launch { updateStaleLists(reportToUi = true) }
     }
+
+    /**
+     * Entry point for [FilterUpdateWorker]: no progress line and no snackbar,
+     * because there may be no Activity to show them. Returns how many list
+     * bodies were downloaded successfully.
+     */
+    suspend fun backgroundUpdateStaleLists(): Int = updateStaleLists(reportToUi = false)
 
     /**
      * Refreshes enabled subscriptions older than `filterAutoUpdateHours`.
      *
-     * There is no periodic worker, no wake lock and no radio wake-up while the
-     * phone is idle. A stale list catches up on launch/resume instead.
+     * A second caller arriving while a refresh runs gets 0 instead of starting
+     * an overlapping download of the same lists. A failed download is not
+     * retried here; the next scheduled or foreground check picks it up.
      */
-    private suspend fun autoUpdateStaleLists() {
+    private suspend fun updateStaleLists(reportToUi: Boolean): Int {
         lastAutoUpdateCheckMs = System.currentTimeMillis()
-        if (autoUpdateRunning) return
-        val hours = _settings.value.filterAutoUpdateHours
-        if (hours <= 0) return
-        val now = System.currentTimeMillis()
-        val stale = _filterLists.value.filter {
-            it.isEnabled && !it.isCustom && !it.subscriptionUrl.isNullOrBlank() &&
-                filterUpdateDue(it.lastUpdatedMs, now, hours)
-        }
-        if (stale.isEmpty()) return
-
-        autoUpdateRunning = true
+        if (!autoUpdateRunning.compareAndSet(false, true)) return 0
         try {
-            _loadingMessage.value =
-                UiText.Formatted(R.string.filter_auto_update_progress, stale.size)
+            val hours = _settings.value.filterAutoUpdateHours
+            if (hours <= 0) return 0
+            val now = System.currentTimeMillis()
+            val stale = _filterLists.value.filter {
+                it.isEnabled && !it.isCustom && !it.subscriptionUrl.isNullOrBlank() &&
+                    filterUpdateDue(it.lastUpdatedMs, now, hours)
+            }
+            if (stale.isEmpty()) return 0
+
+            if (reportToUi) {
+                _loadingMessage.value =
+                    UiText.Formatted(R.string.filter_auto_update_progress, stale.size)
+            }
             var updated = 0
             for (list in stale) {
                 val result = withContext(Dispatchers.IO) { engine.downloadList(list) }
@@ -707,20 +729,23 @@ class AdGuardRepository(
                 }
             }
             if (updated > 0) pushListsToEngine()
-            showTransientStatus(
-                if (updated == stale.size) {
-                    UiText.Formatted(R.string.filter_auto_update_done, stale.size)
-                } else {
-                    UiText.Formatted(
-                        R.string.filter_auto_update_partial,
-                        updated,
-                        stale.size,
-                    )
-                },
-            )
+            if (reportToUi) {
+                showTransientStatus(
+                    if (updated == stale.size) {
+                        UiText.Formatted(R.string.filter_auto_update_done, stale.size)
+                    } else {
+                        UiText.Formatted(
+                            R.string.filter_auto_update_partial,
+                            updated,
+                            stale.size,
+                        )
+                    },
+                )
+            }
+            return updated
         } finally {
-            autoUpdateRunning = false
-            _loadingMessage.value = null
+            autoUpdateRunning.set(false)
+            if (reportToUi) _loadingMessage.value = null
         }
     }
 

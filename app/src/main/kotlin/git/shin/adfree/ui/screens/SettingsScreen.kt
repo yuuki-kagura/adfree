@@ -28,6 +28,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Lock
+import androidx.compose.material.icons.filled.PowerSettingsNew
 import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material.icons.filled.Dns
 import androidx.compose.material.icons.filled.Refresh
@@ -242,6 +243,16 @@ fun SettingsScreen(
                     )
                 }
             }
+
+            Spacer(modifier = Modifier.height(14.dp))
+
+            SettingsSwitch(
+                icon = Icons.Default.PowerSettingsNew,
+                title = stringResource(R.string.settings_autostart_title),
+                subtitle = stringResource(R.string.settings_autostart_subtitle),
+                checked = state.settings.autoStart,
+                onCheckedChange = { viewModel.onIntent(AdGuardIntent.ToggleAutoStart(it)) },
+            )
 
             Spacer(modifier = Modifier.height(24.dp))
 

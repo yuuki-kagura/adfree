@@ -1,10 +1,13 @@
 package git.shin.adfree.vpn
 
+import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.net.VpnService
 import android.os.Handler
 import android.os.Looper
+import android.service.quicksettings.TileService
+import androidx.core.content.ContextCompat
 import git.shin.adfree.core.CoreEngine
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -42,22 +45,33 @@ class VpnController(
     fun onPermissionResult(granted: Boolean) {
         _permissionGranted.value = granted
         if (granted && coreEngine.wantsStart) startVpnService()
+        refreshTile()
     }
 
-    fun startVpnService() {
+    /**
+     * [fromBackground] is for boot and Quick Settings starts: Android requires
+     * `startForegroundService` there, and the service promotes its
+     * notification before doing any binder work.
+     */
+    fun startVpnService(fromBackground: Boolean = false) {
         coreEngine.markWantsStart()
         if (VpnService.prepare(context) != null) {
             _permissionGranted.value = false
+            refreshTile()
             return
         }
         _isVpnActive.value = true
-        runCatching {
-            context.startService(
-                Intent(context, AdGuardVpnService::class.java).apply {
-                    action = AdGuardVpnService.ACTION_START_VPN
-                },
-            )
+        val intent = Intent(context, AdGuardVpnService::class.java).apply {
+            action = AdGuardVpnService.ACTION_START_VPN
         }
+        runCatching {
+            if (fromBackground) {
+                ContextCompat.startForegroundService(context, intent)
+            } else {
+                context.startService(intent)
+            }
+        }
+        refreshTile()
     }
 
     fun stopVpnService() {
@@ -70,6 +84,7 @@ class VpnController(
                 },
             )
         }
+        refreshTile()
     }
 
     /**
@@ -94,10 +109,22 @@ class VpnController(
     fun onVpnStarted() {
         _isVpnActive.value = true
         _permissionGranted.value = true
+        refreshTile()
     }
 
     fun onVpnStopped() {
         _isVpnActive.value = false
+        refreshTile()
+    }
+
+    /** Asks the system to redraw the tile without waiting for the shade to open. */
+    private fun refreshTile() {
+        runCatching {
+            TileService.requestListeningState(
+                context,
+                ComponentName(context, AdFreeTileService::class.java),
+            )
+        }
     }
 
     private companion object {

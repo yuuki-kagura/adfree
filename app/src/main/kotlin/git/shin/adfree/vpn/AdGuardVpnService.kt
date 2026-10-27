@@ -3,6 +3,7 @@ package git.shin.adfree.vpn
 import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
+import android.app.PendingIntent
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
@@ -21,6 +22,7 @@ import android.util.Log
 import androidx.core.app.NotificationCompat
 import git.shin.adfree.AdGuardApplication
 import git.shin.adfree.BuildConfig
+import git.shin.adfree.MainActivity
 import git.shin.adfree.R
 import git.shin.adfree.core.CoreEngine
 import git.shin.adfree.ui.Localization
@@ -182,9 +184,19 @@ class AdGuardVpnService : VpnService() {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        if (intent?.action == ACTION_STOP_VPN) {
-            stopVpn()
-            return START_NOT_STICKY
+        when (intent?.action) {
+            ACTION_STOP_VPN -> {
+                stopVpn()
+                return START_NOT_STICKY
+            }
+            ACTION_PAUSE_VPN -> {
+                // Pause comes from the notification, so it has to survive a
+                // restart. ACTION_STOP_VPN is only used while reconfiguring
+                // the tunnel, where the remembered state must stay "on".
+                container.repository.toggleProtection(false)
+                stopVpn()
+                return START_NOT_STICKY
+            }
         }
         startVpn()
         return START_STICKY
@@ -383,10 +395,34 @@ class AdGuardVpnService : VpnService() {
 
     private fun buildStatusNotification(): Notification {
         val ui = localizedContext()
+        val open = PendingIntent.getActivity(
+            this,
+            0,
+            Intent(this, MainActivity::class.java).apply {
+                flags = Intent.FLAG_ACTIVITY_NEW_TASK or
+                    Intent.FLAG_ACTIVITY_CLEAR_TOP or
+                    Intent.FLAG_ACTIVITY_SINGLE_TOP
+            },
+            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
+        )
+        val pause = PendingIntent.getService(
+            this,
+            1,
+            Intent(this, AdGuardVpnService::class.java).apply {
+                action = ACTION_PAUSE_VPN
+            },
+            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
+        )
         return NotificationCompat.Builder(this, NOTIFICATION_CHANNEL_ID)
             .setContentTitle(ui.getString(R.string.vpn_notification_title))
             .setContentText(ui.getString(R.string.vpn_notification_text))
-            .setSmallIcon(android.R.drawable.stat_sys_download)
+            .setSmallIcon(R.drawable.ic_qs_shield)
+            .setContentIntent(open)
+            .addAction(
+                R.drawable.ic_qs_shield,
+                ui.getString(R.string.vpn_notification_pause),
+                pause,
+            )
             .setOngoing(true)
             .setPriority(NotificationCompat.PRIORITY_LOW)
             .setCategory(NotificationCompat.CATEGORY_SERVICE)
@@ -396,6 +432,7 @@ class AdGuardVpnService : VpnService() {
     companion object {
         const val ACTION_START_VPN = "com.adfree.START_VPN"
         const val ACTION_STOP_VPN = "com.adfree.STOP_VPN"
+        const val ACTION_PAUSE_VPN = "com.adfree.PAUSE_VPN"
         private const val TAG = "AdGuardVpnService"
         /** adbd's package: kept out of the tunnel so tooling survives. */
         private const val SHELL_PACKAGE = "com.android.shell"

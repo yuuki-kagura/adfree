@@ -20,6 +20,7 @@ okhttp = "4.12.0"
 moshiKotlin = "1.15.2"
 datastorePreferences = "1.1.7"
 robolectric = "4.16.1"
+workRuntime = "2.11.2"
 secretsGradlePlugin = "2.0.1"
 googleServices = "4.5.0"
 jna = "5.19.1"
@@ -55,6 +56,7 @@ logging-interceptor = { group = "com.squareup.okhttp3", name = "logging-intercep
 okhttp = { group = "com.squareup.okhttp3", name = "okhttp", version.ref = "okhttp" }
 moshi-kotlin = { group = "com.squareup.moshi", name = "moshi-kotlin", version.ref = "moshiKotlin" }
 robolectric = { group = "org.robolectric", name = "robolectric", version.ref = "robolectric" }
+androidx-work-runtime-ktx = { group = "androidx.work", name = "work-runtime-ktx", version.ref = "workRuntime" }
 jna = { group = "net.java.dev.jna", name = "jna", version.ref = "jna" }
 
 

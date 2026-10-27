@@ -1,5 +1,9 @@
 package git.shin.adfree
 
+import android.Manifest
+import android.content.Intent
+import android.content.pm.PackageManager
+import android.os.Build
 import android.os.Bundle
 import androidx.activity.SystemBarStyle
 import androidx.activity.compose.BackHandler
@@ -55,6 +59,8 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.core.content.ContextCompat
+import androidx.core.content.edit
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LifecycleEventEffect
 import git.shin.adfree.model.ThemeMode
@@ -88,11 +94,23 @@ class MainActivity : AppCompatActivity() {
     /** Container kept for the Activity's lifetime so MainActivity can read it. */
     private val container get() = AdGuardApplication.instance.container
 
+    /**
+     * Android 13+ gates the ongoing protection notification and the result of
+     * a background filter refresh behind an explicit grant.
+     */
+    private val notificationPermissionLauncher = registerForActivityResult(
+        ActivityResultContracts.RequestPermission(),
+    ) { /* The notification is optional; refusal only silences it. */ }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         // System screens (the certificate installer, consent dialogs) launch
         // from the ViewModel, so it needs a context that can start activities.
         viewModel.attachContext { this }
+        // A launch intent is consumed once: rotation replays the original
+        // intent, and asking for consent again there would look like a bug.
+        if (savedInstanceState == null) handleLaunchAction(intent)
+        requestNotificationPermissionOnce()
 
         setContent {
             val state by viewModel.uiState.collectAsState()
@@ -217,6 +235,46 @@ class MainActivity : AppCompatActivity() {
                 }
             }
         }
+    }
+
+    /** Tile and update-notification deep links arrive here while we are alive. */
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        handleLaunchAction(intent)
+    }
+
+    private fun handleLaunchAction(intent: Intent?) {
+        when (intent?.action) {
+            ACTION_ENABLE_PROTECTION -> viewModel.enableProtectionFromShortcut()
+            ACTION_OPEN_FILTERS -> viewModel.openFilters()
+        }
+    }
+
+    private fun requestNotificationPermissionOnce() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) return
+        if (ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) ==
+            PackageManager.PERMISSION_GRANTED
+        ) {
+            return
+        }
+        val prefs = getSharedPreferences(NOTIFICATION_PREFS, MODE_PRIVATE)
+        if (prefs.getBoolean(KEY_NOTIFICATION_ASKED, false)) return
+        // Record the attempt before launching: a refusal is the user's answer,
+        // not a reason to ask on every launch.
+        prefs.edit { putBoolean(KEY_NOTIFICATION_ASKED, true) }
+        notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+    }
+
+    companion object {
+        /** Tile tapped without VPN consent: open the app and raise the dialog. */
+        const val ACTION_ENABLE_PROTECTION = "git.shin.adfree.action.ENABLE_PROTECTION"
+
+        /** Update notification tapped: land on the Filters tab. */
+        const val ACTION_OPEN_FILTERS = "git.shin.adfree.action.OPEN_FILTERS"
+
+        private const val NOTIFICATION_PREFS = "notification_permission"
+        private const val KEY_NOTIFICATION_ASKED = "asked"
     }
 }
 
