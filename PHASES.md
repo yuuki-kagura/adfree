@@ -12,7 +12,7 @@ tiếp, không phải kế hoạch parity mạng trong `plan.md`.
 | 43 | Phase 5: Advanced DNS (DoH/DoT, rewrites, SafeSearch, probe) | ✅ xong (`e622cb0` + `fb82872`) |
 | 44 | Phase 6: Background updates, notification, tile, autostart | ✅ xong (`2cfd659`) |
 | 45 | Phase 7: Theme, language selector, cosmetic filtering | ✅ xong (`7f2f203` + commit này) |
-| 46 | Phase 8: Full verification and commits | ⏳ chưa |
+| 46 | Phase 8: Full verification and commits | ◐ cổng tự động xanh; kiểm tra thiết bị bị chặn |
 
 ## Phase 4 — Stealth end-to-end
 
@@ -103,6 +103,28 @@ Giới hạn:
 
 Test: `turning_cosmetics_off_leaves_the_page_without_them` (Rust, e2e MITM)
 xác nhận bật/tắt thật; test Rust và 731 key mỗi ngôn ngữ đều xanh.
+
+## Phase 8 — Kiểm chứng cuối
+
+Đã chạy, tất cả xanh:
+
+- `cargo fmt --check`; `cargo clippy --all-targets -- -D warnings`.
+- `cargo test --lib`: 677 passed, 2 ignored.
+- `:app:verifyBindings`: sinh lại bindings, `adfree.kt` không đổi.
+- `:app:compileDebugKotlin`, `:app:testDebugUnitTest`, `:app:lintDebug`,
+  `:app:assembleDebug`; 731 key EN/VI khớp từng tên.
+- `detect-changes --scope all` trước mỗi commit, không `partial`/`truncated`.
+
+Chưa kiểm tra trên thiết bị:
+
+- Không có adb device; hai AVD sẵn có đều hỏng (`Small_Phone.avd` là symlink
+  trỏ `/var/tmp` đã mất, `AdFree_Test` thiếu thư mục), và `/home` chỉ còn
+  ~380 MB nên không tạo được AVD mới (image API 37 cần vài GB). AVD tạm đã tạo
+  để thử đã xoá lại.
+- Vì vậy các mục cần quan sát trực tiếp — migration v4 + legacy import chạy
+  đúng một lần, export/import backup, DoH/DoT thật, WorkManager/tile/
+  autostart, header stealth, đổi ngôn ngữ/theme trên UI — hiện chỉ được bảo
+  đảm bằng test tự động, chưa xác nhận trên máy.
 
 ## Ghi chú
 
