@@ -77,6 +77,7 @@ import git.shin.adfree.ui.theme.AdGuardPurpleAI
 import git.shin.adfree.ui.theme.AdGuardRedBlocked
 import git.shin.adfree.ui.theme.AdGuardTextMuted
 import git.shin.adfree.ui.theme.AdGuardTextPrimary
+import git.shin.adfree.ui.theme.AdGuardOnAccent
 import git.shin.adfree.ui.theme.AdGuardTextSecondary
 import kotlinx.coroutines.withContext
 import androidx.compose.foundation.rememberScrollState
@@ -160,7 +161,7 @@ fun ScriptTextEditorDialog(
                     colors = ButtonDefaults.buttonColors(containerColor = AdGuardGreenPrimary),
                     shape = RoundedCornerShape(8.dp),
                 ) {
-                    Text(confirmText, color = Color.Black, fontWeight = FontWeight.Bold)
+                    Text(confirmText, color = AdGuardOnAccent, fontWeight = FontWeight.Bold)
                 }
                 TextButton(onClick = onDismiss) {
                     Text("Hủy", color = AdGuardTextSecondary)
@@ -379,7 +380,7 @@ fun UserScriptStoreSheet(
                     label = { Text(label, fontSize = 10.sp) },
                     colors = FilterChipDefaults.filterChipColors(
                         selectedContainerColor = AdGuardGreenPrimary,
-                        selectedLabelColor = Color.Black,
+                        selectedLabelColor = AdGuardOnAccent,
                         containerColor = AdGuardDarkSurface,
                         labelColor = AdGuardTextSecondary,
                     ),
@@ -557,7 +558,7 @@ private fun StoreScriptRow(
                         colors = ButtonDefaults.buttonColors(containerColor = AdGuardGreenPrimary),
                         shape = RoundedCornerShape(8.dp),
                     ) {
-                        Text("Cài", color = Color.Black, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                        Text("Cài", color = AdGuardOnAccent, fontSize = 12.sp, fontWeight = FontWeight.Bold)
                     }
 
                     installed.isEnabled && installed.sizeBytes > 0 -> OutlinedButton(
@@ -744,7 +745,7 @@ fun AddScriptDialog(
                 colors = ButtonDefaults.buttonColors(containerColor = AdGuardGreenPrimary),
                 shape = RoundedCornerShape(8.dp),
             ) {
-                Text("Thêm và tải", color = Color.Black, fontWeight = FontWeight.Bold)
+                Text("Thêm và tải", color = AdGuardOnAccent, fontWeight = FontWeight.Bold)
             }
         },
         dismissButton = {

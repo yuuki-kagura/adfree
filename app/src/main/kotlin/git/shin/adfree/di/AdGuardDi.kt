@@ -12,6 +12,9 @@ import git.shin.adfree.security.ThreatAnalyzer
 import git.shin.adfree.ui.AdGuardViewModel
 import git.shin.adfree.vpn.PrivateDns
 import git.shin.adfree.vpn.VpnController
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 
 /**
  * Hand-rolled DI container (enough here, no Hilt needed).
@@ -52,6 +55,13 @@ class AdGuardAppContainer(private val context: Context) {
     val privateDnsStrict: Boolean
         get() = PrivateDns.mode(context) == PrivateDns.Mode.STRICT
 
+    /**
+     * The last fallback the core had to take, so the UI can explain why the
+     * tunnel is not using the resolver/proxy the user picked.
+     */
+    private val _configWarning = MutableStateFlow(ConfigWarning.NONE)
+    val configWarning: StateFlow<ConfigWarning> = _configWarning.asStateFlow()
+
     fun provideViewModelFactory(): ViewModelProvider.Factory {
         return object : ViewModelProvider.Factory {
             @Suppress("UNCHECKED_CAST")
@@ -64,6 +74,7 @@ class AdGuardAppContainer(private val context: Context) {
                         coreEngine = coreEngine,
                         onConfigChanged = { applyConfig() },
                         isPrivateDnsStrict = { privateDnsStrict },
+                        configWarning = configWarning,
                     ) as T
                 }
                 throw IllegalArgumentException("Unknown ViewModel: ${modelClass.name}")
@@ -82,6 +93,7 @@ class AdGuardAppContainer(private val context: Context) {
      */
     fun applyConfig(): ConfigOutcome {
         val outcome = coreEngine.applyConfig(privateDnsStrict)
+        _configWarning.value = outcome.warning
         if (outcome.warning != ConfigWarning.NONE) {
             Log.w(TAG, "config fell back: ${outcome.warning}")
         }

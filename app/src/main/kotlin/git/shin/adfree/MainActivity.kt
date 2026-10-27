@@ -2,6 +2,7 @@ package git.shin.adfree
 
 import android.os.Bundle
 import androidx.activity.ComponentActivity
+import androidx.activity.SystemBarStyle
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
@@ -15,6 +16,7 @@ import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInHorizontally
 import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.animation.togetherWith
+import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.navigationBars
@@ -54,6 +56,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LifecycleEventEffect
+import git.shin.adfree.model.ThemeMode
 import git.shin.adfree.ui.AdGuardEffect
 import git.shin.adfree.ui.AdGuardIntent
 import git.shin.adfree.ui.AdGuardTab
@@ -67,6 +70,7 @@ import git.shin.adfree.ui.screens.SettingsScreen
 import git.shin.adfree.ui.theme.AdGuardDarkBg
 import git.shin.adfree.ui.theme.AdGuardDarkSurface
 import git.shin.adfree.ui.theme.AdGuardGreenPrimary
+import git.shin.adfree.ui.theme.AdGuardOnAccent
 import git.shin.adfree.ui.theme.AdGuardTextMuted
 import git.shin.adfree.ui.theme.AdGuardTextSecondary
 import git.shin.adfree.ui.theme.MyApplicationTheme
@@ -85,11 +89,26 @@ class MainActivity : ComponentActivity() {
         // System screens (the certificate installer, consent dialogs) launch
         // from the ViewModel, so it needs a context that can start activities.
         viewModel.attachContext { this }
-        enableEdgeToEdge()
 
         setContent {
-            MyApplicationTheme {
-                val state by viewModel.uiState.collectAsState()
+            val state by viewModel.uiState.collectAsState()
+            val darkTheme = when (state.settings.themeMode) {
+                ThemeMode.SYSTEM -> isSystemInDarkTheme()
+                ThemeMode.DARK -> true
+                ThemeMode.LIGHT -> false
+            }
+            LaunchedEffect(darkTheme) {
+                // The system bars follow the app theme, not the device theme:
+                // a light app on a dark device still needs dark status icons.
+                val transparent = android.graphics.Color.TRANSPARENT
+                val statusBar = if (darkTheme) {
+                    SystemBarStyle.dark(transparent)
+                } else {
+                    SystemBarStyle.light(transparent, transparent)
+                }
+                enableEdgeToEdge(statusBarStyle = statusBar, navigationBarStyle = statusBar)
+            }
+            MyApplicationTheme(darkTheme = darkTheme) {
                 val snackbarHostState = remember { SnackbarHostState() }
                 // Keep each tab's own navigation (for example the Filters hub
                 // sub-screen) alive while the user visits another tab.
@@ -235,7 +254,7 @@ fun AdGuardBottomBar(
                     )
                 },
                 colors = NavigationBarItemDefaults.colors(
-                    selectedIconColor = Color.Black,
+                    selectedIconColor = AdGuardOnAccent,
                     selectedTextColor = AdGuardGreenPrimary,
                     indicatorColor = AdGuardGreenPrimary,
                     unselectedIconColor = AdGuardTextSecondary,

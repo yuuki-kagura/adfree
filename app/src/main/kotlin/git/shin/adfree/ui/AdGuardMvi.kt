@@ -64,6 +64,7 @@ sealed interface AdGuardIntent {
     data object ToggleStealth : AdGuardIntent
     data class ToggleBlockQuic(val enabled: Boolean) : AdGuardIntent
     data class ToggleBlockDoh(val enabled: Boolean) : AdGuardIntent
+    data class ToggleBlockDot(val enabled: Boolean) : AdGuardIntent
     data class ToggleSmartFiltering(val enabled: Boolean) : AdGuardIntent
     /** Subscription refresh interval in hours; 0 turns it off. */
     data class SetFilterAutoUpdate(val hours: Int) : AdGuardIntent

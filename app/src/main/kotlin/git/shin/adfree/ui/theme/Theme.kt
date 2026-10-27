@@ -11,40 +11,45 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.Density
 
 private val DarkColorScheme = darkColorScheme(
-    primary = AdGuardGreenPrimary,
+    primary = AdGuardDarkColors.greenPrimary,
     onPrimary = Color.Black,
-    primaryContainer = AdGuardGreenDark,
+    primaryContainer = AdGuardDarkColors.greenDark,
     onPrimaryContainer = Color.White,
-    secondary = AdGuardBlueDns,
+    secondary = AdGuardDarkColors.blueDns,
     onSecondary = Color.Black,
-    secondaryContainer = AdGuardDarkSurfaceVariant,
+    secondaryContainer = AdGuardDarkColors.surfaceVariant,
     onSecondaryContainer = Color.White,
-    tertiary = AdGuardRedBlocked,
+    tertiary = AdGuardDarkColors.redBlocked,
     onTertiary = Color.White,
-    background = AdGuardDarkBg,
-    onBackground = AdGuardTextPrimary,
-    surface = AdGuardDarkSurface,
-    onSurface = AdGuardTextPrimary,
-    surfaceVariant = AdGuardDarkSurfaceVariant,
-    onSurfaceVariant = AdGuardTextSecondary,
-    outline = AdGuardDarkOutline,
-    outlineVariant = AdGuardDarkOutline.copy(alpha = 0.5f)
+    background = AdGuardDarkColors.bg,
+    onBackground = AdGuardDarkColors.textPrimary,
+    surface = AdGuardDarkColors.surface,
+    onSurface = AdGuardDarkColors.textPrimary,
+    surfaceVariant = AdGuardDarkColors.surfaceVariant,
+    onSurfaceVariant = AdGuardDarkColors.textSecondary,
+    outline = AdGuardDarkColors.outline,
+    outlineVariant = AdGuardDarkColors.outline.copy(alpha = 0.5f),
 )
 
-private val LightColorScheme = darkColorScheme( // AdGuard looks best in dark mode; provide crisp fallback
-    primary = AdGuardGreenPrimary,
-    onPrimary = Color.Black,
-    primaryContainer = AdGuardGreenLight,
-    onPrimaryContainer = Color.Black,
-    secondary = AdGuardBlueDns,
+private val LightColorScheme = lightColorScheme(
+    primary = AdGuardLightColors.greenPrimary,
+    onPrimary = Color.White,
+    primaryContainer = Color(0xFFC4EFD9),
+    onPrimaryContainer = Color(0xFF00210F),
+    secondary = AdGuardLightColors.blueDns,
     onSecondary = Color.White,
-    background = AdGuardDarkBg,
-    onBackground = AdGuardTextPrimary,
-    surface = AdGuardDarkSurface,
-    onSurface = AdGuardTextPrimary,
-    surfaceVariant = AdGuardDarkSurfaceVariant,
-    onSurfaceVariant = AdGuardTextSecondary,
-    outline = AdGuardDarkOutline
+    secondaryContainer = Color(0xFFD3E9F7),
+    onSecondaryContainer = Color(0xFF001E30),
+    tertiary = AdGuardLightColors.redBlocked,
+    onTertiary = Color.White,
+    background = AdGuardLightColors.bg,
+    onBackground = AdGuardLightColors.textPrimary,
+    surface = AdGuardLightColors.surface,
+    onSurface = AdGuardLightColors.textPrimary,
+    surfaceVariant = AdGuardLightColors.surfaceVariant,
+    onSurfaceVariant = AdGuardLightColors.textSecondary,
+    outline = AdGuardLightColors.outline,
+    outlineVariant = AdGuardLightColors.outline.copy(alpha = 0.5f),
 )
 
 /** Labels were laid out at 9-13sp; scale text without resizing dp containers. */
@@ -52,14 +57,16 @@ private const val FontScale = 1.2f
 
 @Composable
 fun MyApplicationTheme(
-    darkTheme: Boolean = true, // AdGuard signature dark cybersecurity look
+    darkTheme: Boolean = isSystemInDarkTheme(),
     dynamicColor: Boolean = false, // Keep AdGuard's branded colors
     content: @Composable () -> Unit,
 ) {
     val colorScheme = if (darkTheme) DarkColorScheme else LightColorScheme
+    val palette = if (darkTheme) AdGuardDarkColors else AdGuardLightColors
     val density = LocalDensity.current
 
     CompositionLocalProvider(
+        LocalAdGuardColors provides palette,
         LocalDensity provides Density(
             density = density.density,
             fontScale = density.fontScale * FontScale,

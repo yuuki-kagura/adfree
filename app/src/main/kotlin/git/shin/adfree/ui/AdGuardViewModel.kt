@@ -3,6 +3,7 @@ package git.shin.adfree.ui
 import android.util.Log
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import git.shin.adfree.core.ConfigWarning
 import git.shin.adfree.core.CoreEngine
 import git.shin.adfree.data.AdGuardRepository
 import git.shin.adfree.model.AppFirewallRule
@@ -53,6 +54,8 @@ class AdGuardViewModel(
     private val onConfigChanged: () -> Unit = {},
     /** Reads Android's strict Private DNS setting; supplied by DI. */
     private val isPrivateDnsStrict: () -> Boolean = { false },
+    /** Last fallback the core had to take; supplied by DI. */
+    private val configWarning: StateFlow<ConfigWarning> = MutableStateFlow(ConfigWarning.NONE),
 ) : ViewModel() {
 
     // ---------------------------------------------------------------- local UI
@@ -229,6 +232,13 @@ class AdGuardViewModel(
 
     init {
         _privateDnsOn.value = isPrivateDnsStrict()
+        // A fallback the user cannot see looks like a bug: say which choice
+        // the core had to replace, once per change.
+        viewModelScope.launch {
+            configWarning.collect { warning ->
+                configWarningMessage(warning)?.let { emit(AdGuardEffect.ShowSnackbar(it)) }
+            }
+        }
         // Protection that was on when the app last ran comes back by itself;
         // a first run has nothing saved and waits for the user. The consent
         // dialog can only be raised by the Activity, hence the flag.
@@ -263,36 +273,21 @@ class AdGuardViewModel(
             is AdGuardIntent.ToggleFirewall ->
                 repository.toggleFirewall(!uiState.value.settings.isFirewallEnabled)
 
-            is AdGuardIntent.ToggleEcoMode -> {
+            is AdGuardIntent.ToggleEcoMode ->
                 repository.toggleEcoBatteryMode(!uiState.value.settings.isEcoBatteryModeEnabled)
-                syncConfig()
-            }
 
             is AdGuardIntent.ToggleStealth ->
                 repository.toggleStealthMode(!uiState.value.settings.isStealthModeEnabled)
 
-            is AdGuardIntent.ToggleBlockQuic -> {
-                repository.toggleBlockQuic(intent.enabled)
-                syncConfig()
-            }
-            is AdGuardIntent.ToggleBlockDoh -> {
-                repository.toggleBlockDoh(intent.enabled)
-                syncConfig()
-            }
+            is AdGuardIntent.ToggleBlockQuic -> repository.toggleBlockQuic(intent.enabled)
+            is AdGuardIntent.ToggleBlockDoh -> repository.toggleBlockDoh(intent.enabled)
+            is AdGuardIntent.ToggleBlockDot -> repository.toggleBlockDot(intent.enabled)
             is AdGuardIntent.SetFilterAutoUpdate ->
                 repository.setFilterAutoUpdate(intent.hours)
-            is AdGuardIntent.ToggleSmartFiltering -> {
+            is AdGuardIntent.ToggleSmartFiltering ->
                 repository.toggleSmartFiltering(intent.enabled)
-                syncConfig()
-            }
-            is AdGuardIntent.ToggleLogAllowed -> {
-                repository.toggleLogAllowed(intent.enabled)
-                syncConfig()
-            }
-            is AdGuardIntent.SetBlockMode -> {
-                repository.setBlockMode(intent.mode)
-                syncConfig()
-            }
+            is AdGuardIntent.ToggleLogAllowed -> repository.toggleLogAllowed(intent.enabled)
+            is AdGuardIntent.SetBlockMode -> repository.setBlockMode(intent.mode)
             is AdGuardIntent.SearchQueryChanged -> _searchQuery.value = intent.query
             is AdGuardIntent.FilterStatusChanged -> _statusFilter.value = intent.status
             is AdGuardIntent.InspectLog -> _inspectedLog.value = intent.log
@@ -403,7 +398,6 @@ class AdGuardViewModel(
 
             is AdGuardIntent.ImportBackup -> viewModelScope.launch {
                 val result = repository.importBackup(intent.uri)
-                if (result.ok) syncConfig()
                 emit(AdGuardEffect.ShowSnackbar(result.message))
             }
 
@@ -474,7 +468,6 @@ class AdGuardViewModel(
             }
             is AdGuardIntent.DismissVpnPermission -> _showVpnPermissionPrompt.value = false
         }
-        syncConfig()
     }
 
     private fun toggleProtection() {
@@ -512,6 +505,18 @@ class AdGuardViewModel(
     /** After each intent, push the configuration down to the core. */
     private fun syncConfig() {
         onConfigChanged()
+    }
+
+    private fun configWarningMessage(warning: ConfigWarning): String? = when (warning) {
+        ConfigWarning.NONE -> null
+        ConfigWarning.PROVIDER_MISSING ->
+            "DNS đã chọn không còn tồn tại, đã dùng AdGuard DNS mặc định"
+        ConfigWarning.ADDRESS_INVALID ->
+            "Upstream DNS đã chọn không dùng được, đã quay về AdGuard DNS"
+        ConfigWarning.PROXY_INVALID ->
+            "Proxy không hợp lệ (cần IP và cổng khác 0), đã tắt proxy"
+        ConfigWarning.STORE_UNAVAILABLE ->
+            "Không đọc được trạng thái đã lưu, đang dùng cấu hình mặc định"
     }
 
     /**
@@ -578,7 +583,6 @@ class AdGuardViewModel(
      */
     fun setHttpsFiltering(enabled: Boolean, onDone: (git.shin.adfree.core.MitmStatus?) -> Unit) {
         repository.toggleHttpsFiltering(enabled)
-        syncConfig()
         onDone(coreEngine.mitmStatus())
     }
 
@@ -590,34 +594,28 @@ class AdGuardViewModel(
      */
     fun setFullEch(enabled: Boolean) {
         repository.toggleFullEch(enabled)
-        syncConfig()
     }
 
     /** HTTPS allowlist: hosts the proxy must not decrypt. */
     fun addHttpsSkipHost(raw: String) {
         repository.addHttpsSkipHost(raw)
-        syncConfig()
     }
 
     fun removeHttpsSkipHost(host: String) {
         repository.removeHttpsSkipHost(host)
-        syncConfig()
     }
 
     /** HTTPS blocklist + inverse mode: decrypt only these hosts. */
     fun addHttpsOnlyHost(raw: String) {
         repository.addHttpsOnlyHost(raw)
-        syncConfig()
     }
 
     fun removeHttpsOnlyHost(host: String) {
         repository.removeHttpsOnlyHost(host)
-        syncConfig()
     }
 
     fun setHttpsOnlyMode(enabled: Boolean) {
         repository.setHttpsOnlyMode(enabled)
-        syncConfig()
     }
 
     /**
@@ -626,7 +624,6 @@ class AdGuardViewModel(
      */
     fun setProxy(proxy: ProxySettings) {
         repository.updateProxy(proxy)
-        syncConfig()
     }
 
     /** Creates (or recreates) the local CA and returns the new status. */

@@ -13,6 +13,7 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Bolt
+import androidx.compose.material.icons.filled.Dns
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.Public
 import androidx.compose.material3.Button
@@ -48,6 +49,7 @@ import git.shin.adfree.ui.theme.AdGuardOrangeWarning
 import git.shin.adfree.ui.theme.AdGuardRedBlocked
 import git.shin.adfree.ui.theme.AdGuardTextMuted
 import git.shin.adfree.ui.theme.AdGuardTextPrimary
+import git.shin.adfree.ui.theme.AdGuardOnAccent
 import git.shin.adfree.ui.theme.AdGuardTextSecondary
 
 /**
@@ -62,6 +64,7 @@ fun NetworkScreen(
     modifier: Modifier = Modifier,
 ) {
     val state by viewModel.uiState.collectAsState()
+    val privateDnsOn by viewModel.privateDnsOn.collectAsState()
 
     Column(
         modifier = modifier
@@ -96,10 +99,24 @@ fun NetworkScreen(
 
             SettingsSwitch(
                 icon = Icons.Default.Lock,
-                title = "Chặn DNS mã hóa (DoH/DoT)",
-                subtitle = "Chặn IP của nhà cung cấp encrypted DNS để tránh bypass filter",
+                title = "Chặn DNS mã hóa (DoH)",
+                subtitle = "Chặn DNS-over-HTTPS để client không đi vòng qua bộ lọc",
                 checked = state.settings.blockDoh,
                 onCheckedChange = { viewModel.onIntent(AdGuardIntent.ToggleBlockDoh(it)) },
+            )
+
+            Spacer(modifier = Modifier.height(10.dp))
+
+            SettingsSwitch(
+                icon = Icons.Default.Dns,
+                title = "Chặn DNS mã hóa (DoT)",
+                subtitle = if (privateDnsOn) {
+                    "Private DNS nghiêm ngặt đang bật: hệ thống giữ resolver riêng, cổng 853 không bị chặn."
+                } else {
+                    "Chặn DNS-over-TLS (cổng 853) để client không đi vòng qua bộ lọc"
+                },
+                checked = state.settings.blockDot,
+                onCheckedChange = { viewModel.onIntent(AdGuardIntent.ToggleBlockDot(it)) },
             )
 
             Spacer(modifier = Modifier.height(24.dp))
@@ -283,7 +300,7 @@ private fun ProxySection(
                     shape = RoundedCornerShape(8.dp),
                     colors = ButtonDefaults.buttonColors(containerColor = AdGuardBlueDns),
                 ) {
-                    Text("Lưu cấu hình proxy", color = Color.Black, fontWeight = FontWeight.Bold)
+                    Text("Lưu cấu hình proxy", color = AdGuardOnAccent, fontWeight = FontWeight.Bold)
                 }
                 Spacer(modifier = Modifier.height(8.dp))
                 Text(

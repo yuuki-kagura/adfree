@@ -88,6 +88,7 @@ import git.shin.adfree.ui.theme.AdGuardOrangeWarning
 import git.shin.adfree.ui.theme.AdGuardRedBlocked
 import git.shin.adfree.ui.theme.AdGuardTextMuted
 import git.shin.adfree.ui.theme.AdGuardTextPrimary
+import git.shin.adfree.ui.theme.AdGuardOnAccent
 import git.shin.adfree.ui.theme.AdGuardTextSecondary
 
 /**
@@ -186,7 +187,7 @@ fun SettingsScreen(
                         label = { Text(mode.label, fontSize = 11.sp) },
                         colors = FilterChipDefaults.filterChipColors(
                             selectedContainerColor = AdGuardGreenPrimary,
-                            selectedLabelColor = Color.Black,
+                            selectedLabelColor = AdGuardOnAccent,
                         ),
                     )
                 }
@@ -221,7 +222,7 @@ fun SettingsScreen(
                         label = { Text(filterAutoUpdateLabel(hours), fontSize = 11.sp) },
                         colors = FilterChipDefaults.filterChipColors(
                             selectedContainerColor = AdGuardGreenPrimary,
-                            selectedLabelColor = Color.Black,
+                            selectedLabelColor = AdGuardOnAccent,
                         ),
                     )
                 }

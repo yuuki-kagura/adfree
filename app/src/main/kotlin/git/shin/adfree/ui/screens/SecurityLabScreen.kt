@@ -72,6 +72,7 @@ import git.shin.adfree.ui.theme.AdGuardPurpleAI
 import git.shin.adfree.ui.theme.AdGuardRedBlocked
 import git.shin.adfree.ui.theme.AdGuardTextMuted
 import git.shin.adfree.ui.theme.AdGuardTextPrimary
+import git.shin.adfree.ui.theme.AdGuardOnAccent
 import git.shin.adfree.ui.theme.AdGuardTextSecondary
 
 @Composable
@@ -229,10 +230,10 @@ fun SecurityLabScreen(
             Icon(
                 imageVector = Icons.Default.Shield,
                 contentDescription = null,
-                tint = Color.Black,
+                tint = AdGuardOnAccent,
             )
             Spacer(modifier = Modifier.width(8.dp))
-            Text(text = "Quét tên miền", fontWeight = FontWeight.Bold, color = Color.Black)
+            Text(text = "Quét tên miền", fontWeight = FontWeight.Bold, color = AdGuardOnAccent)
         }
 
         Spacer(modifier = Modifier.height(20.dp))
@@ -459,9 +460,9 @@ fun ThreatResultCard(
                             shape = RoundedCornerShape(6.dp),
                             modifier = Modifier.height(32.dp)
                         ) {
-                            Icon(Icons.Default.Add, contentDescription = null, tint = Color.Black, modifier = Modifier.size(14.dp))
+                            Icon(Icons.Default.Add, contentDescription = null, tint = AdGuardOnAccent, modifier = Modifier.size(14.dp))
                             Spacer(modifier = Modifier.width(4.dp))
-                            Text("Thêm", fontSize = 12.sp, color = Color.Black, fontWeight = FontWeight.Bold)
+                            Text("Thêm", fontSize = 12.sp, color = AdGuardOnAccent, fontWeight = FontWeight.Bold)
                         }
                     }
                     Spacer(modifier = Modifier.height(6.dp))

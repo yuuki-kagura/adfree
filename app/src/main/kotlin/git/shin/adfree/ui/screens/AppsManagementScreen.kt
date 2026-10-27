@@ -89,6 +89,7 @@ import git.shin.adfree.ui.theme.AdGuardPurpleAI
 import git.shin.adfree.ui.theme.AdGuardRedBlocked
 import git.shin.adfree.ui.theme.AdGuardTextMuted
 import git.shin.adfree.ui.theme.AdGuardTextPrimary
+import git.shin.adfree.ui.theme.AdGuardOnAccent
 import git.shin.adfree.ui.theme.AdGuardTextSecondary
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -184,7 +185,7 @@ fun AppsManagementScreen(
                     label = { Text(cat, fontSize = 11.sp) },
                     colors = FilterChipDefaults.filterChipColors(
                         selectedContainerColor = AdGuardGreenPrimary,
-                        selectedLabelColor = Color.Black,
+                        selectedLabelColor = AdGuardOnAccent,
                         containerColor = AdGuardDarkSurface,
                         labelColor = AdGuardTextSecondary
                     )
@@ -871,11 +872,11 @@ fun AppDetailsFirewallSheet(
             colors = ButtonDefaults.buttonColors(containerColor = AdGuardGreenPrimary),
             shape = RoundedCornerShape(10.dp)
         ) {
-            Icon(Icons.Default.FilterList, contentDescription = null, tint = Color.Black)
+            Icon(Icons.Default.FilterList, contentDescription = null, tint = AdGuardOnAccent)
             Spacer(modifier = Modifier.width(8.dp))
             Text(
                 text = "Xem nhật ký lọc của ${app.appName}",
-                color = Color.Black,
+                color = AdGuardOnAccent,
                 fontWeight = FontWeight.Bold,
                 fontSize = 13.sp
             )

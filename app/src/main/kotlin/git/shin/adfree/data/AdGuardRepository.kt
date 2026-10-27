@@ -407,13 +407,14 @@ class AdGuardRepository(
 
     fun toggleBlockQuic(enabled: Boolean) = updateSettings { it.copy(blockQuic = enabled) }
 
+    fun toggleBlockDoh(enabled: Boolean) = updateSettings { it.copy(blockDoh = enabled) }
+
     /**
-     * One switch covers both encrypted-DNS transports, matching the settings
-     * label: leaving DoT enabled while DoH is off would let clients bypass the
-     * filter through the other port.
+     * DoT has its own switch because the system Private DNS mode decides
+     * whether the core may drop port 853 at all; the core applies that
+     * carve-out per configuration, not by rewriting the stored preference.
      */
-    fun toggleBlockDoh(enabled: Boolean) =
-        updateSettings { it.copy(blockDoh = enabled, blockDot = enabled) }
+    fun toggleBlockDot(enabled: Boolean) = updateSettings { it.copy(blockDot = enabled) }
 
     /** Refresh interval for subscriptions, in hours; 0 turns it off. */
     fun setFilterAutoUpdate(hours: Int) {

@@ -83,6 +83,7 @@ import git.shin.adfree.ui.theme.AdGuardPurpleAI
 import git.shin.adfree.ui.theme.AdGuardRedBlocked
 import git.shin.adfree.ui.theme.AdGuardTextMuted
 import git.shin.adfree.ui.theme.AdGuardTextPrimary
+import git.shin.adfree.ui.theme.AdGuardOnAccent
 import git.shin.adfree.ui.theme.AdGuardTextSecondary
 import kotlinx.coroutines.flow.distinctUntilChanged
 import java.text.SimpleDateFormat
@@ -229,7 +230,7 @@ fun FilteringLogScreen(
                 label = { Text("Tất cả (${state.logs.size})", fontSize = 12.sp) },
                 colors = FilterChipDefaults.filterChipColors(
                     selectedContainerColor = AdGuardGreenPrimary,
-                    selectedLabelColor = Color.Black,
+                    selectedLabelColor = AdGuardOnAccent,
                     containerColor = AdGuardDarkSurface,
                     labelColor = AdGuardTextSecondary
                 )
@@ -253,7 +254,7 @@ fun FilteringLogScreen(
                 label = { Text("Cho phép (${state.logs.count { it.status == FilterStatus.ALLOWED }})", fontSize = 12.sp) },
                 colors = FilterChipDefaults.filterChipColors(
                     selectedContainerColor = AdGuardGreenLight,
-                    selectedLabelColor = Color.Black,
+                    selectedLabelColor = AdGuardOnAccent,
                     containerColor = AdGuardDarkSurface,
                     labelColor = AdGuardTextSecondary
                 )
@@ -686,9 +687,9 @@ fun PacketInspectionSheetContent(
             shape = RoundedCornerShape(10.dp),
             colors = ButtonDefaults.buttonColors(containerColor = AdGuardPurpleAI)
         ) {
-            Icon(Icons.Default.Search, contentDescription = null, tint = Color.Black)
+            Icon(Icons.Default.Search, contentDescription = null, tint = AdGuardOnAccent)
             Spacer(modifier = Modifier.width(8.dp))
-            Text("Kiểm tra an toàn", color = Color.Black, fontWeight = FontWeight.Bold)
+            Text("Kiểm tra an toàn", color = AdGuardOnAccent, fontWeight = FontWeight.Bold)
         }
 
         Spacer(modifier = Modifier.height(16.dp))

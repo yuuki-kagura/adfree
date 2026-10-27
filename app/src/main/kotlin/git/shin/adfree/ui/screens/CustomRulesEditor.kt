@@ -64,6 +64,7 @@ import git.shin.adfree.ui.theme.AdGuardPurpleAI
 import git.shin.adfree.ui.theme.AdGuardRedBlocked
 import git.shin.adfree.ui.theme.AdGuardTextMuted
 import git.shin.adfree.ui.theme.AdGuardTextPrimary
+import git.shin.adfree.ui.theme.AdGuardOnAccent
 import git.shin.adfree.ui.theme.AdGuardTextSecondary
 import git.shin.adfree.model.parseUserRulesText
 import git.shin.adfree.model.userBlockRule
@@ -322,7 +323,7 @@ fun FriendlyCustomRuleEditorSheet(
                     shape = RoundedCornerShape(10.dp),
                     modifier = Modifier.height(52.dp),
                 ) {
-                    Icon(Icons.Default.Add, contentDescription = null, tint = Color.Black)
+                    Icon(Icons.Default.Add, contentDescription = null, tint = AdGuardOnAccent)
                 }
             }
 
@@ -479,9 +480,9 @@ fun FriendlyCustomRuleEditorSheet(
                     colors = ButtonDefaults.buttonColors(containerColor = AdGuardGreenPrimary),
                     shape = RoundedCornerShape(8.dp),
                 ) {
-                    Icon(Icons.Default.Check, contentDescription = null, tint = Color.Black, modifier = Modifier.size(16.dp))
+                    Icon(Icons.Default.Check, contentDescription = null, tint = AdGuardOnAccent, modifier = Modifier.size(16.dp))
                     Spacer(modifier = Modifier.width(6.dp))
-                    Text("Lưu $linesCount quy tắc", color = Color.Black, fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                    Text("Lưu $linesCount quy tắc", color = AdGuardOnAccent, fontWeight = FontWeight.Bold, fontSize = 12.sp)
                 }
             }
         } else {
@@ -535,7 +536,7 @@ fun FriendlyCustomRuleEditorSheet(
                     shape = RoundedCornerShape(10.dp),
                     modifier = Modifier.height(52.dp),
                 ) {
-                    Icon(Icons.Default.Add, contentDescription = null, tint = Color.Black)
+                    Icon(Icons.Default.Add, contentDescription = null, tint = AdGuardOnAccent)
                 }
             }
 

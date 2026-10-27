@@ -107,6 +107,7 @@ import git.shin.adfree.ui.theme.AdGuardGreenPrimary
 import git.shin.adfree.ui.theme.AdGuardRedBlocked
 import git.shin.adfree.ui.theme.AdGuardTextMuted
 import git.shin.adfree.ui.theme.AdGuardTextPrimary
+import git.shin.adfree.ui.theme.AdGuardOnAccent
 import git.shin.adfree.ui.theme.AdGuardTextSecondary
 
 /**
@@ -1012,7 +1013,7 @@ private fun AddFilterDialog(
                 colors = ButtonDefaults.buttonColors(containerColor = AdGuardBlueDns),
                 shape = RoundedCornerShape(8.dp),
             ) {
-                Text("Thêm", color = Color.Black, fontWeight = FontWeight.Bold)
+                Text("Thêm", color = AdGuardOnAccent, fontWeight = FontWeight.Bold)
             }
         },
         dismissButton = {
@@ -1091,7 +1092,7 @@ private fun EditCustomFilterDialog(
                 colors = ButtonDefaults.buttonColors(containerColor = AdGuardBlueDns),
                 shape = RoundedCornerShape(8.dp),
             ) {
-                Text("Lưu", color = Color.Black, fontWeight = FontWeight.Bold)
+                Text("Lưu", color = AdGuardOnAccent, fontWeight = FontWeight.Bold)
             }
         },
         dismissButton = {
