@@ -24,6 +24,14 @@ const QUERY_TIMEOUT_MS: u64 = 12_000;
 const MAX_MESSAGE: usize = 4096;
 const MAX_REPLIES_PER_POLL: usize = 32;
 
+/// Why a query is in flight. A SafeSearch lookup carries the client packet it
+/// is standing in for, so its answer becomes a synthetic reply for that packet.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Purpose {
+    Client,
+    SafeSearch,
+}
+
 /// A query that is currently in flight.
 #[derive(Clone)]
 pub struct Pending {
@@ -32,6 +40,9 @@ pub struct Pending {
     /// Original client DNS message with our own transaction id patched in.
     pub packet: Vec<u8>,
     pub sent_ms: u64,
+    pub purpose: Purpose,
+    /// The filtered host a SafeSearch query was sent to; empty otherwise.
+    pub safe_host: String,
 }
 
 /// An answer that came back from upstream.
@@ -137,39 +148,73 @@ impl Upstream {
         txid: u16,
         now_ms: u64,
     ) -> Option<u32> {
-        // `self.fds.get(socket)` covers both "out of range" and "slot empty".
+        // `packet` is the client's IP packet; only its DNS payload goes on the
+        // wire, so strip the IP and UDP headers.
+        let payload = dns_payload(packet)?;
+        let slot = self.slot(socket)?;
+        self.send_payload(
+            slot,
+            payload,
+            packet,
+            client_txid,
+            txid,
+            now_ms,
+            Purpose::Client,
+            "",
+        )
+    }
+
+    /// Sends one DNS message the engine built itself (SafeSearch's second
+    /// lookup). `client_packet` is the packet the eventual reply stands in
+    /// for; it is kept so the normal rewrite path can answer the client.
+    pub fn send_message(
+        &mut self,
+        socket: usize,
+        message: &[u8],
+        client_packet: &[u8],
+        client_txid: u16,
+        txid: u16,
+        now_ms: u64,
+        safe_host: &str,
+    ) -> Option<u32> {
+        let slot = self.slot(socket)?;
+        self.send_payload(
+            slot,
+            message,
+            client_packet,
+            client_txid,
+            txid,
+            now_ms,
+            Purpose::SafeSearch,
+            safe_host,
+        )
+    }
+
+    /// The preferred pool slot, or the first usable one when that slot has no
+    /// descriptor (a partially populated pool still works).
+    fn slot(&self, socket: usize) -> Option<usize> {
         if self.fds.get(socket).is_some_and(|fd| *fd > 0) {
-            self.send_on(socket, packet, client_txid, txid, now_ms)
+            Some(socket)
         } else {
-            let fallback = self.fds.iter().position(|fd| *fd > 0)?;
-            self.send_on(fallback, packet, client_txid, txid, now_ms)
+            self.fds.iter().position(|fd| *fd > 0)
         }
     }
 
-    fn send_on(
+    fn send_payload(
         &mut self,
-        socket: usize,
+        slot: usize,
+        payload: &[u8],
         packet: &[u8],
         client_txid: u16,
         txid: u16,
         now_ms: u64,
+        purpose: Purpose,
+        safe_host: &str,
     ) -> Option<u32> {
-        let fd = *self.fds.get(socket)?;
-        if fd <= 0 {
+        let fd = *self.fds.get(slot)?;
+        if payload.len() > MAX_MESSAGE {
             return None;
         }
-        if packet.len() > MAX_MESSAGE + 40 {
-            return None;
-        }
-        // `packet` is the client's IP packet; only its DNS payload goes on the
-        // wire, so strip the IP and UDP headers.
-        let Some(payload) = dns_payload(packet) else {
-            crate::logbuf::push(&format!(
-                "dns forward: no payload in a {}-byte packet",
-                packet.len()
-            ));
-            return None;
-        };
         // One place builds the sockaddr (byte order covered by a unit test).
         let sent = match self.resolver {
             SocketAddr::V4(_) => sendto(fd, payload, Self::sockaddr_for(&self.resolver)),
@@ -178,20 +223,22 @@ impl Upstream {
         if sent < 0 {
             let err = std::io::Error::last_os_error();
             crate::logbuf::push(&format!(
-                "dns forward: sendto {} on fd {} (slot {socket}) failed: {}",
+                "dns forward: sendto {} on fd {} (slot {slot}) failed: {}",
                 self.resolver, fd, err
             ));
             return None;
         }
 
-        let key = pending_key(socket, txid);
+        let key = pending_key(slot, txid);
         self.pending.insert(
             key,
             Pending {
                 client_txid,
-                socket: socket as u8,
+                socket: slot as u8,
                 packet: packet.to_vec(),
                 sent_ms: now_ms,
+                purpose,
+                safe_host: safe_host.to_string(),
             },
         );
         Some(key)
@@ -262,20 +309,24 @@ impl Upstream {
         received
     }
 
-    /// Drops queries that were never answered.
-    pub fn expire(&mut self, now_ms: u64) -> usize {
+    /// Drops queries that were never answered, handing them back so the
+    /// caller can answer SafeSearch clients with SERVFAIL instead of leaving
+    /// them to time out.
+    pub fn expire(&mut self, now_ms: u64) -> Vec<Pending> {
         let expired: Vec<u32> = self
             .pending
             .iter()
             .filter(|(_, p)| now_ms.saturating_sub(p.sent_ms) > QUERY_TIMEOUT_MS)
             .map(|(k, _)| *k)
             .collect();
-        let count = expired.len();
+        let mut out = Vec::with_capacity(expired.len());
         for key in expired {
-            self.pending.remove(&key);
+            if let Some(pending) = self.pending.remove(&key) {
+                out.push(pending);
+            }
             self.timeouts += 1;
         }
-        count
+        out
     }
 
     pub fn clear(&mut self) {
@@ -404,9 +455,11 @@ mod tests {
                 socket: 0,
                 packet: vec![0u8; 20],
                 sent_ms: 1_000,
+                purpose: Purpose::Client,
+                safe_host: String::new(),
             },
         );
-        assert_eq!(u.expire(1_000 + QUERY_TIMEOUT_MS + 1), 1);
+        assert_eq!(u.expire(1_000 + QUERY_TIMEOUT_MS + 1).len(), 1);
         assert_eq!(u.pending_len(), 0);
         assert_eq!(u.timeouts(), 1);
     }

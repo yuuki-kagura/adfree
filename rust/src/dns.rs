@@ -8,6 +8,7 @@
 //! per query on the packet path.
 
 use crate::packet::{self, Packet};
+use std::net::IpAddr;
 
 pub const TYPE_A: u16 = 1;
 pub const TYPE_AAAA: u16 = 28;
@@ -256,6 +257,129 @@ fn q_end_len(q: &Query<'_>, mode: BlockMode) -> usize {
         len += 16;
     }
     len
+}
+
+/// Writes one domain name in wire format (labels, then the root label).
+///
+/// `None` for a name that is empty, has a label over 63 bytes or is longer
+/// than DNS allows: a query carrying one would be dropped by the resolver
+/// anyway.
+fn write_name(out: &mut Vec<u8>, name: &str) -> Option<()> {
+    let name = name.trim_end_matches('.');
+    if name.is_empty() || name.len() > 253 {
+        return None;
+    }
+    for label in name.split('.') {
+        if label.is_empty() || label.len() > 63 {
+            return None;
+        }
+        out.push(label.len() as u8);
+        out.extend_from_slice(label.as_bytes());
+    }
+    out.push(0);
+    Some(())
+}
+
+/// Builds one DNS query, with an EDNS0 OPT record asking for a 1232-byte
+/// answer (the tunnel MTU fits it without fragmentation).
+///
+/// Used for the queries the engine originates: SafeSearch's second lookup and
+/// the resolver probe. The transaction id is the caller's, so the reply can be
+/// matched on the same path as a forwarded client query.
+pub fn build_query(qname: &str, qtype: u16, txid: u16) -> Option<Vec<u8>> {
+    let mut body = Vec::with_capacity(64);
+    body.extend_from_slice(&txid.to_be_bytes());
+    body.extend_from_slice(&0x0100u16.to_be_bytes()); // RD
+    body.extend_from_slice(&1u16.to_be_bytes()); // qdcount
+    body.extend_from_slice(&0u16.to_be_bytes()); // ancount
+    body.extend_from_slice(&0u16.to_be_bytes()); // nscount
+    body.extend_from_slice(&1u16.to_be_bytes()); // arcount (OPT)
+    write_name(&mut body, qname)?;
+    body.extend_from_slice(&qtype.to_be_bytes());
+    body.extend_from_slice(&1u16.to_be_bytes()); // class IN
+    // OPT: root name, type 41, UDP payload size, extended rcode/version/flags,
+    // empty rdata.
+    body.push(0);
+    body.extend_from_slice(&41u16.to_be_bytes());
+    body.extend_from_slice(&1232u16.to_be_bytes());
+    body.extend_from_slice(&0u32.to_be_bytes());
+    body.extend_from_slice(&0u16.to_be_bytes());
+    Some(body)
+}
+
+/// Builds the answer body for `query` from a set of addresses.
+///
+/// Only the address family the question asked for is used (`A` gets IPv4,
+/// `AAAA` gets IPv6); every other type, or a set with no matching family,
+/// returns `None` so the caller forwards the query instead of answering it
+/// with an empty record set.
+pub fn answer_message(query: &Query<'_>, answers: &[IpAddr], ttl: u32) -> Option<Vec<u8>> {
+    if !query.has_question || query.q_end > query.body.len() {
+        return None;
+    }
+    let records: Vec<&IpAddr> = answers
+        .iter()
+        .filter(|ip| match (query.qtype, ip) {
+            (TYPE_A, IpAddr::V4(_)) | (TYPE_AAAA, IpAddr::V6(_)) => true,
+            _ => false,
+        })
+        .collect();
+    if records.is_empty() {
+        return None;
+    }
+    let question = &query.body[12..query.q_end];
+    let mut body = Vec::with_capacity(12 + question.len() + records.len() * 32);
+    let flags: u16 = 0x8000 // QR
+        | (query.flags & 0x7800) // opcode, echoed
+        | (query.flags & 0x0100) // RD, echoed
+        | 0x0080 // RA
+        | RCODE_NOERROR;
+    body.extend_from_slice(&query.id.to_be_bytes());
+    body.extend_from_slice(&flags.to_be_bytes());
+    body.extend_from_slice(&1u16.to_be_bytes()); // qdcount
+    body.extend_from_slice(&(records.len() as u16).to_be_bytes()); // ancount
+    body.extend_from_slice(&0u16.to_be_bytes()); // nscount
+    body.extend_from_slice(&0u16.to_be_bytes()); // arcount
+    body.extend_from_slice(question);
+    for ip in records {
+        body.extend_from_slice(&[0xc0, 0x0c]); // owner: the question name
+        body.extend_from_slice(&query.qtype.to_be_bytes());
+        body.extend_from_slice(&1u16.to_be_bytes()); // class IN
+        body.extend_from_slice(&ttl.to_be_bytes());
+        match ip {
+            IpAddr::V4(v4) => {
+                body.extend_from_slice(&4u16.to_be_bytes());
+                body.extend_from_slice(&v4.octets());
+            }
+            IpAddr::V6(v6) => {
+                body.extend_from_slice(&16u16.to_be_bytes());
+                body.extend_from_slice(&v6.octets());
+            }
+        }
+    }
+    Some(body)
+}
+
+/// [`answer_message`] wrapped into a complete IP packet back to the client.
+pub fn synthesize_answer(
+    packet: &Packet<'_>,
+    query: &Query<'_>,
+    answers: &[IpAddr],
+    ttl: u32,
+) -> Option<Vec<u8>> {
+    answer_message(query, answers, ttl).map(|body| packet.rewrite_udp(&body))
+}
+
+/// The A/AAAA addresses in one upstream answer, each with its own TTL.
+///
+/// Unlike [`parse_answers`] this keeps the address value (SafeSearch caches
+/// the safe resolver's addresses, it does not learn a connection mapping).
+pub fn answer_addresses(body: &[u8]) -> Vec<(IpAddr, u32)> {
+    let mut out = Vec::new();
+    for record in parse_answers(body) {
+        out.push((record.ip.as_ip(), record.ttl));
+    }
+    out
 }
 
 /// One learned `IP -> host` mapping taken from an upstream answer.

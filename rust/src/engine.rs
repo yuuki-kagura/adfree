@@ -59,6 +59,17 @@ const FORWARD_WAIT_MS: i32 = 1_000;
 /// figure shown in the UI.
 const BYTES_PER_BLOCKED_REQUEST: u64 = 48 * 1024;
 
+/// The TTL one synthetic answer may carry: the shortest record's, held inside
+/// the range a search engine's endpoint is worth trusting for.
+fn record_ttl(records: &[(std::net::IpAddr, u32)]) -> u32 {
+    records
+        .iter()
+        .map(|(_, ttl)| *ttl)
+        .min()
+        .unwrap_or(60)
+        .clamp(30, 600)
+}
+
 /// Client bytes a relay may buffer while its peer socket is full; beyond this
 /// the flow counts as stuck and is reset rather than buffering forever.
 const MAX_PENDING_TO_PEER: usize = 4 * 1024 * 1024;
@@ -119,7 +130,6 @@ pub struct StealthConfig {
     /// Drop cookies that belong to another site than the one being visited.
     pub block_third_party_cookies: bool,
 }
-
 impl StealthConfig {
     pub fn strips_utm(self) -> bool {
         self.enabled && self.strip_utm
@@ -180,6 +190,9 @@ pub struct Config {
     /// Stealth-mode effects: UTM stripping, WebRTC blocking, third-party
     /// cookies and the disguised user agent.
     pub stealth: StealthConfig,
+    /// Send search-engine queries to their family-filtered host and answer the
+    /// original name with the filtered addresses (see [`crate::safesearch`]).
+    pub safe_search: bool,
 }
 
 impl Default for Config {
@@ -202,6 +215,7 @@ impl Default for Config {
             https_only_mode: false,
             proxy: None,
             stealth: StealthConfig::default(),
+            safe_search: false,
         }
     }
 }
@@ -328,6 +342,12 @@ pub struct VpnStats {
     pub uptime_ms: u64,
 }
 
+/// Addresses a SafeSearch lookup produced, and when they stop being trusted.
+struct SafeCacheEntry {
+    addresses: Vec<std::net::IpAddr>,
+    expires_ms: u64,
+}
+
 pub struct Core {
     cfg: RwLock<Config>,
     filter: Arc<FilterEngine>,
@@ -344,6 +364,11 @@ pub struct Core {
     /// Hosts let through because their block is being retried in a loop
     /// (see [`crate::smart`]); disabled by the matching config switch.
     smart: Mutex<crate::smart::SmartFilter>,
+    /// User `host -> address` answers, checked before the filter lists.
+    dns_rewrites: RwLock<Vec<crate::dnsrewrite::DnsRewriteRule>>,
+    /// SafeSearch addresses, keyed by the filtered host: the extra lookup is
+    /// an RTT the next query for the same engine should not pay.
+    safe_cache: Mutex<FxHashMap<String, SafeCacheEntry>>,
     doh_ips: RwLock<CidrSet>,
     stats: Arc<Stats>,
     events: Mutex<EventLog>,
@@ -482,6 +507,8 @@ impl Core {
             wake_fd: unsafe { libc::eventfd(0, libc::EFD_CLOEXEC | libc::EFD_NONBLOCK) },
             conntrack: Mutex::new(ConnTable::new()),
             smart: Mutex::new(crate::smart::SmartFilter::new(true)),
+            dns_rewrites: RwLock::new(Vec::new()),
+            safe_cache: Mutex::new(FxHashMap::default()),
             doh_ips: RwLock::new(default_doh_cidrs()),
             stats: Arc::new(Stats::new()),
             events: Mutex::new(EventLog::default()),
@@ -765,6 +792,54 @@ impl Core {
 
     pub fn set_socket_fds(&self, fds: &[RawFd]) {
         self.upstream.lock().unwrap().set_socket_fds(fds);
+    }
+
+    /// Replaces the user's DNS rewrites. The caller parses the rows, so a
+    /// hand-edited store can only hand over rules the validator accepted.
+    pub fn set_dns_rewrites(&self, rules: Vec<crate::dnsrewrite::DnsRewriteRule>) {
+        *self.dns_rewrites.write().unwrap() = rules;
+    }
+
+    /// Addresses from a fresh SafeSearch answer, or `None` when the cached
+    /// entry lapsed. The lock is never held across the packet work below.
+    fn cached_safe_search(&self, safe_host: &str, now_ms: u64) -> Option<Vec<std::net::IpAddr>> {
+        let mut cache = self.safe_cache.lock().unwrap();
+        let entry = cache.get(safe_host)?;
+        if entry.expires_ms <= now_ms {
+            cache.remove(safe_host);
+            return None;
+        }
+        Some(entry.addresses.clone())
+    }
+
+    fn remember_safe_search(
+        &self,
+        safe_host: &str,
+        records: &[(std::net::IpAddr, u32)],
+        now_ms: u64,
+    ) {
+        if records.is_empty() {
+            return;
+        }
+        // The answer's own TTL, bounded so a stale engine address cannot live
+        // longer than the user's switch.
+        let ttl = records
+            .iter()
+            .map(|(_, ttl)| *ttl)
+            .min()
+            .unwrap_or(60)
+            .clamp(30, 600) as u64;
+        let mut cache = self.safe_cache.lock().unwrap();
+        if cache.len() >= 32 {
+            cache.clear();
+        }
+        cache.insert(
+            safe_host.to_string(),
+            SafeCacheEntry {
+                addresses: records.iter().map(|(ip, _)| *ip).collect(),
+                expires_ms: now_ms + ttl * 1_000,
+            },
+        );
     }
 
     /// Replaces the encrypted-DNS provider ranges. Returns false when nothing
@@ -1804,14 +1879,14 @@ impl Core {
     fn handle_dns(&self, pkt: &Packet<'_>, cfg: &Config, out: &mut Vec<Vec<u8>>) {
         let Some(query) = dns::parse_query(pkt.l4_payload()) else {
             // Malformed: forwarding is the safest reaction.
-            self.forward_query(pkt, None);
+            self.forward_query(pkt, None, None);
             return;
         };
         if !query.is_query() {
             return;
         }
         if !query.has_question {
-            self.forward_query(pkt, Some(&query));
+            self.forward_query(pkt, Some(&query), None);
             return;
         }
 
@@ -1850,6 +1925,29 @@ impl Core {
                 return;
             }
             app_packages = Some(packages);
+        }
+        // A user rewrite answers the query here. It is explicit intent, so it
+        // runs before the lists, and only for the address family it names:
+        // an A rule does not answer an AAAA question (the real address may
+        // differ, and inventing one would be worse than forwarding).
+        if matches!(query.qtype, dns::TYPE_A | dns::TYPE_AAAA) {
+            let address = crate::dnsrewrite::lookup(&self.dns_rewrites.read().unwrap(), host);
+            if let Some(address) = address {
+                if let Some(reply) = dns::synthesize_answer(pkt, &query, &[address], 60) {
+                    crate::logbuf::push(&format!("dns: rewrite {host} -> {address}"));
+                    self.stats.inc(&self.stats.dns_allowed);
+                    out.push(reply);
+                    if cfg.log_allowed && self.logging_live() {
+                        let packages = app_packages.unwrap_or_else(|| self.apps_for_udp(pkt));
+                        let event = events::with_app(
+                            events::allow_event(host, &pkt.dst_ip_text(), 0),
+                            first_app(&packages),
+                        );
+                        self.log_event(event);
+                    }
+                    return;
+                }
+            }
         }
         let t0 = now_ns();
         let verdict = self.filter.check_host(host);
@@ -1898,7 +1996,32 @@ impl Core {
             self.log_event(event);
         } else {
             self.stats.inc(&self.stats.dns_allowed);
-            self.forward_query(pkt, Some(&query));
+            // SafeSearch rewrites the question, not the answer: see
+            // [`crate::safesearch`]. A cached answer skips the second lookup;
+            // a cold one forwards the filtered host and answers the client
+            // when that reply lands.
+            let mut forwarded = false;
+            if cfg.safe_search && matches!(query.qtype, dns::TYPE_A | dns::TYPE_AAAA) {
+                if let Some(safe_host) = crate::safesearch::safe_host(host) {
+                    let addresses = self.cached_safe_search(safe_host, now_ms());
+                    if let Some(addresses) = addresses {
+                        if let Some(reply) = dns::synthesize_answer(pkt, &query, &addresses, 60) {
+                            out.push(reply);
+                            forwarded = true;
+                            crate::logbuf::push(&format!(
+                                "dns: SafeSearch {host} answered from cache"
+                            ));
+                        }
+                    }
+                    if !forwarded {
+                        self.forward_query(pkt, Some(&query), Some(safe_host));
+                        forwarded = true;
+                    }
+                }
+            }
+            if !forwarded {
+                self.forward_query(pkt, Some(&query), None);
+            }
             if cfg.log_allowed && self.logging_live() {
                 let packages = app_packages.unwrap_or_else(|| self.apps_for_udp(pkt));
                 let event = events::with_app(
@@ -1911,7 +2034,16 @@ impl Core {
     }
 
     /// Sends the query upstream through a protected socket.
-    fn forward_query(&self, pkt: &Packet<'_>, query: Option<&Query<'_>>) {
+    ///
+    /// `safe_host` sends the question to the filtered host instead of the one
+    /// the client asked; the reply becomes a synthetic answer for the original
+    /// name (see [`Self::handle_reply`]).
+    fn forward_query(
+        &self,
+        pkt: &Packet<'_>,
+        query: Option<&Query<'_>>,
+        safe_host: Option<&str>,
+    ) {
         let Some(query) = query else {
             // Without a question there is nothing to forward: answer SERVFAIL
             // so the client fails fast instead of timing out.
@@ -1939,12 +2071,27 @@ impl Core {
             return;
         }
         let txid = upstream.alloc_txid();
-        let mut packet = pkt.raw.to_vec();
-        let off = pkt.l4_payload_offset();
-        packet[off] = (txid >> 8) as u8;
-        packet[off + 1] = (txid & 0xff) as u8;
         self.stats.inc(&self.stats.dns_queries);
-        let sent = upstream.send(socket, &packet, query.id, txid, now_ms());
+        let sent = match safe_host {
+            Some(safe_host) => dns::build_query(safe_host, query.qtype, txid).and_then(|message| {
+                upstream.send_message(
+                    socket,
+                    &message,
+                    pkt.raw,
+                    query.id,
+                    txid,
+                    now_ms(),
+                    safe_host,
+                )
+            }),
+            None => {
+                let mut packet = pkt.raw.to_vec();
+                let off = pkt.l4_payload_offset();
+                packet[off] = (txid >> 8) as u8;
+                packet[off + 1] = (txid & 0xff) as u8;
+                upstream.send(socket, &packet, query.id, txid, now_ms())
+            }
+        };
         drop(upstream);
         if sent.is_none() {
             self.stats.inc(&self.stats.dns_timeouts);
@@ -1960,6 +2107,68 @@ impl Core {
             // Wake the forwarder so the answer is picked up the moment it
             // lands instead of after its idle wait.
             self.wake();
+        }
+    }
+
+    /// A SafeSearch lookup timed out: the client that was waiting on it gets
+    /// SERVFAIL, which is the failure its resolver can retry immediately.
+    fn safe_search_expired(&self, pending: &crate::upstream::Pending) {
+        if pending.purpose != crate::upstream::Purpose::SafeSearch {
+            return;
+        }
+        let Some(pkt) = Packet::parse(&pending.packet) else {
+            return;
+        };
+        let Some(query) = dns::parse_query(pkt.l4_payload()) else {
+            return;
+        };
+        if let Some(err) = dns::synthesize_error(&pkt, Some(&query), dns::RCODE_SERVFAIL) {
+            self.write_raw(&err);
+        }
+    }
+
+    /// Turns one filtered-search answer into the reply the client actually
+    /// asked for: the filtered addresses are cached under the safe host, and
+    /// the original question is answered with them.
+    fn finish_safe_search(&self, reply: &crate::upstream::Reply) {
+        let records = dns::answer_addresses(&reply.message);
+        self.remember_safe_search(&reply.pending.safe_host, &records, now_ms());
+        let Some(client_packet) = Packet::parse(&reply.pending.packet) else {
+            return;
+        };
+        let Some(query) = dns::parse_query(client_packet.l4_payload()) else {
+            return;
+        };
+        let addresses: Vec<std::net::IpAddr> = records.iter().map(|(ip, _)| *ip).collect();
+        let ttl = if records.is_empty() {
+            60
+        } else {
+            record_ttl(&records)
+        };
+        let reply_packet = match dns::synthesize_answer(&client_packet, &query, &addresses, ttl) {
+            Some(packet) => packet,
+            None => {
+                // The filtered host had no address of the requested family:
+                // fail fast instead of handing the client an empty answer it
+                // would cache.
+                let Some(error) =
+                    dns::synthesize_error(&client_packet, Some(&query), dns::RCODE_SERVFAIL)
+                else {
+                    return;
+                };
+                error
+            }
+        };
+        if !self.write_raw(&reply_packet) {
+            return;
+        }
+        self.stats.inc(&self.stats.dns_replies);
+        if let Some(body) = dns::answer_message(&query, &addresses, ttl) {
+            let mitm = {
+                let cfg = self.cfg.read().unwrap();
+                self.mitm_ready(&cfg)
+            };
+            self.learn_answers(&body, mitm);
         }
     }
 
@@ -1995,6 +2204,10 @@ impl Core {
     }
 
     fn handle_reply(&self, reply: &crate::upstream::Reply) {
+        if reply.pending.purpose == crate::upstream::Purpose::SafeSearch {
+            self.finish_safe_search(reply);
+            return;
+        }
         let Some(client_packet) = Packet::parse(&reply.pending.packet) else {
             return;
         };
@@ -2766,7 +2979,9 @@ fn forwarder_loop(core: &'static Core) {
         {
             let mut upstream = core.upstream.lock().unwrap();
             upstream.poll(&mut replies, 0);
-            upstream.expire(now);
+            for pending in upstream.expire(now) {
+                core.safe_search_expired(&pending);
+            }
         }
         for reply in &replies {
             core.handle_reply(reply);
@@ -3356,6 +3571,7 @@ fn write_atomic(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::dnsrewrite::DnsRewriteRule;
 
     #[test]
     fn config_defaults_are_battery_friendly() {
@@ -3503,6 +3719,10 @@ mod tests {
     /// The resolver address is TEST-NET-3: it is not in the encrypted-DNS list,
     /// so the datagram takes the plain DNS path the filter sits on.
     fn dns_query_packet(host: &str) -> Vec<u8> {
+        dns_query_packet_typed(host, crate::dns::TYPE_A)
+    }
+
+    fn dns_query_packet_typed(host: &str, qtype: u16) -> Vec<u8> {
         let mut dns = Vec::new();
         dns.extend_from_slice(&0x1234u16.to_be_bytes()); // id
         dns.extend_from_slice(&0x0100u16.to_be_bytes()); // standard query, recursion desired
@@ -3513,7 +3733,7 @@ mod tests {
             dns.extend_from_slice(label.as_bytes());
         }
         dns.push(0);
-        dns.extend_from_slice(&1u16.to_be_bytes()); // type A
+        dns.extend_from_slice(&qtype.to_be_bytes());
         dns.extend_from_slice(&1u16.to_be_bytes()); // class IN
 
         let total = 20 + 8 + dns.len();
@@ -3540,6 +3760,22 @@ mod tests {
         let raw = out.first()?;
         let pkt = Packet::parse(raw)?;
         pkt.l4_payload().get(3).map(|flags| flags & 0x0f)
+    }
+
+    /// The A/AAAA addresses of the first answer the engine produced.
+    fn dns_reply_addresses(core: &Core, query: Vec<u8>) -> Vec<std::net::IpAddr> {
+        let mut out = core.handle_packet(&query);
+        out.extend(core.take_outbox());
+        let Some(raw) = out.first() else {
+            return Vec::new();
+        };
+        let Some(pkt) = Packet::parse(raw) else {
+            return Vec::new();
+        };
+        crate::dns::answer_addresses(pkt.l4_payload())
+            .into_iter()
+            .map(|(ip, _)| ip)
+            .collect()
     }
 
     /// A `$redirect` host is left to the HTTPS path, which is the only place
@@ -3647,6 +3883,110 @@ mod tests {
         for _ in 0..crate::smart::RETRY_LIMIT * 2 {
             assert_eq!(dns_reply_rcode(&plain, "ads.test"), Some(NXDOMAIN));
         }
+    }
+
+    /// A rewrite is what the user asked for, so it answers before the filter
+    /// lists and only for the address family it names.
+    #[test]
+    fn a_user_rewrite_answers_before_the_lists() {
+        let dir = std::env::temp_dir().join("adfree-engine-rewrite");
+        std::fs::create_dir_all(&dir).expect("temp dir");
+        let path = dir.join("rewrite-list.txt");
+        std::fs::write(&path, "||nas.home^\n").expect("write list");
+        let lists = vec![FilterListInfo {
+            id: 1,
+            name: "rewrite-list".to_string(),
+            url: String::new(),
+            enabled: true,
+            local_path: Some(path),
+            format: crate::filter::ListFormat::Standard,
+            category: 0,
+            trusted: true,
+            rule_count: 0,
+            last_error: None,
+        }];
+        const NXDOMAIN: u8 = 3;
+        const NOERROR: u8 = 0;
+        const SERVFAIL: u8 = 2;
+
+        let core = Core::new();
+        core.set_lists(lists, Vec::new());
+        assert_eq!(dns_reply_rcode(&core, "nas.home"), Some(NXDOMAIN));
+
+        core.set_dns_rewrites(vec![
+            DnsRewriteRule::parse("nas.home", "192.168.1.10").expect("rule"),
+            DnsRewriteRule::parse("lab.home", "192.168.1.11").expect("rule"),
+        ]);
+        assert_eq!(
+            dns_reply_addresses(&core, dns_query_packet("nas.home")),
+            vec!["192.168.1.10".parse::<std::net::IpAddr>().unwrap()]
+        );
+        assert_eq!(dns_reply_rcode(&core, "nas.home"), Some(NOERROR));
+
+        // An A rule does not invent an AAAA answer: that query is forwarded,
+        // which in a test without sockets is a fast SERVFAIL. (For `nas.home`
+        // the list still blocks the other family, which is the second half of
+        // the same rule: a rewrite overrides the list only for what it names.)
+        assert_eq!(
+            dns_reply_addresses(
+                &core,
+                dns_query_packet_typed("lab.home", crate::dns::TYPE_AAAA)
+            ),
+            Vec::<std::net::IpAddr>::new()
+        );
+        assert_eq!(
+            dns_reply_rcode_typed(&core, "lab.home", crate::dns::TYPE_AAAA),
+            Some(SERVFAIL)
+        );
+        assert_eq!(
+            dns_reply_rcode_typed(&core, "nas.home", crate::dns::TYPE_AAAA),
+            Some(NXDOMAIN)
+        );
+
+        // Withdrawing the rule restores the list verdict.
+        core.set_dns_rewrites(Vec::new());
+        assert_eq!(dns_reply_rcode(&core, "nas.home"), Some(NXDOMAIN));
+    }
+
+    /// SafeSearch answers the original name with the filtered host's cached
+    /// addresses; a cold lookup is forwarded instead of blocking the query.
+    #[test]
+    fn safe_search_answers_the_original_name_from_the_filtered_host() {
+        const NOERROR: u8 = 0;
+        const SERVFAIL: u8 = 2;
+
+        let core = Core::new();
+        core.set_config(Config {
+            safe_search: true,
+            ..Config::default()
+        });
+
+        // Cold: no upstream sockets, so the lookup cannot complete here.
+        assert_eq!(dns_reply_rcode(&core, "www.google.com"), Some(SERVFAIL));
+
+        let address = "216.239.32.32".parse::<std::net::IpAddr>().unwrap();
+        core.remember_safe_search(
+            "forcesafesearch.google.com",
+            &[(address, 120)],
+            now_ms(),
+        );
+        assert_eq!(
+            dns_reply_addresses(&core, dns_query_packet("www.google.com")),
+            vec![address]
+        );
+        assert_eq!(dns_reply_rcode(&core, "www.google.com"), Some(NOERROR));
+
+        // A host with no safe variant is never rewritten.
+        assert_eq!(dns_reply_rcode(&core, "example.com"), Some(SERVFAIL));
+    }
+
+    /// The rcode for a query of any type.
+    fn dns_reply_rcode_typed(core: &Core, host: &str, qtype: u16) -> Option<u8> {
+        let mut out = core.handle_packet(&dns_query_packet_typed(host, qtype));
+        out.extend(core.take_outbox());
+        let raw = out.first()?;
+        let pkt = Packet::parse(raw)?;
+        pkt.l4_payload().get(3).map(|flags| flags & 0x0f)
     }
 
     struct AllowAll;

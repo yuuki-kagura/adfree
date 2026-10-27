@@ -8,8 +8,8 @@ tiếp, không phải kế hoạch parity mạng trong `plan.md`.
 | 39 | Phase 1: Rust-owned typed state + Kotlin cutover | ✅ xong (`094d737`) |
 | 40 | Phase 2: Rust config application + settings sanity | ✅ xong |
 | 41 | Phase 3: Localize UI strings | ✅ xong (`707f79e` → `85fb29b`) |
-| 42 | Phase 4: Stealth features end-to-end | 🚧 đang làm |
-| 43 | Phase 5: Advanced DNS (DoH/DoT, rewrites, SafeSearch, probe) | ⏳ chưa |
+| 42 | Phase 4: Stealth features end-to-end | ✅ xong (`f1cbdfb`) |
+| 43 | Phase 5: Advanced DNS (DoH/DoT, rewrites, SafeSearch, probe) | 🚧 đang làm |
 | 44 | Phase 6: Background updates, notification, tile, autostart | ⏳ chưa |
 | 45 | Phase 7: Theme, language selector, cosmetic filtering | ◐ language xong (`7f2f203`), còn theme + cosmetic |
 | 46 | Phase 8: Full verification and commits | ⏳ chưa |

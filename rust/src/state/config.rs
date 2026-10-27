@@ -30,6 +30,8 @@ pub struct Plan {
     pub outcome: ConfigOutcome,
     pub resolver: ResolverSnapshot,
     pub policy: PolicyPlan,
+    /// Parsed `host -> address` rows, ready for the engine.
+    pub rewrites: Vec<crate::dnsrewrite::DnsRewriteRule>,
 }
 
 const DEFAULT_IP: Ipv4Addr = Ipv4Addr::new(94, 140, 14, 14);
@@ -45,6 +47,7 @@ fn default_upstream() -> SocketAddr {
 pub fn apply(state: &StateStore, core: &Core, private_dns_strict: bool) -> ConfigOutcome {
     let plan = build(&state.snapshot(), private_dns_strict);
     core.set_config(plan.config);
+    core.set_dns_rewrites(plan.rewrites);
     core.set_app_network_policy(
         plan.policy.cellular_blocked,
         plan.policy.wifi_blocked,
@@ -102,7 +105,15 @@ pub fn build(snapshot: &StateSnapshot, private_dns_strict: bool) -> Plan {
             disguise_user_agent: protection.disguise_user_agent,
             block_third_party_cookies: protection.block_third_party_cookies,
         },
+        safe_search: protection.safe_search,
     };
+
+    let rewrites = snapshot
+        .dns
+        .rewrites
+        .iter()
+        .filter_map(|row| crate::dnsrewrite::DnsRewriteRule::parse(&row.host, &row.answer))
+        .collect();
 
     Plan {
         config,
@@ -113,6 +124,7 @@ pub fn build(snapshot: &StateSnapshot, private_dns_strict: bool) -> Plan {
         },
         resolver,
         policy,
+        rewrites,
     }
 }
 
@@ -367,6 +379,31 @@ mod tests {
         let plan = build(&s, false);
         assert!(plan.config.proxy.is_none());
         assert_eq!(plan.outcome.warning, ConfigWarning::ProxyInvalid);
+    }
+
+    #[test]
+    fn rewrites_are_parsed_and_bad_rows_are_skipped() {
+        let mut s = snapshot();
+        s.dns.rewrites.push(DnsRewrite {
+            host: "*.lan".to_string(),
+            answer: "10.0.0.2".to_string(),
+        });
+        s.dns.rewrites.push(DnsRewrite {
+            host: "broken.lan".to_string(),
+            answer: "not-an-address".to_string(),
+        });
+        let plan = build(&s, false);
+        assert_eq!(plan.rewrites.len(), 1);
+        assert_eq!(plan.rewrites[0].host, "lan");
+        assert!(plan.rewrites[0].wildcard);
+    }
+
+    #[test]
+    fn safe_search_reaches_the_engine() {
+        let mut s = snapshot();
+        assert!(!build(&s, false).config.safe_search);
+        s.protection.safe_search = true;
+        assert!(build(&s, false).config.safe_search);
     }
 
     #[test]
