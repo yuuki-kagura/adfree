@@ -14,6 +14,7 @@ pub mod hosts;
 pub mod hpke;
 pub mod http;
 pub mod proxy;
+pub mod quic;
 pub mod relay;
 pub mod script;
 pub mod segment;

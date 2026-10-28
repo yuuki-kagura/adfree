@@ -64,6 +64,18 @@ rusqlite = { version = "0.40.2", features = ["bundled"] }
 # async runtimes: the platform calls these from its own IO threads, and ureq
 # reuses the rustls/ring stack the MITM stage already builds on.
 ureq = { version = "2", default-features = false, features = ["tls", "gzip"] }
+# Opt-in HTTP/3 filtering: QUIC is terminated against the local CA and
+# re-originated upstream. quinn drives the transports, h3 the request layer.
+# `rustls-ring` keeps the same crypto backend as the HTTPS stage.
+quinn = { version = "0.11.12", default-features = false, features = ["runtime-tokio", "rustls-ring", "log"] }
+h3 = "0.0.8"
+h3-quinn = "0.0.10"
+# Only the QUIC workers run an async runtime; the rest of the core stays
+# blocking. Current-thread is enough: one `adfree-quic` thread owns it.
+tokio = { version = "1", features = ["rt", "time", "sync", "macros", "io-util"] }
+# h3 passes request/response heads around with these types.
+http = "1"
+bytes = "1"
 
 [profile.release]
 opt-level = 3
