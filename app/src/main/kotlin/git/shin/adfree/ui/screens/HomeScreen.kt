@@ -58,6 +58,7 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -75,6 +76,8 @@ import androidx.core.app.NotificationManagerCompat
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LifecycleEventEffect
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import git.shin.adfree.R
 import git.shin.adfree.model.ProtectionStats
 import git.shin.adfree.ui.AdGuardIntent
@@ -154,7 +157,9 @@ fun HomeScreen(
 
             Spacer(modifier = Modifier.height(14.dp))
 
-            HomeSystemStatusRow()
+            HomeSystemStatusRow(
+                onPermissionGranted = { viewModel.refreshStatusNotification() },
+            )
 
             if (privateDnsOn) {
                 Spacer(modifier = Modifier.height(16.dp))
@@ -231,8 +236,9 @@ private fun StatusChip(isActive: Boolean) {
  * Each chip opens the system screen that changes the answer.
  */
 @Composable
-private fun HomeSystemStatusRow() {
+private fun HomeSystemStatusRow(onPermissionGranted: () -> Unit) {
     val context = LocalContext.current
+    val scope = rememberCoroutineScope()
     var notificationsOn by remember { mutableStateOf(notificationsEnabled(context)) }
     var batteryOptimized by remember { mutableStateOf(!isIgnoringBatteryOptimizations(context)) }
 
@@ -240,14 +246,36 @@ private fun HomeSystemStatusRow() {
         ActivityResultContracts.RequestPermission(),
     ) { granted ->
         notificationsOn = notificationsEnabled(context)
-        // Android stops showing the dialog after two refusals and returns
-        // "denied" silently; the settings page is the only way back.
-        if (!granted) openNotificationSettings(context)
+        if (granted) {
+            // The service's ongoing notification was dropped while the
+            // permission was missing; ask it to post again.
+            onPermissionGranted()
+        } else {
+            // Android stops showing the dialog after two refusals and returns
+            // "denied" silently; the settings page is the only way back.
+            openNotificationSettings(context)
+        }
+    }
+
+    fun refresh() {
+        notificationsOn = notificationsEnabled(context)
+        batteryOptimized = !isIgnoringBatteryOptimizations(context)
     }
 
     LifecycleEventEffect(Lifecycle.Event.ON_RESUME) {
-        notificationsOn = notificationsEnabled(context)
-        batteryOptimized = !isIgnoringBatteryOptimizations(context)
+        refresh()
+        // MIUI and other OEMs persist their per-app power policy slightly
+        // after the settings activity closes, so the read taken on resume can
+        // still see the old value. Re-read while the chip is complaining.
+        if (batteryOptimized) {
+            scope.launch {
+                repeat(3) {
+                    delay(1_000)
+                    batteryOptimized = !isIgnoringBatteryOptimizations(context)
+                    if (!batteryOptimized) return@launch
+                }
+            }
+        }
     }
 
     Row(
@@ -356,13 +384,30 @@ private fun openNotificationSettings(context: Context) {
     runCatching { context.startActivity(intent) }
 }
 
+/**
+ * Battery-optimization exemption. MIUI keeps its own no-restrict list and
+ * never syncs it to the AOSP deviceidle whitelist, so
+ * [PowerManager.isIgnoringBatteryOptimizations] reports false even after the
+ * user picks "Không hạn chế"; [MIUI_NO_RESTRICT_APPS] is that list.
+ */
 private fun isIgnoringBatteryOptimizations(context: Context): Boolean {
-    val power = context.getSystemService(PowerManager::class.java) ?: return false
-    return power.isIgnoringBatteryOptimizations(context.packageName)
+    val power = context.getSystemService(PowerManager::class.java)
+    if (power?.isIgnoringBatteryOptimizations(context.packageName) == true) return true
+    if (!Build.MANUFACTURER.equals("xiaomi", ignoreCase = true)) return false
+    val listed = runCatching {
+        Settings.System.getString(context.contentResolver, MIUI_NO_RESTRICT_APPS)
+    }.getOrNull() ?: return false
+    return listed.split(',').any { it.trim() == context.packageName }
 }
 
+private const val MIUI_NO_RESTRICT_APPS = "MILLET_NO_RESTRICT_APP"
+
 private fun requestIgnoreBatteryOptimizations(context: Context) {
-    if (isIgnoringBatteryOptimizations(context)) {
+    val exempt = isIgnoringBatteryOptimizations(context)
+    // MIUI routes the request straight to its PowerDetailActivity, which is
+    // also the only screen that can undo a "Không hạn chế" choice.
+    val xiaomi = Build.MANUFACTURER.equals("xiaomi", ignoreCase = true)
+    if (exempt && !xiaomi) {
         // Already exempt: the system list is where the user could undo it.
         runCatching {
             context.startActivity(Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS))

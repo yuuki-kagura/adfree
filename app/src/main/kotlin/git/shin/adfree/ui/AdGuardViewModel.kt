@@ -103,6 +103,9 @@ class AdGuardViewModel(
         _requestedProtectionSection.value = null
     }
 
+    /** Android drops the status notification when permission was missing. */
+    fun refreshStatusNotification() = vpnController.refreshStatusNotification()
+
     private val _effect = MutableSharedFlow<AdGuardEffect>(
         replay = 0,
         extraBufferCapacity = 8,

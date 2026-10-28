@@ -111,6 +111,22 @@ class VpnController(
 
     fun isPaused(): Boolean = coreEngine.isProtectionPaused()
 
+    /**
+     * Re-posts the ongoing status notification. A permission granted after the
+     * service called `startForeground` did not resurrect the notification the
+     * system dropped, so the UI asks for a fresh one.
+     */
+    fun refreshStatusNotification() {
+        if (!_isVpnActive.value) return
+        runCatching {
+            context.startService(
+                Intent(context, AdGuardVpnService::class.java).apply {
+                    action = AdGuardVpnService.ACTION_REFRESH_NOTIFICATION
+                },
+            )
+        }
+    }
+
     /** The service calls this after it flips the pause flag itself. */
     fun onPauseChanged() = refreshTile()
 

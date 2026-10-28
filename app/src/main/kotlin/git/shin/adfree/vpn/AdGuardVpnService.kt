@@ -159,11 +159,11 @@ class AdGuardVpnService : VpnService() {
                 addDataScheme("package")
             },
         )
-        // The service outlives the Activity: follow language changes so the
-        // channel and foreground notification do not keep the old wording.
+        // The service outlives the Activity: follow language and HTTPS changes
+        // so the channel and the filtering line never describe an older config.
         serviceScope.launch {
             container.repository.settings
-                .map { it.appLanguage }
+                .map { it.appLanguage to it.isHttpsFilteringEnabled }
                 .distinctUntilChanged()
                 .drop(1)
                 .collect {
@@ -205,6 +205,12 @@ class AdGuardVpnService : VpnService() {
                 container.repository.toggleProtection(false)
                 stopVpn()
                 return START_NOT_STICKY
+            }
+            ACTION_REFRESH_NOTIFICATION -> {
+                // Re-post only. This action must never start a tunnel: it is
+                // sent from the UI after a permission grant.
+                if (isRunning) promoteToForeground(NOTIFICATION_ID, buildStatusNotification())
+                return START_STICKY
             }
         }
         startVpn()
@@ -413,6 +419,8 @@ class AdGuardVpnService : VpnService() {
     private fun buildStatusNotification(): Notification {
         val ui = localizedContext()
         val paused = container.coreEngine.isProtectionPaused()
+        val httpsFiltering = container.repository.settings.value.isHttpsFilteringEnabled &&
+            container.coreEngine.isCaTrusted()
         val open = PendingIntent.getActivity(
             this,
             0,
@@ -448,8 +456,11 @@ class AdGuardVpnService : VpnService() {
             )
             .setContentText(
                 ui.getString(
-                    if (paused) R.string.vpn_notification_paused_text
-                    else R.string.vpn_notification_text,
+                    when {
+                        paused -> R.string.vpn_notification_paused_text
+                        httpsFiltering -> R.string.vpn_notification_text_https
+                        else -> R.string.vpn_notification_text
+                    },
                 ),
             )
             .setSmallIcon(R.drawable.ic_qs_shield)
@@ -488,6 +499,7 @@ class AdGuardVpnService : VpnService() {
         const val ACTION_PAUSE_VPN = VpnActions.PAUSE
         const val ACTION_RESUME_VPN = VpnActions.RESUME
         const val ACTION_DISABLE_PROTECTION = VpnActions.DISABLE
+        const val ACTION_REFRESH_NOTIFICATION = VpnActions.REFRESH_NOTIFICATION
         private const val TAG = "AdGuardVpnService"
         /** adbd's package: kept out of the tunnel so tooling survives. */
         private const val SHELL_PACKAGE = "com.android.shell"

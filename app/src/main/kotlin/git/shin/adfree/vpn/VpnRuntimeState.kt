@@ -25,6 +25,13 @@ object VpnActions {
 
     /** Stop from the notification: the stored protection switch goes off. */
     const val DISABLE = "com.adfree.DISABLE_PROTECTION"
+
+    /**
+     * Re-post the ongoing notification without touching the tunnel. Needed
+     * when POST_NOTIFICATIONS is granted after the service already called
+     * `startForeground`: Android dropped that first notification silently.
+     */
+    const val REFRESH_NOTIFICATION = "com.adfree.REFRESH_NOTIFICATION"
 }
 
 /** The pause/resume button the notification shows for [paused]. */

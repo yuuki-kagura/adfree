@@ -115,7 +115,11 @@ class MainActivity : AppCompatActivity() {
      */
     private val notificationPermissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestPermission(),
-    ) { /* The notification is optional; refusal only silences it. */ }
+    ) { granted ->
+        // The service posted its notification before this grant; Android
+        // dropped it then, so ask for a redraw now.
+        if (granted) container.vpnController.refreshStatusNotification()
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -183,6 +187,9 @@ class MainActivity : AppCompatActivity() {
                     // The certificate installer is another activity: coming
                     // back is the moment trust can have changed.
                     container.repository.syncHttpsReminder()
+                    // Permission may have been granted from system settings
+                    // while the tunnel kept running without a visible status.
+                    container.vpnController.refreshStatusNotification()
                 }
 
                 // VPN consent: the system shows a confirmation dialog once (and after a revoke).

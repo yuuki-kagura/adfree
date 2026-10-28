@@ -244,6 +244,7 @@
     <string name="vpn_channel_description">Chỉ báo AdFree đang lọc lưu lượng mạng</string>
     <string name="vpn_notification_title">AdFree đang bảo vệ</string>
     <string name="vpn_notification_text">Lọc quảng cáo &amp; tracker mức DNS</string>
+    <string name="vpn_notification_text_https">Lọc quảng cáo &amp; tracker qua HTTPS và DNS</string>
     <string name="vpn_notification_pause">Tạm dừng</string>
     <string name="vpn_notification_paused_title">Đã tạm dừng bảo vệ</string>
     <string name="vpn_notification_paused_text">VPN vẫn bật; quảng cáo &amp; tracker chưa bị lọc</string>
