@@ -30,6 +30,7 @@ import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.PowerSettingsNew
 import androidx.compose.material.icons.filled.ChevronRight
+import androidx.compose.material.icons.automirrored.filled.HelpOutline
 import androidx.compose.material.icons.filled.Dns
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Science
@@ -63,6 +64,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.AnnotatedString
@@ -103,6 +105,9 @@ import git.shin.adfree.ui.theme.AdGuardTextPrimary
 import git.shin.adfree.ui.theme.AdGuardOnAccent
 import git.shin.adfree.ui.theme.AdGuardTextSecondary
 
+/** Public project page; the README carries the user-facing documentation. */
+private const val HELP_URL = "https://github.com/tachibana-shin/adfree#readme"
+
 /**
  * Settings screen.
  *
@@ -116,6 +121,7 @@ fun SettingsScreen(
 ) {
     val state by viewModel.uiState.collectAsState()
     val scrollState = rememberScrollState()
+    val uriHandler = LocalUriHandler.current
     var pendingRestoreUri by remember { mutableStateOf<String?>(null) }
 
     val exportLauncher = rememberLauncherForActivityResult(
@@ -319,6 +325,17 @@ fun SettingsScreen(
             Spacer(modifier = Modifier.height(24.dp))
 
             EngineInfoSection(state.stats.filterBuildMs)
+
+            Spacer(modifier = Modifier.height(24.dp))
+
+            SettingsLink(
+                icon = Icons.AutoMirrored.Filled.HelpOutline,
+                title = stringResource(R.string.settings_help_title),
+                subtitle = stringResource(R.string.settings_help_subtitle),
+                onClick = {
+                    runCatching { uriHandler.openUri(HELP_URL) }
+                },
+            )
 
             Spacer(modifier = Modifier.height(24.dp))
 

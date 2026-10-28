@@ -244,6 +244,7 @@ fn proxy(
                 port: state.port,
                 username: state.username.clone(),
                 password: state.password.clone(),
+                automatic: state.automatic,
             })),
             ConfigWarning::None,
         ),

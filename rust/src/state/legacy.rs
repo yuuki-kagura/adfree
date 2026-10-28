@@ -229,6 +229,7 @@ fn settings_from(blob: LegacySettings) -> LegacySettingsPart {
 
     p.proxy = ProxyState {
         enabled: blob.proxy_enabled.unwrap_or(defaults.proxy.enabled),
+        automatic: defaults.proxy.automatic,
         host: blob.proxy_host.unwrap_or_default(),
         port: blob.proxy_port.unwrap_or(defaults.proxy.port),
         username: blob.proxy_username.unwrap_or_default(),

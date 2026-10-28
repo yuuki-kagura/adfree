@@ -3,7 +3,7 @@ package git.shin.adfree.model
 import java.net.InetAddress
 
 /**
- * Outbound SOCKS5 endpoint for TCP flows (routing mode).
+ * Outbound SOCKS5 endpoint for TCP and UDP flows (routing mode).
  *
  * The host stays an IP literal because the core dials it from the packet loop:
  * resolving a name there would stall every flow. Credentials are optional and
@@ -11,6 +11,7 @@ import java.net.InetAddress
  */
 data class ProxySettings(
     val enabled: Boolean = false,
+    val automatic: Boolean = true,
     val host: String = "",
     val port: Int = 1080,
     val username: String = "",

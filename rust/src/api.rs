@@ -958,6 +958,8 @@ pub fn core_uid_for_port(port: u16) -> u32 {
 /// One user script, as the UI holds it.
 #[derive(uniffi::Record, Clone, Debug)]
 pub struct ScriptBinding {
+    /// Stable id from the platform; names the script's GM storage namespace.
+    pub id: String,
     pub name: String,
     pub body: String,
     pub enabled: bool,
@@ -1228,6 +1230,7 @@ pub fn core_set_scripts(scripts: Vec<ScriptBinding>, enabled: bool) -> bool {
         let converted: Vec<crate::mitm::script::UserScript> = scripts
             .iter()
             .map(|s| crate::mitm::script::UserScript {
+                id: s.id.clone(),
                 name: s.name.clone(),
                 body: s.body.clone(),
                 enabled: s.enabled,
@@ -1327,6 +1330,7 @@ mod mitm_api_tests {
         let _guard = CORE_LOCK.lock().unwrap();
         core_set_scripts(
             vec![ScriptBinding {
+                id: "basic".into(),
                 name: "basic".into(),
                 body: "let x = 1;".into(),
                 enabled: true,
@@ -1339,6 +1343,7 @@ mod mitm_api_tests {
         // Disabling the master switch stops serving.
         core_set_scripts(
             vec![ScriptBinding {
+                id: "basic".into(),
                 name: "basic".into(),
                 body: "let x = 1;".into(),
                 enabled: true,
@@ -1349,6 +1354,7 @@ mod mitm_api_tests {
         // And re-enabling restores it.
         core_set_scripts(
             vec![ScriptBinding {
+                id: "basic".into(),
                 name: "basic".into(),
                 body: "let x = 1;".into(),
                 enabled: true,

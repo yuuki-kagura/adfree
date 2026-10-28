@@ -32,7 +32,7 @@ use crate::fxhash::{hash_str, FxHashMap};
 use crate::packet::{self, IpKey, Packet, PROTO_TCP, PROTO_UDP};
 use crate::socks5::Socks5Handshake;
 use crate::stats::{self, Stats};
-use crate::udpnat::{UdpFlow, UdpKey, UdpNat, UDP_MAX_FLOWS};
+use crate::udpnat::{UdpFlow, UdpKey, UdpNat, UDP_MAX_FLOWS, UDP_MAX_PROXIED_FLOWS};
 use crate::uidmap::UidMap;
 use crate::upstream::Upstream;
 use crate::util::{now_ms, now_ns};
@@ -1343,8 +1343,10 @@ impl Core {
     ///
     /// The mapping is keyed by both endpoints; the first datagram opens the
     /// socket and later ones reuse it, so a game keeps one descriptor (and one
-    /// NAT port on the server's side) for the whole session. Replies are handled
-    /// by [`Core::handle_udp_reply`].
+    /// NAT port on the server's side) for the whole session. With a proxy
+    /// configured the mapping is bridged to a SOCKS5 UDP ASSOCIATE thread
+    /// instead of a direct socket. Replies are handled by
+    /// [`Core::handle_udp_reply`].
     fn relay_udp(&self, pkt: &Packet<'_>) {
         let (Some(client), Some(server)) = (pkt.src_ip(), pkt.dst_ip()) else {
             return;
@@ -1360,6 +1362,18 @@ impl Core {
             server,
             server_port: pkt.dst_port,
         };
+        // The same rule the TCP relay uses: in proxy mode every flow goes out
+        // through the SOCKS5 endpoint, and automatic routing keeps LAN and
+        // other non-internet destinations direct (a remote proxy cannot reach
+        // them anyway). DNS never gets here; it has its own forwarder.
+        let proxy = self
+            .cfg
+            .read()
+            .unwrap()
+            .proxy
+            .clone()
+            .filter(|p| !p.automatic || !crate::socks5::bypasses_automatic(server));
+        let proxied = proxy.is_some();
         let payload = pkt.l4_payload();
         let mut nat = self.udp_nat.lock().unwrap();
         if let Some(flow) = nat.get_mut(&key) {
@@ -1371,7 +1385,7 @@ impl Core {
             self.stats.inc(&self.stats.udp_relayed);
             return;
         }
-        if nat.len() >= UDP_MAX_FLOWS {
+        if nat.len() >= UDP_MAX_FLOWS || (proxied && nat.proxied_len() >= UDP_MAX_PROXIED_FLOWS) {
             // One app spraying destination ports must not drain the descriptor
             // budget; the flow simply loses its packets, like a full NAT box.
             drop(nat);
@@ -1394,15 +1408,24 @@ impl Core {
             }
             packages
         };
-        let Some(fd) = self.open_peer_socket(server, libc::SOCK_DGRAM) else {
+        let fd = match proxy {
+            Some(endpoint) => self.open_proxied_udp(server, pkt.dst_port, endpoint),
+            None => {
+                let fd = self.open_peer_socket(server, libc::SOCK_DGRAM);
+                match fd {
+                    Some(fd) if connect_fd(fd, server, pkt.dst_port) != Connect::Failed => Some(fd),
+                    Some(fd) => {
+                        unsafe { libc::close(fd) };
+                        None
+                    }
+                    None => None,
+                }
+            }
+        };
+        let Some(fd) = fd else {
             self.stats.inc(&self.stats.udp_dropped);
             return;
         };
-        if connect_fd(fd, server, pkt.dst_port) == Connect::Failed {
-            unsafe { libc::close(fd) };
-            self.stats.inc(&self.stats.udp_dropped);
-            return;
-        }
         Self::send_udp(fd, payload);
         self.stats.inc(&self.stats.udp_relayed);
         self.udp_nat.lock().unwrap().insert(UdpFlow {
@@ -1414,6 +1437,7 @@ impl Core {
             last_ms: now_ms(),
             app_packages,
             retire: false,
+            proxied,
         });
         // The reply can only arrive on this descriptor, so the forwarder must
         // start watching it now rather than at its next cadence tick.
@@ -1639,7 +1663,15 @@ impl Core {
         // In proxy mode every flow dials the SOCKS5 endpoint; the destination
         // moves into the CONNECT request instead of the socket address. The
         // local injection origin never leaves the device, so it stays direct.
-        let proxy = if local { None } else { cfg.proxy.clone() };
+        // Automatic routing also keeps LAN and other non-internet addresses
+        // off the proxy: a remote endpoint cannot reach them anyway.
+        let proxy = if local {
+            None
+        } else {
+            cfg.proxy
+                .clone()
+                .filter(|p| !p.automatic || !crate::socks5::bypasses_automatic(dst))
+        };
         let handshake = match &proxy {
             Some(p) => match Socks5Handshake::new(dst, pkt.dst_port, p.credentials()) {
                 Ok(h) => Some(h),
@@ -1836,6 +1868,43 @@ impl Core {
             return None;
         }
         Some(fd)
+    }
+
+    /// Wires one mapping to a SOCKS5 UDP ASSOCIATE thread. The returned
+    /// descriptor is the engine end of a `SEQPACKET` pair; the thread owns the
+    /// protected sockets that reach the proxy and does the relaying, so the
+    /// poll loop only sees plain server payloads on this descriptor.
+    fn open_proxied_udp(
+        &self,
+        server: IpKey,
+        server_port: u16,
+        proxy: Arc<crate::socks5::ProxyEndpoint>,
+    ) -> Option<RawFd> {
+        let protector = self.socket_protector.lock().unwrap().clone()?;
+        let mut fds = [0 as RawFd; 2];
+        let paired = unsafe {
+            libc::socketpair(
+                libc::AF_UNIX,
+                libc::SOCK_SEQPACKET | libc::SOCK_NONBLOCK | libc::SOCK_CLOEXEC,
+                0,
+                fds.as_mut_ptr(),
+            )
+        };
+        if paired != 0 {
+            crate::logbuf::push("udp relay: socketpair() failed");
+            return None;
+        }
+        if let Err(error) = crate::udpproxy::spawn(fds[1], proxy, protector, server, server_port) {
+            crate::logbuf::push(&format!(
+                "udp relay: cannot start the proxy thread: {error}"
+            ));
+            unsafe {
+                libc::close(fds[0]);
+                libc::close(fds[1]);
+            }
+            return None;
+        }
+        Some(fds[0])
     }
 
     /// Installs the app-side protector new sockets are handed to.
@@ -3475,6 +3544,16 @@ impl Core {
                 // here: the mapping can never produce a reply, so retire it.
                 self.udp_nat.lock().unwrap().remove(&key);
                 return;
+            }
+            if read == 0 {
+                // A proxied mapping is fed by its association thread: a clean
+                // EOF means the thread is gone and nothing can answer through
+                // it. A direct socket's zero-length datagram stays a datagram.
+                let mut nat = self.udp_nat.lock().unwrap();
+                if nat.get_mut(&key).is_some_and(|flow| flow.proxied) {
+                    nat.remove(&key);
+                    return;
+                }
             }
             let reply = {
                 let mut nat = self.udp_nat.lock().unwrap();

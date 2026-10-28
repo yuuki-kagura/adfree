@@ -2002,6 +2002,7 @@ class AdGuardRepository(
         val bindings = _userscripts.value.mapNotNull { script ->
             val body = engine.scriptText(script.id) ?: return@mapNotNull null
             ScriptBinding(
+                id = script.id,
                 name = script.name,
                 body = body,
                 enabled = script.isEnabled,

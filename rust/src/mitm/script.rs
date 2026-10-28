@@ -28,6 +28,8 @@ const META_SCAN_LINES: usize = 256;
 /// One user script.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct UserScript {
+    /// Stable identifier: names the GM storage namespace and survives edits.
+    pub id: String,
     pub name: String,
     pub body: String,
     pub enabled: bool,
@@ -49,6 +51,7 @@ pub struct ScriptSet {
 /// A script with its metadata already parsed and compiled.
 #[derive(Clone, Debug)]
 pub(crate) struct ScriptEntry {
+    id: String,
     name: String,
     body: String,
     enabled: bool,
@@ -490,7 +493,7 @@ pub(crate) fn embed_requires(
 fn advanced_runtime_js() -> &'static str {
     r##"
 var __adfree_fetch=window.fetch?window.fetch.bind(window):null;
-var __adfree_supported_grants={unsafeWindow:1,GM_addStyle:1,GM_log:1,GM_info:1,GM_xmlhttpRequest:1,GM_download:1,GM_openInTab:1,GM_notification:1,GM_setClipboard:1,GM_addElement:1};
+var __adfree_supported_grants={unsafeWindow:1,GM_addStyle:1,GM_log:1,GM_info:1,GM_xmlhttpRequest:1,GM_download:1,GM_openInTab:1,GM_notification:1,GM_setClipboard:1,GM_addElement:1,GM_setValue:1,GM_getValue:1,GM_deleteValue:1,GM_listValues:1,GM_addValueChangeListener:1,GM_removeValueChangeListener:1,GM_registerMenuCommand:1,GM_unregisterMenuCommand:1};
 var __adfree_gm_call=function(cb,value){if(typeof cb==='function'){try{cb(value);}catch(e){try{console.warn('AdFree: GM callback failed',e);}catch(_){}}}};
 var __adfree_gm_headers=function(response){var out='';if(response.headers&&response.headers.forEach){response.headers.forEach(function(value,name){out+=name+': '+value+'\r\n';});}return out;};
 var __adfree_gm_fail=function(details,kind,message){var result={readyState:4,status:0,statusText:'',responseText:'',response:null,responseHeaders:'',finalUrl:'',error:message};if(kind==='timeout'){__adfree_gm_call(details.ontimeout,result);}else if(kind==='abort'){__adfree_gm_call(details.onabort,result);}else{__adfree_gm_call(details.onerror,result);}};
@@ -595,6 +598,77 @@ var GM_addElement=function(parent,tag,attributes){
   parent.appendChild(el);
   return el;
 };
+/*
+ * Menu commands. There is no extension toolbar, so the host is a small
+ * floating panel in a closed shadow root: page CSS cannot move it, and the
+ * commands stay reachable without a native bridge.
+ */
+var __adfree_gm_menu_items=[];
+var __adfree_gm_menu_host=null;
+var __adfree_gm_menu_panel=null;
+var __adfree_gm_menu_next=0;
+var __adfree_gm_menu_draw=function(){
+  var host=__adfree_gm_menu_host;
+  if(!host){return;}
+  var panel=__adfree_gm_menu_panel;
+  while(panel.firstChild){panel.removeChild(panel.firstChild);}
+  var title=document.createElement('div');
+  title.textContent='AdFree scripts';
+  title.style.cssText='font:600 12px sans-serif;color:#e6e8ef;padding:6px 10px;border-bottom:1px solid #333a4d;';
+  panel.appendChild(title);
+  __adfree_gm_menu_items.forEach(function(item){
+    var button=document.createElement('button');
+    button.type='button';
+    button.textContent=item.label;
+    button.style.cssText='display:block;width:100%;text-align:left;background:none;border:0;color:#c8cde0;font:12px sans-serif;padding:7px 10px;cursor:pointer;';
+    if(item.script){button.title=item.script;}
+    button.addEventListener('click',function(){
+      panel.style.display='none';
+      try{item.run();}catch(e){try{console.warn('AdFree: menu command failed',e);}catch(_){}}
+    });
+    panel.appendChild(button);
+  });
+  if(!__adfree_gm_menu_items.length){
+    var empty=document.createElement('div');
+    empty.textContent='No commands';
+    empty.style.cssText='font:12px sans-serif;color:#8b91a8;padding:8px 10px;';
+    panel.appendChild(empty);
+  }
+};
+var __adfree_gm_menu_ensure=function(){
+  if(__adfree_gm_menu_host){return;}
+  if(!document.documentElement){return;}
+  var host=document.createElement('div');
+  host.style.cssText='position:fixed;right:12px;bottom:12px;z-index:2147483647;font:12px sans-serif;';
+  var root=host.attachShadow?host.attachShadow({mode:'closed'}):host;
+  var toggle=document.createElement('button');
+  toggle.type='button';
+  toggle.textContent='\u2699';
+  toggle.title='AdFree menu';
+  toggle.style.cssText='width:34px;height:34px;border-radius:50%;border:1px solid #5b4ac9;background:#221f3b;color:#fff;font-size:16px;line-height:1;cursor:pointer;box-shadow:0 2px 8px rgba(0,0,0,.4);';
+  var panel=document.createElement('div');
+  panel.style.cssText='display:none;position:absolute;right:0;bottom:42px;min-width:180px;max-width:280px;background:#161b26;border:1px solid #333a4d;border-radius:8px;overflow:hidden;box-shadow:0 6px 24px rgba(0,0,0,.5);';
+  toggle.addEventListener('click',function(){
+    panel.style.display=panel.style.display==='none'?'block':'none';
+  });
+  root.appendChild(toggle);
+  root.appendChild(panel);
+  document.documentElement.appendChild(host);
+  __adfree_gm_menu_host=host;
+  __adfree_gm_menu_panel=panel;
+};
+var __adfree_gm_menu_register=function(script,label,run,accessKey){
+  if(typeof label!=='string'||!label||typeof run!=='function'){return '';}
+  var id='gm-menu-'+(++__adfree_gm_menu_next);
+  __adfree_gm_menu_items.push({id:id,script:script,label:label,run:run,key:accessKey});
+  __adfree_gm_menu_ensure();
+  __adfree_gm_menu_draw();
+  return id;
+};
+var __adfree_gm_menu_unregister=function(id){
+  __adfree_gm_menu_items=__adfree_gm_menu_items.filter(function(item){return item.id!==id;});
+  __adfree_gm_menu_draw();
+};
 "##
 }
 
@@ -602,6 +676,7 @@ impl ScriptEntry {
     fn new(script: UserScript) -> Self {
         let meta = ScriptMeta::parse(&script.body);
         Self {
+            id: script.id,
             name: script.name,
             body: script.body,
             enabled: script.enabled,
@@ -627,9 +702,7 @@ impl ScriptEntry {
         }
         out.push_str("var __adfree_run=function(){\n");
         // Page-context shims. The advanced network helpers live once in the
-        // outer IIFE (build_combined); GM_setValue/menu/resource need a real
-        // browser-extension sandbox, so they stay absent and are called out in
-        // the UI and the @grant warning.
+        // outer IIFE (build_combined); storage and the menu are per script.
         out.push_str("var unsafeWindow=window;\n");
         out.push_str("var GM_info={scriptHandler:'AdFree',version:'1.0',script:{name:");
         out.push_str(&js_string(&self.name));
@@ -638,6 +711,36 @@ impl ScriptEntry {
         out.push_str(",grant:");
         out.push_str(&js_string_array(&self.meta.grants));
         out.push_str("}};\n");
+        // Greasemonkey storage. The runtime is the page's main world, so the
+        // only synchronous store available is this origin's localStorage;
+        // values are namespaced per script. They do not travel across origins
+        // the way a browser extension's storage would.
+        let ns = if self.id.is_empty() {
+            &self.name
+        } else {
+            &self.id
+        };
+        out.push_str("var __adfree_gm_prefix='adfree.gm.'+");
+        out.push_str(&js_string(ns));
+        out.push_str("+'.';\n");
+        out.push_str(
+            "var __adfree_gm_key=function(key){return __adfree_gm_prefix+String(key);};\n\
+var __adfree_gm_listeners=Object.create(null);\n\
+var __adfree_gm_value_next=0;\n\
+var __adfree_gm_notify=function(key,oldValue,newValue,remote){var list=__adfree_gm_listeners[String(key)];if(!list){return;}list.slice().forEach(function(fn){try{fn(String(key),oldValue,newValue,!!remote);}catch(e){try{console.warn('AdFree: GM value listener failed',e);}catch(_){}}});};\n\
+var GM_getValue=function(key,fallback){try{var raw=localStorage.getItem(__adfree_gm_key(key));if(raw===null){return fallback;}return JSON.parse(raw);}catch(e){return fallback;}};\n\
+var GM_setValue=function(key,value){var name=String(key);var oldValue=GM_getValue(name);var raw;try{raw=JSON.stringify(value);}catch(e){console.warn('AdFree: GM_setValue cannot serialize',e);return;}try{localStorage.setItem(__adfree_gm_key(name),raw);}catch(e){console.warn('AdFree: GM_setValue failed',e);return;}__adfree_gm_notify(name,oldValue,value,false);};\n\
+var GM_deleteValue=function(key){var name=String(key);var oldValue=GM_getValue(name);try{localStorage.removeItem(__adfree_gm_key(name));}catch(e){console.warn('AdFree: GM_deleteValue failed',e);return;}__adfree_gm_notify(name,oldValue,undefined,false);};\n\
+var GM_listValues=function(){var out=[];try{for(var i=0;i<localStorage.length;i++){var key=localStorage.key(i);if(key&&key.indexOf(__adfree_gm_prefix)===0){out.push(key.slice(__adfree_gm_prefix.length));}}}catch(e){}return out;};\n\
+var GM_addValueChangeListener=function(key,fn){if(typeof fn!=='function'){return '';}var name=String(key);var id='gm-value-'+(++__adfree_gm_value_next);(__adfree_gm_listeners[name]||(__adfree_gm_listeners[name]=[])).push(fn);fn.__adfree_gm_id=id;return id;};\n\
+var GM_removeValueChangeListener=function(id){Object.keys(__adfree_gm_listeners).forEach(function(key){__adfree_gm_listeners[key]=__adfree_gm_listeners[key].filter(function(fn){return fn.__adfree_gm_id!==id;});});};\n",
+        );
+        out.push_str("var GM_registerMenuCommand=function(label,run,accessKey){return __adfree_gm_menu_register(");
+        out.push_str(&js_string(&self.name));
+        out.push_str(",label,run,accessKey);};\n");
+        out.push_str(
+            "var GM_unregisterMenuCommand=function(id){__adfree_gm_menu_unregister(id);};\n",
+        );
         if !self.meta.grants.is_empty() {
             out.push_str("var __adfree_grants=");
             out.push_str(&js_string_array(&self.meta.grants));
@@ -776,6 +879,7 @@ mod tests {
 
     fn script(name: &str, body: &str) -> UserScript {
         UserScript {
+            id: name.to_string(),
             name: name.to_string(),
             body: body.to_string(),
             enabled: true,
@@ -819,16 +923,19 @@ mod tests {
         let huge = "x".repeat(MAX_SCRIPT_BYTES + 1);
         set.replace_all(vec![
             UserScript {
+                id: String::new(),
                 name: String::new(),
                 body: "a".into(),
                 enabled: true,
             },
             UserScript {
+                id: "empty".into(),
                 name: "empty".into(),
                 body: String::new(),
                 enabled: true,
             },
             UserScript {
+                id: "big".into(),
                 name: "big".into(),
                 body: huge,
                 enabled: true,
@@ -857,6 +964,7 @@ mod tests {
         set.replace_all(vec![
             script("on", "let on = 1;"),
             UserScript {
+                id: "off".into(),
                 name: "off".into(),
                 body: "let off = 1;".into(),
                 enabled: false,
@@ -1124,7 +1232,7 @@ mod tests {
     }
 
     #[test]
-    fn advanced_gm_helpers_are_page_safe_and_storage_is_absent() {
+    fn advanced_gm_helpers_are_page_safe_and_storage_is_namespaced() {
         let mut set = ScriptSet::new();
         set.set_enabled(true);
         set.replace_all(vec![script(
@@ -1142,10 +1250,12 @@ mod tests {
         assert!(js.contains("var GM_notification="));
         assert!(js.contains("var GM_setClipboard="));
         assert!(js.contains("var GM_addElement="));
-        assert!(
-            !js.contains("var GM_setValue="),
-            "GM storage needs an extension sandbox; do not fake it in the page"
-        );
+        assert!(js.contains("var GM_setValue="));
+        assert!(js.contains("var GM_getValue="));
+        assert!(js.contains("var GM_deleteValue="));
+        assert!(js.contains("var GM_listValues="));
+        assert!(js.contains("var GM_registerMenuCommand="));
+        assert!(js.contains("adfree.gm.'+"));
         assert!(js.contains("credentials:details.withCredentials?'include':'same-origin'"));
     }
 }

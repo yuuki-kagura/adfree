@@ -71,16 +71,25 @@ pub enum ThemeMode {
 #[derive(uniffi::Record, Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ProxyState {
     pub enabled: bool,
+    /// Automatic routing: only internet destinations use the proxy; LAN,
+    /// loopback and other non-routable addresses stay direct.
+    #[serde(default = "proxy_automatic_default")]
+    pub automatic: bool,
     pub host: String,
     pub port: u16,
     pub username: String,
     pub password: String,
 }
 
+fn proxy_automatic_default() -> bool {
+    true
+}
+
 impl Default for ProxyState {
     fn default() -> Self {
         ProxyState {
             enabled: false,
+            automatic: true,
             host: String::new(),
             port: 1080,
             username: String::new(),

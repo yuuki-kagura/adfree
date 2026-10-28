@@ -318,9 +318,11 @@
     <string name="network_rewrites_save">Lưu</string>
     <string name="network_rewrites_remove">Xóa</string>
     <string name="network_proxy_title">Đường ra của lưu lượng</string>
-    <string name="network_proxy_subtitle">Gửi luồng TCP qua một proxy SOCKS5 thay vì kết nối trực tiếp.</string>
+    <string name="network_proxy_subtitle">Gửi luồng TCP và UDP qua một proxy SOCKS5 thay vì kết nối trực tiếp.</string>
     <string name="network_socks_title">SOCKS5 proxy</string>
-    <string name="network_socks_subtitle">Chỉ TCP đi qua proxy; DNS và UDP vẫn đi trực tiếp</string>
+    <string name="network_socks_subtitle">TCP và UDP đi qua proxy khi proxy hỗ trợ UDP ASSOCIATE; DNS vẫn đi trực tiếp</string>
+    <string name="network_proxy_auto_title">Chế độ tự động</string>
+    <string name="network_proxy_auto_subtitle">Chỉ lưu lượng internet (TCP và UDP) đi qua proxy; địa chỉ LAN đi trực tiếp</string>
     <string name="network_proxy_host_error">Chỉ hỗ trợ địa chỉ IPv4/IPv6, không dùng tên miền</string>
     <string name="network_proxy_port_error">Cổng phải trong khoảng 1–65535</string>
     <string name="network_proxy_host_label">Địa chỉ IP proxy</string>
@@ -328,7 +330,7 @@
     <string name="network_proxy_port_label">Cổng</string>
     <string name="network_proxy_username_label">Tên đăng nhập (tuỳ chọn)</string>
     <string name="network_proxy_password_label">Mật khẩu (tuỳ chọn)</string>
-    <string name="network_proxy_note">Tên đăng nhập và mật khẩu chỉ được gửi khi cả hai được nhập. Proxy phải hỗ trợ CONNECT tới địa chỉ IP.</string>
+    <string name="network_proxy_note">Tên đăng nhập và mật khẩu chỉ được gửi khi cả hai được nhập. Proxy phải hỗ trợ CONNECT tới địa chỉ IP và UDP ASSOCIATE cho luồng UDP.</string>
     <string name="network_proxy_save">Lưu cấu hình proxy</string>
     <string name="network_proxy_off">Đang tắt: mọi kết nối đi trực tiếp.</string>
     <string name="network_proxy_active">Đang áp dụng cho kết nối mới: %1$s:%2$d</string>
@@ -759,6 +761,8 @@
     <string name="settings_dns_add">Thêm và chọn</string>
     <string name="settings_engine_title">Trạng thái engine</string>
     <string name="settings_engine_build">Biên dịch bộ lọc: %1$d ms</string>
+    <string name="settings_help_title">Trợ giúp &amp; mã nguồn</string>
+    <string name="settings_help_subtitle">Mở README của dự án trên GitHub</string>
     <string name="settings_https_sites_title">Trang web &amp; HTTPS</string>
     <string name="settings_https_sites_body">Chọn trang không bị giải mã, hoặc chỉ giải mã một số trang. Trang bị bỏ qua sẽ không lọc được quảng cáo và script.</string>
     <string name="settings_https_only_title">Chỉ lọc các trang trong danh sách</string>

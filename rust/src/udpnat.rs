@@ -23,6 +23,10 @@ pub const UDP_FLOW_IDLE_MS: u64 = 60_000;
 /// exhaust the process descriptor budget.
 pub const UDP_MAX_FLOWS: usize = 512;
 
+/// Proxied mappings each own a helper thread and a SOCKS5 association, so they
+/// get a much smaller cap than direct sockets.
+pub const UDP_MAX_PROXIED_FLOWS: usize = 64;
+
 /// Identity of one NAT mapping: who sent it and where it is headed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct UdpKey {
@@ -47,6 +51,10 @@ pub struct UdpFlow {
     /// Set by a policy change from another thread; the forwarder drops the
     /// mapping on its next pass, so its descriptor is never closed under poll.
     pub retire: bool,
+    /// The descriptor is the engine end of a bridge to a UDP ASSOCIATE thread
+    /// instead of a connected socket: payloads are raw server data and a clean
+    /// EOF means the thread is gone.
+    pub proxied: bool,
 }
 
 impl Drop for UdpFlow {
@@ -89,6 +97,11 @@ impl UdpNat {
 
     pub fn get_mut(&mut self, key: &UdpKey) -> Option<&mut UdpFlow> {
         self.flows.get_mut(key)
+    }
+
+    /// How many mappings are relayed through a SOCKS5 proxy.
+    pub fn proxied_len(&self) -> usize {
+        self.flows.values().filter(|f| f.proxied).count()
     }
 
     pub fn insert(&mut self, flow: UdpFlow) {
@@ -160,6 +173,7 @@ mod tests {
             last_ms: 1000,
             app_packages: Vec::new(),
             retire: false,
+            proxied: false,
         });
         assert_eq!(nat.len(), 1);
         assert!(nat.get_mut(&key(5000)).is_some());
@@ -176,6 +190,7 @@ mod tests {
             last_ms: 1000,
             app_packages: Vec::new(),
             retire: false,
+            proxied: false,
         });
         // Still fresh just under the threshold...
         assert_eq!(nat.expire(1000 + UDP_FLOW_IDLE_MS - 1), 0);
@@ -194,6 +209,7 @@ mod tests {
             last_ms: 1000,
             app_packages: Vec::new(),
             retire: false,
+            proxied: false,
         });
         let snapshot = nat.poll_snapshot();
         assert_eq!(snapshot.len(), 1);

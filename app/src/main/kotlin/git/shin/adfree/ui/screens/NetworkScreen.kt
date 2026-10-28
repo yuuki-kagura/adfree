@@ -14,6 +14,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Bolt
 import androidx.compose.material.icons.filled.Dns
+import androidx.compose.material.icons.filled.Language
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.Public
 import androidx.compose.material.icons.filled.Search
@@ -238,6 +239,19 @@ private fun ProxySection(
             checked = draft.enabled,
             onCheckedChange = { enabled ->
                 draft = draft.copy(enabled = enabled)
+                error = null
+            },
+        )
+
+        Spacer(modifier = Modifier.height(10.dp))
+
+        SettingsSwitch(
+            icon = Icons.Default.Language,
+            title = stringResource(R.string.network_proxy_auto_title),
+            subtitle = stringResource(R.string.network_proxy_auto_subtitle),
+            checked = draft.automatic,
+            onCheckedChange = { automatic ->
+                draft = draft.copy(automatic = automatic)
                 error = null
             },
         )

@@ -98,6 +98,7 @@ internal fun CoreProtectionState.toModel(): ProtectionSettings = ProtectionSetti
 
 private fun ProxySettings.toCore(): CoreProxyState = CoreProxyState(
     enabled = enabled,
+    automatic = automatic,
     host = host,
     port = port.coerceIn(0, 65535).toUShort(),
     username = username,
@@ -106,6 +107,7 @@ private fun ProxySettings.toCore(): CoreProxyState = CoreProxyState(
 
 private fun CoreProxyState.toModel(): ProxySettings = ProxySettings(
     enabled = enabled,
+    automatic = automatic,
     host = host,
     port = port.toInt(),
     username = username,

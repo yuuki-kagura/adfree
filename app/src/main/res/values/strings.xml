@@ -319,9 +319,11 @@
     <string name="network_rewrites_save">Save</string>
     <string name="network_rewrites_remove">Remove</string>
     <string name="network_proxy_title">Traffic routing</string>
-    <string name="network_proxy_subtitle">Send TCP flows through a SOCKS5 proxy instead of connecting directly.</string>
+    <string name="network_proxy_subtitle">Send TCP and UDP flows through a SOCKS5 proxy instead of connecting directly.</string>
     <string name="network_socks_title">SOCKS5 proxy</string>
-    <string name="network_socks_subtitle">Only TCP goes through the proxy; DNS and UDP stay direct</string>
+    <string name="network_socks_subtitle">TCP and UDP go through the proxy when it supports UDP ASSOCIATE; DNS stays direct</string>
+    <string name="network_proxy_auto_title">Automatic mode</string>
+    <string name="network_proxy_auto_subtitle">Send only internet traffic (TCP and UDP) through the proxy; LAN addresses stay direct</string>
     <string name="network_proxy_host_error">Only IPv4/IPv6 addresses are supported; hostnames cannot be used</string>
     <string name="network_proxy_port_error">The port must be between 1 and 65535</string>
     <string name="network_proxy_host_label">Proxy IP address</string>
@@ -329,7 +331,7 @@
     <string name="network_proxy_port_label">Port</string>
     <string name="network_proxy_username_label">Username (optional)</string>
     <string name="network_proxy_password_label">Password (optional)</string>
-    <string name="network_proxy_note">Username and password are sent only when both are filled in. The proxy must support CONNECT to an IP address.</string>
+    <string name="network_proxy_note">Username and password are sent only when both are filled in. The proxy must support CONNECT to an IP address, plus UDP ASSOCIATE for UDP flows.</string>
     <string name="network_proxy_save">Save proxy configuration</string>
     <string name="network_proxy_off">Off: all connections go direct.</string>
     <string name="network_proxy_active">Applied to new connections: %1$s:%2$d</string>
@@ -763,6 +765,8 @@
     <string name="settings_dns_add">Add and select</string>
     <string name="settings_engine_title">Engine status</string>
     <string name="settings_engine_build">Filter compile: %1$d ms</string>
+    <string name="settings_help_title">Help &amp; source code</string>
+    <string name="settings_help_subtitle">Open the project README on GitHub</string>
     <string name="settings_https_sites_title">Websites &amp; HTTPS</string>
     <string name="settings_https_sites_body">Choose sites that are never decrypted, or decrypt only some sites. Skipped sites cannot have ads and scripts filtered.</string>
     <string name="settings_https_only_title">Filter only the listed sites</string>

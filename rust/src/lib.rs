@@ -41,6 +41,7 @@ pub mod stats;
 pub mod store;
 pub mod trust;
 pub mod udpnat;
+pub mod udpproxy;
 pub mod uidmap;
 pub mod upstream;
 pub mod util;

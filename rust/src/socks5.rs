@@ -12,6 +12,7 @@ const VERSION: u8 = 0x05;
 const METHOD_NO_AUTH: u8 = 0x00;
 const METHOD_USERNAME: u8 = 0x02;
 const COMMAND_CONNECT: u8 = 0x01;
+const COMMAND_UDP_ASSOCIATE: u8 = 0x03;
 const ATYP_IPV4: u8 = 0x01;
 const ATYP_DOMAIN: u8 = 0x03;
 const ATYP_IPV6: u8 = 0x04;
@@ -26,6 +27,9 @@ pub struct ProxyEndpoint {
     pub port: u16,
     pub username: String,
     pub password: String,
+    /// Automatic routing: destinations that are not on the public internet
+    /// skip the proxy. Manual mode sends every flow through it.
+    pub automatic: bool,
 }
 
 impl ProxyEndpoint {
@@ -35,6 +39,41 @@ impl ProxyEndpoint {
             None
         } else {
             Some((self.username.clone(), self.password.clone()))
+        }
+    }
+}
+
+/// Whether automatic routing keeps `dst` off the proxy.
+///
+/// A LAN address, loopback, a multicast group or the tunnel's own addresses
+/// are only reachable locally: sending them to a remote SOCKS5 endpoint would
+/// fail or, worse, hand a private destination to a third party.
+pub fn bypasses_automatic(dst: IpKey) -> bool {
+    match dst.as_ip() {
+        std::net::IpAddr::V4(ip) => {
+            let octets = ip.octets();
+            ip.is_loopback()
+                || ip.is_private()
+                || ip.is_link_local()
+                || ip.is_broadcast()
+                || ip.is_documentation()
+                || ip.is_unspecified()
+                || ip.is_multicast()
+                || (octets[0] == 100 && (octets[1] & 0xc0) == 64)
+                || (octets[0] == 198 && (octets[1] & 0xfe) == 18)
+                || octets[0] >= 240
+        }
+        std::net::IpAddr::V6(ip) => {
+            if let Some(v4) = ip.to_ipv4_mapped() {
+                return bypasses_automatic(crate::packet::ip_key_from(std::net::IpAddr::V4(v4)));
+            }
+            let segments = ip.segments();
+            ip.is_loopback()
+                || ip.is_unspecified()
+                || ip.is_multicast()
+                || (segments[0] & 0xffc0) == 0xfe80
+                || (segments[0] & 0xfe00) == 0xfc00
+                || (segments[0] == 0x2001 && segments[1] == 0x0db8)
         }
     }
 }
@@ -52,16 +91,35 @@ enum Phase {
 pub struct Socks5Handshake {
     dest: IpKey,
     dest_port: u16,
+    command: u8,
     auth: Option<(String, String)>,
     phase: Phase,
     /// Handshake bytes the proxy has not accepted yet.
     out: Vec<u8>,
     /// Proxy bytes not yet consumed by the current phase.
     rx: Vec<u8>,
+    /// Relay endpoint a UDP ASSOCIATE reply named.
+    bound: Option<(IpKey, u16)>,
 }
 
 impl Socks5Handshake {
     pub fn new(
+        dest: IpKey,
+        dest_port: u16,
+        auth: Option<(String, String)>,
+    ) -> Result<Self, &'static str> {
+        Self::with_command(COMMAND_CONNECT, dest, dest_port, auth)
+    }
+
+    /// UDP ASSOCIATE: the destination fields are the address the client will
+    /// send from. This client uses an ephemeral port, so it sends the
+    /// unspecified address and port, which RFC 1928 permits.
+    pub fn new_udp_associate(auth: Option<(String, String)>) -> Result<Self, &'static str> {
+        Self::with_command(COMMAND_UDP_ASSOCIATE, IpKey::V4(0), 0, auth)
+    }
+
+    fn with_command(
+        command: u8,
         dest: IpKey,
         dest_port: u16,
         auth: Option<(String, String)>,
@@ -84,11 +142,18 @@ impl Socks5Handshake {
         Ok(Self {
             dest,
             dest_port,
+            command,
             auth,
             phase: Phase::Method,
             out,
             rx: Vec::new(),
+            bound: None,
         })
+    }
+
+    /// The relay endpoint named by a UDP ASSOCIATE reply.
+    pub fn bound(&self) -> Option<(IpKey, u16)> {
+        self.bound
     }
 
     /// True when the caller has handshake bytes to write to the proxy.
@@ -206,6 +271,30 @@ impl Socks5Handshake {
                         self.phase = Phase::Failed;
                         return Err(reply_reason(rep));
                     }
+                    if self.command == COMMAND_UDP_ASSOCIATE {
+                        self.bound = match atyp {
+                            ATYP_IPV4 => {
+                                let mut ip = [0u8; 4];
+                                ip.copy_from_slice(&self.rx[4..8]);
+                                Some((
+                                    IpKey::V4(u32::from_be_bytes(ip)),
+                                    u16::from_be_bytes([self.rx[8], self.rx[9]]),
+                                ))
+                            }
+                            ATYP_IPV6 => {
+                                let mut ip = [0u8; 16];
+                                ip.copy_from_slice(&self.rx[4..20]);
+                                Some((
+                                    IpKey::V6(u128::from_be_bytes(ip)),
+                                    u16::from_be_bytes([self.rx[20], self.rx[21]]),
+                                ))
+                            }
+                            _ => {
+                                self.phase = Phase::Failed;
+                                return Err("proxy returned a domain name for the UDP relay");
+                            }
+                        };
+                    }
                     self.rx.drain(..total);
                     self.phase = Phase::Done;
                     return Ok(std::mem::take(&mut self.rx));
@@ -229,7 +318,7 @@ impl Socks5Handshake {
 
     fn queue_connect(&mut self) {
         self.out.push(VERSION);
-        self.out.push(COMMAND_CONNECT);
+        self.out.push(self.command);
         self.out.push(0);
         match self.dest {
             IpKey::V4(v) => {
@@ -372,5 +461,73 @@ mod tests {
     fn oversized_credentials_are_refused_before_any_byte_is_sent() {
         let auth = Some(("u".repeat(256), "p".to_string()));
         assert!(Socks5Handshake::new(dest(), 443, auth).is_err());
+    }
+
+    #[test]
+    fn automatic_routing_keeps_private_and_local_addresses_direct() {
+        for text in [
+            "127.0.0.1",
+            "10.1.2.3",
+            "172.16.5.4",
+            "192.168.1.1",
+            "169.254.1.1",
+            "100.64.0.1",
+            "255.255.255.255",
+            "224.0.0.1",
+            "10.111.222.1",
+            "192.0.2.1",
+        ] {
+            let ip = text.parse::<std::net::IpAddr>().expect("literal");
+            assert!(
+                bypasses_automatic(crate::packet::ip_key_from(ip)),
+                "{text} must stay direct"
+            );
+        }
+        for text in ["93.184.216.34", "1.1.1.1", "2606:4700:4700::1111"] {
+            let ip = text.parse::<std::net::IpAddr>().expect("literal");
+            assert!(
+                !bypasses_automatic(crate::packet::ip_key_from(ip)),
+                "{text} must use the proxy"
+            );
+        }
+    }
+
+    #[test]
+    fn ipv6_local_scopes_are_direct_too() {
+        for text in ["::1", "fe80::1", "fd00::1", "ff02::1", "::ffff:192.168.1.1"] {
+            let ip = text.parse::<std::net::IpAddr>().expect("literal");
+            assert!(
+                bypasses_automatic(crate::packet::ip_key_from(ip)),
+                "{text} must stay direct"
+            );
+        }
+    }
+
+    #[test]
+    fn udp_associate_requests_a_relay_and_reads_its_endpoint() {
+        let mut hs = Socks5Handshake::new_udp_associate(None).expect("handshake");
+        assert_eq!(hs.take_output(), vec![5, 1, 0]);
+        hs.on_bytes(&[5, 0]).expect("method");
+        // RSV RSV FRAG ATYP=IPv4 0.0.0.0:0
+        assert_eq!(hs.take_output(), vec![5, 3, 0, 1, 0, 0, 0, 0, 0, 0]);
+        hs.on_bytes(&[5, 0, 0, 1, 127, 0, 0, 1, 0x9c, 0x40])
+            .expect("reply");
+        assert!(hs.is_done());
+        assert_eq!(
+            hs.bound(),
+            Some((IpKey::V4(u32::from_be_bytes([127, 0, 0, 1])), 40000))
+        );
+    }
+
+    #[test]
+    fn a_domain_udp_relay_is_refused() {
+        let mut hs = Socks5Handshake::new_udp_associate(None).expect("handshake");
+        hs.on_bytes(&[5, 0]).expect("method");
+        hs.take_output();
+        // ATYP=domain, length 9, "relay.lan", port 40000
+        let mut reply = vec![5, 0, 0, 3, 9];
+        reply.extend_from_slice(b"relay.lan");
+        reply.extend_from_slice(&40000u16.to_be_bytes());
+        assert!(hs.on_bytes(&reply).is_err());
     }
 }

@@ -3720,6 +3720,12 @@ public object FfiConverterTypeProtectionState: FfiConverterRustBuffer<Protection
 data class ProxyState (
     var `enabled`: kotlin.Boolean
     , 
+    /**
+     * Automatic routing: only internet destinations use the proxy; LAN,
+     * loopback and other non-routable addresses stay direct.
+     */
+    var `automatic`: kotlin.Boolean
+    , 
     var `host`: kotlin.String
     , 
     var `port`: kotlin.UShort
@@ -3744,6 +3750,7 @@ public object FfiConverterTypeProxyState: FfiConverterRustBuffer<ProxyState> {
     override fun read(buf: ByteBuffer): ProxyState {
         return ProxyState(
             FfiConverterBoolean.read(buf),
+            FfiConverterBoolean.read(buf),
             FfiConverterString.read(buf),
             FfiConverterUShort.read(buf),
             FfiConverterString.read(buf),
@@ -3753,6 +3760,7 @@ public object FfiConverterTypeProxyState: FfiConverterRustBuffer<ProxyState> {
 
     override fun allocationSize(value: ProxyState) = (
             FfiConverterBoolean.allocationSize(value.`enabled`) +
+            FfiConverterBoolean.allocationSize(value.`automatic`) +
             FfiConverterString.allocationSize(value.`host`) +
             FfiConverterUShort.allocationSize(value.`port`) +
             FfiConverterString.allocationSize(value.`username`) +
@@ -3761,6 +3769,7 @@ public object FfiConverterTypeProxyState: FfiConverterRustBuffer<ProxyState> {
 
     override fun write(value: ProxyState, buf: ByteBuffer) {
             FfiConverterBoolean.write(value.`enabled`, buf)
+            FfiConverterBoolean.write(value.`automatic`, buf)
             FfiConverterString.write(value.`host`, buf)
             FfiConverterUShort.write(value.`port`, buf)
             FfiConverterString.write(value.`username`, buf)
@@ -3899,6 +3908,11 @@ public object FfiConverterTypeRootTrustBinding: FfiConverterRustBuffer<RootTrust
  * One user script, as the UI holds it.
  */
 data class ScriptBinding (
+    /**
+     * Stable id from the platform; names the script's GM storage namespace.
+     */
+    var `id`: kotlin.String
+    , 
     var `name`: kotlin.String
     , 
     var `body`: kotlin.String
@@ -3922,17 +3936,20 @@ public object FfiConverterTypeScriptBinding: FfiConverterRustBuffer<ScriptBindin
         return ScriptBinding(
             FfiConverterString.read(buf),
             FfiConverterString.read(buf),
+            FfiConverterString.read(buf),
             FfiConverterBoolean.read(buf),
         )
     }
 
     override fun allocationSize(value: ScriptBinding) = (
+            FfiConverterString.allocationSize(value.`id`) +
             FfiConverterString.allocationSize(value.`name`) +
             FfiConverterString.allocationSize(value.`body`) +
             FfiConverterBoolean.allocationSize(value.`enabled`)
     )
 
     override fun write(value: ScriptBinding, buf: ByteBuffer) {
+            FfiConverterString.write(value.`id`, buf)
             FfiConverterString.write(value.`name`, buf)
             FfiConverterString.write(value.`body`, buf)
             FfiConverterBoolean.write(value.`enabled`, buf)

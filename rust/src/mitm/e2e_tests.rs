@@ -852,6 +852,7 @@ fn setup_core_with_list(origin: &Origin, tag: &str, list: &str) -> (Arc<Core>, V
     {
         let mut scripts = core.mitm_scripts.write().unwrap();
         scripts.replace_all(vec![UserScript {
+            id: "e2e".to_string(),
             name: "e2e.js".to_string(),
             body,
             enabled: true,
