@@ -35,6 +35,10 @@ use rustls::{ClientConfig, ClientConnection, ServerConfig, ServerConnection};
 /// ALPN we offer: HTTP/1.1 first. HTTP/2 support is a later stage.
 pub const ALPN_H1: &[u8] = b"http/1.1";
 
+/// ALPN for HTTP/3. QUIC runs the same TLS 1.3 handshake; only the protocol
+/// name on the wire differs.
+pub const ALPN_H3: &[u8] = b"h3";
+
 /// The two halves of one intercepted flow.
 pub struct TlsSession {
     pub server: ServerConnection,
@@ -220,6 +224,16 @@ pub fn client_config_with(roots: rustls::RootCertStore) -> Arc<ClientConfig> {
     Arc::new(config)
 }
 
+/// The QUIC variant of [`client_config_with`]: same trust anchors, negotiated
+/// as `h3`.
+pub fn client_config_h3_with(roots: rustls::RootCertStore) -> Arc<ClientConfig> {
+    let mut config = ClientConfig::builder()
+        .with_root_certificates(roots)
+        .with_no_client_auth();
+    config.alpn_protocols = vec![ALPN_H3.to_vec()];
+    Arc::new(config)
+}
+
 /// The upstream TLS settings of one engine: the plain client config, the root
 /// store it was built from, and the per-host ECH configs built from it.
 ///
@@ -259,6 +273,14 @@ impl UpstreamTls {
     /// The client config for a host with no ECHConfig on offer.
     pub fn plain(&self) -> Arc<ClientConfig> {
         Arc::clone(&self.plain)
+    }
+
+    /// The QUIC client config: the same roots, negotiated as `h3`.
+    ///
+    /// ECH is not offered here: QUIC's handshake changes the record framing
+    /// and the ECH path in rustls only covers the TCP configuration today.
+    pub fn plain_h3(&self) -> Arc<ClientConfig> {
+        client_config_h3_with(self.roots.clone())
     }
 
     /// A client config that offers `list` — the raw ECHConfigList from the
@@ -325,6 +347,18 @@ pub fn server_config_dyn(resolver: Arc<dyn ResolvesServerCert>) -> Arc<ServerCon
         .with_no_client_auth()
         .with_cert_resolver(resolver);
     config.alpn_protocols = vec![ALPN_H1.to_vec()];
+    Arc::new(config)
+}
+
+/// The QUIC variant of [`server_config_dyn`]: same resolver, `h3` negotiated.
+///
+/// The resolver still signs the leaf from the ClientHello's SNI; QUIC only
+/// changes the framing around the same TLS 1.3 handshake.
+pub fn server_config_h3(resolver: Arc<dyn ResolvesServerCert>) -> Arc<ServerConfig> {
+    let mut config = ServerConfig::builder()
+        .with_no_client_auth()
+        .with_cert_resolver(resolver);
+    config.alpn_protocols = vec![ALPN_H3.to_vec()];
     Arc::new(config)
 }
 
