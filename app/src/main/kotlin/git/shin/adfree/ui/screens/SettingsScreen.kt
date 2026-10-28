@@ -25,6 +25,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Bolt
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Lock
@@ -679,6 +680,20 @@ internal fun HttpsFilterSection(
                     viewModel.setHttpsFiltering(enabled) { status = it }
                 }
             }
+        )
+
+        Spacer(modifier = Modifier.height(10.dp))
+
+        // QUIC is TCP's alternative transport: with HTTPS filtering on, the
+        // engine can terminate it too, so pages that negotiate HTTP/3 keep
+        // being filtered instead of falling back to TCP or being dropped.
+        SettingsSwitch(
+            icon = Icons.Default.Bolt,
+            title = stringResource(R.string.settings_http3_title),
+            subtitle = stringResource(R.string.settings_http3_subtitle),
+            checked = ui.settings.filterHttp3,
+            enabled = httpsEnabled,
+            onCheckedChange = { viewModel.onIntent(AdGuardIntent.ToggleFilterHttp3(it)) }
         )
 
         Spacer(modifier = Modifier.height(10.dp))
@@ -1515,6 +1530,7 @@ fun SettingsSwitch(
     subtitle: String,
     checked: Boolean,
     onCheckedChange: (Boolean) -> Unit,
+    enabled: Boolean = true,
 ) {
     Card(
         modifier = Modifier.fillMaxWidth(),
@@ -1556,6 +1572,7 @@ fun SettingsSwitch(
             Switch(
                 checked = checked,
                 onCheckedChange = onCheckedChange,
+                enabled = enabled,
                 colors = SwitchDefaults.colors(
                     checkedThumbColor = Color.White,
                     checkedTrackColor = AdGuardGreenPrimary,

@@ -24,6 +24,9 @@ pub struct Stats {
     pub dns_replies: AtomicU64,
     pub dns_timeouts: AtomicU64,
     pub quic_dropped: AtomicU64,
+    /// HTTP/3 requests answered with a block page: QUIC flows this engine
+    /// terminated and filtered instead of dropping.
+    pub quic_blocked: AtomicU64,
     pub udp_dropped: AtomicU64,
     /// UDP datagrams spliced through a NAT mapping, both directions.
     pub udp_relayed: AtomicU64,
@@ -99,6 +102,7 @@ impl Stats {
             &self.dns_replies,
             &self.dns_timeouts,
             &self.quic_dropped,
+            &self.quic_blocked,
             &self.udp_dropped,
             &self.udp_relayed,
             &self.bytes_saved,
@@ -156,6 +160,7 @@ impl Stats {
             tcp_reset: self.get(&self.tcp_reset),
             tcp_relayed: self.get(&self.tcp_relayed),
             quic_dropped: self.get(&self.quic_dropped),
+            quic_blocked: self.get(&self.quic_blocked),
             udp_dropped: self.get(&self.udp_dropped),
             udp_relayed: self.get(&self.udp_relayed),
             dropped: self.get(&self.dropped),
@@ -195,6 +200,7 @@ pub struct StatsSnapshot {
     pub dns_replies: u64,
     pub dns_timeouts: u64,
     pub quic_dropped: u64,
+    pub quic_blocked: u64,
     pub udp_dropped: u64,
     pub udp_relayed: u64,
     pub bytes_saved: u64,

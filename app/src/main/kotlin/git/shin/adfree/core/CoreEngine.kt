@@ -587,6 +587,7 @@ class CoreEngine {
                 dnsAllowed = 0,
                 tcpReset = 0,
                 quicDropped = 0,
+                quicBlocked = 0,
                 udpDropped = 0,
                 dnsQueries = 0,
                 dnsReplies = 0,

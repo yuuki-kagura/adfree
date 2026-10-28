@@ -715,6 +715,8 @@
     <string name="settings_cosmetic_subtitle">Ẩn khung quảng cáo còn sót trên trang; cần bật lọc HTTPS</string>
     <string name="settings_ech_title">ECH đầy đủ</string>
     <string name="settings_ech_subtitle">Cho trình duyệt tự mã hoá ECH end-to-end. Host dùng ECH sẽ được nối thẳng, không lọc được.</string>
+    <string name="settings_http3_title">Lọc HTTP/3</string>
+    <string name="settings_http3_subtitle">Giải mã và lọc QUIC (HTTP/3) thay vì chặn; cần bật lọc HTTPS. Chrome không tin chứng chỉ người dùng cho QUIC nên sẽ tự chuyển sang TCP.</string>
     <string name="settings_ca_created">CA đã tạo</string>
     <string name="settings_ca_missing">Chưa có CA</string>
     <string name="settings_ca_fingerprint">Vân tay: %1$s…</string>

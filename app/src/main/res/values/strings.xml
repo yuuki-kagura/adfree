@@ -716,6 +716,8 @@
     <string name="settings_cosmetic_subtitle">Hide leftover ad placeholders on pages; requires HTTPS filtering</string>
     <string name="settings_ech_title">Full ECH</string>
     <string name="settings_ech_subtitle">Let the browser encrypt ECH end-to-end. Hosts that use ECH are connected directly and cannot be filtered.</string>
+    <string name="settings_http3_title">Filter HTTP/3</string>
+    <string name="settings_http3_subtitle">Decrypt and filter QUIC (HTTP/3) instead of blocking it; needs HTTPS filtering. Chrome does not trust user certificates for QUIC, so it falls back to TCP.</string>
     <string name="settings_ca_created">CA created</string>
     <string name="settings_ca_missing">No CA yet</string>
     <string name="settings_ca_fingerprint">Fingerprint: %1$s…</string>

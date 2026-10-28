@@ -436,6 +436,10 @@ data class ProtectionSettings(
     // terminating TLS without a trusted certificate would hand apps a leaf
     // they reject, breaking HTTPS instead of filtering it.
     val isHttpsFilteringEnabled: Boolean = false,
+    // Off by default: AdGuard keeps QUIC blocked until the user opts in. When
+    // on, UDP/443 is terminated and filtered like HTTPS instead of dropped;
+    // needs HTTPS filtering for the same certificate and decision layer.
+    val filterHttp3: Boolean = false,
     // Off by default: letting clients run ECH end to end means the proxy can no
     // longer see (or filter) the names they hide. The user opts into that trade.
     val isFullEchEnabled: Boolean = false,

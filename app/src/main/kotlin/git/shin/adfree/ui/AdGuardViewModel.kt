@@ -299,6 +299,8 @@ class AdGuardViewModel(
             is AdGuardIntent.ToggleSafeSearch -> repository.toggleSafeSearch(intent.enabled)
             is AdGuardIntent.ToggleCosmeticFiltering ->
                 repository.toggleCosmeticFiltering(intent.enabled)
+            is AdGuardIntent.ToggleFilterHttp3 ->
+                repository.toggleFilterHttp3(intent.enabled)
             is AdGuardIntent.SetFilterAutoUpdate ->
                 repository.setFilterAutoUpdate(intent.hours)
             is AdGuardIntent.ToggleAutoStart ->

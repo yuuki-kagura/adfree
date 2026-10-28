@@ -369,6 +369,8 @@ pub struct VpnStats {
     pub dns_allowed: u64,
     pub tcp_reset: u64,
     pub quic_dropped: u64,
+    /// HTTP/3 requests blocked inside a terminated QUIC flow.
+    pub quic_blocked: u64,
     pub udp_dropped: u64,
     pub dns_queries: u64,
     pub dns_replies: u64,
@@ -583,6 +585,15 @@ pub(crate) fn log_mitm_block(block: &crate::mitm::proxy::MitmBlock<'_>) {
 /// one, which is what the platform's attribution reported.
 fn first_app(packages: &[String]) -> &str {
     packages.first().map(String::as_str).unwrap_or("")
+}
+
+/// The HTTP/3 sink: a request answered by the QUIC hub is counted in its own
+/// bucket (so the UI can tell terminated QUIC from dropped datagrams) and then
+/// logged exactly like an HTTPS block.
+fn log_http3_block(block: &crate::mitm::proxy::MitmBlock<'_>) {
+    let core = core();
+    core.stats.inc(&core.stats.quic_blocked);
+    log_mitm_block(block);
 }
 
 impl Default for Core {
@@ -1759,7 +1770,7 @@ impl Core {
             serve_path,
             script_body,
             script_tag_src,
-            sink: Some(log_mitm_block),
+            sink: Some(log_http3_block),
         }
     }
 
@@ -3464,6 +3475,7 @@ impl Core {
             dns_allowed: s.dns_allowed,
             tcp_reset: s.tcp_reset,
             quic_dropped: s.quic_dropped,
+            quic_blocked: s.quic_blocked,
             udp_dropped: s.udp_dropped,
             dns_queries: s.dns_queries,
             dns_replies: s.dns_replies,

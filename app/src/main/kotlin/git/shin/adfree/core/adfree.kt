@@ -3536,6 +3536,12 @@ data class ProtectionState (
     , 
     var `isHttpsFilteringEnabled`: kotlin.Boolean
     , 
+    /**
+     * Terminate and filter QUIC (HTTP/3) instead of dropping it. Needs HTTPS
+     * filtering, because the same certificate and decision layer are used.
+     */
+    var `filterHttp3`: kotlin.Boolean
+    , 
     var `isFullEchEnabled`: kotlin.Boolean
     , 
     var `isFirewallEnabled`: kotlin.Boolean
@@ -3624,6 +3630,7 @@ public object FfiConverterTypeProtectionState: FfiConverterRustBuffer<Protection
             FfiConverterBoolean.read(buf),
             FfiConverterBoolean.read(buf),
             FfiConverterBoolean.read(buf),
+            FfiConverterBoolean.read(buf),
             FfiConverterUInt.read(buf),
             FfiConverterBoolean.read(buf),
             FfiConverterTypeDnsBlockMode.read(buf),
@@ -3651,6 +3658,7 @@ public object FfiConverterTypeProtectionState: FfiConverterRustBuffer<Protection
             FfiConverterBoolean.allocationSize(value.`isDnsProtectionEnabled`) +
             FfiConverterBoolean.allocationSize(value.`isSmartFilteringEnabled`) +
             FfiConverterBoolean.allocationSize(value.`isHttpsFilteringEnabled`) +
+            FfiConverterBoolean.allocationSize(value.`filterHttp3`) +
             FfiConverterBoolean.allocationSize(value.`isFullEchEnabled`) +
             FfiConverterBoolean.allocationSize(value.`isFirewallEnabled`) +
             FfiConverterBoolean.allocationSize(value.`isEcoBatteryModeEnabled`) +
@@ -3684,6 +3692,7 @@ public object FfiConverterTypeProtectionState: FfiConverterRustBuffer<Protection
             FfiConverterBoolean.write(value.`isDnsProtectionEnabled`, buf)
             FfiConverterBoolean.write(value.`isSmartFilteringEnabled`, buf)
             FfiConverterBoolean.write(value.`isHttpsFilteringEnabled`, buf)
+            FfiConverterBoolean.write(value.`filterHttp3`, buf)
             FfiConverterBoolean.write(value.`isFullEchEnabled`, buf)
             FfiConverterBoolean.write(value.`isFirewallEnabled`, buf)
             FfiConverterBoolean.write(value.`isEcoBatteryModeEnabled`, buf)
@@ -4124,6 +4133,8 @@ data class StatsSnapshot (
     , 
     var `quicDropped`: kotlin.Long
     , 
+    var `quicBlocked`: kotlin.Long
+    , 
     var `udpDropped`: kotlin.Long
     , 
     var `dnsQueries`: kotlin.Long
@@ -4230,6 +4241,7 @@ public object FfiConverterTypeStatsSnapshot: FfiConverterRustBuffer<StatsSnapsho
             FfiConverterLong.read(buf),
             FfiConverterLong.read(buf),
             FfiConverterLong.read(buf),
+            FfiConverterLong.read(buf),
             FfiConverterBoolean.read(buf),
         )
     }
@@ -4242,6 +4254,7 @@ public object FfiConverterTypeStatsSnapshot: FfiConverterRustBuffer<StatsSnapsho
             FfiConverterLong.allocationSize(value.`dnsAllowed`) +
             FfiConverterLong.allocationSize(value.`tcpReset`) +
             FfiConverterLong.allocationSize(value.`quicDropped`) +
+            FfiConverterLong.allocationSize(value.`quicBlocked`) +
             FfiConverterLong.allocationSize(value.`udpDropped`) +
             FfiConverterLong.allocationSize(value.`dnsQueries`) +
             FfiConverterLong.allocationSize(value.`dnsReplies`) +
@@ -4277,6 +4290,7 @@ public object FfiConverterTypeStatsSnapshot: FfiConverterRustBuffer<StatsSnapsho
             FfiConverterLong.write(value.`dnsAllowed`, buf)
             FfiConverterLong.write(value.`tcpReset`, buf)
             FfiConverterLong.write(value.`quicDropped`, buf)
+            FfiConverterLong.write(value.`quicBlocked`, buf)
             FfiConverterLong.write(value.`udpDropped`, buf)
             FfiConverterLong.write(value.`dnsQueries`, buf)
             FfiConverterLong.write(value.`dnsReplies`, buf)

@@ -298,7 +298,7 @@ class AdGuardRepository(
         val blocked = dnsBlocked + tcpReset
         return ProtectionStats(
             adsBlocked = dnsBlocked,
-            trackersBlocked = (quicDropped + udpDropped + tcpReset).toLong(),
+            trackersBlocked = (quicDropped + quicBlocked + udpDropped + tcpReset).toLong(),
             dataSavedBytes = bytesSaved,
             totalRequestsIntercepted = packetsTotal,
             activeRulesCount = activeRules.toInt(),
@@ -373,6 +373,10 @@ class AdGuardRepository(
 
     fun toggleHttpsFiltering(enabled: Boolean) =
         updateSettings { it.copy(isHttpsFilteringEnabled = enabled) }
+
+    /** HTTP/3 (QUIC) filtering; inert unless HTTPS filtering is on. */
+    fun toggleFilterHttp3(enabled: Boolean) =
+        updateSettings { it.copy(filterHttp3 = enabled) }
 
     /** Element hiding, scriptlets and the page runtime; rides HTTPS filtering. */
     fun toggleCosmeticFiltering(enabled: Boolean) =
