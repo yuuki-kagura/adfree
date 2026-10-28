@@ -90,6 +90,10 @@ pub fn build(snapshot: &StateSnapshot, private_dns_strict: bool) -> Plan {
 
     let config = Config {
         mitm_enabled: protection.is_https_filtering_enabled,
+        // Termination needs the CA and the decision layer HTTPS filtering
+        // brings; the UI disables the switch, and the core refuses to arm it
+        // on its own (a stored `true` must not survive turning HTTPS off).
+        filter_http3: protection.filter_http3 && protection.is_https_filtering_enabled,
         full_ech: protection.is_full_ech_enabled,
         block_quic: protection.block_quic,
         block_doh: protection.block_doh,

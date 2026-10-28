@@ -111,6 +111,9 @@ pub struct ProtectionState {
     pub is_dns_protection_enabled: bool,
     pub is_smart_filtering_enabled: bool,
     pub is_https_filtering_enabled: bool,
+    /// Terminate and filter QUIC (HTTP/3) instead of dropping it. Needs HTTPS
+    /// filtering, because the same certificate and decision layer are used.
+    pub filter_http3: bool,
     pub is_full_ech_enabled: bool,
     pub is_firewall_enabled: bool,
     pub is_eco_battery_mode_enabled: bool,
@@ -150,6 +153,9 @@ impl Default for ProtectionState {
             is_dns_protection_enabled: true,
             is_smart_filtering_enabled: true,
             is_https_filtering_enabled: false,
+            // AdGuard keeps HTTP/3 blocked until the user opts in: the
+            // termination is new and browser support varies.
+            filter_http3: false,
             is_full_ech_enabled: false,
             is_firewall_enabled: true,
             is_eco_battery_mode_enabled: true,

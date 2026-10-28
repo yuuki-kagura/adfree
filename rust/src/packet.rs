@@ -431,6 +431,79 @@ impl<'a> Packet<'a> {
     }
 }
 
+/// Builds a whole UDP packet from its four endpoints and payload.
+///
+/// The QUIC bridge only ever holds datagrams, not packets: quinn reports where
+/// a datagram goes, and the engine has to turn it into something the TUN
+/// device accepts. Addresses and ports are taken as-is (no swap), so the caller
+/// decides the direction.
+pub fn build_udp(
+    src: IpKey,
+    src_port: u16,
+    dst: IpKey,
+    dst_port: u16,
+    payload: &[u8],
+) -> Option<Vec<u8>> {
+    let udp_len = 8usize.checked_add(payload.len())?;
+    if udp_len > u16::MAX as usize {
+        return None;
+    }
+    match (src, dst) {
+        (IpKey::V4(s), IpKey::V4(d)) => {
+            let total = 20usize.checked_add(udp_len)?;
+            if total > u16::MAX as usize {
+                return None;
+            }
+            let mut out = vec![0u8; total];
+            out[0] = 0x45;
+            out[2..4].copy_from_slice(&(total as u16).to_be_bytes());
+            // Don't fragment: a QUIC datagram is never fragmented by the path
+            // above us either, and the DF bit keeps that contract.
+            out[6] = 0x40;
+            out[8] = 64;
+            out[9] = PROTO_UDP;
+            out[12..16].copy_from_slice(&s.to_be_bytes());
+            out[16..20].copy_from_slice(&d.to_be_bytes());
+            fix_ipv4_checksum(&mut out);
+            write_udp_header(&mut out[20..28], src_port, dst_port, udp_len);
+            out[28..].copy_from_slice(payload);
+            let checksum = internet_checksum(
+                &v4_pseudo(&out[..20], udp_len as u32, PROTO_UDP),
+                &out[20..28],
+                payload,
+            );
+            // A computed zero is transmitted as all ones (RFC 768): zero means
+            // "no checksum", which would make a v6 receiver drop the datagram.
+            let checksum = if checksum == 0 { 0xffff } else { checksum };
+            out[26..28].copy_from_slice(&checksum.to_be_bytes());
+            Some(out)
+        }
+        (IpKey::V6(s), IpKey::V6(d)) => {
+            let mut out = vec![0u8; 40 + udp_len];
+            out[0] = 0x60;
+            out[4..6].copy_from_slice(&(udp_len as u16).to_be_bytes());
+            out[6] = PROTO_UDP;
+            out[7] = 64;
+            out[8..24].copy_from_slice(&s.to_be_bytes());
+            out[24..40].copy_from_slice(&d.to_be_bytes());
+            write_udp_header(&mut out[40..48], src_port, dst_port, udp_len);
+            out[48..].copy_from_slice(payload);
+            let checksum = udp_checksum_v6(&out[..40], &out[40..48], payload);
+            let checksum = if checksum == 0 { 0xffff } else { checksum };
+            out[46..48].copy_from_slice(&checksum.to_be_bytes());
+            Some(out)
+        }
+        _ => None,
+    }
+}
+
+fn write_udp_header(header: &mut [u8], src_port: u16, dst_port: u16, len: usize) {
+    header[0..2].copy_from_slice(&src_port.to_be_bytes());
+    header[2..4].copy_from_slice(&dst_port.to_be_bytes());
+    header[4..6].copy_from_slice(&(len as u16).to_be_bytes());
+    header[6..8].copy_from_slice(&[0, 0]);
+}
+
 impl<'a> Packet<'a> {
     #[inline]
     fn dst_port_hi(&self) -> u8 {
@@ -741,6 +814,62 @@ mod tests {
         assert_eq!(parsed.version, 6);
         assert_eq!(parsed.dst_ip_text(), "2001:db8::2");
         assert_eq!(parsed.dst_port, 53);
+    }
+
+    #[test]
+    fn build_udp_round_trips_both_families() {
+        let v4 = build_udp(
+            IpKey::V4(u32::from_be_bytes([192, 0, 2, 10])),
+            443,
+            IpKey::V4(u32::from_be_bytes([203, 0, 113, 7])),
+            50000,
+            b"quic",
+        )
+        .expect("v4 packet");
+        let parsed = Packet::parse(&v4).expect("parse v4");
+        assert_eq!(parsed.version, 4);
+        assert_eq!(parsed.src_ip_text(), "192.0.2.10");
+        assert_eq!(parsed.dst_ip_text(), "203.0.113.7");
+        assert_eq!(parsed.src_port, 443);
+        assert_eq!(parsed.dst_port, 50000);
+        assert_eq!(parsed.l4_payload(), b"quic");
+        assert_eq!(
+            internet_checksum(&v4_pseudo(&v4[..20], 12, PROTO_UDP), &v4[20..], &[]),
+            0,
+            "the UDP checksum must verify"
+        );
+
+        let v6 = build_udp(
+            IpKey::V6(u128::from(
+                "2001:db8::1".parse::<std::net::Ipv6Addr>().unwrap(),
+            )),
+            443,
+            IpKey::V6(u128::from(
+                "2001:db8::2".parse::<std::net::Ipv6Addr>().unwrap(),
+            )),
+            444,
+            b"h3",
+        )
+        .expect("v6 packet");
+        let parsed = Packet::parse(&v6).expect("parse v6");
+        assert_eq!(parsed.version, 6);
+        assert_eq!(parsed.src_ip_text(), "2001:db8::1");
+        assert_eq!(parsed.dst_ip_text(), "2001:db8::2");
+        assert_eq!(parsed.src_port, 443);
+        assert_eq!(parsed.dst_port, 444);
+        assert_eq!(parsed.l4_payload(), b"h3");
+        assert_eq!(
+            internet_checksum(
+                &v6_pseudo(&v6[..40], (v6.len() - 40) as u32, PROTO_UDP),
+                &v6[40..],
+                &[]
+            ),
+            0,
+            "the UDP checksum must verify"
+        );
+
+        // A four-tuple cannot cross address families.
+        assert!(build_udp(IpKey::V4(1), 1, IpKey::V6(1), 2, b"x").is_none());
     }
 
     #[test]

@@ -29,6 +29,8 @@ use crate::dns::{self, BlockMode, Query};
 use crate::events::{self, Event, EventLog};
 use crate::filter::{FilterEngine, FilterListInfo, HostVerdict};
 use crate::fxhash::{hash_str, FxHashMap};
+use crate::mitm::quic::bridge;
+use crate::mitm::quic::socket::{Datagram, TunUdpSocket};
 use crate::packet::{self, IpKey, Packet, PROTO_TCP, PROTO_UDP};
 use crate::socks5::Socks5Handshake;
 use crate::stats::{self, Stats};
@@ -71,6 +73,27 @@ const SECURE_DNS_IN_FLIGHT: usize = 64;
 /// figure shown in the UI.
 const BYTES_PER_BLOCKED_REQUEST: u64 = 48 * 1024;
 
+/// TLS alerts a client sends when it refuses our certificate, by number.
+///
+/// The TCP path sees them formatted by rustls (`UnknownCA` and friends); QUIC
+/// hands back the numeric alert inside a CRYPTO_ERROR close. One table feeds
+/// both paths.
+const CERT_ALERTS: [(&str, u8); 7] = [
+    ("BadCertificate", 42),
+    ("UnsupportedCertificate", 43),
+    ("CertificateRevoked", 44),
+    ("CertificateExpired", 45),
+    ("CertificateUnknown", 46),
+    ("UnknownCA", 48),
+    ("AccessDenied", 49),
+];
+
+/// Is `alert` a client refusing the leaf (as opposed to, say, a protocol
+/// error)?
+pub(crate) fn cert_alert_is_rejection(alert: u8) -> bool {
+    CERT_ALERTS.iter().any(|(_, code)| *code == alert)
+}
+
 /// The TTL one synthetic answer may carry: the shortest record's, held inside
 /// the range a search engine's endpoint is worth trusting for.
 fn record_ttl(records: &[(std::net::IpAddr, u32)]) -> u32 {
@@ -85,6 +108,17 @@ fn record_ttl(records: &[(std::net::IpAddr, u32)]) -> u32 {
 /// Client bytes a relay may buffer while its peer socket is full; beyond this
 /// the flow counts as stuck and is reset rather than buffering forever.
 const MAX_PENDING_TO_PEER: usize = 4 * 1024 * 1024;
+
+/// Client bytes buffered per QUIC flow until its SNI decides the path.
+const H3_PENDING_BYTES: usize = 16 * 1024;
+/// Idle timeout for a terminated QUIC flow. The bridge's own quinn timeout is
+/// the same; this reaps flows whose handshake never completed.
+const H3_IDLE_MS: u64 = 60_000;
+/// How long a spliced five-tuple stays on the NAT path: a client reconnects
+/// from the same socket after the refused handshake.
+const H3_SPLICE_MS: u64 = 60_000;
+/// Datagrams moved to the tun in one forwarder pass.
+const H3_DRAIN_MAX: usize = 256;
 
 /// Built-in list of well known encrypted DNS providers. Blocking these is the
 /// only way to stop apps from silently bypassing the filter.
@@ -164,6 +198,9 @@ impl StealthConfig {
 pub struct Config {
     /// Terminate TLS for intercepted connections and inject user scripts.
     pub mitm_enabled: bool,
+    /// Terminate QUIC (HTTP/3) and filter it like HTTPS instead of dropping
+    /// it. Requires `mitm_enabled`: the same CA and decision layer are used.
+    pub filter_http3: bool,
     /// Leave ECHConfigs in DNS answers so clients can run ECH end to end.
     ///
     /// Off by default: ECH hides the inner name from the proxy, so an ECH
@@ -214,6 +251,7 @@ impl Default for Config {
     fn default() -> Self {
         Config {
             mitm_enabled: false,
+            filter_http3: false,
             full_ech: false,
             block_quic: true,
             block_doh: true,
@@ -364,6 +402,19 @@ struct SafeCacheEntry {
     expires_ms: u64,
 }
 
+/// One terminated QUIC flow.
+struct H3Flow {
+    /// Where the engine feeds the client's datagrams; quinn owns the rest.
+    socket: Arc<TunUdpSocket>,
+    apps: Vec<String>,
+    last_ms: u64,
+    /// Client packets seen before the SNI decided the flow's fate. If the host
+    /// turns out to be excluded they are replayed into a plain NAT mapping, so
+    /// the splice does not wait for the client's retransmission.
+    pending: Vec<Vec<u8>>,
+    pending_bytes: usize,
+}
+
 pub struct Core {
     cfg: RwLock<Config>,
     filter: Arc<FilterEngine>,
@@ -444,6 +495,14 @@ pub struct Core {
     relays: Mutex<crate::mitm::relay::RelayTable>,
     /// Live UDP NAT mappings (everything except DNS).
     udp_nat: Mutex<UdpNat>,
+    /// The HTTP/3 worker: one tokio thread owning every QUIC endpoint.
+    h3: Mutex<Option<Arc<crate::mitm::quic::bridge::Bridge>>>,
+    /// Live terminated QUIC flows, keyed by the client's five-tuple.
+    h3_flows: Mutex<FxHashMap<UdpKey, H3Flow>>,
+    /// Five-tuples whose QUIC is spliced verbatim (HTTPS exclusions, apps that
+    /// refused the CA), with the moment the verdict expires. A client that
+    /// reconnects lands on the NAT path without a new handshake.
+    h3_spliced: Mutex<FxHashMap<UdpKey, u64>>,
     /// Tun and forwarder threads of the current session. A new session joins
     /// them before starting its own, so two tunnels never share the tables.
     workers: Mutex<Vec<std::thread::JoinHandle<()>>>,
@@ -584,6 +643,9 @@ impl Core {
             mitm_resolver: RwLock::new(None),
             relays: Mutex::new(crate::mitm::relay::RelayTable::new()),
             udp_nat: Mutex::new(UdpNat::new()),
+            h3: Mutex::new(None),
+            h3_flows: Mutex::new(FxHashMap::default()),
+            h3_spliced: Mutex::new(FxHashMap::default()),
             workers: Mutex::new(Vec::new()),
             socket_protector: Mutex::new(None),
             upstream_config: RwLock::new(crate::mitm::tls::UpstreamTls::system()),
@@ -724,7 +786,14 @@ impl Core {
             )),
             only_mode: cfg.https_only_mode,
         };
+        // A terminated QUIC flow keeps the transport it started with. When the
+        // HTTP/3 switch goes away (or a proxy takes the traffic over) the open
+        // flows are cut, so the client retries on a path the new config covers.
+        let h3_off = !cfg.filter_http3 || !cfg.mitm_enabled || cfg.proxy.is_some();
         *self.cfg.write().unwrap() = cfg;
+        if h3_off {
+            self.close_h3_flows();
+        }
         if lists_changed {
             // Recompile off the caller's thread: the previous engine keeps
             // serving (with the new live category gate) until this one is
@@ -832,6 +901,27 @@ impl Core {
                     .is_some()
             });
         }
+        {
+            let mut flows = self.h3_flows.lock().unwrap();
+            let blocked: Vec<UdpKey> = flows
+                .iter()
+                .filter(|(_, flow)| {
+                    policy
+                        .blocked_reason(&flow.apps, network, screen_off)
+                        .is_some()
+                })
+                .map(|(key, _)| *key)
+                .collect();
+            if !blocked.is_empty() {
+                let bridge = self.h3.lock().unwrap().clone();
+                for key in blocked {
+                    flows.remove(&key);
+                    if let Some(bridge) = &bridge {
+                        bridge.close(key);
+                    }
+                }
+            }
+        }
         // The forwarder owns relay and mapping descriptors; it has to run the
         // removals and may be parked in poll() right now.
         self.wake();
@@ -858,6 +948,12 @@ impl Core {
             }
         };
         self.filter.set_module_flags(ads, tracking, dns);
+        if paused {
+            // A paused tunnel forwards QUIC verbatim, so the terminated flows
+            // are closed: keeping them would leave the client on a filtered
+            // transport while the user believes filtering is off.
+            self.close_h3_flows();
+        }
         // A paused engine still forwards DNS and UDP: every worker sleeps on
         // this fd, so nothing more is needed, but a wake keeps the UI's first
         // stats tick from waiting out the idle poll.
@@ -1202,6 +1298,11 @@ impl Core {
         {
             workers.push(worker);
         }
+        // HTTP/3 termination lives on its own tokio thread; `stop()` shuts it
+        // down so this join returns promptly.
+        if let Some(worker) = statics.start_h3() {
+            workers.push(worker);
+        }
         *self.workers.lock().unwrap() = workers;
     }
 
@@ -1216,6 +1317,10 @@ impl Core {
     pub fn stop(&self) {
         self.running.store(false, Ordering::SeqCst);
         self.tun_fd.store(-1, Ordering::SeqCst);
+        // QUIC flows own their transport and never touch the tun, so ending
+        // them here releases the sockets even if the forwarder's last pass is
+        // already gone.
+        self.stop_h3();
         // The forwarder may be halfway through its one-second wait; without
         // this it would only notice the stop on the next timeout.
         self.wake();
@@ -1225,7 +1330,7 @@ impl Core {
     ///
     /// One 8-byte counter write on the eventfd. Ignored when creation failed:
     /// the loop's timeout cadence still services everything, just later.
-    fn wake(&self) {
+    pub(crate) fn wake(&self) {
         if self.wake_fd < 0 {
             return;
         }
@@ -1281,10 +1386,10 @@ impl Core {
         if pkt.proto == PROTO_UDP && pkt.dst_port == 53 {
             self.stats.inc(&self.stats.packets_dns);
             self.handle_dns(&pkt, &cfg, &mut out);
-        } else if pkt.proto == PROTO_UDP && pkt.dst_port == 443 && cfg.block_quic && !paused {
-            // QUIC/HTTP3 cannot be filtered without breaking TLS; dropping it
-            // sends the client back to TCP where we can see the host.
-            self.stats.inc(&self.stats.quic_dropped);
+        } else if pkt.proto == PROTO_UDP && pkt.dst_port == 443 {
+            // HTTP/3 precedence: paused → plain relay; filtering armed → QUIC
+            // termination; the QUIC switch → drop; otherwise relay.
+            self.handle_quic(&pkt, &cfg);
         } else if pkt.proto == PROTO_UDP && pkt.dst_port == 853 && cfg.block_dot && !paused {
             self.stats.inc(&self.stats.udp_dropped);
         } else if pkt.proto == PROTO_UDP
@@ -1454,6 +1559,452 @@ impl Core {
                 payload.len(),
                 libc::MSG_NOSIGNAL,
             );
+        }
+    }
+
+    // ---------------------------------------------------------------- HTTP/3
+
+    /// Routes one UDP/443 datagram.
+    ///
+    /// QUIC is the one transport the engine cannot inspect without terminating
+    /// it. With HTTP/3 filtering armed the flow is handed to the QUIC bridge;
+    /// flows the user excluded (and apps that refuse our CA) are spliced
+    /// verbatim through the ordinary NAT path; everything else keeps the old
+    /// behavior — drop when `block_quic` is on, relay otherwise.
+    fn handle_quic(&self, pkt: &Packet<'_>, cfg: &Config) {
+        let (Some(client), Some(server)) = (pkt.src_ip(), pkt.dst_ip()) else {
+            return;
+        };
+        if server.as_ip() == crate::mitm::proxy::local_origin_addr() {
+            // The injection origin is a TCP-only local service: a QUIC probe
+            // must not leak out towards a reserved address.
+            return;
+        }
+        let key = UdpKey {
+            client,
+            client_port: pkt.src_port,
+            server,
+            server_port: pkt.dst_port,
+        };
+        if self.is_paused() {
+            // A pause closed every terminated flow; what is left is a plain
+            // datagram the paused tunnel forwards like any other.
+            self.relay_udp(pkt);
+            return;
+        }
+        // Encrypted DNS and blocked-address verdicts come first: terminating
+        // DoH3 would defeat the point of blocking it.
+        if self.udp_blocked(pkt, cfg) {
+            self.stats.inc(&self.stats.udp_dropped);
+            return;
+        }
+        // The proxy carries TCP; a QUIC flow that would ride it is dropped so
+        // the client falls back to TCP, which the proxy filters end to end.
+        let proxied = cfg
+            .proxy
+            .as_ref()
+            .is_some_and(|p| !p.automatic || !crate::socks5::bypasses_automatic(server));
+        if proxied {
+            self.stats.inc(&self.stats.quic_dropped);
+            return;
+        }
+        if cfg.filter_http3 && self.mitm_ready(cfg) {
+            if self.feed_h3(key, pkt) {
+                return;
+            }
+            if self.spliced_until(key).is_some() {
+                self.relay_udp(pkt);
+                return;
+            }
+            self.open_h3(pkt, cfg, key, server);
+            return;
+        }
+        if cfg.block_quic {
+            self.stats.inc(&self.stats.quic_dropped);
+        } else {
+            self.relay_udp(pkt);
+        }
+    }
+
+    /// Forwards one datagram to an already terminated flow.
+    ///
+    /// The raw packet is also buffered until the flow's fate is decided: if the
+    /// SNI turns out to be excluded, the buffered flight is replayed into a
+    /// plain NAT mapping instead of costing the client a retransmission.
+    fn feed_h3(&self, key: UdpKey, pkt: &Packet<'_>) -> bool {
+        let Some(server) = pkt.dst_ip() else {
+            return false;
+        };
+        let raw = &pkt.raw[..pkt.total_len.min(pkt.raw.len())];
+        let mut flows = self.h3_flows.lock().unwrap();
+        let Some(flow) = flows.get_mut(&key) else {
+            return false;
+        };
+        flow.last_ms = now_ms();
+        if flow.pending_bytes + raw.len() <= H3_PENDING_BYTES {
+            flow.pending.push(raw.to_vec());
+            flow.pending_bytes += raw.len();
+        }
+        flow.socket.recv(Datagram {
+            peer: SocketAddr::new(key.client.as_ip(), key.client_port),
+            dst_ip: Some(server.as_ip()),
+            payload: pkt.l4_payload().to_vec(),
+        });
+        true
+    }
+
+    /// Starts terminating a new QUIC flow, or splices it when a DNS-learned
+    /// host is already known to be excluded.
+    fn open_h3(&self, pkt: &Packet<'_>, cfg: &Config, key: UdpKey, server: IpKey) {
+        let apps = self.quic_apps(pkt);
+        if self.app_blocked_reason(&apps).is_some() {
+            self.stats.inc(&self.stats.udp_dropped);
+            return;
+        }
+        if let Some(host) = self.host_for_ip(Some(server)) {
+            let full_ech = cfg.full_ech;
+            if let Some(reason) = self.ech_hosts.splice_reason(&host, full_ech, now_ms()) {
+                crate::logbuf::push(&format!("quic {host}: spliced verbatim ({reason})"));
+                self.h3_splice(key, &host);
+                self.relay_udp(pkt);
+                return;
+            }
+            if self.https_excluded(&host, &apps) {
+                crate::logbuf::push(&format!(
+                    "quic {host}: excluded from HTTPS filtering, splicing verbatim"
+                ));
+                self.h3_splice(key, &host);
+                self.relay_udp(pkt);
+                return;
+            }
+        }
+        if self.h3_flows.lock().unwrap().len() >= bridge::MAX_FLOWS {
+            // A full table loses the flow, like a congested NAT box; the
+            // client falls back to TCP instead of hanging.
+            self.stats.inc(&self.stats.quic_dropped);
+            return;
+        }
+        let bridge = self.h3.lock().unwrap().clone();
+        let Some(bridge) = bridge else {
+            if cfg.block_quic {
+                self.stats.inc(&self.stats.quic_dropped);
+            } else {
+                self.relay_udp(pkt);
+            }
+            return;
+        };
+        let info = self.h3_info(key, cfg, apps.clone());
+        let Some(socket) = bridge.open(key, info) else {
+            self.stats.inc(&self.stats.quic_dropped);
+            return;
+        };
+        self.h3_flows.lock().unwrap().insert(
+            key,
+            H3Flow {
+                socket,
+                apps,
+                last_ms: now_ms(),
+                pending: Vec::new(),
+                pending_bytes: 0,
+            },
+        );
+        self.feed_h3(key, pkt);
+    }
+
+    /// Packages owning the flow, when something needs the name: app rules, the
+    /// per-app firewall, HTTPS exclusions, learned CA rejections, or the log.
+    fn quic_apps(&self, pkt: &Packet<'_>) -> Vec<String> {
+        let needed = !self.app_network_policy.read().unwrap().is_empty()
+            || self.filter.has_app_rules()
+            || !self.https_skip_apps.read().unwrap().is_empty()
+            || !self.ca_rejecting_apps.read().unwrap().is_empty()
+            // The QUIC path logs the app on every request it blocks.
+            || self.logging_live();
+        if !needed {
+            return Vec::new();
+        }
+        self.apps_for_udp(pkt)
+    }
+
+    /// The same HTTPS exclusion rules the TCP path applies: the website lists,
+    /// the inverted "only" model, and the per-app skip set (including apps
+    /// learned to reject the AdFree CA).
+    fn https_excluded(&self, host: &str, apps: &[String]) -> bool {
+        let hosts = self.https_hosts.read().unwrap();
+        let excluded = hosts.skip.matches(host) || (hosts.only_mode && !hosts.only.matches(host));
+        drop(hosts);
+        if excluded {
+            return true;
+        }
+        let skip_apps = self.effective_https_skip_apps();
+        apps.iter().any(|app| skip_apps.contains(app))
+    }
+
+    /// The shared inputs the HTTP/3 hub reads, built from the same sources the
+    /// HTTP/1.1 session uses.
+    fn h3_info(&self, key: UdpKey, cfg: &Config, apps: Vec<String>) -> bridge::FlowInfo {
+        let (serve_path, script_body) = {
+            let scripts = self.mitm_scripts.read().unwrap();
+            (scripts.serve_path().to_string(), scripts.combined_arc())
+        };
+        let script_tag_src = crate::mitm::proxy::script_tag_src(&serve_path, &script_body);
+        bridge::FlowInfo {
+            local: SocketAddr::new(key.server.as_ip(), key.server_port),
+            apps,
+            filter: Arc::clone(&self.filter),
+            resolver: self.mitm_resolver(),
+            cosmetic: cfg.cosmetic_filtering.then(|| Arc::clone(&self.filter)),
+            stealth: cfg.stealth,
+            upstream: self.upstream_tls_config(),
+            serve_path,
+            script_body,
+            script_tag_src,
+            sink: Some(log_mitm_block),
+        }
+    }
+
+    /// The client's ClientHello named an excluded host. Called on the QUIC
+    /// thread, before any leaf is minted.
+    pub(crate) fn h3_should_splice(&self, key: UdpKey, host: &str, apps: &[String]) -> bool {
+        let full_ech = self.cfg.read().unwrap().full_ech;
+        if let Some(reason) = self.ech_hosts.splice_reason(host, full_ech, now_ms()) {
+            crate::logbuf::push(&format!("quic {host}: spliced verbatim ({reason})"));
+            self.h3_splice(key, host);
+            return true;
+        }
+        if self.https_excluded(host, apps) {
+            self.h3_splice(key, host);
+            return true;
+        }
+        false
+    }
+
+    /// Moves a terminated flow onto the plain NAT path and remembers the
+    /// verdict, so the client's retry does not pay another handshake.
+    pub(crate) fn h3_splice(&self, key: UdpKey, host: &str) {
+        self.mark_spliced(key);
+        let flow = self.h3_flows.lock().unwrap().remove(&key);
+        if let Some(bridge) = self.h3.lock().unwrap().clone() {
+            bridge.close(key);
+        }
+        let Some(flow) = flow else {
+            return;
+        };
+        crate::logbuf::push(&format!(
+            "quic {host}: excluded from HTTPS filtering, splicing verbatim"
+        ));
+        self.replay_spliced(flow);
+    }
+
+    /// No transport could be built for the flow; splice instead of hanging.
+    pub(crate) fn h3_abandon(&self, key: UdpKey) {
+        self.mark_spliced(key);
+        let flow = self.h3_flows.lock().unwrap().remove(&key);
+        let Some(flow) = flow else {
+            return;
+        };
+        crate::logbuf::push("quic: no upstream transport, splicing the flow verbatim");
+        self.replay_spliced(flow);
+    }
+
+    /// The client refused the forged certificate. Learn the app (the same list
+    /// the TCP path uses) and keep the five-tuple on the raw path for its retry.
+    pub(crate) fn h3_cert_rejected(&self, key: UdpKey, host: &str, apps: &[String], alert: u8) {
+        if apps.is_empty() || !cert_alert_is_rejection(alert) {
+            return;
+        }
+        self.learn_ca_rejections(apps, host);
+        self.mark_spliced(key);
+        let flow = self.h3_flows.lock().unwrap().remove(&key);
+        if flow.is_none() {
+            return;
+        }
+        if let Some(bridge) = self.h3.lock().unwrap().clone() {
+            bridge.close(key);
+        }
+        crate::logbuf::push(&format!(
+            "quic {host}: the client rejected the AdFree certificate, \
+             splicing its QUIC verbatim from now on"
+        ));
+    }
+
+    /// Sends the buffered flight of a spliced flow through a fresh NAT mapping.
+    fn replay_spliced(&self, flow: H3Flow) {
+        for raw in flow.pending {
+            if let Some(pkt) = Packet::parse(&raw) {
+                self.relay_udp(&pkt);
+            }
+        }
+    }
+
+    fn mark_spliced(&self, key: UdpKey) {
+        self.h3_spliced
+            .lock()
+            .unwrap()
+            .insert(key, now_ms() + H3_SPLICE_MS);
+    }
+
+    fn spliced_until(&self, key: UdpKey) -> Option<u64> {
+        let now = now_ms();
+        let mut spliced = self.h3_spliced.lock().unwrap();
+        match spliced.get(&key).copied() {
+            Some(until) if until > now => Some(until),
+            Some(_) => {
+                spliced.remove(&key);
+                None
+            }
+            None => None,
+        }
+    }
+
+    /// A protected, bound wildcard socket for the shared upstream endpoint.
+    ///
+    /// quinn reads `local_addr()` at construction to learn the address family,
+    /// so the socket is bound explicitly instead of relying on the implicit
+    /// bind the first `sendto` would do.
+    pub(crate) fn open_upstream_quic_socket(&self, ipv6: bool) -> Option<std::net::UdpSocket> {
+        use std::os::unix::io::FromRawFd;
+        let family = if ipv6 { libc::AF_INET6 } else { libc::AF_INET };
+        let fd = unsafe {
+            libc::socket(
+                family,
+                libc::SOCK_DGRAM | libc::SOCK_NONBLOCK | libc::SOCK_CLOEXEC,
+                0,
+            )
+        };
+        if fd < 0 {
+            crate::logbuf::push("quic: upstream socket() failed");
+            return None;
+        }
+        if !self.protect_socket(fd) {
+            unsafe { libc::close(fd) };
+            crate::logbuf::push("quic: the app refused to protect the upstream socket");
+            return None;
+        }
+        let bound = unsafe {
+            if ipv6 {
+                let addr = libc::sockaddr_in6 {
+                    sin6_family: libc::AF_INET6 as libc::sa_family_t,
+                    sin6_port: 0,
+                    sin6_flowinfo: 0,
+                    sin6_addr: libc::in6_addr { s6_addr: [0u8; 16] },
+                    sin6_scope_id: 0,
+                };
+                libc::bind(
+                    fd,
+                    &addr as *const libc::sockaddr_in6 as *const libc::sockaddr,
+                    std::mem::size_of::<libc::sockaddr_in6>() as libc::socklen_t,
+                )
+            } else {
+                let addr = libc::sockaddr_in {
+                    sin_family: libc::AF_INET as libc::sa_family_t,
+                    sin_port: 0,
+                    sin_addr: libc::in_addr { s_addr: 0 },
+                    sin_zero: [0; 8],
+                };
+                libc::bind(
+                    fd,
+                    &addr as *const libc::sockaddr_in as *const libc::sockaddr,
+                    std::mem::size_of::<libc::sockaddr_in>() as libc::socklen_t,
+                )
+            }
+        };
+        if bound != 0 {
+            crate::logbuf::push("quic: upstream bind() failed");
+            unsafe { libc::close(fd) };
+            return None;
+        }
+        Some(unsafe { std::net::UdpSocket::from_raw_fd(fd) })
+    }
+
+    /// Turns datagrams quinn produced into packets for the tun.
+    ///
+    /// The bridge reports the source (the original server address) and the
+    /// destination (the client); rebuilding the packet here is what lets the
+    /// endpoint be socketless on the client side.
+    fn drain_quic(&self) {
+        let bridge = self.h3.lock().unwrap().clone();
+        let Some(bridge) = bridge else {
+            return;
+        };
+        let mut out = Vec::with_capacity(16);
+        bridge.drain(&mut out, H3_DRAIN_MAX);
+        for datagram in out {
+            let src = packet::ip_key_from(datagram.source.ip());
+            let dst = packet::ip_key_from(datagram.destination.ip());
+            if src.as_ip().is_unspecified() || dst.as_ip().is_unspecified() {
+                continue;
+            }
+            let Some(raw) = packet::build_udp(
+                src,
+                datagram.source.port(),
+                dst,
+                datagram.destination.port(),
+                &datagram.payload,
+            ) else {
+                continue;
+            };
+            self.stats.inc(&self.stats.udp_relayed);
+            self.write_raw(&raw);
+        }
+    }
+
+    /// Reaps idle terminated flows and lapsed splice verdicts.
+    fn expire_quic(&self, now: u64) {
+        let expired = {
+            let mut flows = self.h3_flows.lock().unwrap();
+            let expired: Vec<UdpKey> = flows
+                .iter()
+                .filter(|(_, flow)| now.saturating_sub(flow.last_ms) >= H3_IDLE_MS)
+                .map(|(key, _)| *key)
+                .collect();
+            for key in &expired {
+                flows.remove(key);
+            }
+            expired
+        };
+        if !expired.is_empty() {
+            if let Some(bridge) = self.h3.lock().unwrap().clone() {
+                for key in expired {
+                    bridge.close(key);
+                }
+            }
+        }
+        self.h3_spliced
+            .lock()
+            .unwrap()
+            .retain(|_, until| *until > now);
+    }
+
+    /// Drops every terminated flow (pause, switch-off, CA change, firewall).
+    fn close_h3_flows(&self) {
+        let flows = std::mem::take(&mut *self.h3_flows.lock().unwrap());
+        if flows.is_empty() {
+            return;
+        }
+        if let Some(bridge) = self.h3.lock().unwrap().clone() {
+            for key in flows.keys() {
+                bridge.close(*key);
+            }
+        }
+    }
+
+    /// Spawns the QUIC thread for this session. Returns the handle so `start`
+    /// joins it like the other workers.
+    pub(crate) fn start_h3(&'static self) -> Option<std::thread::JoinHandle<()>> {
+        let (bridge, worker) = bridge::Bridge::start(bridge::CoreHost::new(self))?;
+        *self.h3.lock().unwrap() = Some(bridge);
+        Some(worker)
+    }
+
+    /// Stops the QUIC thread and closes every terminated flow. Idempotent: a
+    /// second call finds neither flows nor a bridge.
+    pub(crate) fn stop_h3(&self) {
+        self.close_h3_flows();
+        self.h3_spliced.lock().unwrap().clear();
+        let bridge = self.h3.lock().unwrap().take();
+        if let Some(bridge) = bridge {
+            bridge.shutdown();
         }
     }
 
@@ -3007,16 +3558,9 @@ impl Core {
     /// The origin-facing feed is prefixed `client process_new_packets` and its
     /// alerts must not condemn the app, so those never match.
     fn client_rejected_certificate(err: &str) -> bool {
-        const ALERTS: [&str; 5] = [
-            "UnknownCA",
-            "CertificateUnknown",
-            "BadCertificate",
-            "CertificateExpired",
-            "CertificateRevoked",
-        ];
         err.contains("received fatal alert")
             && !err.contains("client process_new_packets")
-            && ALERTS.iter().any(|alert| err.contains(alert))
+            && CERT_ALERTS.iter().any(|(name, _)| err.contains(name))
     }
 
     /// The client-facing half just received a certificate alert: the app does
@@ -3027,6 +3571,13 @@ impl Core {
         if apps.is_empty() || !Self::client_rejected_certificate(err) {
             return;
         }
+        self.learn_ca_rejections(apps, host);
+    }
+
+    /// Marks every package in `apps` as one that refuses the AdFree CA. Shared
+    /// by the TCP path (alerts read out of the error string) and the QUIC path
+    /// (numeric alerts from the CONNECTION_CLOSE).
+    fn learn_ca_rejections(&self, apps: &[String], host: &str) {
         let mut learned = self.ca_rejecting_apps.write().unwrap();
         for app in apps {
             if learned.insert(app.clone()) {
@@ -3170,6 +3721,9 @@ impl Core {
     #[cfg(test)]
     pub fn pump_once(&self, timeout_ms: libc::c_int) {
         self.wait_for_events(timeout_ms);
+        // The wait itself services the queued DNS and relay work; QUIC
+        // datagrams are turned into packets here, like the forwarder does.
+        self.drain_quic();
     }
 
     /// Drains the packets [`Self::write_raw`] collected for the tun.
@@ -3194,6 +3748,11 @@ impl Core {
         *self.mitm_ca.write().unwrap() = ca;
         *self.mitm_resolver.write().unwrap() = None;
         if changed {
+            // Live flows were terminated with leaves from the old key; a new
+            // CA means the client must be given a chance to validate the new
+            // one, so they are closed and the next connection is filtered
+            // again.
+            self.close_h3_flows();
             self.clear_ca_rejections();
         }
     }
@@ -3209,6 +3768,10 @@ impl Core {
                 "mitm: retrying HTTPS decryption for {count} app(s) after the CA change"
             ));
         }
+        drop(learned);
+        // The QUIC path remembered five-tuples whose client refused the leaf;
+        // those verdicts lapse with the rejection they came from.
+        self.h3_spliced.lock().unwrap().clear();
         count
     }
 
@@ -3402,6 +3965,10 @@ fn forwarder_loop(core: &'static Core) {
             core.handle_secure_reply(reply);
             answered = true;
         }
+        // QUIC handed datagrams for the client since the last pass; the
+        // endpoints wake this thread through the eventfd, so they land here
+        // right after the wait.
+        core.drain_quic();
 
         // Relayed connections: whatever the real server answered has been
         // spliced back to the client by the wait itself, and finished relays
@@ -3410,6 +3977,9 @@ fn forwarder_loop(core: &'static Core) {
         core.prune_relays();
         // Idle NAT mappings are retired here too, for the same reason.
         core.udp_nat.lock().unwrap().expire(now);
+        // Terminated QUIC flows live on their own thread; this only tells it
+        // which five-tuples to shut down.
+        core.expire_quic(now);
 
         if !answered {
             core.conntrack.lock().unwrap().expire(now);
@@ -3424,6 +3994,9 @@ fn forwarder_loop(core: &'static Core) {
     // poll and before returning.
     core.relays.lock().unwrap().clear();
     core.udp_nat.lock().unwrap().clear();
+    // Same for the QUIC side: `stop()` already asked the bridge to shut down,
+    // but a loop that exits for any other reason must not leave flows behind.
+    core.stop_h3();
 }
 
 /// Services every flow descriptor the engine owns.
@@ -4060,6 +4633,233 @@ mod tests {
         assert!(!core.is_paused());
         core.handle_packet(&udp_packet(50002, [142, 250, 185, 194], 443));
         assert_eq!(core.stats().quic_dropped.load(Ordering::Relaxed), 2);
+    }
+
+    /// A `Core` that outlives the test: the QUIC bridge holds a
+    /// `&'static Core`, the same way the process-wide engine does.
+    fn leaked_core() -> &'static Core {
+        Box::leak(Box::new(Core::new()))
+    }
+
+    /// HTTPS filtering armed (CA loaded) plus the HTTP/3 sub-switch. The
+    /// anti-bypass drop stays on: a filtered flow must terminate first.
+    fn arm_http3(core: &Core) {
+        core.set_mitm_ca(Arc::new(
+            crate::mitm::ca::CertificateAuthority::generate().expect("ca"),
+        ));
+        core.set_config(Config {
+            mitm_enabled: true,
+            filter_http3: true,
+            ..Config::default()
+        });
+    }
+
+    fn quic_key(client_port: u16, server: [u8; 4]) -> UdpKey {
+        UdpKey {
+            client: packet::ip_key_from(std::net::IpAddr::from([10, 0, 2, 15])),
+            client_port,
+            server: packet::ip_key_from(std::net::IpAddr::from(server)),
+            server_port: 443,
+        }
+    }
+
+    fn test_quic_flow(socket: Arc<TunUdpSocket>) -> H3Flow {
+        H3Flow {
+            socket,
+            apps: Vec::new(),
+            last_ms: now_ms(),
+            pending: Vec::new(),
+            pending_bytes: 0,
+        }
+    }
+
+    /// HTTP/3 filtering is a sub-switch of HTTPS filtering: without the parent
+    /// (or before a CA is loaded) the old QUIC drop still wins.
+    #[test]
+    fn http3_filtering_requires_https_filtering() {
+        let core = Core::new();
+        core.set_config(Config {
+            filter_http3: true,
+            ..Config::default()
+        });
+        core.handle_packet(&udp_packet(50000, [203, 0, 113, 7], 443));
+        assert_eq!(core.stats().quic_dropped.load(Ordering::Relaxed), 1);
+        assert!(core.udp_nat.lock().unwrap().is_empty());
+
+        core.set_config(Config {
+            mitm_enabled: true,
+            filter_http3: true,
+            ..Config::default()
+        });
+        core.handle_packet(&udp_packet(50001, [203, 0, 113, 7], 443));
+        assert_eq!(
+            core.stats().quic_dropped.load(Ordering::Relaxed),
+            2,
+            "no CA yet: the flow must never be terminated"
+        );
+        assert!(core.udp_nat.lock().unwrap().is_empty());
+    }
+
+    /// A five-tuple learned as "splice this" takes the NAT path even with the
+    /// HTTP/3 switch on and the anti-bypass drop armed.
+    #[test]
+    fn a_spliced_quic_flow_takes_the_nat_path() {
+        let core = Core::new();
+        core.set_socket_protector(Arc::new(AllowAll));
+        arm_http3(&core);
+        let key = quic_key(50002, [203, 0, 113, 7]);
+        core.mark_spliced(key);
+        core.handle_packet(&udp_packet(50002, [203, 0, 113, 7], 443));
+        assert_eq!(core.stats().quic_dropped.load(Ordering::Relaxed), 0);
+        assert_eq!(core.udp_nat.lock().unwrap().len(), 1);
+        assert!(core.h3_flows.lock().unwrap().is_empty());
+    }
+
+    /// The armed bridge terminates a flow; pause and the switch-off both cut
+    /// it so the client retries on a path the new state covers.
+    #[test]
+    fn an_armed_bridge_terminates_quic_and_pause_closes_it() {
+        let core = leaked_core();
+        arm_http3(core);
+        let worker = core.start_h3().expect("quic thread");
+
+        core.handle_packet(&udp_packet(50003, [203, 0, 113, 7], 443));
+        {
+            let flows = core.h3_flows.lock().unwrap();
+            assert_eq!(flows.len(), 1);
+            assert!(flows.contains_key(&quic_key(50003, [203, 0, 113, 7])));
+        }
+
+        core.set_paused(true);
+        assert!(core.h3_flows.lock().unwrap().is_empty());
+        core.set_paused(false);
+
+        core.handle_packet(&udp_packet(50004, [203, 0, 113, 7], 443));
+        assert_eq!(core.h3_flows.lock().unwrap().len(), 1);
+        core.set_config(Config::default());
+        assert!(
+            core.h3_flows.lock().unwrap().is_empty(),
+            "switching HTTP/3 off must end the terminated flows"
+        );
+
+        core.stop();
+        let _ = worker.join();
+    }
+
+    /// Client packets buffered before the SNI lands are replayed into the NAT
+    /// mapping, so an excluded host does not pay a retransmission.
+    #[test]
+    fn splicing_replays_the_buffered_client_flight() {
+        let core = Core::new();
+        core.set_socket_protector(Arc::new(AllowAll));
+        let key = quic_key(50005, [203, 0, 113, 7]);
+        let raw = udp_packet(50005, [203, 0, 113, 7], 443);
+        let socket = TunUdpSocket::new(
+            SocketAddr::new(key.server.as_ip(), 443),
+            std::sync::mpsc::sync_channel(4).0,
+        );
+        let mut flow = test_quic_flow(socket);
+        flow.pending.push(raw);
+        flow.pending_bytes = 32;
+        core.h3_flows.lock().unwrap().insert(key, flow);
+
+        core.h3_splice(key, "example.com");
+        assert!(core.h3_flows.lock().unwrap().is_empty());
+        assert!(core.spliced_until(key).is_some());
+        assert_eq!(
+            core.udp_nat.lock().unwrap().len(),
+            1,
+            "the buffered datagram opened a NAT mapping"
+        );
+    }
+
+    /// Terminated flows are reaped after sixty idle seconds; splice verdicts
+    /// lapse on their own clock.
+    #[test]
+    fn idle_quic_flows_and_lapsed_splices_are_reaped() {
+        let core = Core::new();
+        let key = quic_key(50006, [203, 0, 113, 7]);
+        let socket = TunUdpSocket::new(
+            SocketAddr::new(key.server.as_ip(), 443),
+            std::sync::mpsc::sync_channel(1).0,
+        );
+        let mut flow = test_quic_flow(socket);
+        flow.last_ms = 0;
+        core.h3_flows.lock().unwrap().insert(key, flow);
+        core.mark_spliced(key);
+
+        let now = now_ms();
+        core.expire_quic(now);
+        assert!(core.h3_flows.lock().unwrap().is_empty());
+        assert!(
+            core.spliced_until(key).is_some(),
+            "the verdict is still fresh"
+        );
+
+        core.expire_quic(now + H3_SPLICE_MS + 1);
+        assert!(core.spliced_until(key).is_none());
+    }
+
+    /// A full table loses the new flow instead of growing without bound; the
+    /// client falls back to TCP (or keeps the drop the QUIC switch asked for).
+    #[test]
+    fn a_full_quic_table_drops_new_flows() {
+        let core = Core::new();
+        arm_http3(&core);
+        let socket = TunUdpSocket::new(
+            SocketAddr::new(IpKey::V4(0).as_ip(), 443),
+            std::sync::mpsc::sync_channel(1).0,
+        );
+        {
+            let mut flows = core.h3_flows.lock().unwrap();
+            for i in 0..bridge::MAX_FLOWS {
+                let key = quic_key(40000 + i as u16, [203, 0, 113, 7]);
+                flows.insert(key, test_quic_flow(Arc::clone(&socket)));
+            }
+        }
+        core.handle_packet(&udp_packet(51000, [203, 0, 113, 7], 443));
+        assert_eq!(core.stats().quic_dropped.load(Ordering::Relaxed), 1);
+        assert!(core.udp_nat.lock().unwrap().is_empty());
+    }
+
+    /// The proxy carries TCP only: a QUIC flow that would ride it is dropped
+    /// so the client falls back to a transport the proxy filters.
+    #[test]
+    fn a_proxy_carries_tcp_so_quic_is_dropped() {
+        let core = Core::new();
+        arm_http3(&core);
+        core.set_config(Config {
+            mitm_enabled: true,
+            filter_http3: true,
+            proxy: Some(Arc::new(crate::socks5::ProxyEndpoint {
+                addr: packet::ip_key_from("127.0.0.1".parse().unwrap()),
+                port: 1080,
+                username: String::new(),
+                password: String::new(),
+                automatic: false,
+            })),
+            ..Config::default()
+        });
+        core.handle_packet(&udp_packet(51001, [203, 0, 113, 7], 443));
+        assert_eq!(core.stats().quic_dropped.load(Ordering::Relaxed), 1);
+        assert!(core.udp_nat.lock().unwrap().is_empty());
+    }
+
+    /// The QUIC worker is per session: `stop()` ends it and a later start gets
+    /// a fresh bridge instead of a dead one.
+    #[test]
+    fn the_quic_worker_restarts_after_stop() {
+        let core = leaked_core();
+        let worker = core.start_h3().expect("first quic thread");
+        assert!(core.h3.lock().unwrap().is_some());
+        core.stop();
+        let _ = worker.join();
+        assert!(core.h3.lock().unwrap().is_none());
+
+        let worker = core.start_h3().expect("second quic thread");
+        assert!(core.h3.lock().unwrap().is_some());
+        core.stop();
+        let _ = worker.join();
     }
 
     /// Minimal IPv4 TCP SYN; only the fields `Packet::parse` reads matter.

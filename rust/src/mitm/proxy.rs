@@ -81,6 +81,15 @@ pub(crate) fn local_asset(path: &str) -> String {
     format!("{LOCAL_ORIGIN}{path}")
 }
 
+/// The origin-absolute URL the injected user-script `<script src>` carries.
+///
+/// The path is content-addressed so a script edit cannot be served from a
+/// stale HTTP cache; both the HTTP/1.1 splice and the HTTP/3 hub advertise
+/// exactly this URL.
+pub(crate) fn script_tag_src(serve_path: &str, body: &str) -> String {
+    local_asset(&versioned_path(serve_path, content_hash(body.as_bytes())))
+}
+
 /// [`LOCAL_ORIGIN`] as an address, for matching packets in the engine.
 pub fn local_origin_addr() -> std::net::IpAddr {
     std::net::IpAddr::V4(std::net::Ipv4Addr::from(LOCAL_ORIGIN_V4))
@@ -559,10 +568,7 @@ impl ProxySession {
     /// A session whose halves are already open (tests, and any caller that
     /// knows the hostname up front).
     pub fn new(session: TlsSession, script_src: String, script_body: Arc<str>) -> Self {
-        let script_tag_src = local_asset(&versioned_path(
-            &script_src,
-            content_hash(script_body.as_bytes()),
-        ));
+        let script_tag_src = script_tag_src(&script_src, &script_body);
         ProxySession {
             state: ProxyState::Active(Box::new(session)),
             captured: None,

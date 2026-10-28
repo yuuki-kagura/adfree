@@ -60,12 +60,24 @@ pub struct TunUdpSocket {
     local: SocketAddr,
     inbound: Mutex<Inbound>,
     outbound: SyncSender<OutDatagram>,
+    /// Called after datagrams were handed to the outbound channel, so the
+    /// forwarder drains them before its next timeout. `None` in the tests that
+    /// pump the channel themselves.
+    wake: Option<Arc<dyn Fn() + Send + Sync>>,
     dropped: AtomicU64,
     truncated: AtomicU64,
 }
 
 impl TunUdpSocket {
     pub fn new(local: SocketAddr, outbound: SyncSender<OutDatagram>) -> Arc<Self> {
+        Self::with_wake(local, outbound, None)
+    }
+
+    pub fn with_wake(
+        local: SocketAddr,
+        outbound: SyncSender<OutDatagram>,
+        wake: Option<Arc<dyn Fn() + Send + Sync>>,
+    ) -> Arc<Self> {
         Arc::new(Self {
             local,
             inbound: Mutex::new(Inbound {
@@ -74,6 +86,7 @@ impl TunUdpSocket {
                 waker: None,
             }),
             outbound,
+            wake,
             dropped: AtomicU64::new(0),
             truncated: AtomicU64::new(0),
         })
@@ -130,6 +143,7 @@ impl AsyncUdpSocket for TunUdpSocket {
         // backpressure: UDP drops are normal, stalls are not.
         let segments = transmit.segment_size.unwrap_or(transmit.contents.len());
         let mut sent = 0usize;
+        let mut delivered = false;
         while sent < transmit.contents.len() {
             let end = (sent + segments).min(transmit.contents.len());
             let out = OutDatagram {
@@ -138,7 +152,7 @@ impl AsyncUdpSocket for TunUdpSocket {
                 payload: transmit.contents[sent..end].to_vec(),
             };
             match self.outbound.try_send(out) {
-                Ok(()) => {}
+                Ok(()) => delivered = true,
                 Err(TrySendError::Full(_)) => {
                     self.dropped.fetch_add(1, Ordering::Relaxed);
                 }
@@ -150,6 +164,11 @@ impl AsyncUdpSocket for TunUdpSocket {
                 }
             }
             sent = end;
+        }
+        if delivered {
+            if let Some(wake) = &self.wake {
+                wake();
+            }
         }
         Ok(())
     }

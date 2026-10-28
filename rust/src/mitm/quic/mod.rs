@@ -5,5 +5,6 @@
 //! `socket::TunUdpSocket` carries datagrams to and from the packet engine
 //! in memory; everything above it is ordinary quinn/h3.
 
+pub mod bridge;
 pub mod hub;
 pub mod socket;
