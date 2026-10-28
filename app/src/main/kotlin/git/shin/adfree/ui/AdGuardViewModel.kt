@@ -33,7 +33,7 @@ import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 
-enum class AdGuardTab { HOME, ACTIVITY, FILTERS, APPS, AI_LAB, SETTINGS }
+enum class AdGuardTab { HOME, PROTECTION, ACTIVITY, APPS, AI_LAB, SETTINGS }
 
 sealed interface AiLabUiState {
     data object Idle : AiLabUiState
@@ -279,8 +279,18 @@ class AdGuardViewModel(
             is AdGuardIntent.ToggleDns ->
                 repository.toggleDnsProtection(!uiState.value.settings.isDnsProtectionEnabled)
 
-            is AdGuardIntent.ToggleHttps ->
-                repository.toggleHttpsFiltering(!uiState.value.settings.isHttpsFilteringEnabled)
+            is AdGuardIntent.ToggleHttps -> {
+                // Without a trusted CA the engine can only relay, so an "on"
+                // switch would lie. Send the user to the module that installs
+                // the certificate instead of toggling something inert.
+                val enabling = !uiState.value.settings.isHttpsFilteringEnabled
+                if (enabling && !coreEngine.isCaTrusted()) {
+                    emit(AdGuardEffect.ShowSnackbar(UiText.Resource(R.string.home_https_needs_cert)))
+                    _currentTab.value = AdGuardTab.PROTECTION
+                } else {
+                    repository.toggleHttpsFiltering(enabling)
+                }
+            }
 
             is AdGuardIntent.ToggleFirewall ->
                 repository.toggleFirewall(!uiState.value.settings.isFirewallEnabled)
@@ -543,8 +553,8 @@ class AdGuardViewModel(
         }
     }
 
-    /** Update notification tapped: the refreshed lists live on the Filters tab. */
-    fun openFilters() = onIntent(AdGuardIntent.SelectTab(AdGuardTab.FILTERS))
+    /** Update notification tapped: the refreshed lists live behind Protection. */
+    fun openFilters() = onIntent(AdGuardIntent.SelectTab(AdGuardTab.PROTECTION))
 
     private fun toggleProtection() {
         // The switch follows the VPN itself, not a remembered flag: the flag

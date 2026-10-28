@@ -30,11 +30,11 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ListAlt
 import androidx.compose.material.icons.automirrored.outlined.ListAlt
 import androidx.compose.material.icons.filled.Apps
-import androidx.compose.material.icons.filled.Layers
+import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Shield
 import androidx.compose.material.icons.outlined.Apps
-import androidx.compose.material.icons.outlined.Layers
+import androidx.compose.material.icons.outlined.Home
 import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material.icons.outlined.Shield
 import androidx.compose.material3.Icon
@@ -42,6 +42,7 @@ import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.NavigationBarItemDefaults
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Snackbar
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
@@ -72,9 +73,9 @@ import git.shin.adfree.ui.AdGuardViewModel
 import git.shin.adfree.ui.Localization
 import git.shin.adfree.ui.UiText
 import git.shin.adfree.ui.screens.AppsManagementScreen
-import git.shin.adfree.ui.screens.FilteringHubScreen
 import git.shin.adfree.ui.screens.FilteringLogScreen
 import git.shin.adfree.ui.screens.HomeScreen
+import git.shin.adfree.ui.screens.ProtectionScreen
 import git.shin.adfree.ui.screens.SecurityLabScreen
 import git.shin.adfree.ui.screens.SettingsScreen
 import git.shin.adfree.ui.theme.AdGuardDarkBg
@@ -82,6 +83,7 @@ import git.shin.adfree.ui.theme.AdGuardDarkSurface
 import git.shin.adfree.ui.theme.AdGuardGreenPrimary
 import git.shin.adfree.ui.theme.AdGuardOnAccent
 import git.shin.adfree.ui.theme.AdGuardTextMuted
+import git.shin.adfree.ui.theme.AdGuardTextPrimary
 import git.shin.adfree.ui.theme.AdGuardTextSecondary
 import git.shin.adfree.ui.theme.MyApplicationTheme
 
@@ -138,6 +140,9 @@ class MainActivity : AppCompatActivity() {
                 LaunchedEffect(Unit) {
                     container.repository.settings.collect {
                         Localization.apply(it.appLanguage)
+                        // HTTPS, protection and language changes all pass
+                        // through here; re-evaluate the certificate reminder.
+                        container.repository.syncHttpsReminder()
                     }
                 }
                 // Keep each tab's own navigation (for example the Filters hub
@@ -162,6 +167,9 @@ class MainActivity : AppCompatActivity() {
                 // the app after a day in Recents is the catch-up point.
                 LifecycleEventEffect(Lifecycle.Event.ON_RESUME) {
                     container.repository.autoUpdateIfStale()
+                    // The certificate installer is another activity: coming
+                    // back is the moment trust can have changed.
+                    container.repository.syncHttpsReminder()
                 }
 
                 // VPN consent: the system shows a confirmation dialog once (and after a revoke).
@@ -194,7 +202,15 @@ class MainActivity : AppCompatActivity() {
                     modifier = Modifier.fillMaxSize(),
                     contentWindowInsets = WindowInsets.safeDrawing,
                     containerColor = AdGuardDarkBg,
-                    snackbarHost = { SnackbarHost(snackbarHostState) },
+                    snackbarHost = {
+                        SnackbarHost(snackbarHostState) { data ->
+                            Snackbar(
+                                snackbarData = data,
+                                containerColor = AdGuardDarkSurface,
+                                contentColor = AdGuardTextPrimary,
+                            )
+                        }
+                    },
                     bottomBar = {
                         AdGuardBottomBar(
                             currentTab = state.currentTab,
@@ -222,8 +238,8 @@ class MainActivity : AppCompatActivity() {
                         tabStateHolder.SaveableStateProvider(tab) {
                             when (tab) {
                                 AdGuardTab.HOME -> HomeScreen(viewModel = viewModel)
+                                AdGuardTab.PROTECTION -> ProtectionScreen(viewModel = viewModel)
                                 AdGuardTab.ACTIVITY -> FilteringLogScreen(viewModel = viewModel)
-                                AdGuardTab.FILTERS -> FilteringHubScreen(viewModel = viewModel)
                                 AdGuardTab.APPS -> AppsManagementScreen(viewModel = viewModel)
                                 AdGuardTab.SETTINGS -> SettingsScreen(viewModel = viewModel)
                                 // Reached from Settings instead of the tab bar: it is
@@ -248,6 +264,7 @@ class MainActivity : AppCompatActivity() {
         when (intent?.action) {
             ACTION_ENABLE_PROTECTION -> viewModel.enableProtectionFromShortcut()
             ACTION_OPEN_FILTERS -> viewModel.openFilters()
+            ACTION_OPEN_PROTECTION -> viewModel.onIntent(AdGuardIntent.SelectTab(AdGuardTab.PROTECTION))
         }
     }
 
@@ -270,8 +287,11 @@ class MainActivity : AppCompatActivity() {
         /** Tile tapped without VPN consent: open the app and raise the dialog. */
         const val ACTION_ENABLE_PROTECTION = "git.shin.adfree.action.ENABLE_PROTECTION"
 
-        /** Update notification tapped: land on the Filters tab. */
+        /** Update notification tapped: land on the Protection tab. */
         const val ACTION_OPEN_FILTERS = "git.shin.adfree.action.OPEN_FILTERS"
+
+        /** Certificate reminder tapped: land on the Protection tab. */
+        const val ACTION_OPEN_PROTECTION = "git.shin.adfree.action.OPEN_PROTECTION"
 
         private const val NOTIFICATION_PREFS = "notification_permission"
         private const val KEY_NOTIFICATION_ASKED = "asked"
@@ -292,10 +312,10 @@ fun AdGuardBottomBar(
     onTabSelected: (AdGuardTab) -> Unit
 ) {
     val navItems = listOf(
-        NavItem(AdGuardTab.HOME, UiText.Resource(R.string.nav_home), Icons.Filled.Shield, Icons.Outlined.Shield, "nav_home"),
-        NavItem(AdGuardTab.ACTIVITY, UiText.Resource(R.string.nav_activity), Icons.AutoMirrored.Filled.ListAlt, Icons.AutoMirrored.Outlined.ListAlt, "nav_activity"),
-        NavItem(AdGuardTab.FILTERS, UiText.Resource(R.string.nav_filters), Icons.Filled.Layers, Icons.Outlined.Layers, "nav_filters"),
+        NavItem(AdGuardTab.HOME, UiText.Resource(R.string.nav_home), Icons.Filled.Home, Icons.Outlined.Home, "nav_home"),
+        NavItem(AdGuardTab.PROTECTION, UiText.Resource(R.string.nav_protection), Icons.Filled.Shield, Icons.Outlined.Shield, "nav_protection"),
         NavItem(AdGuardTab.APPS, UiText.Resource(R.string.nav_apps), Icons.Filled.Apps, Icons.Outlined.Apps, "nav_apps"),
+        NavItem(AdGuardTab.ACTIVITY, UiText.Resource(R.string.nav_activity), Icons.AutoMirrored.Filled.ListAlt, Icons.AutoMirrored.Outlined.ListAlt, "nav_activity"),
         NavItem(AdGuardTab.SETTINGS, UiText.Resource(R.string.nav_settings), Icons.Filled.Settings, Icons.Outlined.Settings, "nav_settings")
     )
 

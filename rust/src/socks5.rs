@@ -20,7 +20,7 @@ const ATYP_IPV6: u8 = 0x04;
 /// this is not a SOCKS5 reply and must not grow the queue.
 const MAX_REPLY_BYTES: usize = 512;
 
-/// The SOCKS5 proxy a TCP flow must be sent through.
+/// The SOCKS5 proxy TCP flows (and non-DNS UDP mappings) are sent through.
 #[derive(Clone, Debug)]
 pub struct ProxyEndpoint {
     pub addr: IpKey,

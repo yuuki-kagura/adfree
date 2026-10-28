@@ -324,11 +324,14 @@ class AdGuardVpnService : VpnService() {
         pushNetworkType()
         container.coreEngine.start(fd)
         container.vpnController.onVpnStarted()
+        // Protection is up, so the missing-certificate reminder is due.
+        container.repository.syncHttpsReminder()
         Log.i(TAG, "TUN up (fd=$fd), dns=$tunnelDns")
     }
 
     private fun stopVpn() {
         isRunning = false
+        container.repository.syncHttpsReminder()
         container.coreEngine.stop()
         container.vpnController.onVpnStopped()
         try {
@@ -381,6 +384,8 @@ class AdGuardVpnService : VpnService() {
     private fun onScreenOn() {
         container.coreEngine.setScreenOff(false)
         container.coreEngine.markScreenOn()
+        // The user may be returning from the certificate installer.
+        container.repository.syncHttpsReminder()
     }
 
     /**

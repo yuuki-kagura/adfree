@@ -1585,7 +1585,7 @@ impl ProxySession {
     /// it, the origin already has ECH, and a bare `502` is its own failure —
     /// `crypto.cloudflare.com` answered exactly that way while ECH was in use
     /// (its outage of 20/10/2026), and learning "requires ECH" from it would
-    /// throw away the filtering R18 just gained.
+    /// throw away the filtering the plain retry just gained.
     ///
     /// `421` is definitive and exempts at once. A bare `502` is also what an
     /// ordinary edge failure sends, so it takes two within

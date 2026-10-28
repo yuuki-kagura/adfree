@@ -31,17 +31,15 @@ import androidx.compose.material.icons.filled.BatteryChargingFull
 import androidx.compose.material.icons.filled.Block
 import androidx.compose.material.icons.filled.CloudDownload
 import androidx.compose.material.icons.filled.Dns
+import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.PowerSettingsNew
 import androidx.compose.material.icons.filled.Shield
 import androidx.compose.material.icons.filled.TrackChanges
 import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
-import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.OutlinedButton
-import androidx.compose.material3.Switch
-import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
@@ -79,12 +77,12 @@ import git.shin.adfree.ui.theme.AdGuardTextPrimary
 import git.shin.adfree.ui.theme.AdGuardTextSecondary
 
 /**
- * The protection tab: one big switch, the numbers it produced, and the modules
- * it can switch off.
+ * The home tab: the power switch, a compact row of module switches, and the
+ * numbers the tunnel produced.
  *
- * Deliberately short — everything here fits without scrolling, the way the
- * reference client lays it out. Only the module list scrolls, and it is capped
- * at four real modules rather than every flag the engine supports.
+ * Deliberately short — the per-module options live behind the Protection tab,
+ * the way the reference client lays it out, so this screen never turns into a
+ * long settings list.
  */
 @Composable
 fun HomeScreen(
@@ -115,6 +113,23 @@ fun HomeScreen(
                 .padding(horizontal = 16.dp),
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
+            QuickModuleRow(
+                adBlocking = state.settings.isAdBlockingEnabled,
+                tracking = state.settings.isTrackingProtectionEnabled,
+                dns = state.settings.isDnsProtectionEnabled,
+                https = state.settings.isHttpsFilteringEnabled,
+                firewall = state.settings.isFirewallEnabled,
+                eco = state.settings.isEcoBatteryModeEnabled,
+                onAdBlocking = { viewModel.onIntent(AdGuardIntent.ToggleAdBlocking) },
+                onTracking = { viewModel.onIntent(AdGuardIntent.ToggleTracking) },
+                onDns = { viewModel.onIntent(AdGuardIntent.ToggleDns) },
+                onHttps = { viewModel.onIntent(AdGuardIntent.ToggleHttps) },
+                onFirewall = { viewModel.onIntent(AdGuardIntent.ToggleFirewall) },
+                onEco = { viewModel.onIntent(AdGuardIntent.ToggleEcoMode) },
+            )
+
+            Spacer(modifier = Modifier.height(6.dp))
+
             AdGuardShieldHero(
                 isActive = state.isVpnActive,
                 onToggle = { viewModel.onIntent(AdGuardIntent.ToggleProtection) }
@@ -132,65 +147,6 @@ fun HomeScreen(
             StatsGrid(
                 stats = state.stats,
                 onCardClick = { viewModel.onIntent(AdGuardIntent.SelectTab(AdGuardTab.ACTIVITY)) }
-            )
-
-            Spacer(modifier = Modifier.height(16.dp))
-
-            SectionTitle(stringResource(R.string.home_modules_title))
-
-            Spacer(modifier = Modifier.height(8.dp))
-
-            ModuleToggleCard(
-                title = stringResource(R.string.home_module_adblock_title),
-                subtitle = stringResource(R.string.home_module_adblock_subtitle),
-                icon = Icons.Default.Block,
-                isChecked = state.settings.isAdBlockingEnabled,
-                onCheckedChange = { viewModel.onIntent(AdGuardIntent.ToggleAdBlocking) },
-                accentColor = AdGuardGreenPrimary
-            )
-
-            ModuleRow()
-
-            ModuleToggleCard(
-                title = stringResource(R.string.home_module_tracking_title),
-                subtitle = stringResource(R.string.home_module_tracking_subtitle),
-                icon = Icons.Default.TrackChanges,
-                isChecked = state.settings.isTrackingProtectionEnabled,
-                onCheckedChange = { viewModel.onIntent(AdGuardIntent.ToggleTracking) },
-                accentColor = AdGuardOrangeWarning
-            )
-
-            ModuleRow()
-
-            ModuleToggleCard(
-                title = stringResource(R.string.home_module_dns_title),
-                subtitle = stringResource(R.string.home_module_dns_subtitle),
-                icon = Icons.Default.Dns,
-                isChecked = state.settings.isDnsProtectionEnabled,
-                onCheckedChange = { viewModel.onIntent(AdGuardIntent.ToggleDns) },
-                accentColor = AdGuardBlueDns
-            )
-
-            ModuleRow()
-
-            ModuleToggleCard(
-                title = stringResource(R.string.home_module_firewall_title),
-                subtitle = stringResource(R.string.home_module_firewall_subtitle),
-                icon = Icons.Default.Shield,
-                isChecked = state.settings.isFirewallEnabled,
-                onCheckedChange = { viewModel.onIntent(AdGuardIntent.ToggleFirewall) },
-                accentColor = AdGuardGreenPrimary
-            )
-
-            ModuleRow()
-
-            ModuleToggleCard(
-                title = stringResource(R.string.home_module_eco_title),
-                subtitle = stringResource(R.string.home_module_eco_subtitle),
-                icon = Icons.Default.BatteryChargingFull,
-                isChecked = state.settings.isEcoBatteryModeEnabled,
-                onCheckedChange = { viewModel.onIntent(AdGuardIntent.ToggleEcoMode) },
-                accentColor = AdGuardGreenLight
             )
 
             Spacer(modifier = Modifier.height(16.dp))
@@ -295,25 +251,125 @@ private fun PrivateDnsWarningCard(onOpenSettings: () -> Unit) {
     }
 }
 
+/**
+ * One row, one tap per module, the way the reference client shows them: the
+ * icon carries the state, so six switches fit above the power button.
+ */
 @Composable
-private fun SectionTitle(text: String) {
-    Text(
-        text = text,
-        fontSize = 13.sp,
-        fontWeight = FontWeight.Bold,
-        color = AdGuardTextSecondary,
-        modifier = Modifier.fillMaxWidth()
-    )
+private fun QuickModuleRow(
+    adBlocking: Boolean,
+    tracking: Boolean,
+    dns: Boolean,
+    https: Boolean,
+    firewall: Boolean,
+    eco: Boolean,
+    onAdBlocking: () -> Unit,
+    onTracking: () -> Unit,
+    onDns: () -> Unit,
+    onHttps: () -> Unit,
+    onFirewall: () -> Unit,
+    onEco: () -> Unit,
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(top = 4.dp),
+        horizontalArrangement = Arrangement.SpaceEvenly,
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        QuickModuleToggle(
+            icon = Icons.Default.Block,
+            label = stringResource(R.string.home_quick_ads),
+            active = adBlocking,
+            accent = AdGuardGreenPrimary,
+            onClick = onAdBlocking,
+            modifier = Modifier.weight(1f),
+        )
+        QuickModuleToggle(
+            icon = Icons.Default.TrackChanges,
+            label = stringResource(R.string.home_quick_tracking),
+            active = tracking,
+            accent = AdGuardOrangeWarning,
+            onClick = onTracking,
+            modifier = Modifier.weight(1f),
+        )
+        QuickModuleToggle(
+            icon = Icons.Default.Dns,
+            label = stringResource(R.string.home_quick_dns),
+            active = dns,
+            accent = AdGuardBlueDns,
+            onClick = onDns,
+            modifier = Modifier.weight(1f),
+        )
+        QuickModuleToggle(
+            icon = Icons.Default.Lock,
+            label = stringResource(R.string.home_quick_https),
+            active = https,
+            accent = Color(0xFFB48CFF),
+            onClick = onHttps,
+            modifier = Modifier.weight(1f),
+        )
+        QuickModuleToggle(
+            icon = Icons.Default.Shield,
+            label = stringResource(R.string.home_quick_firewall),
+            active = firewall,
+            accent = AdGuardGreenPrimary,
+            onClick = onFirewall,
+            modifier = Modifier.weight(1f),
+        )
+        QuickModuleToggle(
+            icon = Icons.Default.BatteryChargingFull,
+            label = stringResource(R.string.home_quick_eco),
+            active = eco,
+            accent = AdGuardGreenLight,
+            onClick = onEco,
+            modifier = Modifier.weight(1f),
+        )
+    }
 }
 
-/** Thin separator so the module list reads as one group. */
 @Composable
-private fun ModuleRow() {
-    HorizontalDivider(
-        color = AdGuardDarkOutline.copy(alpha = 0.5f),
-        thickness = 0.5.dp,
-        modifier = Modifier.padding(top = 7.dp, bottom = 7.dp)
-    )
+private fun QuickModuleToggle(
+    icon: ImageVector,
+    label: String,
+    active: Boolean,
+    accent: Color,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Column(
+        horizontalAlignment = Alignment.CenterHorizontally,
+        modifier = modifier
+            .clip(RoundedCornerShape(12.dp))
+            .clickable(onClick = onClick)
+            .padding(vertical = 6.dp)
+            .testTag("quick_$label"),
+    ) {
+        Box(
+            contentAlignment = Alignment.Center,
+            modifier = Modifier
+                .size(40.dp)
+                .clip(RoundedCornerShape(13.dp))
+                .background(
+                    if (active) accent.copy(alpha = 0.16f) else AdGuardDarkSurface
+                ),
+        ) {
+            Icon(
+                imageVector = icon,
+                contentDescription = label,
+                tint = if (active) accent else AdGuardTextMuted,
+                modifier = Modifier.size(21.dp),
+            )
+        }
+        Spacer(modifier = Modifier.height(4.dp))
+        Text(
+            text = label,
+            fontSize = 10.sp,
+            fontWeight = if (active) FontWeight.SemiBold else FontWeight.Normal,
+            color = if (active) AdGuardTextPrimary else AdGuardTextMuted,
+            maxLines = 1,
+        )
+    }
 }
 
 /** The power button. Doubles as the protection switch. */
@@ -515,70 +571,3 @@ private fun StatCard(
     }
 }
 
-@Composable
-private fun ModuleToggleCard(
-    title: String,
-    subtitle: String,
-    icon: ImageVector,
-    isChecked: Boolean,
-    onCheckedChange: (Boolean) -> Unit,
-    accentColor: Color
-) {
-    Card(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clickable { onCheckedChange(!isChecked) },
-        shape = RoundedCornerShape(0.dp),
-        colors = CardDefaults.cardColors(containerColor = AdGuardDarkBg),
-        border = null
-    ) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(vertical = 9.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Box(
-                modifier = Modifier
-                    .size(36.dp)
-                    .clip(RoundedCornerShape(10.dp))
-                    .background(accentColor.copy(alpha = 0.15f)),
-                contentAlignment = Alignment.Center
-            ) {
-                Icon(
-                    imageVector = icon,
-                    contentDescription = null,
-                    tint = accentColor,
-                    modifier = Modifier.size(20.dp)
-                )
-            }
-
-            Spacer(modifier = Modifier.width(12.dp))
-
-            Column(modifier = Modifier.weight(1f)) {
-                Text(
-                    text = title,
-                    fontSize = 14.sp,
-                    fontWeight = FontWeight.SemiBold,
-                    color = AdGuardTextPrimary
-                )
-                Text(
-                    text = subtitle,
-                    fontSize = 12.sp,
-                    color = AdGuardTextSecondary
-                )
-            }
-
-            Switch(
-                checked = isChecked,
-                onCheckedChange = onCheckedChange,
-                colors = SwitchDefaults.colors(
-                    checkedThumbColor = Color.White,
-                    checkedTrackColor = AdGuardGreenPrimary,
-                    uncheckedThumbColor = AdGuardTextMuted,
-                    uncheckedTrackColor = AdGuardDarkOutline
-                )
-            )
-        }
-    }
-}

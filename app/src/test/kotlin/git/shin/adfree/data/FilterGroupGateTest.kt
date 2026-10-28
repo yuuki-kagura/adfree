@@ -6,7 +6,7 @@ import org.junit.Test
 
 /**
  * The group banner ("Không hoạt động") must agree with what the core
- * actually gates: R30 folded AD + ANNOYANCE under the ads module, and
+ * actually gates: AD + ANNOYANCE fold under the ads module, and
  * TRACKER + ANALYTICS + SOCIAL under tracking. A wrong mapping would show
  * a banner on a group that is filtering fine, or the reverse.
  */

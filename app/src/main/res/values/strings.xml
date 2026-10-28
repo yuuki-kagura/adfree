@@ -262,7 +262,8 @@
     <string name="threat_analyzing">Analyzing %1$s on this device…</string>
 
     <!-- Navigation -->
-    <string name="nav_home">Protection</string>
+    <string name="nav_home">Home</string>
+    <string name="nav_protection">Protection</string>
     <string name="nav_activity">Activity</string>
     <string name="nav_filters">Filters</string>
     <string name="nav_apps">Apps</string>
@@ -294,10 +295,29 @@
     <string name="home_stat_data_value">%1$d MB</string>
     <string name="home_stat_battery">Battery saved</string>
     <string name="home_stat_battery_value">+%1$.1f%%</string>
+    <string name="home_quick_ads">Ads</string>
+    <string name="home_quick_tracking">Tracking</string>
+    <string name="home_quick_dns">DNS</string>
+    <string name="home_quick_https">HTTPS</string>
+    <string name="home_quick_firewall">Firewall</string>
+    <string name="home_quick_eco">Battery</string>
+    <string name="home_https_needs_cert">Install the AdFree certificate first: Protection → HTTPS filtering</string>
 
-    <!-- Network destination -->
-    <string name="network_title">Network</string>
-    <string name="network_subtitle">DNS, HTTPS filtering and traffic routing</string>
+    <!-- Protection tab and module details -->
+    <string name="protection_subtitle">Tap a module to open its options</string>
+    <string name="protection_module_open">Open options</string>
+    <string name="protection_filters_row">Filter lists</string>
+    <string name="protection_filters_summary">%1$d lists on · %2$s rules</string>
+    <string name="protection_filters_empty">No filter lists enabled</string>
+    <string name="protection_dns_server">DNS server</string>
+    <string name="protection_firewall_apps">Per-app rules</string>
+    <string name="protection_firewall_apps_summary">%1$d apps limited</string>
+    <string name="protection_firewall_apps_none">No app is limited</string>
+    <string name="protection_eco_body">Fewer CPU wake-ups and background checks while the tunnel runs. Filtering stays exactly the same.</string>
+
+    <!-- DNS protection detail -->
+    <string name="network_title">DNS protection</string>
+    <string name="network_subtitle">Resolver, encrypted DNS and traffic routing</string>
     <string name="network_quic_title">Block QUIC / UDP 443</string>
     <string name="network_quic_subtitle">Forces clients back to TCP so the engine sees hostnames</string>
     <string name="network_doh_title">Block encrypted DNS (DoH)</string>
@@ -710,6 +730,10 @@
     <string name="settings_backup_body">Includes settings, enabled filters, custom filters and rules. Userscripts stay on the device.</string>
     <string name="settings_https_title">HTTPS filtering</string>
     <string name="settings_https_body">Self-signed certificate to read and inject scripts into HTTPS pages. Requires installing the CA certificate in the system store.</string>
+    <string name="https_reminder_channel_name">Certificate reminder</string>
+    <string name="https_reminder_channel_description">Reminds you to install the AdFree certificate so HTTPS filtering can run</string>
+    <string name="https_reminder_title">HTTPS filtering needs the certificate</string>
+    <string name="https_reminder_text">Protection is on, but HTTPS pages are not filtered yet. Open Protection → HTTPS filtering to install the AdFree certificate. Tap to open.</string>
     <string name="settings_https_enable_title">Enable HTTPS filtering</string>
     <string name="settings_https_enable_subtitle">Decrypt HTTPS to filter ads and inject scripts</string>
     <string name="settings_cosmetic_title">Cosmetic filtering</string>

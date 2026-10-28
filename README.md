@@ -34,8 +34,12 @@ telemetry.
   Activity view.
 - **Security Lab** — offline threat analysis, no network calls.
 
-The UI is six Compose tabs (Home, Activity, Filters, Apps, Security Lab,
-Settings) over a uniffi bridge to `libadfree_core.so`.
+The UI is five Compose tabs (Home, Protection, Activity, Apps, Settings) over
+a uniffi bridge to `libadfree_core.so`. Home is a dashboard — one power switch,
+one tap per module, then the counters. Protection lists every module with its
+own switch; opening a row shows that module's options (filter lists, resolver,
+certificate, stealth, per-app firewall rules). The Security Lab is reachable
+from Settings.
 
 ## Build
 
@@ -73,8 +77,10 @@ semantic-release; see `.github/workflows/`.
 
 HTTPS filtering stays off until the local CA is installed. The toggle explains
 the steps and exports `AdFree-CA.crt` to Downloads; after installing it through
-Settings (screen lock required) the toggle turns on by itself. The full flow,
-including the Android 14+ user trust store path, is documented in
+Settings (screen lock required) the toggle turns on by itself. While protection
+runs without the certificate, a low-priority notification keeps pointing at the
+HTTPS module until the store contains the CA. The full flow, including the
+Android 14+ user trust store path, is documented in
 [DESIGN.md](DESIGN.md#installing-the-certificate).
 
 ## Limitations

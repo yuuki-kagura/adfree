@@ -43,7 +43,7 @@ enum class FilterGroup(
 }
 
 /**
- * Which engine module flag (R30) gates a category group at request time:
+ * Which engine module flag gates a category group at request time:
  * the ads module covers the AD and ANNOYANCE categories, the tracking
  * module covers TRACKER, ANALYTICS and SOCIAL. Malware, custom rules and
  * the user rules (`null` gates) are never switched off by a module.

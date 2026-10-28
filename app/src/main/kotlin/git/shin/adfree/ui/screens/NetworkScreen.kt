@@ -1,7 +1,10 @@
 package git.shin.adfree.ui.screens
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -12,6 +15,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Bolt
 import androidx.compose.material.icons.filled.Dns
 import androidx.compose.material.icons.filled.Language
@@ -22,6 +26,10 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.FilterChip
+import androidx.compose.material3.FilterChipDefaults
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Text
@@ -40,6 +48,7 @@ import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import git.shin.adfree.R
+import git.shin.adfree.model.DnsBlockMode
 import git.shin.adfree.model.ProxySettings
 import git.shin.adfree.model.normalizeProxyHost
 import git.shin.adfree.ui.AdGuardIntent
@@ -57,14 +66,13 @@ import git.shin.adfree.ui.theme.AdGuardOnAccent
 import git.shin.adfree.ui.theme.AdGuardTextSecondary
 
 /**
- * Full-screen network destination: what leaves the tunnel, which resolver sees
- * the names, and whether TLS is decrypted for filtering.
+ * Full-screen DNS module: which resolver sees the names, how blocked answers
+ * look, what may leave the tunnel, and where the flows are routed.
  */
 @Composable
 fun NetworkScreen(
     viewModel: AdGuardViewModel,
     onBack: () -> Unit,
-    onManageScripts: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val state by viewModel.uiState.collectAsState()
@@ -75,11 +83,11 @@ fun NetworkScreen(
             .fillMaxSize()
             .background(AdGuardDarkBg),
     ) {
-        Column(modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)) {
-            HubDestinationHeader(
-                title = stringResource(R.string.network_title),
-                subtitle = stringResource(R.string.network_subtitle),
-                onBack = onBack,
+        IconButton(onClick = onBack) {
+            Icon(
+                imageVector = Icons.AutoMirrored.Filled.ArrowBack,
+                contentDescription = stringResource(R.string.hub_back),
+                tint = AdGuardTextPrimary,
             )
         }
 
@@ -89,7 +97,63 @@ fun NetworkScreen(
                 .verticalScroll(rememberScrollState())
                 .padding(horizontal = 16.dp),
         ) {
-            Spacer(modifier = Modifier.height(8.dp))
+            ModuleDetailHero(
+                icon = Icons.Default.Dns,
+                tint = AdGuardBlueDns,
+                title = stringResource(R.string.network_title),
+                subtitle = stringResource(R.string.network_subtitle),
+            )
+
+            SettingsSwitch(
+                icon = Icons.Default.Dns,
+                title = stringResource(R.string.home_module_dns_title),
+                subtitle = stringResource(R.string.home_module_dns_subtitle),
+                checked = state.settings.isDnsProtectionEnabled,
+                onCheckedChange = { viewModel.onIntent(AdGuardIntent.ToggleDns) },
+            )
+
+            Spacer(modifier = Modifier.height(18.dp))
+
+            DnsProviderSection(
+                providers = state.dnsProviders,
+                selectedId = state.settings.selectedDnsProviderId,
+                isProbing = state.isDnsProbeRunning,
+                onSelect = { viewModel.onIntent(AdGuardIntent.SelectDnsProvider(it)) },
+                onAdd = { name, address, type ->
+                    viewModel.onIntent(AdGuardIntent.AddCustomDnsProvider(name, address, type))
+                },
+                onProbe = { viewModel.onIntent(AdGuardIntent.ProbeDnsProvider(it)) },
+            )
+
+            Spacer(modifier = Modifier.height(18.dp))
+
+            Text(
+                text = stringResource(R.string.settings_block_mode_title),
+                fontSize = 12.sp,
+                fontWeight = FontWeight.Bold,
+                color = AdGuardTextSecondary,
+                modifier = Modifier.padding(bottom = 6.dp),
+            )
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .horizontalScroll(rememberScrollState()),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                DnsBlockMode.entries.forEach { mode ->
+                    FilterChip(
+                        selected = state.settings.blockMode == mode,
+                        onClick = { viewModel.onIntent(AdGuardIntent.SetBlockMode(mode)) },
+                        label = { Text(blockModeLabel(mode), fontSize = 11.sp) },
+                        colors = FilterChipDefaults.filterChipColors(
+                            selectedContainerColor = AdGuardGreenPrimary,
+                            selectedLabelColor = AdGuardOnAccent,
+                        ),
+                    )
+                }
+            }
+
+            Spacer(modifier = Modifier.height(18.dp))
 
             SettingsSwitch(
                 icon = Icons.Default.Bolt,
@@ -123,7 +187,7 @@ fun NetworkScreen(
                 onCheckedChange = { viewModel.onIntent(AdGuardIntent.ToggleBlockDot(it)) },
             )
 
-            Spacer(modifier = Modifier.height(24.dp))
+            Spacer(modifier = Modifier.height(18.dp))
 
             SettingsSwitch(
                 icon = Icons.Default.Search,
@@ -133,27 +197,7 @@ fun NetworkScreen(
                 onCheckedChange = { viewModel.onIntent(AdGuardIntent.ToggleSafeSearch(it)) },
             )
 
-            Spacer(modifier = Modifier.height(24.dp))
-
-            ProxySection(
-                viewModel = viewModel,
-                saved = state.settings.proxy,
-            )
-
-            Spacer(modifier = Modifier.height(24.dp))
-
-            DnsProviderSection(
-                providers = state.dnsProviders,
-                selectedId = state.settings.selectedDnsProviderId,
-                isProbing = state.isDnsProbeRunning,
-                onSelect = { viewModel.onIntent(AdGuardIntent.SelectDnsProvider(it)) },
-                onAdd = { name, address, type ->
-                    viewModel.onIntent(AdGuardIntent.AddCustomDnsProvider(name, address, type))
-                },
-                onProbe = { viewModel.onIntent(AdGuardIntent.ProbeDnsProvider(it)) },
-            )
-
-            Spacer(modifier = Modifier.height(24.dp))
+            Spacer(modifier = Modifier.height(18.dp))
 
             DnsRewriteSection(
                 rewrites = state.dnsRewrites,
@@ -164,18 +208,26 @@ fun NetworkScreen(
                 onRemove = { viewModel.onIntent(AdGuardIntent.RemoveDnsRewrite(it)) },
             )
 
-            Spacer(modifier = Modifier.height(24.dp))
+            Spacer(modifier = Modifier.height(18.dp))
 
-            HttpsFilterSection(
+            ProxySection(
                 viewModel = viewModel,
-                fullEchEnabled = state.settings.isFullEchEnabled,
-                onManageScripts = onManageScripts,
+                saved = state.settings.proxy,
             )
 
-            Spacer(modifier = Modifier.height(72.dp))
+            Spacer(modifier = Modifier.height(64.dp))
         }
     }
 }
+
+@Composable
+private fun blockModeLabel(mode: DnsBlockMode): String = stringResource(
+    when (mode) {
+        DnsBlockMode.NXDOMAIN -> R.string.settings_block_mode_nxdomain
+        DnsBlockMode.ZERO_IP -> R.string.settings_block_mode_zero
+        DnsBlockMode.REFUSED -> R.string.settings_block_mode_refused
+    }
+)
 
 /**
  * Routing mode: outbound SOCKS5 for TCP flows.

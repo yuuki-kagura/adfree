@@ -1609,7 +1609,7 @@ impl Core {
             self.stats.inc(&self.stats.udp_dropped);
             return;
         }
-        // The proxy carries TCP; a QUIC flow that would ride it is dropped so
+        // The proxy carries TCP (and non-DNS UDP); a QUIC flow is dropped so
         // the client falls back to TCP, which the proxy filters end to end.
         let proxied = cfg
             .proxy
@@ -4834,8 +4834,8 @@ mod tests {
         assert!(core.udp_nat.lock().unwrap().is_empty());
     }
 
-    /// The proxy carries TCP only: a QUIC flow that would ride it is dropped
-    /// so the client falls back to a transport the proxy filters.
+    /// The proxy carries TCP and non-DNS UDP, but QUIC is dropped so the
+    /// client falls back to TCP, which the proxy filters end to end.
     #[test]
     fn a_proxy_carries_tcp_so_quic_is_dropped() {
         let core = Core::new();

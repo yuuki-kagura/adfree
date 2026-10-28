@@ -261,7 +261,8 @@
     <string name="threat_analyzing">Đang phân tích %1$s trên thiết bị…</string>
 
     <!-- Navigation -->
-    <string name="nav_home">Bảo vệ</string>
+    <string name="nav_home">Trang chủ</string>
+    <string name="nav_protection">Bảo vệ</string>
     <string name="nav_activity">Nhật ký</string>
     <string name="nav_filters">Bộ lọc</string>
     <string name="nav_apps">Ứng dụng</string>
@@ -293,10 +294,30 @@
     <string name="home_stat_data_value">%1$d MB</string>
     <string name="home_stat_battery">Tiết kiệm pin</string>
     <string name="home_stat_battery_value">+%1$.1f%%</string>
+    <string name="home_quick_ads">Quảng cáo</string>
+    <string name="home_quick_tracking">Theo dõi</string>
+    <string name="home_quick_dns">DNS</string>
+    <string name="home_quick_https">HTTPS</string>
+    <string name="home_quick_firewall">Tường lửa</string>
+    <string name="home_quick_eco">Pin</string>
+    <string name="home_https_needs_cert">Hãy cài chứng chỉ AdFree trước: Bảo vệ → Lọc HTTPS</string>
+
+    <!-- Protection tab and module details -->
+    <string name="protection_subtitle">Chạm vào một mô-đun để mở tùy chọn</string>
+    <string name="protection_module_open">Mở tùy chọn</string>
+    <string name="protection_filters_row">Danh sách bộ lọc</string>
+    <string name="protection_filters_summary">%1$d danh sách bật · %2$s quy tắc</string>
+    <string name="protection_filters_empty">Chưa bật danh sách bộ lọc nào</string>
+    <string name="protection_dns_server">Máy chủ DNS</string>
+    <string name="protection_firewall_apps">Quy tắc theo ứng dụng</string>
+    <string name="protection_firewall_apps_summary">%1$d ứng dụng bị giới hạn</string>
+    <string name="protection_firewall_apps_none">Không có ứng dụng nào bị giới hạn</string>
+    <string name="protection_eco_body">Giảm số lần đánh thức CPU và kiểm tra nền khi đường hầm đang chạy. Việc lọc không thay đổi.</string>
 
     <!-- Network destination -->
-    <string name="network_title">Mạng</string>
-    <string name="network_subtitle">DNS, lọc HTTPS và đường ra của lưu lượng</string>
+    <!-- DNS protection detail -->
+    <string name="network_title">Bảo vệ DNS</string>
+    <string name="network_subtitle">Máy chủ, DNS mã hóa và định tuyến lưu lượng</string>
     <string name="network_quic_title">Chặn QUIC / UDP 443</string>
     <string name="network_quic_subtitle">Buộc client quay về TCP để engine thấy được hostname</string>
     <string name="network_doh_title">Chặn DNS mã hóa (DoH)</string>
@@ -709,6 +730,10 @@
     <string name="settings_backup_body">Gồm cài đặt, bộ lọc đang bật, bộ lọc tự thêm và quy tắc. Userscript ở lại thiết bị.</string>
     <string name="settings_https_title">Lọc HTTPS</string>
     <string name="settings_https_body">Tự ký chứng chỉ để đọc và chèn script vào trang HTTPS. Cần cài chứng chỉ CA vào hệ thống.</string>
+    <string name="https_reminder_channel_name">Nhắc cài chứng chỉ</string>
+    <string name="https_reminder_channel_description">Nhắc bạn cài chứng chỉ AdFree để bật lọc HTTPS</string>
+    <string name="https_reminder_title">Lọc HTTPS cần chứng chỉ</string>
+    <string name="https_reminder_text">Đang bảo vệ nhưng trang HTTPS chưa được lọc. Mở Bảo vệ → Lọc HTTPS để cài chứng chỉ AdFree. Chạm để mở.</string>
     <string name="settings_https_enable_title">Bật lọc HTTPS</string>
     <string name="settings_https_enable_subtitle">Giải mã HTTPS để lọc quảng cáo và chèn script</string>
     <string name="settings_cosmetic_title">Lọc giao diện</string>

@@ -44,6 +44,7 @@ import git.shin.adfree.model.ProtocolType
 import git.shin.adfree.ui.CoreText
 import git.shin.adfree.ui.Localization
 import git.shin.adfree.ui.UiText
+import git.shin.adfree.vpn.HttpsReminder
 import git.shin.adfree.work.FilterUpdateScheduler
 import java.io.IOException
 import java.net.URLEncoder
@@ -224,6 +225,24 @@ class AdGuardRepository(
         FilterUpdateScheduler.sync(context, settings.filterAutoUpdateHours)
         loadFilterState(snapshot.filters)
         loadScriptsState(snapshot.scripts)
+    }
+
+    /**
+     * Posts or clears the "install the certificate" reminder. The trust-store
+     * lookup is off-thread because it walks every alias; callers only signal
+     * that something changed (resume, screen-on, tunnel start, settings).
+     */
+    fun syncHttpsReminder() {
+        scope.launch {
+            val settings = _settings.value
+            val caTrusted = runCatching { engine.isCaTrusted() }.getOrDefault(false)
+            HttpsReminder.sync(
+                context,
+                settings.appLanguage,
+                settings.isProtectionActive,
+                caTrusted,
+            )
+        }
     }
 
     /**

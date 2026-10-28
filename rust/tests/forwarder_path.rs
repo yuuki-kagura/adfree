@@ -435,7 +435,7 @@ fn a_host_that_requires_ech_keeps_its_config() {
         "a rewritten answer must not be cached as if it came from the origin"
     );
     // The config still reaches the proxy's own upstream half: offering it is
-    // what keeps a host that requires ECH filterable (R18).
+    // what keeps a host that requires ECH filterable.
     assert_eq!(
         core.ech_hosts
             .upstream_ech("required-ech.test", adfree_core::util::now_ms()),

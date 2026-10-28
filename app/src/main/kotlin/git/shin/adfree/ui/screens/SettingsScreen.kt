@@ -33,7 +33,6 @@ import androidx.compose.material.icons.filled.PowerSettingsNew
 import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material.icons.automirrored.filled.HelpOutline
 import androidx.compose.material.icons.filled.Dns
-import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Science
 import androidx.compose.material.icons.filled.Visibility
 import androidx.compose.material.icons.filled.VisibilityOff
@@ -78,7 +77,6 @@ import androidx.lifecycle.compose.LifecycleEventEffect
 import git.shin.adfree.core.DnsRewriteValidation
 import git.shin.adfree.core.MitmStatus
 import git.shin.adfree.model.AppLanguage
-import git.shin.adfree.model.DnsBlockMode
 import git.shin.adfree.model.DnsProvider
 import git.shin.adfree.model.DnsRewriteRule
 import git.shin.adfree.model.ProtectionSettings
@@ -188,79 +186,7 @@ fun SettingsScreen(
                 onCheckedChange = { viewModel.onIntent(AdGuardIntent.ToggleLogAllowed(it)) }
             )
 
-            Spacer(modifier = Modifier.height(10.dp))
-
-            SettingsSwitch(
-                icon = Icons.Default.Refresh,
-                title = stringResource(R.string.settings_smart_filtering_title),
-                subtitle = stringResource(R.string.settings_smart_filtering_subtitle),
-                checked = state.settings.isSmartFilteringEnabled,
-                onCheckedChange = { viewModel.onIntent(AdGuardIntent.ToggleSmartFiltering(it)) }
-            )
-
-            Spacer(modifier = Modifier.height(10.dp))
-
-            Text(
-                text = stringResource(R.string.settings_block_mode_title),
-                fontSize = 12.sp,
-                fontWeight = FontWeight.Bold,
-                color = AdGuardTextSecondary,
-                modifier = Modifier.padding(bottom = 6.dp)
-            )
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .horizontalScroll(rememberScrollState()),
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                DnsBlockMode.entries.forEach { mode ->
-                    FilterChip(
-                        selected = state.settings.blockMode == mode,
-                        onClick = { viewModel.onIntent(AdGuardIntent.SetBlockMode(mode)) },
-                        label = { Text(blockModeLabel(mode), fontSize = 11.sp) },
-                        colors = FilterChipDefaults.filterChipColors(
-                            selectedContainerColor = AdGuardGreenPrimary,
-                            selectedLabelColor = AdGuardOnAccent,
-                        ),
-                    )
-                }
-            }
-
             Spacer(modifier = Modifier.height(18.dp))
-
-            Text(
-                text = stringResource(R.string.settings_auto_update_title),
-                fontSize = 12.sp,
-                fontWeight = FontWeight.Bold,
-                color = AdGuardTextSecondary,
-            )
-            Text(
-                text = stringResource(R.string.settings_auto_update_subtitle),
-                fontSize = 11.sp,
-                color = AdGuardTextMuted,
-                modifier = Modifier.padding(top = 2.dp, bottom = 6.dp),
-            )
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .horizontalScroll(rememberScrollState())
-                    .testTag("filter_auto_update_chips"),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
-                listOf(0, 6, 12, 24, 48, 72).forEach { hours ->
-                    FilterChip(
-                        selected = state.settings.filterAutoUpdateHours == hours,
-                        onClick = { viewModel.onIntent(AdGuardIntent.SetFilterAutoUpdate(hours)) },
-                        label = { Text(autoUpdateLabel(hours), fontSize = 11.sp) },
-                        colors = FilterChipDefaults.filterChipColors(
-                            selectedContainerColor = AdGuardGreenPrimary,
-                            selectedLabelColor = AdGuardOnAccent,
-                        ),
-                    )
-                }
-            }
-
-            Spacer(modifier = Modifier.height(14.dp))
 
             SettingsSwitch(
                 icon = Icons.Default.PowerSettingsNew,
@@ -268,50 +194,6 @@ fun SettingsScreen(
                 subtitle = stringResource(R.string.settings_autostart_subtitle),
                 checked = state.settings.autoStart,
                 onCheckedChange = { viewModel.onIntent(AdGuardIntent.ToggleAutoStart(it)) },
-            )
-
-            Spacer(modifier = Modifier.height(24.dp))
-
-            Text(
-                text = stringResource(R.string.settings_stealth_title),
-                fontSize = 14.sp,
-                fontWeight = FontWeight.Bold,
-                color = AdGuardTextPrimary
-            )
-            Spacer(modifier = Modifier.height(10.dp))
-            StealthToggleRow(
-                title = stringResource(R.string.settings_stealth_master_title),
-                subtitle = stringResource(R.string.settings_stealth_master_subtitle),
-                isChecked = state.settings.isStealthModeEnabled,
-                onCheckedChange = { viewModel.onIntent(AdGuardIntent.ToggleStealth) }
-            )
-            StealthToggleRow(
-                title = stringResource(R.string.settings_stealth_utm_title),
-                subtitle = stringResource(R.string.settings_stealth_utm_subtitle),
-                isChecked = state.settings.stripUtmTracking,
-                enabled = state.settings.isStealthModeEnabled,
-                onCheckedChange = { viewModel.onIntent(AdGuardIntent.UpdateStealth(stripUtm = it)) }
-            )
-            StealthToggleRow(
-                title = stringResource(R.string.settings_stealth_webrtc_title),
-                subtitle = stringResource(R.string.settings_stealth_webrtc_subtitle),
-                isChecked = state.settings.blockWebRtcLeaks,
-                enabled = state.settings.isStealthModeEnabled,
-                onCheckedChange = { viewModel.onIntent(AdGuardIntent.UpdateStealth(blockWebRtc = it)) }
-            )
-            StealthToggleRow(
-                title = stringResource(R.string.settings_stealth_ua_title),
-                subtitle = stringResource(R.string.settings_stealth_ua_subtitle),
-                isChecked = state.settings.disguiseUserAgent,
-                enabled = state.settings.isStealthModeEnabled,
-                onCheckedChange = { viewModel.onIntent(AdGuardIntent.UpdateStealth(disguiseUa = it)) }
-            )
-            StealthToggleRow(
-                title = stringResource(R.string.settings_stealth_cookies_title),
-                subtitle = stringResource(R.string.settings_stealth_cookies_subtitle),
-                isChecked = state.settings.blockThirdPartyCookies,
-                enabled = state.settings.isStealthModeEnabled,
-                onCheckedChange = { viewModel.onIntent(AdGuardIntent.UpdateStealth(blockCookies = it)) }
             )
 
             Spacer(modifier = Modifier.height(24.dp))
@@ -380,21 +262,6 @@ fun SettingsScreen(
         )
     }
 }
-
-/** Label for the auto-update chips; 0 means "off". */
-@Composable
-private fun autoUpdateLabel(hours: Int): String =
-    if (hours <= 0) stringResource(R.string.settings_auto_update_off)
-    else stringResource(R.string.settings_auto_update_hours, hours)
-
-@Composable
-private fun blockModeLabel(mode: DnsBlockMode): String = stringResource(
-    when (mode) {
-        DnsBlockMode.NXDOMAIN -> R.string.settings_block_mode_nxdomain
-        DnsBlockMode.ZERO_IP -> R.string.settings_block_mode_zero
-        DnsBlockMode.REFUSED -> R.string.settings_block_mode_refused
-    }
-)
 
 /** In-app language; AppCompat recreates the activity when the choice changes. */
 @Composable
@@ -650,19 +517,6 @@ internal fun HttpsFilterSection(
     }
 
     Column {
-        Text(
-            text = stringResource(R.string.settings_https_title),
-            fontSize = 14.sp,
-            fontWeight = FontWeight.Bold,
-            color = AdGuardTextPrimary
-        )
-        Text(
-            text = stringResource(R.string.settings_https_body),
-            fontSize = 11.sp,
-            color = AdGuardTextMuted
-        )
-        Spacer(modifier = Modifier.height(10.dp))
-
         SettingsSwitch(
             icon = Icons.Default.Lock,
             title = stringResource(R.string.settings_https_enable_title),
@@ -923,8 +777,8 @@ internal fun HttpsFilterSection(
                     text = stringResource(
                         R.string.settings_ca_stage,
                         status?.stage ?: "—",
-                        status?.scriptCount ?: 0,
-                        status?.leavesIssued ?: 0
+                        status?.scriptCount?.toLong() ?: 0L,
+                        status?.leavesIssued?.toLong() ?: 0L
                     ),
                     fontSize = 11.sp,
                     color = AdGuardTextMuted,
