@@ -313,7 +313,6 @@
 
     <!-- Protection tab and module details -->
     <string name="protection_subtitle">Chạm vào một mô-đun để mở tùy chọn</string>
-    <string name="protection_module_open">Mở tùy chọn</string>
     <string name="protection_filters_row">Danh sách bộ lọc</string>
     <string name="protection_filters_summary">%1$d danh sách bật · %2$s quy tắc</string>
     <string name="protection_filters_empty">Chưa bật danh sách bộ lọc nào</string>
@@ -406,7 +405,7 @@
     <string name="hub_filters_subtitle">%1$d bộ lọc đang bật • %2$s quy tắc</string>
     <string name="hub_extensions_title">Tiện ích</string>
     <string name="hub_extensions_none">Chưa có userscript nào</string>
-    <string name="hub_extensions_master_off">Đang tắt tổng — không script nào chạy</string>
+    <string name="hub_extensions_master_off">Đã tắt toàn bộ tiện ích — không script nào chạy</string>
     <string name="hub_extensions_count">Bật %1$d/%2$d script</string>
     <string name="hub_network_https_on">%1$s • HTTPS bật</string>
     <string name="hub_network_https_off">%1$s • HTTPS tắt</string>
@@ -457,7 +456,7 @@
     <string name="ext_add_footnote">Lưu ý: tiện ích có thể truy cập dữ liệu trang — chỉ cài những script bạn hiểu và tin cậy.</string>
     <string name="ext_add_download">Thêm và tải</string>
     <string name="ext_detail_enable_title">Bật tiện ích này</string>
-    <string name="ext_detail_master_off">Tiện ích bị tắt tổng — không script nào chạy</string>
+    <string name="ext_detail_master_off">Tiện ích đang bị tắt nên script này không chạy</string>
     <string name="ext_detail_running">Đang chạy khi lọc HTTPS bật</string>
     <string name="ext_detail_off">Đang tắt</string>
     <string name="ext_detail_size">Kích thước</string>
@@ -477,7 +476,7 @@
     <string name="ext_run_at_idle">Khi trang rảnh</string>
     <string name="ext_run_at_body">Khi trang có &lt;body&gt;</string>
     <string name="ext_screen_subtitle">Userscript chạy trong trang HTTPS đã lọc</string>
-    <string name="ext_screen_intro">Mỗi script tự khai báo trang áp dụng bằng @match / @include. Công tắc tổng tắt thì không script nào chạy, kể cả script đang bật.</string>
+    <string name="ext_screen_intro">Mỗi script tự khai báo trang áp dụng bằng @match / @include. Khi tắt toàn bộ tiện ích thì không script nào chạy, kể cả script đang bật.</string>
     <string name="ext_create_title">Tạo tiện ích mới</string>
     <string name="ext_create_template">// ==UserScript==\n// @name         Tiện ích của tôi\n// @match        *://*/*\n// @grant        none\n// ==/UserScript==\n\n</string>
     <string name="ext_create_confirm">Tạo</string>
@@ -689,7 +688,11 @@
     <string name="log_category_custom">Quy tắc tuỳ chỉnh</string>
 
     <!-- Settings -->
-    <string name="settings_subtitle">Ngôn ngữ, ghi log, lọc thông minh, tàng hình và sao lưu</string>
+    <string name="settings_subtitle">Ngôn ngữ, giao diện, ghi log và sao lưu</string>
+    <string name="settings_group_general">Chung</string>
+    <string name="settings_group_logging">Nhật ký</string>
+    <string name="settings_group_data">Sao lưu &amp; dữ liệu</string>
+    <string name="settings_group_about">Giới thiệu</string>
     <string name="settings_language_title">Ngôn ngữ ứng dụng</string>
     <string name="settings_language_system">Theo hệ thống</string>
     <string name="settings_language_english">English</string>

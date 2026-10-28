@@ -210,12 +210,12 @@ fun ExtensionsSection(
             ) {
                 Box(
                     modifier = Modifier
-                        .size(38.dp)
+                        .size(36.dp)
                         .clip(RoundedCornerShape(10.dp))
                         .background(AdGuardPurpleAI.copy(alpha = 0.12f)),
                     contentAlignment = Alignment.Center,
                 ) {
-                    Icon(Icons.Default.Extension, contentDescription = null, tint = AdGuardPurpleAI, modifier = Modifier.size(20.dp))
+                    Icon(Icons.Default.Extension, contentDescription = null, tint = AdGuardPurpleAI, modifier = Modifier.size(18.dp))
                 }
                 Spacer(modifier = Modifier.width(12.dp))
                 Column(modifier = Modifier.weight(1f)) {

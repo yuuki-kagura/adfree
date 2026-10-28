@@ -314,7 +314,6 @@
 
     <!-- Protection tab and module details -->
     <string name="protection_subtitle">Tap a module to open its options</string>
-    <string name="protection_module_open">Open options</string>
     <string name="protection_filters_row">Filter lists</string>
     <string name="protection_filters_summary">%1$d lists on · %2$s rules</string>
     <string name="protection_filters_empty">No filter lists enabled</string>
@@ -406,7 +405,7 @@
     <string name="hub_filters_subtitle">%1$d filters enabled • %2$s rules</string>
     <string name="hub_extensions_title">Extensions</string>
     <string name="hub_extensions_none">No userscripts yet</string>
-    <string name="hub_extensions_master_off">Master switch off — no scripts run</string>
+    <string name="hub_extensions_master_off">All extensions are off — no scripts run</string>
     <string name="hub_extensions_count">%1$d/%2$d scripts on</string>
     <string name="hub_network_https_on">%1$s • HTTPS on</string>
     <string name="hub_network_https_off">%1$s • HTTPS off</string>
@@ -457,7 +456,7 @@
     <string name="ext_add_footnote">Note: extensions can access page data — install only scripts you understand and trust.</string>
     <string name="ext_add_download">Add and download</string>
     <string name="ext_detail_enable_title">Enable this extension</string>
-    <string name="ext_detail_master_off">Extensions are off globally — no scripts run</string>
+    <string name="ext_detail_master_off">Extensions are turned off, so this script does not run</string>
     <string name="ext_detail_running">Running while HTTPS filtering is on</string>
     <string name="ext_detail_off">Off</string>
     <string name="ext_detail_size">Size</string>
@@ -477,7 +476,7 @@
     <string name="ext_run_at_idle">When the page is idle</string>
     <string name="ext_run_at_body">When the page has a &lt;body&gt;</string>
     <string name="ext_screen_subtitle">Userscripts run on filtered HTTPS pages</string>
-    <string name="ext_screen_intro">Each script declares the pages it applies to with @match / @include. When the master switch is off no script runs, even enabled ones.</string>
+    <string name="ext_screen_intro">Each script declares the pages it applies to with @match / @include. When all extensions are turned off, no script runs — even enabled ones.</string>
     <string name="ext_create_title">New extension</string>
     <string name="ext_create_template">// ==UserScript==\n// @name         My extension\n// @match        *://*/*\n// @grant        none\n// ==/UserScript==\n\n</string>
     <string name="ext_create_confirm">Create</string>
@@ -689,7 +688,11 @@
     <string name="log_category_custom">Custom rule</string>
 
     <!-- Settings -->
-    <string name="settings_subtitle">Language, logging, smart filtering, stealth and backups</string>
+    <string name="settings_subtitle">Language, appearance, logging and backups</string>
+    <string name="settings_group_general">General</string>
+    <string name="settings_group_logging">Logging</string>
+    <string name="settings_group_data">Backup &amp; data</string>
+    <string name="settings_group_about">About</string>
     <string name="settings_language_title">App language</string>
     <string name="settings_language_system">System default</string>
     <string name="settings_language_english">English</string>

@@ -164,29 +164,21 @@ fun SettingsScreen(
         ) {
         Spacer(modifier = Modifier.height(8.dp))
 
+            SettingsGroupHeader(stringResource(R.string.settings_group_general))
+
             LanguageSection(
                 selected = state.settings.appLanguage,
                 onSelect = { viewModel.onIntent(AdGuardIntent.SetAppLanguage(it)) },
             )
 
-            Spacer(modifier = Modifier.height(18.dp))
+            Spacer(modifier = Modifier.height(14.dp))
 
             ThemeSection(
                 selected = state.settings.themeMode,
                 onSelect = { viewModel.onIntent(AdGuardIntent.SetThemeMode(it)) },
             )
 
-            Spacer(modifier = Modifier.height(18.dp))
-
-            SettingsSwitch(
-                icon = Icons.Default.Visibility,
-                title = stringResource(R.string.settings_log_allowed_title),
-                subtitle = stringResource(R.string.settings_log_allowed_subtitle),
-                checked = state.settings.logAllowedRequests,
-                onCheckedChange = { viewModel.onIntent(AdGuardIntent.ToggleLogAllowed(it)) }
-            )
-
-            Spacer(modifier = Modifier.height(18.dp))
+            Spacer(modifier = Modifier.height(12.dp))
 
             SettingsSwitch(
                 icon = Icons.Default.PowerSettingsNew,
@@ -196,7 +188,21 @@ fun SettingsScreen(
                 onCheckedChange = { viewModel.onIntent(AdGuardIntent.ToggleAutoStart(it)) },
             )
 
-            Spacer(modifier = Modifier.height(24.dp))
+            Spacer(modifier = Modifier.height(20.dp))
+
+            SettingsGroupHeader(stringResource(R.string.settings_group_logging))
+
+            SettingsSwitch(
+                icon = Icons.Default.Visibility,
+                title = stringResource(R.string.settings_log_allowed_title),
+                subtitle = stringResource(R.string.settings_log_allowed_subtitle),
+                checked = state.settings.logAllowedRequests,
+                onCheckedChange = { viewModel.onIntent(AdGuardIntent.ToggleLogAllowed(it)) }
+            )
+
+            Spacer(modifier = Modifier.height(20.dp))
+
+            SettingsGroupHeader(stringResource(R.string.settings_group_data))
 
             BackupSection(
                 onExport = { exportLauncher.launch("adfree-backup.json") },
@@ -205,11 +211,13 @@ fun SettingsScreen(
                 },
             )
 
-            Spacer(modifier = Modifier.height(24.dp))
+            Spacer(modifier = Modifier.height(20.dp))
+
+            SettingsGroupHeader(stringResource(R.string.settings_group_about))
 
             EngineInfoSection(state.stats.filterBuildMs)
 
-            Spacer(modifier = Modifier.height(24.dp))
+            Spacer(modifier = Modifier.height(10.dp))
 
             SettingsLink(
                 icon = Icons.AutoMirrored.Filled.HelpOutline,
@@ -220,7 +228,7 @@ fun SettingsScreen(
                 },
             )
 
-            Spacer(modifier = Modifier.height(24.dp))
+            Spacer(modifier = Modifier.height(10.dp))
 
             // A diagnostic screen rather than a daily tab: reachable from here.
             SettingsLink(
@@ -261,6 +269,18 @@ fun SettingsScreen(
             },
         )
     }
+}
+
+/** Group label that keeps the flat list of cards from reading as one blob. */
+@Composable
+private fun SettingsGroupHeader(title: String) {
+    Text(
+        text = title,
+        fontSize = 13.sp,
+        fontWeight = FontWeight.Bold,
+        color = AdGuardGreenLight,
+        modifier = Modifier.padding(top = 4.dp, bottom = 10.dp),
+    )
 }
 
 /** In-app language; AppCompat recreates the activity when the choice changes. */
@@ -1402,12 +1422,20 @@ fun SettingsSwitch(
                 modifier = Modifier.weight(1f),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                Icon(
-                    imageVector = icon,
-                    contentDescription = null,
-                    tint = AdGuardBlueDns,
-                    modifier = Modifier.size(20.dp),
-                )
+                Box(
+                    modifier = Modifier
+                        .size(36.dp)
+                        .clip(RoundedCornerShape(10.dp))
+                        .background(AdGuardBlueDns.copy(alpha = 0.12f)),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Icon(
+                        imageVector = icon,
+                        contentDescription = null,
+                        tint = AdGuardBlueDns,
+                        modifier = Modifier.size(18.dp),
+                    )
+                }
                 Spacer(modifier = Modifier.size(12.dp))
                 Column(modifier = Modifier.weight(1f)) {
                     Text(

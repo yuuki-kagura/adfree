@@ -752,11 +752,11 @@ private fun ModuleRow(
             Box(
                 contentAlignment = Alignment.Center,
                 modifier = Modifier
-                    .size(38.dp)
+                    .size(36.dp)
                     .clip(RoundedCornerShape(10.dp))
                     .background(accent.copy(alpha = 0.12f)),
             ) {
-                Icon(icon, contentDescription = null, tint = accent, modifier = Modifier.size(20.dp))
+                Icon(icon, contentDescription = null, tint = accent, modifier = Modifier.size(18.dp))
             }
             Spacer(modifier = Modifier.width(12.dp))
             Column(modifier = Modifier.weight(1f)) {
@@ -772,13 +772,6 @@ private fun ModuleRow(
                     color = AdGuardTextSecondary,
                 )
             }
-            Icon(
-                imageVector = Icons.Default.ChevronRight,
-                contentDescription = stringResource(R.string.protection_module_open),
-                tint = AdGuardTextMuted,
-                modifier = Modifier.size(18.dp),
-            )
-            Spacer(modifier = Modifier.width(4.dp))
             Switch(
                 checked = checked,
                 onCheckedChange = onCheckedChange,
@@ -817,8 +810,8 @@ private fun NavigationRow(
             Box(
                 contentAlignment = Alignment.Center,
                 modifier = Modifier
-                    .size(34.dp)
-                    .clip(RoundedCornerShape(9.dp))
+                    .size(36.dp)
+                    .clip(RoundedCornerShape(10.dp))
                     .background(accent.copy(alpha = 0.12f)),
             ) {
                 Icon(icon, contentDescription = null, tint = accent, modifier = Modifier.size(18.dp))
