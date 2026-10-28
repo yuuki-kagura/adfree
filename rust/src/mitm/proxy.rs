@@ -12,6 +12,7 @@ use crate::engine::StealthConfig;
 use crate::filter::{
     CookiePlan, FilterEngine, HeaderEdit, HlsPlan, HtmlPlan, JsonprunePlan, Replace,
 };
+use crate::mitm::decide::{self, Injector, RequestContext, RequestPlan, ResponsePlans};
 use crate::mitm::ech::BareRefusal;
 use crate::mitm::http;
 use crate::mitm::tls::{
@@ -328,37 +329,6 @@ struct ResponseEdit {
     page_url: Option<String>,
 }
 
-/// What one forwarded request carries back from the filter: the response body
-/// rewrite it matched, if any, and the header edits its response needs.
-#[derive(Default)]
-struct RequestPlan {
-    /// The `$replace` rule: its response body is rewritten when it comes back.
-    replace: Option<Arc<Replace>>,
-    /// Header edits, computed once, here, and held until the response arrives.
-    headers: Option<Arc<HeaderEdit>>,
-    /// The `$cookie` rules the request matched: the request loses the cookies
-    /// they name now, and the response may not set them — the same plan
-    /// answers both, so it rides along.
-    cookies: Option<Arc<CookiePlan>>,
-    /// Stealth mode: the request is cross-site, so its `Cookie` header went
-    /// away and the answer may not set new ones.
-    block_cookies: bool,
-    /// The `$jsonprune` rules the request matched: held until the response
-    /// body arrives.
-    jsonprune: Option<Arc<JsonprunePlan>>,
-    /// The `$hls` rules the request matched: held until the response body
-    /// arrives.
-    hls: Option<Arc<HlsPlan>>,
-    /// The `$$` / `##^` HTML filtering rules the request matched: held until
-    /// the response body arrives.
-    html: Option<Arc<HtmlPlan>>,
-    /// The request's page URL when the loaded lists carry `[$path=…]` rules:
-    /// what the injection matches those rules against. Rides on the plan so
-    /// the response edit — which happens long after the head was read — can
-    /// find it again.
-    page_url: Option<String>,
-}
-
 /// State for a response whose body is streamed to the client as it is edited.
 ///
 /// Holding a body whole only works while it fits in the client's receive
@@ -555,33 +525,6 @@ enum Framing {
     Length(usize),
     /// `transfer-encoding: chunked`.
     Chunked,
-}
-
-/// One `$replace` payload, short enough for a log line.
-///
-/// The payload is the rule's own text — what the list author wrote between
-/// `$replace=` and the end of the line — so it is worth showing whole when it
-/// fits, and cut on a character boundary when it does not.
-fn payload_summary(payload: &str) -> String {
-    const MAX: usize = 96;
-    if payload.chars().count() <= MAX {
-        return payload.to_string();
-    }
-    let cut: String = payload.chars().take(MAX - 1).collect();
-    format!("{cut}…")
-}
-
-/// The text of the rules one response edit applied, short enough for a log
-/// line: the rules as they come, cut on a character boundary when there are
-/// too many or they are too long.
-fn rules_summary(rules: &[String]) -> String {
-    const MAX: usize = 160;
-    let joined = rules.join("; ");
-    if joined.chars().count() <= MAX {
-        return joined;
-    }
-    let cut: String = joined.chars().take(MAX - 1).collect();
-    format!("{cut}…")
 }
 
 /// How a passed-through body is framed, and how far it still has to go.
@@ -1358,7 +1301,7 @@ impl ProxySession {
         outcome: &mut Outcome,
         discard: &mut Option<ClientDiscard>,
     ) -> Result<RequestPlan, String> {
-        let Some(mut head_end) = header_end(buffer) else {
+        let Some(head_end) = header_end(buffer) else {
             return Ok(RequestPlan::default());
         };
         // Everything the filter needs is copied out of the head up front: the
@@ -1409,287 +1352,42 @@ impl ProxySession {
         let closes = facts.closes;
         // What the request's body amounts to if the rules answer it here.
         let body = facts.body;
-
-        // `$urlblock` (and `$document`, which implies it): the page asked for
-        // its own requests not to be blocked. The page is the document itself,
-        // or the referrer of a subresource. AdGuard spells the coverage out —
-        // blocking, redirects *and* `$removeparam` — so the whole decision is
-        // skipped for such a page.
-        let page_host = if request_type == "document" {
-            crate::filter::url_host(&url)
-        } else {
-            crate::filter::url_host(&source)
-        };
-        if !page_host.is_empty() && filter.cosmetic_switches_for(page_host).urlblock {
-            // The network decision is skipped, but the page's cosmetics still
-            // run: `$urlblock` alone unblocks requests, it does not switch
-            // element hiding off.
-            return Ok(RequestPlan {
-                page_url,
-                ..RequestPlan::default()
-            });
-        }
-
-        // The response-header rules (`$csp`, `$permissions`, `$removeheader`)
-        // are matched once, here, and ride on the plan: the response they shape
-        // is the next thing to come back. The request-side half of
-        // `$removeheader` happens now, while the head is here — the rest waits.
-        let mut plan = RequestPlan {
-            page_url,
-            ..RequestPlan::default()
-        };
-        if filter.has_header_rules() {
-            if let Some(edit) = filter.header_edit(&url, &source, request_type, &method) {
-                // `drop_headers` is `None` when none of the names is there, so
-                // the request is spliced only when it actually changes.
-                if let Some(fixed) = http::drop_headers(&buffer[..head_end], &edit.remove_request) {
-                    let old_end = head_end;
-                    head_end = fixed.len();
-                    buffer.splice(..old_end, fixed);
-                    crate::logbuf::push(&format!(
-                        "mitm {host}: request headers dropped: {}",
-                        edit.remove_request.join(", ")
-                    ));
-                }
-                plan.headers = Some(Arc::new(edit));
-            }
-        }
-
-        // `$jsonprune`: the response body loses the JSON items the matching
-        // rules name. Matched here, like the header edits, and held until the
-        // body comes back; a request that ends up blocked discards the plan
-        // with its answer, and the page's own switches were asked above
-        // (`$urlblock`) and inside the finder (`$content`, an empty
-        // `$replace`).
-        if filter.has_jsonprune_rules() {
-            if let Some(rules) = filter.jsonprune_plan(&url, &source, request_type, &method) {
-                plan.jsonprune = Some(Arc::new(rules));
-            }
-        }
-
-        // `$hls`: the response playlist loses the segments the matching rules
-        // name, media playlists and master playlists alike. Matched here like
-        // the other body edits, held until the body comes back; a blocked
-        // request discards the plan with its answer.
-        if filter.has_hls_rules() {
-            if let Some(rules) = filter.hls_plan(&url, &source, request_type, &method) {
-                plan.hls = Some(Arc::new(rules));
-            }
-        }
-
-        // `$$` / `##^`: the response body loses the elements the matching
-        // rules name. Matched here like the other body edits and held until
-        // the body comes back; the body pipeline runs it after `$jsonprune`
-        // and before `$replace`.
-        if filter.has_html_rules() {
-            if let Some(rules) = filter.html_plan_for_apps(&url, &source, request_type, apps) {
-                plan.html = Some(rules);
-            }
-        }
-
-        // `$replace`: the response body is rewritten *instead of* the request
-        // being blocked — AdGuard gives the modifier priority over every other
-        // basic rule, so a URL it matches is never blocked. The request goes
-        // out untouched; the response is picked up again when it comes back.
-        if filter.has_replace() {
-            if let Some(rule) = filter.replace_for(&url, &source, request_type, &method) {
-                plan.replace = Some(rule);
-                Self::apply_cookie_plan(
-                    filter, buffer, head_end, &url, &source, &method, &host, &mut plan,
-                );
-                return Ok(plan);
-            }
-        }
-
-        let mut verdict = filter.check_url(&url, &source, request_type, &method, apps);
-        if !verdict.blocked {
-            // The request-URL modifiers. `$urltransform` and the shapes of
-            // `$removeparam` the crate refuses are run by our own engine here;
-            // the `=name` shape the crate does implement comes back on the
-            // verdict itself. AdGuard keeps `$urltransform` out of the way of a
-            // URL basic rules already block, so this only runs on a clear
-            // verdict.
-            let mut rewritten_target: Option<String> = None;
-            let mut transformed: Option<crate::filter::UrlEdit> = None;
-            if filter.has_url_rules() {
-                if let Some(edit) = filter.url_edit(&url, &source, request_type, &method) {
-                    if !crate::filter::same_origin(&url, &edit.url) {
-                        // The rule reaches for another origin, which no rewrite
-                        // of the request line can take the request to — but a
-                        // redirect can, and only a method that allows one may
-                        // be answered that way.
-                        if matches!(method.as_str(), "GET" | "HEAD") {
-                            let rules = edit.rules.join("; ");
-                            crate::logbuf::push(&format!(
-                                "mitm {host}: URL transform redirects to {} ({rules})",
-                                edit.url
-                            ));
-                            let mut response = transform_redirect_response(&edit.url);
-                            if closes {
-                                response = closing_response(response);
-                            }
-                            buffer.drain(..head_end);
-                            *discard = swallow_body(None, body, buffer, Some(host.as_str()));
-                            let started = Instant::now();
-                            let handshaking = tls::server_handshaking(&session.server);
-                            outcome
-                                .to_client
-                                .extend(send_to_client(&mut session.server, &response)?);
-                            record_tls(stats, started, handshaking);
-                            if let Some(sink) = sink {
-                                sink(&MitmBlock {
-                                    host: &host,
-                                    rule: Some(&rules),
-                                    list_name: None,
-                                    category: 0,
-                                    apps,
-                                });
-                            }
-                            return Ok(RequestPlan::default());
-                        }
-                    } else if rewritable(&method) {
-                        if let Some(new_target) = origin_form(&edit.url) {
-                            if new_target != target {
-                                // The transformed URL is a request of its own:
-                                // it is matched against the rest of the rules
-                                // before it goes out.
-                                verdict = filter.check_url(
-                                    &edit.url,
-                                    &source,
-                                    request_type,
-                                    &method,
-                                    apps,
-                                );
-                                if !verdict.blocked {
-                                    rewritten_target = Some(new_target);
-                                    transformed = Some(edit);
-                                }
-                            }
-                        }
-                    }
-                }
-            } else if let Some(rewritten) = verdict
-                .rewritten_url
-                .as_deref()
-                .filter(|_| rewritable(&method))
-            {
-                // A `$removeparam` rule the crate implements itself: the
-                // request still goes out, with the parameters the list dropped
-                // taken off. GET, HEAD, OPTIONS and POST — see [`rewritable`]
-                // — so anything else keeps its query.
-                if let Some(new_target) = origin_form(rewritten) {
-                    if new_target != target {
-                        rewritten_target = Some(new_target);
-                    }
-                }
-            }
-            if !verdict.blocked {
-                if let Some(rewritten_target) = rewritten_target {
-                    // The rebuilt line is as long as the target it carries, so
-                    // the head end moves with it: the cookie plan below (and
-                    // the plan's own record) reads the head that actually goes
-                    // out, and the old end would slice past its end whenever
-                    // the rewrite is shorter.
-                    let old_end = head_end;
-                    let rebuilt = rebuilt_head(&buffer[..old_end], &rewritten_target);
-                    head_end = rebuilt.len();
-                    buffer.splice(..old_end, rebuilt);
-                    if let Some(edit) = transformed {
-                        crate::logbuf::push(&format!(
-                            "mitm {host}: URL rewritten to {} by {} rule(s)",
-                            edit.url,
-                            edit.rules.len(),
-                        ));
-                    }
-                }
-                Self::apply_cookie_plan(
-                    filter, buffer, head_end, &url, &source, &method, &host, &mut plan,
-                );
-                return Ok(plan);
-            }
-        }
-
-        let mut response = verdict
-            .redirect
-            .as_deref()
-            .and_then(redirect_response)
-            .unwrap_or_else(blocked_response);
-        if method == "HEAD" {
-            // A HEAD answer is headers only. The length of the body the same
-            // request would have carried is already in the head, so dropping
-            // the bytes is all it takes.
-            if let Some(end) = header_end(&response) {
-                response.truncate(end);
-            }
-        }
-        if closes {
-            response = closing_response(response);
-        }
-        buffer.drain(..head_end);
-        *discard = swallow_body(None, body, buffer, Some(host.as_str()));
-        let started = Instant::now();
-        let handshaking = tls::server_handshaking(&session.server);
-        outcome
-            .to_client
-            .extend(send_to_client(&mut session.server, &response)?);
-        record_tls(stats, started, handshaking);
-        if let Some(sink) = sink {
-            sink(&MitmBlock {
+        let decision = decide::decide_request(
+            &RequestContext {
+                filter,
                 host: &host,
-                rule: verdict.rule_text.as_deref(),
-                list_name: verdict.list_name.as_deref(),
-                category: verdict.category,
+                url: &url,
+                method: &method,
+                target: &target,
+                source: &source,
+                request_type,
                 apps,
-            });
-        }
-        Ok(RequestPlan::default())
-    }
-
-    /// Applies the `$cookie` plan to the request head at the front of `buffer`:
-    /// the cookies the rules name come off the `Cookie` header, and the plan
-    /// rides on `plan` so the response that request produces cannot set them
-    /// either.
-    ///
-    /// The rules are matched against the URL the client sent — the way the
-    /// reference reads its matching result — so a request a `$urltransform`
-    /// rewrote is still the exchange that client meant to make. A page that
-    /// switched content modification off (`$urlblock`) never gets here: the
-    /// caller returns before this point, exactly like the reference's cookie
-    /// finder sees an empty rule set there.
-    #[allow(clippy::too_many_arguments)]
-    fn apply_cookie_plan(
-        filter: &FilterEngine,
-        buffer: &mut Vec<u8>,
-        head_end: usize,
-        url: &str,
-        source: &str,
-        method: &str,
-        host: &str,
-        plan: &mut RequestPlan,
-    ) {
-        if !filter.has_cookie_rules() {
-            return;
-        }
-        let Some(cookie_plan) = filter.cookie_plan(url, source, method) else {
-            return;
-        };
-        let names = http::request_cookie_names(&buffer[..head_end]);
-        if !names.is_empty() {
-            if let Some(edit) = cookie_plan.dropped(&names) {
-                // `drop_request_cookies` is `None` when none of the names is
-                // there, so the request is spliced only when it really changes.
-                if let Some(fixed) = http::drop_request_cookies(&buffer[..head_end], &edit.drop) {
-                    let old_end = head_end;
-                    buffer.splice(..old_end, fixed);
-                    crate::logbuf::push(&format!(
-                        "mitm {host}: request cookies dropped: {} by {} rule(s)",
-                        edit.drop.join(", "),
-                        edit.rules.len(),
-                    ));
-                }
+                page_url,
+                closes,
+            },
+            buffer,
+            head_end,
+        );
+        if let Some(answer) = decision.answer {
+            buffer.drain(..decision.head_end);
+            *discard = swallow_body(None, body, buffer, Some(host.as_str()));
+            let started = Instant::now();
+            let handshaking = tls::server_handshaking(&session.server);
+            outcome
+                .to_client
+                .extend(send_to_client(&mut session.server, &answer.response)?);
+            record_tls(stats, started, handshaking);
+            if let Some(sink) = sink {
+                sink(&MitmBlock {
+                    host: &host,
+                    rule: answer.rule.as_deref(),
+                    list_name: answer.list_name.as_deref(),
+                    category: answer.category,
+                    apps,
+                });
             }
         }
-        plan.cookies = Some(Arc::new(cookie_plan));
+        Ok(decision.plan)
     }
 
     /// Answers whatever the client asks the local injection origin.
@@ -2073,9 +1771,7 @@ impl ProxySession {
                     // the cosmetic rules or the WebRTC guard are in play; a
                     // connection that is here for header edits alone must not
                     // hold bodies back.
-                    let can_inject = !self.script_src.is_empty()
-                        || self.cosmetic.is_some()
-                        || self.stealth.blocks_web_rtc();
+                    let can_inject = self.injector().active();
                     let html_edit = can_inject && info.html && renderable && editable;
                     // `$replace`, `$jsonprune` and `$hls` only ever look at
                     // text bodies: media, images and downloads travel
@@ -2287,108 +1983,34 @@ impl ProxySession {
                     }
                     let recompress = decoded.is_some();
                     let plain = decoded.as_deref().unwrap_or(&body);
-                    // `$hls` first: the playlist edit drops whole lines, and
-                    // the passes below read what it left. Each log line names
-                    // the bytes its own pass started from.
-                    let original = plain.len();
-                    let trimmed = hls.as_ref().and_then(|plan| plan.apply(plain));
-                    let plain = trimmed
-                        .as_ref()
-                        .map(|(body, _)| body.as_slice())
-                        .unwrap_or(plain);
-                    if let Some((_, applied)) = trimmed.as_ref() {
-                        crate::logbuf::push(&format!(
-                            "mitm {}: $hls applied ({} to {} bytes): {}",
-                            self.captured.as_deref().unwrap_or("?"),
-                            original,
-                            plain.len(),
-                            applied.join("; "),
-                        ));
-                    }
-                    // `$jsonprune` takes its matches out of the document
-                    // itself, and the `$replace` pass below then reads the
-                    // pruned bytes — a regexp written for what the client
-                    // will get.
-                    let before_prune = plain.len();
-                    let pruned = jsonprune.as_ref().and_then(|plan| plan.apply(plain));
-                    let plain = pruned
-                        .as_ref()
-                        .map(|(body, _)| body.as_slice())
-                        .unwrap_or(plain);
-                    if let Some((_, applied)) = pruned.as_ref() {
-                        crate::logbuf::push(&format!(
-                            "mitm {}: $jsonprune applied ({} to {} bytes): {}",
-                            self.captured.as_deref().unwrap_or("?"),
-                            before_prune,
-                            plain.len(),
-                            applied.join("; "),
-                        ));
-                    }
-                    // `$$` / `##^`: the elements the matching rules name are
-                    // cut out of the document itself, and the `$replace` pass
-                    // below then reads what they left — a regexp written for
-                    // what the client will get.
-                    let before_html = plain.len();
-                    let cut = html.as_ref().and_then(|plan| plan.apply(plain));
-                    let plain = cut
-                        .as_ref()
-                        .map(|(body, _)| body.as_slice())
-                        .unwrap_or(plain);
-                    if let Some((_, applied)) = cut.as_ref() {
-                        crate::logbuf::push(&format!(
-                            "mitm {}: $$ applied ({} to {} bytes): {}",
-                            self.captured.as_deref().unwrap_or("?"),
-                            before_html,
-                            plain.len(),
-                            rules_summary(applied),
-                        ));
-                    }
-                    // `$replace` second: what a list rewrites is the page's own
-                    // bytes, and the snippet injected below is ours, not the
-                    // list's — the two never feed into one another.
-                    let before = plain.len();
-                    let replaced = replace.as_ref().and_then(|rule| rule.apply(plain));
-                    let plain = replaced.as_deref().unwrap_or(plain);
-                    if let Some(rule) = replace.as_ref().filter(|_| replaced.is_some()) {
-                        crate::logbuf::push(&format!(
-                            "mitm {}: $replace applied ({} to {} bytes): {}",
-                            self.captured.as_deref().unwrap_or("?"),
-                            before,
-                            plain.len(),
-                            payload_summary(rule.payload())
-                        ));
-                    }
-                    let edited = replaced.is_some()
-                        || pruned.is_some()
-                        || trimmed.is_some()
-                        || cut.is_some();
-                    // One nonce for this response: the tags carry it, and the
-                    // policy does too when the head goes out rewritten below.
-                    let nonce = http::new_nonce();
-                    let snippet = if inject {
-                        self.injection_snippet(plain, &nonce)
-                    } else {
-                        Vec::new()
+                    let plans = ResponsePlans {
+                        replace,
+                        jsonprune,
+                        hls,
+                        html,
                     };
-                    let (new_body, decision) = if snippet.is_empty() {
-                        (plain.to_vec(), http::Decision::Skip)
-                    } else {
-                        http::inject_snippet(plain, &snippet)
-                    };
-                    if decision == http::Decision::Injected {
-                        injected += new_body.len() - plain.len();
+                    let edited = decide::edit_response(
+                        &plans,
+                        plain,
+                        inject,
+                        &self.injector(),
+                        self.captured.as_deref().unwrap_or("?"),
+                    );
+                    let new_body = edited.body;
+                    if edited.decision == http::Decision::Injected {
+                        injected += edited.injected;
                         crate::logbuf::push(&format!(
                             "mitm {}: injected {} bytes into a {} byte body (recompressed={})",
                             self.captured.as_deref().unwrap_or("?"),
-                            new_body.len() - plain.len(),
+                            edited.injected,
                             plain.len(),
                             recompress
                         ));
                         // The page keeps its policy: it just learns the nonce
                         // the snippet's tags carry.
-                        let head = http::csp_with_nonce(&head, &nonce, LOCAL_ORIGIN);
+                        let head = http::csp_with_nonce(&head, &edited.nonce, LOCAL_ORIGIN);
                         emit_edited(&mut out, &head, &new_body, recompress);
-                    } else if edited {
+                    } else if edited.edited {
                         // A rewrite without a snippet: the head only learns the
                         // length its body now has.
                         emit_edited(&mut out, &head, &new_body, recompress);
@@ -2569,7 +2191,7 @@ impl ProxySession {
             } else {
                 state.prefix.extend_from_slice(&decoded);
                 if let Some(pos) = state.injection_offset() {
-                    let snippet = self.injection_snippet(&state.prefix, &state.nonce);
+                    let snippet = self.injector().snippet(&state.prefix, &state.nonce);
                     let before: Vec<u8> = state.prefix[..pos].to_vec();
                     let after: Vec<u8> = state.prefix[pos..].to_vec();
                     state.prefix.clear();
@@ -2587,7 +2209,7 @@ impl ProxySession {
                 // No `</head>` ever showed up: the snippet lands after the last
                 // complete tag, so the document stays well formed.
                 let pos = http::safe_injection_point(&state.prefix);
-                let snippet = self.injection_snippet(&state.prefix, &state.nonce);
+                let snippet = self.injector().snippet(&state.prefix, &state.nonce);
                 let before: Vec<u8> = state.prefix[..pos].to_vec();
                 let after: Vec<u8> = state.prefix[pos..].to_vec();
                 state.prefix.clear();
@@ -2637,189 +2259,18 @@ impl ProxySession {
         Ok(())
     }
 
-    /// The HTML snippet injected early in `<head>`: the hiding stylesheet, the
-    /// cosmetic payload (rule data inline, runtime fetched from the app's own
-    /// origin) plus the user script tag when one is installed. Empty when
-    /// nothing applies.
-    ///
-    /// Every tag carries `nonce`, and the head's policy is taught the same
-    /// value before it leaves, so a strict `script-src`/`style-src` lets the
-    /// snippet through without the page losing its policy.
-    fn injection_snippet(&self, body: &[u8], nonce: &str) -> Vec<u8> {
-        let mut out = Vec::new();
-        if let Some(filter) = self.cosmetic.as_deref() {
-            let switches = self
-                .captured
-                .as_deref()
-                .map(|host| filter.cosmetic_switches_for(host))
-                .unwrap_or_default();
-            // A page the lists unblocked (`$document`, or `$elemhide` together
-            // with `$jsinject`) has nothing left to hide, look up or inject:
-            // every tag would be a fetch for nothing. The user's own script is
-            // not the lists' to switch off, and still goes out below.
-            if !(switches.elemhide && switches.jsinject) {
-                // Without a hostname there are no rules to look up (a session
-                // that never saw a ClientHello keeps only the runtime).
-                if let Some(host) = self.captured.as_deref() {
-                    // What the rules hide goes out as a stylesheet, not as inline
-                    // data: the same 11 KB of all-site selectors applies to every
-                    // page of a site, and this way the browser fetches it once and
-                    // keeps it. It is fetched from the app's own origin, where the
-                    // page's service worker cannot answer in our place. A
-                    // page-scoped `#@#` exception is the one case the host
-                    // stylesheet cannot express: the caller below then carries
-                    // the filtered selectors inline for this page only.
-                    let payload = self.cosmetic_payload(
-                        filter,
-                        host,
-                        body,
-                        self.page_url.as_deref(),
-                        &self.apps,
-                    );
-                    let inline_hides = payload.as_ref().is_some_and(|page| page.inline_hides);
-                    if !inline_hides {
-                        if let Some((href, _)) = hide_stylesheet(filter, host) {
-                            out.extend_from_slice(
-                                http::style_link_tag(&local_asset(&href), "adfree-hide", nonce)
-                                    .as_bytes(),
-                            );
-                        }
-                    }
-                    if let Some(data) = payload.and_then(|page| page.json) {
-                        out.extend_from_slice(
-                            format!("<script{}>window.__adfree_page=", http::nonce_attr(nonce))
-                                .as_bytes(),
-                        );
-                        out.extend_from_slice(data.as_bytes());
-                        out.extend_from_slice(b";</script>");
-                    }
-                }
-                // The runtime goes out whenever cosmetic filtering runs, payload or
-                // not: it is what finds rules for the tokens the proxy never saw,
-                // which on a streamed page is everything past the anchor.
-                // Not deferred: the hiding stylesheet must land before the body
-                // renders, and every answer comes from the app itself.
-                // `dmn=` is what tells the cross-origin runtime which host's rules
-                // its lookups are for (AdGuard's content script carries the same
-                // parameter).
-                let runtime = match self.captured.as_deref() {
-                    Some(host) => versioned_path(
-                        &format!("{PAGE_SCRIPT_PATH}?dmn={host}"),
-                        content_hash(PAGE_RUNTIME.as_bytes()),
-                    ),
-                    None => versioned_path(PAGE_SCRIPT_PATH, content_hash(PAGE_RUNTIME.as_bytes())),
-                };
-                out.extend_from_slice(
-                    http::script_tag(&local_asset(&runtime), false, nonce).as_bytes(),
-                );
-            }
+    /// The per-session inputs the shared injection code reads.
+    fn injector(&self) -> Injector<'_> {
+        Injector {
+            script_src: &self.script_src,
+            script_tag_src: &self.script_tag_src,
+            cosmetic: self.cosmetic.as_deref(),
+            host: self.captured.as_deref(),
+            page_url: self.page_url.as_deref(),
+            apps: &self.apps,
+            stealth: self.stealth,
         }
-        if self.stealth.blocks_web_rtc() {
-            // Inline rather than served: the guard is tiny and has to run
-            // before the page's own scripts. The nonce keeps a strict
-            // `script-src` from dropping it.
-            out.extend_from_slice(
-                format!(
-                    "<script{}>{}</script>",
-                    http::nonce_attr(nonce),
-                    crate::mitm::stealth::WEBRTC_GUARD
-                )
-                .as_bytes(),
-            );
-        }
-        if !self.script_src.is_empty() {
-            // Not deferred: `@run-at document-start` only means anything if
-            // the tag is fetched and executed while the parser is still in the
-            // head. End/idle scripts wait inside their own wrapper.
-            out.extend_from_slice(http::script_tag(&self.script_tag_src, false, nonce).as_bytes());
-        }
-        out
     }
-
-    /// The per-page cosmetic payload as JSON, or `None` when the page has
-    /// nothing left to carry inline (element hiding travels as a stylesheet).
-    ///
-    /// `page_url` is the page's own URL when the request carried one — that is
-    /// what `[$path=…]` / `[$url=…]` / path-in-domain rules are matched
-    /// against. Without it the answer is the host's alone: no `/`-path may
-    /// stand in for a page nobody named.
-    fn cosmetic_payload(
-        &self,
-        filter: &FilterEngine,
-        host: &str,
-        body: &[u8],
-        page_url: Option<&str>,
-        apps: &[String],
-    ) -> Option<CosmeticPayload> {
-        let rules = match page_url {
-            Some(url) => filter.cosmetic_resources_with_apps(url, apps),
-            None => filter.cosmetic_resources_for_host_with_apps(host, apps),
-        };
-        let inline_hides = rules.inline_hides;
-
-        // Generic class/id rules: the page's own tokens decide which apply.
-        // The initial HTML is scanned here so the first paint is covered; the
-        // runtime asks again for whatever the page adds later.
-        let mut generic = Vec::new();
-        if !rules.generichide {
-            let (classes, ids) = http::collect_class_id_tokens(body);
-            if !classes.is_empty() || !ids.is_empty() {
-                generic = filter.generic_selectors(&classes, &ids, &rules.exceptions);
-            }
-        }
-
-        let mut obj = serde_json::Map::new();
-        if inline_hides && !rules.hide_selectors.is_empty() {
-            obj.insert("hide".into(), serde_json::json!(rules.hide_selectors));
-        }
-        if inline_hides && !rules.generichide {
-            // The generic lookup endpoint is host-only and cannot see the
-            // page scope. Carry the page's exceptions so the runtime can
-            // drop a dynamic answer the exception already cancelled.
-            obj.insert("exceptions".into(), serde_json::json!(rules.exceptions));
-        }
-        if !rules.style_rules.is_empty() {
-            obj.insert("style".into(), serde_json::json!(rules.style_rules));
-        }
-        if !generic.is_empty() {
-            obj.insert("generic".into(), serde_json::json!(generic));
-        }
-        if !rules.procedural.is_empty() {
-            obj.insert("procedural".into(), serde_json::json!(rules.procedural));
-        }
-        if !rules.scriptlets.is_empty() {
-            obj.insert("scriptlets".into(), serde_json::json!(rules.scriptlets));
-        }
-        if !rules.jsrules.is_empty() {
-            obj.insert("jsrules".into(), serde_json::json!(rules.jsrules));
-        }
-        // With `$generichide` in play the dynamic lookup would answer `[]`
-        // every time; say so, and only then — the runtime assumes it is on, so
-        // a page whose payload never made it out still gets the lookup.
-        if rules.generichide {
-            obj.insert("dynamic".into(), serde_json::json!(false));
-        }
-        let json = if obj.is_empty() {
-            None
-        } else {
-            Some(escape_for_script(
-                &serde_json::Value::Object(obj).to_string(),
-            ))
-        };
-        // An inline-hides page must suppress the host stylesheet even when
-        // every selector was excepted and there is no JSON left to carry.
-        if json.is_none() && !inline_hides {
-            return None;
-        }
-        Some(CosmeticPayload { json, inline_hides })
-    }
-}
-
-/// What one page needs inline, and whether its `<link rel=stylesheet>` must
-/// be left out because a location/app-scoped exception changed the answer.
-struct CosmeticPayload {
-    json: Option<String>,
-    inline_hides: bool,
 }
 
 /// Answers a request for one of our local endpoints without touching the peer.
@@ -3377,7 +2828,7 @@ pub(crate) fn content_hash(bytes: &[u8]) -> u64 {
 
 /// Appends the content hash to a local path (`?h=…`, or `&h=…` if the path
 /// already carries a query) so its answer can be cached until it changes.
-fn versioned_path(path: &str, hash: u64) -> String {
+pub(super) fn versioned_path(path: &str, hash: u64) -> String {
     let separator = if path.contains('?') { '&' } else { '?' };
     format!("{path}{separator}h={hash:016x}")
 }
@@ -3404,7 +2855,7 @@ pub(crate) fn hide_stylesheet(filter: &FilterEngine, host: &str) -> Option<(Stri
 /// `<` is the one character that can terminate the element early
 /// (`</script>`, `<!--`); U+2028/2029 are valid JSON but were invalid in JS
 /// string literals before ES2019.
-fn escape_for_script(json: &str) -> String {
+pub(super) fn escape_for_script(json: &str) -> String {
     let mut out = String::with_capacity(json.len() + 16);
     for ch in json.chars() {
         match ch {
@@ -3418,7 +2869,7 @@ fn escape_for_script(json: &str) -> String {
 }
 
 /// Byte offset just past the HTTP header block, if it is complete.
-fn header_end(buf: &[u8]) -> Option<usize> {
+pub(super) fn header_end(buf: &[u8]) -> Option<usize> {
     http::head_end(buf)
 }
 
