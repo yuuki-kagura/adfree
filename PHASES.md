@@ -140,6 +140,31 @@ Chưa kiểm tra trên thiết bị:
   autostart, header stealth, đổi ngôn ngữ/theme trên UI — hiện chỉ được bảo
   đảm bằng test tự động, chưa xác nhận trên máy.
 
+## Phase 9 — Lọc HTTP/3 (QUIC)
+
+Công tắc opt-in "Lọc HTTP/3" (Mạng → Lọc HTTPS, chỉ bật được khi Lọc HTTPS
+bật): QUIC/UDP:443 được terminate bằng CA cục bộ và lọc như HTTPS thay vì bị
+chặn (mặc định vẫn chặn), dùng chung `decide.rs`/`Injector` với HTTP/1.1. Host
+bị loại, app từ chối CA và host ECH được splice thẳng; proxy SOCKS5 vẫn chặn
+QUIC vì proxy chỉ đi TCP.
+
+Đã chạy, tất cả xanh:
+
+- `cargo fmt --check`; `cargo clippy --all-targets -- -D warnings`.
+- `cargo test --lib`: 708 passed, 2 ignored; `cargo test --test forwarder_path`:
+  4 passed.
+- `cargo ndk -t arm64-v8a check --lib`; `:app:buildRust` đủ 4 ABI;
+  `:app:verifyBindings` (adfree.kt thêm `filterHttp3`, `quicBlocked`).
+- `:app:testDebugUnitTest` (2 test mapping mới), `:app:lintDebug`,
+  `:app:assembleDebug`.
+- `detect-changes --scope all` trước mỗi commit, không `partial`/`truncated`.
+
+Chưa kiểm tra trên thiết bị (vẫn không có adb device):
+
+- Cần client QUIC tin CA người dùng để thấy luồng h3 được lọc. Chrome/Cronet
+  từ chối CA người dùng cho QUIC nên dự kiến rơi về TCP — giới hạn nền tảng,
+  giống AdGuard; cần xác nhận bật/tắt công tắc không hồi quy luồng TCP.
+
 ## Ghi chú
 
 - Chỉ bật các hiệu ứng khi `isStealthModeEnabled` bật; các cờ con vẫn được lưu
