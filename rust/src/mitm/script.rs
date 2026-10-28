@@ -827,8 +827,13 @@ impl ScriptSet {
     }
 
     /// Rebuilds the served body; called after any state change.
+    ///
+    /// The master switch alone is not enough: with every script disabled the
+    /// stitched file would hold only the runtime scaffolding, which is a tag
+    /// (and a fetch) every page pays for and no script needs.
     fn recompute(&mut self) {
-        self.combined = if self.is_enabled() {
+        let any_enabled = self.scripts.iter().any(|script| script.enabled);
+        self.combined = if self.enabled && any_enabled {
             std::sync::Arc::from(self.build_combined().as_str())
         } else {
             std::sync::Arc::from("")
@@ -867,9 +872,16 @@ impl ScriptSet {
         out
     }
 
-    /// The path we answer when a client requests it.
+    /// The path we answer when a client requests it, or `""` when there is
+    /// nothing to serve. An empty path is what keeps the HTML rewrite from
+    /// emitting a `<script src>` for a bundle that does not exist (master
+    /// switch off, or every script disabled): that tag could only 404.
     pub fn serve_path(&self) -> &str {
-        &self.serve_path
+        if self.combined.is_empty() {
+            ""
+        } else {
+            &self.serve_path
+        }
     }
 }
 
@@ -987,9 +999,29 @@ mod tests {
     }
 
     #[test]
-    fn serve_path_defaults_to_a_stable_url() {
-        let set = ScriptSet::new();
+    fn serve_path_is_empty_until_a_body_exists() {
+        let mut set = ScriptSet::new();
+        assert_eq!(set.serve_path(), "", "no scripts means no tag");
+        set.replace_all(vec![script("a", "let a = 1;")]);
+        assert_eq!(set.serve_path(), "", "master switch still off");
+        set.set_enabled(true);
         assert_eq!(set.serve_path(), "/adfree-user.js");
+        set.set_enabled(false);
+        assert_eq!(set.serve_path(), "", "master switch off serves nothing");
+    }
+
+    #[test]
+    fn all_scripts_disabled_serves_no_body() {
+        let mut set = ScriptSet::new();
+        set.set_enabled(true);
+        set.replace_all(vec![UserScript {
+            id: "off".into(),
+            name: "off".into(),
+            body: "let off = 1;".into(),
+            enabled: false,
+        }]);
+        assert!(set.combined_arc().is_empty());
+        assert_eq!(set.serve_path(), "");
     }
 
     #[test]

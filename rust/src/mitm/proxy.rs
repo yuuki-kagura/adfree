@@ -85,8 +85,12 @@ pub(crate) fn local_asset(path: &str) -> String {
 ///
 /// The path is content-addressed so a script edit cannot be served from a
 /// stale HTTP cache; both the HTTP/1.1 splice and the HTTP/3 hub advertise
-/// exactly this URL.
+/// exactly this URL. Empty when there is no path to serve, which is what the
+/// callers' "inject nothing" check reads.
 pub(crate) fn script_tag_src(serve_path: &str, body: &str) -> String {
+    if serve_path.is_empty() {
+        return String::new();
+    }
     local_asset(&versioned_path(serve_path, content_hash(body.as_bytes())))
 }
 
