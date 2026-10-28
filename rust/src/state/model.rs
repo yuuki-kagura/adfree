@@ -163,7 +163,10 @@ impl Default for ProtectionState {
             // is opt-in. It used to be a checkbox with no implementation.
             is_stealth_mode_enabled: false,
             block_quic: true,
-            block_doh: true,
+            // Off by default: a client with a custom DoH URL (Chrome's secure
+            // DNS, Private DNS in strict mode) has no fallback, so blocking it
+            // breaks resolution entirely. SNI-level filtering still applies.
+            block_doh: false,
             block_dot: true,
             filter_auto_update_hours: 24,
             log_allowed_requests: false,

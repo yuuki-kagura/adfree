@@ -601,6 +601,9 @@ const EXT_ENCRYPTED_CLIENT_HELLO: u16 = 0xfe0d;
 /// Extension type 0x0000, `server_name`.
 const EXT_SERVER_NAME: u16 = 0x0000;
 
+/// Extension type 0x0010, `application_layer_protocol_negotiation`.
+const EXT_ALPN: u16 = 0x0010;
+
 /// What the first flight of a connection holds.
 #[derive(Debug, PartialEq, Eq)]
 pub enum Flight {
@@ -619,6 +622,10 @@ pub enum Flight {
         /// The name the hello exposes: the real host for an ordinary hello,
         /// the ECH public name for a real ECH one, `None` without an SNI.
         server_name: Option<String>,
+        /// Whether the hello's ALPN list includes `http/1.1`, the only
+        /// protocol the MITM speaks. `None` when the hello carries no ALPN
+        /// extension at all: those are terminated as before.
+        alpn_http1: Option<bool>,
     },
 }
 
@@ -664,12 +671,15 @@ pub fn first_flight(bytes: &[u8]) -> Flight {
                     return Flight::Hello {
                         ech_len: None,
                         server_name: None,
+                        alpn_http1: None,
                     };
                 };
                 return Flight::Hello {
                     ech_len: extension(extensions, EXT_ENCRYPTED_CLIENT_HELLO)
                         .map(|body| body.len()),
                     server_name: server_name_of(extensions),
+                    alpn_http1: extension(extensions, EXT_ALPN)
+                        .map(|list| alpn_offers(list, ALPN_H1)),
                 };
             }
         }
@@ -695,6 +705,27 @@ fn server_name_of(extensions: &[u8]) -> Option<String> {
     std::str::from_utf8(name)
         .ok()
         .map(|n| n.to_ascii_lowercase())
+}
+
+/// Does an `application_layer_protocol_negotiation` body list `wanted`?
+///
+/// The body is a 2-byte list length followed by 1-byte-length names.
+fn alpn_offers(list: &[u8], wanted: &[u8]) -> bool {
+    let mut off = 2;
+    while off < list.len() {
+        let Some(len) = list.get(off) else {
+            return false;
+        };
+        let len = *len as usize;
+        let Some(proto) = list.get(off + 1..off + 1 + len) else {
+            return false;
+        };
+        if proto == wanted {
+            return true;
+        }
+        off += 1 + len;
+    }
+    false
 }
 
 /// One extension's body out of a ClientHello extension block.

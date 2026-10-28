@@ -321,7 +321,7 @@
     <string name="network_quic_title">Block QUIC / UDP 443</string>
     <string name="network_quic_subtitle">Forces clients back to TCP so the engine sees hostnames</string>
     <string name="network_doh_title">Block encrypted DNS (DoH)</string>
-    <string name="network_doh_subtitle">Blocks DNS-over-HTTPS so clients cannot bypass the filter</string>
+    <string name="network_doh_subtitle">Blocks DNS-over-HTTPS so apps cannot bypass the filter. Off by default: a browser with a custom secure DNS provider has no fallback and would lose DNS.</string>
     <string name="network_dot_title">Block encrypted DNS (DoT)</string>
     <string name="network_dot_subtitle">Blocks DNS-over-TLS (port 853) so clients cannot bypass the filter</string>
     <string name="network_dot_private_dns">Strict Private DNS is on: the system keeps its own resolver, so port 853 is not blocked.</string>

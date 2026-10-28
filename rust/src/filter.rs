@@ -1889,6 +1889,20 @@ impl FilterEngine {
         }
     }
 
+    /// What the filter says about a connection that so far only carries a
+    /// hostname.
+    ///
+    /// The TLS half learns the SNI before any request exists, and a host that
+    /// reached it has bypassed the DNS filter (Secure DNS, the client's own
+    /// cache). Refusing the connection there reproduces what the resolver's
+    /// NXDOMAIN would have done, instead of answering a request that would
+    /// count as delivered. A `$redirect` host is not a refusal: the MITM path
+    /// answers it with the resource the rule names.
+    pub fn connection_block(&self, host: &str) -> Option<HostVerdict> {
+        let verdict = self.check_host_detailed(host);
+        (verdict.blocked && !verdict.redirect).then_some(verdict)
+    }
+
     /// A full request URL, evaluated against every network rule.
     ///
     /// This is the MITM path's decision point: it is the only place that knows

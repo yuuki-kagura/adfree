@@ -218,6 +218,7 @@ fn a_hello_without_ech_is_read_as_such() {
         Flight::Hello {
             ech_len: None,
             server_name: Some("shop.test".to_string()),
+            alpn_http1: Some(true),
         }
     );
     // A partial record says nothing yet.
@@ -228,6 +229,36 @@ fn a_hello_without_ech_is_read_as_such() {
         first_flight(&[0x17, 0x03, 0x03, 0x00, 0x01, 0x00]),
         Flight::NotHello
     );
+}
+
+/// The MITM speaks HTTP/1.1 only, so the hello has to say whether the client
+/// would accept it: Chrome's Secure DNS and gRPC list `h2` alone, and those
+/// flows must go to the origin instead of failing the handshake.
+#[test]
+fn a_hello_reports_whether_it_offers_http1() {
+    fn flight_for(alpn: Option<&[&[u8]]>) -> Vec<u8> {
+        let mut config = ClientConfig::builder()
+            .with_root_certificates(rustls::RootCertStore::empty())
+            .with_no_client_auth();
+        if let Some(list) = alpn {
+            config.alpn_protocols = list.iter().map(|p| p.to_vec()).collect();
+        }
+        let name =
+            rustls::pki_types::ServerName::try_from("shop.test".to_string()).expect("server name");
+        let mut client = ClientConnection::new(Arc::new(config), name).expect("client conn");
+        take_client_outbound(&mut client)
+    }
+    fn http1(flight: &[u8]) -> Option<bool> {
+        match first_flight(flight) {
+            Flight::Hello { alpn_http1, .. } => alpn_http1,
+            other => panic!("expected a hello, got {other:?}"),
+        }
+    }
+    assert_eq!(http1(&flight_for(Some(&[b"h2"]))), Some(false));
+    assert_eq!(http1(&flight_for(Some(&[b"h2", b"http/1.1"]))), Some(true));
+    // No ALPN extension at all: nothing to judge, the MITM terminates as
+    // before.
+    assert_eq!(http1(&flight_for(None)), None);
 }
 
 #[test]
@@ -245,6 +276,7 @@ fn a_hello_that_offers_ech_keeps_its_outer_name() {
             // + payload(2 + 48), the shape `with_fake_ech` writes.
             ech_len: Some(90),
             server_name: Some("shop.test".to_string()),
+            alpn_http1: Some(true),
         },
         "a GREASE hello still names the real host"
     );
@@ -256,6 +288,7 @@ fn a_hello_that_offers_ech_keeps_its_outer_name() {
         Flight::Hello {
             ech_len: Some(90),
             server_name: Some("shop.test".to_string()),
+            alpn_http1: Some(true),
         }
     );
 }
@@ -272,6 +305,7 @@ fn a_client_hello_can_be_told_from_garbage() {
         Flight::Hello {
             ech_len: None,
             server_name: None,
+            alpn_http1: None,
         }
     );
     junk[5] = 0x02; // a ServerHello, not a ClientHello
@@ -354,6 +388,7 @@ fn an_upstream_config_with_ech_offers_the_hosts_config() {
         Flight::Hello {
             ech_len: Some(len),
             server_name,
+            ..
         } => {
             assert!(
                 len > 100,
@@ -588,6 +623,7 @@ fn a_real_host_accepts_the_dns_learned_config() {
         Flight::Hello {
             ech_len: Some(_),
             server_name,
+            ..
         } => assert_eq!(server_name.as_deref(), Some(public.as_str())),
         other => panic!("expected a real ECH hello, got {other:?}"),
     }

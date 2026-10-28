@@ -448,7 +448,10 @@ data class ProtectionSettings(
     // Stealth effects are opt-in; the sub-switches remember the choice.
     val isStealthModeEnabled: Boolean = false,
     val blockQuic: Boolean = true,
-    val blockDoh: Boolean = true,
+    // Off by default: browsers configured with a custom secure DNS provider
+    // (Chrome's DoH) have no insecure fallback, so a reset here leaves them
+    // with no DNS at all. Filtering then rides the SNI/TLS path instead.
+    val blockDoh: Boolean = false,
     val blockDot: Boolean = true,
     /**
      * Refresh enabled subscriptions older than this many hours when the app

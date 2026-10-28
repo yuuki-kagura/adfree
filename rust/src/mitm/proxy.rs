@@ -266,6 +266,9 @@ pub struct ProxySession {
     /// snapshotted when the flow opened so a settings change never edits a
     /// request halfway through.
     stealth: StealthConfig,
+    /// The lists the DNS half blocks with, for the one check this layer has
+    /// before a request exists: a ClientHello naming a blocked host.
+    host_filter: Option<Arc<FilterEngine>>,
 }
 
 /// Where a connection's response stream stands.
@@ -594,6 +597,7 @@ impl ProxySession {
             client_discard: None,
             apps: Vec::new(),
             stealth: StealthConfig::default(),
+            host_filter: None,
         }
     }
 
@@ -645,6 +649,7 @@ impl ProxySession {
             client_discard: None,
             apps: Vec::new(),
             stealth: StealthConfig::default(),
+            host_filter: None,
         })
     }
 
@@ -658,6 +663,14 @@ impl ProxySession {
     /// the connection opens, like cosmetics and the app list.
     pub fn set_stealth(&mut self, stealth: StealthConfig) {
         self.stealth = stealth;
+    }
+
+    /// Points the handshake at the same lists the DNS half blocks with: a
+    /// ClientHello naming a blocked host is refused before any request, which
+    /// is how a flow that bypassed DNS (Secure DNS, a cached answer) still
+    /// fails instead of being answered.
+    pub fn set_host_filter(&mut self, filter: Arc<FilterEngine>) {
+        self.host_filter = Some(filter);
     }
 
     /// A session for the local injection origin.
@@ -701,6 +714,7 @@ impl ProxySession {
             client_discard: None,
             apps: Vec::new(),
             stealth: StealthConfig::default(),
+            host_filter: None,
         })
     }
 
@@ -850,6 +864,7 @@ impl ProxySession {
         if let tls::Flight::Hello {
             ech_len,
             server_name,
+            alpn_http1,
         } = tls::first_flight(&state.raw)
         {
             let name = server_name.as_deref().unwrap_or("?");
@@ -874,6 +889,58 @@ impl ProxySession {
                 // Same exit as the website list above.
                 crate::logbuf::push(&format!(
                     "mitm {name}: HTTPS filtering is off for {app}, splicing verbatim"
+                ));
+                return Ok(self.splice_pending_verbatim());
+            }
+            // A host the lists block, refused before the handshake. It only
+            // reaches this layer with a name the DNS half never saw — the
+            // client resolved it itself (Secure DNS, a cached answer) — and
+            // answering its requests with a block response would let them
+            // count as delivered. Closing reproduces the resolver's refusal:
+            // the request fails, the page around it does not.
+            if let Some(verdict) = self
+                .host_filter
+                .as_deref()
+                .and_then(|filter| filter.connection_block(name))
+            {
+                crate::logbuf::push(&format!(
+                    "mitm {name}: blocked by the DNS lists before the handshake"
+                ));
+                if let Some(sink) = self.sink {
+                    sink(&MitmBlock {
+                        host: name,
+                        rule: verdict.rule_text.as_deref(),
+                        list_name: verdict.list_name.as_deref(),
+                        category: verdict.category,
+                        apps: &self.apps,
+                    });
+                }
+                // The relay resets the client flow when a step closes the
+                // session without an answer: the state is never polled again.
+                self.captured = Some(name.to_string());
+                return Ok(Outcome {
+                    closed: true,
+                    ..Outcome::default()
+                });
+            }
+            if crate::mitm::doh::is_endpoint(name) {
+                // Encrypted DNS is unfilterable by definition, and the DoH
+                // client needs HTTP/2 — the MITM would negotiate HTTP/1.1 and
+                // leave the browser without DNS entirely.
+                crate::logbuf::push(&format!(
+                    "mitm {name}: encrypted DNS endpoint, splicing verbatim"
+                ));
+                return Ok(self.splice_pending_verbatim());
+            }
+            if alpn_http1 == Some(false) {
+                // The MITM speaks HTTP/1.1 only. A client that lists ALPN
+                // without it — Chrome's Secure DNS, gRPC — cannot be
+                // terminated without failing its handshake, which takes the
+                // whole app offline. Handing the flow to the origin untouched
+                // keeps it working; h2 becomes filterable once the MITM
+                // speaks it.
+                crate::logbuf::push(&format!(
+                    "mitm {name}: client offers no http/1.1, splicing verbatim"
                 ));
                 return Ok(self.splice_pending_verbatim());
             }

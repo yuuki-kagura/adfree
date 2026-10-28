@@ -254,7 +254,11 @@ impl Default for Config {
             filter_http3: false,
             full_ech: false,
             block_quic: true,
-            block_doh: true,
+            // Off by default, like AdGuard: clients with a custom secure
+            // resolver (Chrome's DoH, Private DNS) have no insecure fallback,
+            // so refusing it leaves them without any DNS at all. Hostname
+            // blocking still carries filtering on the TLS path.
+            block_doh: false,
             block_dot: true,
             ad_blocking: true,
             tracking_protection: true,
@@ -1436,8 +1440,8 @@ impl Core {
         if self.relay_tcp(pkt, out) {
             return;
         }
-        if self.tcp_blocked(pkt, cfg) {
-            self.reset_tcp(pkt);
+        if let Some(reason) = self.tcp_blocked(pkt, cfg) {
+            self.reset_tcp_with_reason(pkt, reason);
             return;
         }
         if pkt.is_syn {
@@ -1497,7 +1501,15 @@ impl Core {
             // The lock is held across the send so the polling thread cannot
             // retire (and close) the descriptor between the lookup and the
             // syscall. `send()` on a non-blocking socket never blocks.
-            Self::send_udp(flow.fd, payload);
+            if !Self::send_udp(flow.fd, payload) {
+                // The route behind this mapping died (typically IPv6 the
+                // network cannot carry). Answering with ICMP is what makes
+                // QUIC-first clients fall back instead of retrying into the
+                // dark for the rest of the session.
+                self.stats.inc(&self.stats.udp_dropped);
+                self.refuse_udp(pkt);
+                return;
+            }
             self.stats.inc(&self.stats.udp_relayed);
             return;
         }
@@ -1539,10 +1551,18 @@ impl Core {
             }
         };
         let Some(fd) = fd else {
+            // No route, no protected descriptor: the flow cannot exist. Tell
+            // the client so it can move on to a transport that works.
             self.stats.inc(&self.stats.udp_dropped);
+            self.refuse_udp(pkt);
             return;
         };
-        Self::send_udp(fd, payload);
+        if !Self::send_udp(fd, payload) {
+            unsafe { libc::close(fd) };
+            self.stats.inc(&self.stats.udp_dropped);
+            self.refuse_udp(pkt);
+            return;
+        }
         self.stats.inc(&self.stats.udp_relayed);
         self.udp_nat.lock().unwrap().insert(UdpFlow {
             fd,
@@ -1560,17 +1580,23 @@ impl Core {
         self.wake();
     }
 
-    /// Fire-and-forget datagram send: UDP has no retransmission, and a packet
-    /// the socket refuses would be lost on the wire anyway.
-    fn send_udp(fd: RawFd, payload: &[u8]) {
-        unsafe {
+    /// Fire-and-forget datagram send. Returns `false` only when the error
+    /// means the flow itself cannot work (no route, unreachable host) — a
+    /// full send buffer just loses one datagram, which UDP does anyway.
+    fn send_udp(fd: RawFd, payload: &[u8]) -> bool {
+        let sent = unsafe {
             libc::send(
                 fd,
                 payload.as_ptr() as *const libc::c_void,
                 payload.len(),
                 libc::MSG_NOSIGNAL,
-            );
+            )
+        };
+        if sent >= 0 {
+            return true;
         }
+        let err = std::io::Error::last_os_error().raw_os_error().unwrap_or(0);
+        !matches!(err, libc::EAGAIN | libc::ENOBUFS)
     }
 
     // ---------------------------------------------------------------- HTTP/3
@@ -1607,6 +1633,7 @@ impl Core {
         // DoH3 would defeat the point of blocking it.
         if self.udp_blocked(pkt, cfg) {
             self.stats.inc(&self.stats.udp_dropped);
+            self.refuse_udp(pkt);
             return;
         }
         // The proxy carries TCP (and non-DNS UDP); a QUIC flow is dropped so
@@ -1617,6 +1644,7 @@ impl Core {
             .is_some_and(|p| !p.automatic || !crate::socks5::bypasses_automatic(server));
         if proxied {
             self.stats.inc(&self.stats.quic_dropped);
+            self.refuse_udp(pkt);
             return;
         }
         if cfg.filter_http3 && self.mitm_ready(cfg) {
@@ -1631,7 +1659,19 @@ impl Core {
             return;
         }
         if cfg.block_quic {
+            // Encrypted DNS rides QUIC too and is unfilterable either way.
+            // Dropping it strands HTTP/3-first clients — Chrome's Secure DNS
+            // retries its QUIC handshake forever instead of falling back —
+            // while relaying it loses nothing the filter could have seen.
+            if self
+                .host_for_ip(Some(server))
+                .is_some_and(|host| crate::mitm::doh::is_endpoint(&host))
+            {
+                self.relay_udp(pkt);
+                return;
+            }
             self.stats.inc(&self.stats.quic_dropped);
+            self.refuse_udp(pkt);
         } else {
             self.relay_udp(pkt);
         }
@@ -2066,6 +2106,7 @@ impl Core {
         // release before pushing (which locks the table itself).
         let mut to_peer = Vec::new();
         let mut reset = false;
+        let mut refused = false;
         let mut fin_pending = false;
         let resumed;
         {
@@ -2088,6 +2129,9 @@ impl Core {
                     Ok((peer_bytes, to_client)) => {
                         to_peer = peer_bytes;
                         saw_data = true;
+                        // A session that closed itself with nothing to say
+                        // refused the flow; it is not a normal finish.
+                        refused = relay.closed && to_client.is_empty();
                         relay.queue_to_client(&to_client);
                     }
                     Err(e) => {
@@ -2121,6 +2165,15 @@ impl Core {
             // its cap; the forwarder has to re-arm it now that ACKs drained
             // the queue below the low-water mark.
             resumed = was_paused && !relay.client_paused;
+            if refused {
+                // The session refused the flow itself (a ClientHello naming
+                // a blocked host): a reset is what makes the client's request
+                // fail instead of waiting on a flow nobody will answer.
+                if let Some(rst) = relay.rst_to_client() {
+                    out.push(rst);
+                }
+                reset = true;
+            }
             if reset {
                 relay.close();
             } else if pkt.is_fin && !relay.client_fin {
@@ -2344,6 +2397,12 @@ impl Core {
                     proxy.set_ech_hosts(Arc::clone(&self.ech_hosts), cfg.full_ech);
                     let https = self.https_hosts.read().unwrap().clone();
                     proxy.set_https_hosts(https.skip, https.only, https.only_mode);
+                    // The TLS half learns the hostname before the first
+                    // request exists. Hand it the same lists the DNS half
+                    // uses, so a host that reached it without a lookup
+                    // (Secure DNS, the client's own cache) is refused at the
+                    // handshake, the way the resolver's NXDOMAIN would.
+                    proxy.set_host_filter(Arc::clone(&self.filter));
                     Some(proxy)
                 }
                 Err(e) => {
@@ -2635,36 +2694,43 @@ impl Core {
         off
     }
 
-    fn tcp_blocked(&self, pkt: &Packet<'_>, cfg: &Config) -> bool {
+    /// `Some(rule)` when the flow must be refused, naming the reason the log
+    /// will show. The label is decided here, where the cause is known, so a
+    /// failed relay is never reported as an encrypted-DNS block.
+    fn tcp_blocked(&self, pkt: &Packet<'_>, cfg: &Config) -> Option<&'static str> {
         if self.is_paused() {
-            return false;
+            return None;
         }
-        let Some(dst) = pkt.dst_ip() else {
-            return false;
-        };
+        let dst = pkt.dst_ip()?;
         // TURN over TCP/TLS rides the same signalling ports as the UDP half.
         if cfg.stealth.blocks_web_rtc() && crate::mitm::stealth::is_webrtc_port(pkt.dst_port) {
-            return true;
+            return Some("WebRTC blocked");
         }
         // DoT over TCP bypasses the DNS filter exactly like the UDP port does.
         if cfg.block_dot && pkt.dst_port == 853 {
-            return true;
+            return Some("connection to encrypted DNS blocked");
         }
         // DoH is HTTPS. The provider ranges also carry plain DNS and DoT
         // endpoints (1.1.1.1:853, 8.8.8.8:53); matching every port there would
         // break Private DNS in strict mode, which has no UDP fallback.
         if cfg.block_doh && pkt.dst_port == 443 && self.is_encrypted_dns_elsewhere(dst) {
-            return true;
+            return Some("connection to encrypted DNS blocked");
         }
         let conn = self.conntrack.lock().unwrap();
         let verdict = conn.lookup(&dst, now_ms());
         drop(conn);
+        // The address came from a DNS answer learned as blocked. An app
+        // that keeps dialling it is the retry loop smart filtering exists
+        // for: once the host trips the limit the SYN is relayed as usual.
         match verdict {
-            // The address came from a DNS answer learned as blocked. An app
-            // that keeps dialling it is the retry loop smart filtering exists
-            // for: once the host trips the limit the SYN is relayed as usual.
-            IpVerdict::Blocked { host } => !self.smart.lock().unwrap().note_blocked(&host),
-            _ => false,
+            IpVerdict::Blocked { host } => {
+                if self.smart.lock().unwrap().note_blocked(&host) {
+                    None
+                } else {
+                    Some("connection dropped")
+                }
+            }
+            _ => None,
         }
     }
 
@@ -2709,14 +2775,7 @@ impl Core {
         let host = self
             .host_for_ip(pkt.dst_ip())
             .unwrap_or_else(|| pkt.dst_ip_text());
-        let rule = match reason {
-            Some(reason) => reason,
-            None if host.parse::<std::net::IpAddr>().is_ok() => {
-                // A bare address only gets here from the encrypted-DNS lists.
-                "connection to encrypted DNS blocked"
-            }
-            None => "connection dropped",
-        };
+        let rule = reason.unwrap_or("connection dropped");
         let category = if rule.contains("DNS") {
             crate::filter::CAT_TRACKER
         } else {
@@ -2742,6 +2801,18 @@ impl Core {
             first_app(&app_packages),
         );
         self.log_event(event);
+    }
+
+    /// Answers a dropped datagram with ICMP port unreachable.
+    ///
+    /// A quiet drop makes a QUIC sender keep retrying its handshake instead of
+    /// moving to the TCP flow the filter can see; Chrome's Secure DNS is
+    /// HTTP/3 first and never falls back without this, leaving the browser
+    /// with no DNS at all.
+    fn refuse_udp(&self, pkt: &Packet<'_>) {
+        if let Some(reply) = packet::build_unreachable(pkt) {
+            self.write_raw(&reply);
+        }
     }
 
     fn handle_dns(&self, pkt: &Packet<'_>, cfg: &Config, out: &mut Vec<Vec<u8>>) {
@@ -4585,7 +4656,7 @@ mod tests {
     fn config_defaults_are_battery_friendly() {
         let cfg = Config::default();
         assert!(cfg.block_quic);
-        assert!(cfg.block_doh);
+        assert!(!cfg.block_doh);
         assert!(!cfg.log_allowed);
         assert!(cfg.eco_mode);
     }
@@ -4614,6 +4685,50 @@ mod tests {
         assert!(set.contains_v4(u32::from_be_bytes([1, 0, 0, 1])));
         assert!(!set.contains_v4(u32::from_be_bytes([1, 1, 2, 3])));
         assert!(!set.is_empty());
+    }
+
+    /// A dropped QUIC datagram is answered with ICMP port unreachable: a
+    /// quiet drop leaves HTTP/3-first clients (Chrome's Secure DNS) retrying
+    /// their handshake forever instead of falling back to the TCP path the
+    /// filter can see, which costs them DNS entirely.
+    #[test]
+    fn a_dropped_quic_flow_is_answered_with_icmp_unreachable() {
+        let core = Core::new();
+        core.set_config(Config::default());
+        core.handle_packet(&udp_packet(50000, [203, 0, 113, 7], 443));
+        assert_eq!(core.stats().quic_dropped.load(Ordering::Relaxed), 1);
+        let packets = core.take_outbox();
+        let icmp = packets
+            .iter()
+            .find(|p| p.len() > 28 && p[0] == 0x45 && p[9] == 1)
+            .expect("an ICMP error for the dropped datagram");
+        assert_eq!(&icmp[12..16], &[203, 0, 113, 7], "sent by the dialed host");
+        assert_eq!(&icmp[16..20], &[10, 0, 2, 15], "addressed to the client");
+        assert_eq!(&icmp[20..22], &[3, 3], "destination unreachable, port");
+    }
+
+    /// QUIC to an address the DNS half learned as an encrypted-DNS endpoint
+    /// is relayed, not dropped: those datagrams carry queries the filter can
+    /// never see, and dropping them strands HTTP/3-first clients that moved
+    /// their DoH onto QUIC after learning h3 from the first TCP connection.
+    #[test]
+    fn quic_to_a_learned_doh_endpoint_is_relayed() {
+        let core = Core::new();
+        core.set_socket_protector(Arc::new(AllowAll));
+        core.set_config(Config::default());
+        core.conntrack.lock().unwrap().learn(
+            &crate::dns::LearnedRecord {
+                ip: packet::ip_key_from(std::net::IpAddr::from([203, 0, 113, 7])),
+                ttl: 60,
+            },
+            "dns.google",
+            false,
+            now_ms(),
+        );
+        core.handle_packet(&udp_packet(50000, [203, 0, 113, 7], 443));
+        assert_eq!(core.stats().quic_dropped.load(Ordering::Relaxed), 0);
+        assert_eq!(core.udp_nat.lock().unwrap().len(), 1);
+        assert_eq!(core.stats().udp_relayed.load(Ordering::Relaxed), 1);
     }
 
     #[test]
@@ -5019,19 +5134,25 @@ mod tests {
         let core = Core::new();
         let cfg = Config {
             block_dot: false,
+            block_doh: true,
             ..Config::default()
         };
 
         let dot_raw = tcp_packet([1, 1, 1, 1], 853);
         let dot = Packet::parse(&dot_raw).expect("dot syn");
-        assert!(
-            !core.tcp_blocked(&dot, &cfg),
+        assert_eq!(
+            core.tcp_blocked(&dot, &cfg),
+            None,
             "DoT to a DoH provider must survive while its RST is off"
         );
 
         let doh_raw = tcp_packet([1, 1, 1, 1], 443);
         let doh = Packet::parse(&doh_raw).expect("doh syn");
-        assert!(core.tcp_blocked(&doh, &cfg), "DoH on 443 is still blocked");
+        assert_eq!(
+            core.tcp_blocked(&doh, &cfg),
+            Some("connection to encrypted DNS blocked"),
+            "DoH on 443 is still blocked, and the log says why"
+        );
 
         let plain_raw = udp_packet(40000, [1, 1, 1, 1], 53);
         let plain = Packet::parse(&plain_raw).expect("dns datagram");
@@ -5046,6 +5167,24 @@ mod tests {
             core.udp_blocked(&doh3, &cfg),
             "DoH3 on 443 is still blocked"
         );
+    }
+
+    /// Chrome with a custom secure DNS provider has no insecure fallback, so
+    /// refusing its DoH endpoint leaves the browser with no DNS at all. The
+    /// default allows DoH; hostname filtering rides the TLS path instead.
+    #[test]
+    fn doh_is_allowed_when_the_switch_is_off() {
+        let core = Core::new();
+        let cfg = Config::default();
+        assert!(!cfg.block_doh);
+
+        let doh_raw = tcp_packet([1, 1, 1, 1], 443);
+        let doh = Packet::parse(&doh_raw).expect("doh syn");
+        assert_eq!(core.tcp_blocked(&doh, &cfg), None);
+
+        let doh3_raw = udp_packet(40000, [1, 1, 1, 1], 443);
+        let doh3 = Packet::parse(&doh3_raw).expect("doh3 datagram");
+        assert!(!core.udp_blocked(&doh3, &cfg));
     }
 
     #[test]
@@ -5502,6 +5641,14 @@ mod tests {
         // (an unprotected socket would loop the datagram right back in).
         assert!(core.udp_nat.lock().unwrap().is_empty());
         assert_eq!(core.snapshot().udp_dropped, 1);
+        // The flow cannot exist at all, so the client learns that now rather
+        // than waiting out a timeout.
+        let packets = core.take_outbox();
+        let icmp = packets
+            .iter()
+            .find(|p| p.len() > 28 && p[0] == 0x45 && p[9] == 1)
+            .expect("an ICMP error for the unrelayable datagram");
+        assert_eq!(&icmp[20..22], &[3, 3], "destination unreachable, port");
     }
 
     #[test]

@@ -321,7 +321,7 @@
     <string name="network_quic_title">Chặn QUIC / UDP 443</string>
     <string name="network_quic_subtitle">Buộc client quay về TCP để engine thấy được hostname</string>
     <string name="network_doh_title">Chặn DNS mã hóa (DoH)</string>
-    <string name="network_doh_subtitle">Chặn DNS-over-HTTPS để client không đi vòng qua bộ lọc</string>
+    <string name="network_doh_subtitle">Chặn DNS-over-HTTPS để ứng dụng không đi vòng bộ lọc. Mặc định tắt: trình duyệt dùng secure DNS tùy chỉnh không có dự phòng sẽ mất DNS.</string>
     <string name="network_dot_title">Chặn DNS mã hóa (DoT)</string>
     <string name="network_dot_subtitle">Chặn DNS-over-TLS (cổng 853) để client không đi vòng qua bộ lọc</string>
     <string name="network_dot_private_dns">Private DNS nghiêm ngặt đang bật: hệ thống giữ resolver riêng, cổng 853 không bị chặn.</string>

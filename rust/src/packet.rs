@@ -586,6 +586,68 @@ pub fn build_rst(packet: &Packet<'_>) -> Option<Vec<u8>> {
     Some(out)
 }
 
+/// An ICMP "port unreachable" for a datagram the engine drops.
+///
+/// A silent drop leaves the sender waiting out the whole UDP/QUIC handshake
+/// timeout. Chrome's Secure DNS is HTTP/3 first, so a quiet drop there never
+/// falls back to TCP and the browser loses DNS entirely; the error is the
+/// definite failure that triggers the fallback, and it is what a real NAT
+/// would have sent. The error quotes the original IP header and the first
+/// eight bytes of its payload, as RFC 792/4443 prescribe.
+pub fn build_unreachable(packet: &Packet<'_>) -> Option<Vec<u8>> {
+    let quote = packet.raw.get(..packet.ip_hdr_len + 8)?;
+    if packet.version == 4 {
+        Some(unreachable_v4(packet, quote))
+    } else {
+        Some(unreachable_v6(packet, quote))
+    }
+}
+
+fn unreachable_v4(packet: &Packet<'_>, quote: &[u8]) -> Vec<u8> {
+    let icmp_len = 8 + quote.len();
+    let total = 20 + icmp_len;
+    let mut out = vec![0u8; total];
+    out[0] = 0x45;
+    out[2..4].copy_from_slice(&(total as u16).to_be_bytes());
+    out[8] = 64;
+    out[9] = 1; // ICMP
+    let (Some(src), Some(dst)) = (packet.src_ip_bytes(), packet.dst_ip_bytes()) else {
+        return out;
+    };
+    // The error is addressed from the host that was dialed to the client.
+    out[12..16].copy_from_slice(dst);
+    out[16..20].copy_from_slice(src);
+    fix_ipv4_checksum(&mut out[..20]);
+    out[20] = 3; // destination unreachable
+    out[21] = 3; // port unreachable
+    out[28..].copy_from_slice(quote);
+    let checksum = internet_checksum(&[], &out[20..], &[]);
+    out[22..24].copy_from_slice(&checksum.to_be_bytes());
+    out
+}
+
+fn unreachable_v6(packet: &Packet<'_>, quote: &[u8]) -> Vec<u8> {
+    let icmp_len = 8 + quote.len();
+    let total = 40 + icmp_len;
+    let mut out = vec![0u8; total];
+    out[0] = 0x60;
+    out[4..6].copy_from_slice(&(icmp_len as u16).to_be_bytes());
+    out[6] = 58; // ICMPv6
+    out[7] = 64;
+    let (Some(src), Some(dst)) = (packet.src_ip_bytes(), packet.dst_ip_bytes()) else {
+        return out;
+    };
+    out[8..24].copy_from_slice(dst);
+    out[24..40].copy_from_slice(src);
+    out[40] = 1; // destination unreachable
+    out[41] = 4; // port unreachable
+    out[48..].copy_from_slice(quote);
+    let pseudo = v6_pseudo(&out[..40], icmp_len as u32, 58);
+    let checksum = internet_checksum(&pseudo, &out[40..], &[]);
+    out[42..44].copy_from_slice(&checksum.to_be_bytes());
+    out
+}
+
 /// Build a TCP reply (ACK or SYN-ACK) for a packet, using caller-supplied
 /// seq/ack. Used by the MITM stage when we answer instead of the OS.
 pub fn build_ack_response(pkt: &Packet<'_>, seq: u32, ack: u32) -> Option<Vec<u8>> {
@@ -814,6 +876,66 @@ mod tests {
         assert_eq!(parsed.version, 6);
         assert_eq!(parsed.dst_ip_text(), "2001:db8::2");
         assert_eq!(parsed.dst_port, 53);
+    }
+
+    #[test]
+    fn an_unreachable_quotes_the_dropped_datagram() {
+        let v4 = build_udp(
+            IpKey::V4(u32::from_be_bytes([192, 0, 2, 10])),
+            50000,
+            IpKey::V4(u32::from_be_bytes([203, 0, 113, 7])),
+            443,
+            b"quic",
+        )
+        .expect("v4 packet");
+        let parsed = Packet::parse(&v4).expect("parse v4");
+        let err = build_unreachable(&parsed).expect("icmp");
+        assert_eq!(err[0], 0x45);
+        assert_eq!(err[9], 1, "ICMP");
+        assert_eq!(&err[12..16], &[203, 0, 113, 7], "sent by the dialed host");
+        assert_eq!(&err[16..20], &[192, 0, 2, 10], "addressed to the client");
+        assert_eq!(ipv4_checksum(&err[..20]), 0, "the header must verify");
+        assert_eq!(&err[20..22], &[3, 3], "destination unreachable, port");
+        assert_eq!(&err[28..], &v4[..28], "the header and eight bytes quoted");
+        assert_eq!(
+            internet_checksum(&[], &err[20..], &[]),
+            0,
+            "the ICMP checksum must verify"
+        );
+
+        let v6 = build_udp(
+            IpKey::V6(u128::from(
+                "2001:db8::1".parse::<std::net::Ipv6Addr>().unwrap(),
+            )),
+            50000,
+            IpKey::V6(u128::from(
+                "2001:db8::2".parse::<std::net::Ipv6Addr>().unwrap(),
+            )),
+            443,
+            b"h3",
+        )
+        .expect("v6 packet");
+        let parsed = Packet::parse(&v6).expect("parse v6");
+        let err = build_unreachable(&parsed).expect("icmpv6");
+        assert_eq!(err[0], 0x60);
+        assert_eq!(err[6], 58, "ICMPv6");
+        assert_eq!(
+            u16::from_be_bytes([err[4], err[5]]) as usize,
+            err.len() - 40
+        );
+        assert_eq!(&err[8..24], &v6[24..40], "sent by the dialed host");
+        assert_eq!(&err[24..40], &v6[8..24], "addressed to the client");
+        assert_eq!(&err[40..42], &[1, 4], "destination unreachable, port");
+        assert_eq!(&err[48..], &v6[..48], "the header and eight bytes quoted");
+        assert_eq!(
+            internet_checksum(
+                &v6_pseudo(&err[..40], (err.len() - 40) as u32, 58),
+                &err[40..],
+                &[]
+            ),
+            0,
+            "the ICMPv6 checksum must verify"
+        );
     }
 
     #[test]

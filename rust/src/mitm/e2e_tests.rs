@@ -3239,6 +3239,7 @@ fn a_client_without_ech_is_still_terminated() {
         tls::Flight::Hello {
             ech_len: None,
             server_name: Some("shop.test".to_string()),
+            alpn_http1: Some(true),
         },
         "the proxy's own hello must name the host and not offer ECH"
     );
@@ -3315,4 +3316,39 @@ fn a_bare_502_from_a_host_without_ech_teaches_nothing() {
         !core.ech_hosts.exempt("shop.test", crate::util::now_ms()),
         "a host that never advertised ECH must not be exempted"
     );
+}
+
+/// A flow whose ClientHello names a host the lists block is reset before the
+/// handshake. Such a flow exists only because the client resolved the name
+/// without the engine's resolver (Secure DNS, a cached answer); answering its
+/// requests would let them count as delivered, while a reset fails them the
+/// way the resolver's NXDOMAIN would have.
+#[test]
+fn a_blocked_sni_resets_the_flow() {
+    let origin = start_origin(HTML);
+    let (core, ca_der) = setup_core_with_list(&origin, "blocked-sni", "||shop.test^\n");
+
+    let tcp = Client::connect(core.clone(), origin.port);
+    let mut browser = ClientConnection::new(
+        client_config(ca_der),
+        ServerName::try_from("shop.test").expect("server name"),
+    )
+    .expect("client connection");
+    let hello = tls::take_client_outbound(&mut browser);
+    assert!(!hello.is_empty(), "the browser has a first flight");
+
+    let pkt = tcp_packet(
+        ORIGIN_IP,
+        ACK | PSH,
+        tcp.seq,
+        tcp.their_seq,
+        origin.port,
+        &hello,
+        &[],
+    );
+    let out = core.handle_packet(&pkt);
+    let reset = out
+        .iter()
+        .any(|raw| Packet::parse(raw).is_some_and(|p| p.is_rst && p.src_port == origin.port));
+    assert!(reset, "the blocked flow must be reset, not answered");
 }

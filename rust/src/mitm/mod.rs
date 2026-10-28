@@ -10,6 +10,7 @@
 
 pub mod ca;
 pub mod decide;
+pub mod doh;
 pub mod ech;
 pub mod hosts;
 pub mod hpke;

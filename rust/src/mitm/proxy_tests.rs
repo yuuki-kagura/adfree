@@ -744,6 +744,155 @@ fn an_app_with_https_filtering_off_is_spliced_untouched() {
     assert_eq!(proxy.captured_sni(), None, "no name was captured");
 }
 
+/// A Chrome-style first flight: the ALPN list is the only thing that says the
+/// client would not speak HTTP/1.1, which is what the MITM can terminate.
+fn h2_only_hello(ca: &CertificateAuthority, name: &str) -> Vec<u8> {
+    use rustls::pki_types::ServerName;
+    use rustls::ClientConnection;
+    let mut roots = rustls::RootCertStore::empty();
+    roots
+        .add(rustls::pki_types::CertificateDer::from(ca.cert_der()))
+        .expect("browser root");
+    let mut config = rustls::ClientConfig::builder()
+        .with_root_certificates(roots)
+        .with_no_client_auth();
+    config.alpn_protocols = vec![b"h2".to_vec()];
+    let name = ServerName::try_from(name.to_string()).expect("server name");
+    let mut browser = ClientConnection::new(Arc::new(config), name).expect("browser");
+    let hello = tls::take_client_outbound(&mut browser);
+    assert!(!hello.is_empty(), "the browser has a first flight");
+    hello
+}
+
+/// A client that lists ALPN without `http/1.1` cannot be terminated: the
+/// handshake would fail and take the app's traffic with it. The flow goes to
+/// the origin untouched instead.
+#[test]
+fn a_client_without_http1_is_spliced_untouched() {
+    let mitm_ca = CertificateAuthority::generate().expect("mitm ca");
+    let resolver = Arc::new(SniCertResolver::new(Arc::new(
+        CertificateAuthority::from_pem(&mitm_ca.cert_pem(), &mitm_ca.key_pem()).expect("restore"),
+    )));
+    let mut proxy = ProxySession::new_pending(
+        resolver,
+        tls::UpstreamTls::system(),
+        "/adfree-user.js".into(),
+        Arc::from(""),
+    )
+    .expect("pending session");
+
+    let hello = h2_only_hello(&mitm_ca, "i.instagram.com");
+    let out = proxy.on_client_payload(&hello).expect("client step");
+    assert_eq!(
+        out.to_peer, hello,
+        "the hello must reach the origin untouched"
+    );
+    assert!(out.to_client.is_empty(), "no handshake was terminated");
+    assert!(!out.closed, "the flow was not refused");
+    assert!(!proxy.server_handshaking(), "the flow is on the plain path");
+    assert_eq!(proxy.captured_sni(), None, "no name was captured");
+}
+
+/// Encrypted DNS cannot be filtered: its queries and answers are TLS payload.
+/// A browser whose Secure DNS points at such an endpoint must keep it working,
+/// so those flows are spliced verbatim even when they offer `http/1.1`.
+#[test]
+fn an_encrypted_dns_endpoint_is_spliced_untouched() {
+    let mitm_ca = CertificateAuthority::generate().expect("mitm ca");
+    let resolver = Arc::new(SniCertResolver::new(Arc::new(
+        CertificateAuthority::from_pem(&mitm_ca.cert_pem(), &mitm_ca.key_pem()).expect("restore"),
+    )));
+    let mut proxy = ProxySession::new_pending(
+        resolver,
+        tls::UpstreamTls::system(),
+        "/adfree-user.js".into(),
+        Arc::from(""),
+    )
+    .expect("pending session");
+
+    let hello = browser_hello(&mitm_ca, "chrome.cloudflare-dns.com");
+    let out = proxy.on_client_payload(&hello).expect("client step");
+    assert_eq!(
+        out.to_peer, hello,
+        "the hello must reach the origin untouched"
+    );
+    assert!(out.to_client.is_empty(), "no handshake was terminated");
+    assert!(!out.closed, "the flow was not refused");
+    assert!(!proxy.server_handshaking(), "the flow is on the plain path");
+    assert_eq!(proxy.captured_sni(), None, "no name was captured");
+}
+
+/// A browser's first flight for `name`, trusting the MITM CA.
+fn browser_hello(ca: &CertificateAuthority, name: &str) -> Vec<u8> {
+    use rustls::pki_types::ServerName;
+    use rustls::ClientConnection;
+    let mut roots = rustls::RootCertStore::empty();
+    roots
+        .add(rustls::pki_types::CertificateDer::from(ca.cert_der()))
+        .expect("browser root");
+    let name = ServerName::try_from(name.to_string()).expect("server name");
+    let mut browser = ClientConnection::new(tls::client_config_with(roots), name).expect("browser");
+    let hello = tls::take_client_outbound(&mut browser);
+    assert!(!hello.is_empty(), "the browser has a first flight");
+    hello
+}
+
+/// A ClientHello naming a host the DNS lists block is refused before the
+/// handshake. The flow exists only because the client resolved the name some
+/// other way (Secure DNS, a cached answer), and answering its requests would
+/// let them count as delivered; closing is what the resolver's refusal does.
+#[test]
+fn a_blocked_host_is_refused_before_the_handshake() {
+    let filter = engine_with("host-filter", "||ads.example^\n");
+    let mitm_ca = CertificateAuthority::generate().expect("mitm ca");
+    let resolver = Arc::new(SniCertResolver::new(Arc::new(
+        CertificateAuthority::from_pem(&mitm_ca.cert_pem(), &mitm_ca.key_pem()).expect("restore"),
+    )));
+    let mut proxy = ProxySession::new_pending(
+        Arc::clone(&resolver),
+        tls::UpstreamTls::system(),
+        "/adfree-user.js".into(),
+        Arc::from(""),
+    )
+    .expect("pending session");
+    proxy.set_host_filter(filter);
+
+    let hello = browser_hello(&mitm_ca, "ads.example");
+    let out = proxy.on_client_payload(&hello).expect("client step");
+    assert!(out.closed, "the flow is refused, not answered");
+    assert!(out.to_peer.is_empty(), "the hello never reaches the origin");
+    assert!(out.to_client.is_empty(), "the handshake is never answered");
+    assert_eq!(proxy.captured_sni().as_deref(), Some("ads.example"));
+}
+
+/// A `$redirect` host is not a refusal: the MITM path answers it with the
+/// resource the rule names, so the connection is terminated as usual.
+#[test]
+fn a_redirect_host_still_opens_the_session() {
+    let filter = engine_with("redirect-filter", "||ads.example^$redirect=noopjs\n");
+    let mitm_ca = CertificateAuthority::generate().expect("mitm ca");
+    let resolver = Arc::new(SniCertResolver::new(Arc::new(
+        CertificateAuthority::from_pem(&mitm_ca.cert_pem(), &mitm_ca.key_pem()).expect("restore"),
+    )));
+    let mut proxy = ProxySession::new_pending(
+        Arc::clone(&resolver),
+        tls::UpstreamTls::system(),
+        "/adfree-user.js".into(),
+        Arc::from(""),
+    )
+    .expect("pending session");
+    proxy.set_host_filter(filter);
+
+    let hello = browser_hello(&mitm_ca, "ads.example");
+    let out = proxy.on_client_payload(&hello).expect("client step");
+    assert!(!out.closed, "a redirect host is served, not refused");
+    assert!(
+        !out.to_client.is_empty(),
+        "our half of the handshake answers the hello"
+    );
+    assert_eq!(proxy.captured_sni().as_deref(), Some("ads.example"));
+}
+
 /// A script body larger than rustls' 64 KiB buffer cap must still reach the
 /// client: the write has to drain records between chunks, or the splice dies
 /// with `WriteZero` and the page hangs (the stitched AdGuard Extra + Disable

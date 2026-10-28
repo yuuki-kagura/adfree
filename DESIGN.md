@@ -929,7 +929,7 @@ $ adb shell ping -c1 fresh.adnxs.com     → unknown host             (blocked)
 | Real rules compiled | **421,687** (AdGuard DNS 184,178 + OISD + StevenBlack + 3 user rules) |
 | Decision latency (cache hit) | **2 µs** |
 | Subdomain blocking (`a.doubleclick.net`) | ✅ NXDOMAIN |
-| DoH by IP (`94.140.14.14:443`) | ✅ TCP reset, "connection dropped" rule |
+| DoH by IP (`94.140.14.14:443`) | ✅ TCP reset, "connection to encrypted DNS blocked" rule (switch off by default) |
 | TCP relay on every port + UDP NAT | ✅ every socket `protect()`ed, internet unchanged while on |
 | HTTPS MITM | ✅ Chrome reports *"AdFree Personal CA issued this website's certificate"* |
 | Stack | uniffi 0.32 + JNA, no hand-written JNI |
