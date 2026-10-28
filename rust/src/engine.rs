@@ -4874,6 +4874,122 @@ mod tests {
         let _ = worker.join();
     }
 
+    fn udp6_packet(src_port: u16, dst: std::net::Ipv6Addr, dst_port: u16) -> Vec<u8> {
+        let src: std::net::Ipv6Addr = "2001:db8::2".parse().unwrap();
+        packet::build_udp(
+            packet::ip_key_from(std::net::IpAddr::V6(src)),
+            src_port,
+            packet::ip_key_from(std::net::IpAddr::V6(dst)),
+            dst_port,
+            &[1, 2, 3, 4],
+        )
+        .expect("ipv6 udp packet")
+    }
+
+    /// IPv6 UDP/443 follows the same route as IPv4: the five-tuple includes
+    /// version-tagged addresses, so v6 flows terminate instead of leaking.
+    #[test]
+    fn quic_flows_terminate_over_ipv6() {
+        let core = leaked_core();
+        arm_http3(core);
+        let worker = core.start_h3().expect("quic thread");
+        let server: std::net::Ipv6Addr = "2001:db8::53".parse().unwrap();
+        core.handle_packet(&udp6_packet(52000, server, 443));
+
+        let key = UdpKey {
+            client: packet::ip_key_from("2001:db8::2".parse().unwrap()),
+            client_port: 52000,
+            server: packet::ip_key_from(std::net::IpAddr::V6(server)),
+            server_port: 443,
+        };
+        let flows = core.h3_flows.lock().unwrap();
+        assert_eq!(flows.len(), 1);
+        assert!(flows.contains_key(&key));
+        drop(flows);
+
+        core.stop();
+        let _ = worker.join();
+    }
+
+    /// The injection origin is a TCP-only local service: a QUIC probe sent to
+    /// it must neither open a flow nor leak towards a reserved address.
+    #[test]
+    fn a_datagram_to_the_local_origin_is_ignored() {
+        let core = Core::new();
+        core.set_socket_protector(Arc::new(AllowAll));
+        arm_http3(&core);
+        core.handle_packet(&udp_packet(52001, [192, 0, 2, 1], 443));
+        assert!(core.h3_flows.lock().unwrap().is_empty());
+        assert!(core.udp_nat.lock().unwrap().is_empty());
+        assert_eq!(core.stats().quic_dropped.load(Ordering::Relaxed), 0);
+    }
+
+    /// The pre-SNI client flight is buffered for a possible splice, so a
+    /// client that keeps sending must not grow that buffer without bound.
+    #[test]
+    fn a_burst_into_a_flow_keeps_the_replay_buffer_bounded() {
+        let core = leaked_core();
+        arm_http3(core);
+        let worker = core.start_h3().expect("quic thread");
+        let raw = packet::build_udp(
+            packet::ip_key_from("10.0.2.15".parse().unwrap()),
+            52002,
+            packet::ip_key_from("203.0.113.7".parse().unwrap()),
+            443,
+            &[0u8; 1000],
+        )
+        .expect("packet");
+        for _ in 0..200 {
+            core.handle_packet(&raw);
+        }
+
+        let flows = core.h3_flows.lock().unwrap();
+        let flow = flows.values().next().expect("flow");
+        assert!(flow.pending_bytes <= H3_PENDING_BYTES);
+        assert!(flow.pending.len() <= 16);
+        drop(flows);
+
+        core.stop();
+        let _ = worker.join();
+    }
+
+    /// The packet path and the QUIC worker share the flow table from different
+    /// threads; concurrent bursts must not deadlock, panic or corrupt it.
+    #[test]
+    fn concurrent_bursts_keep_one_flow_per_five_tuple() {
+        let core = leaked_core();
+        arm_http3(core);
+        let worker = core.start_h3().expect("quic thread");
+        std::thread::scope(|scope| {
+            for thread in 0..4u16 {
+                scope.spawn(move || {
+                    let port = 53000 + thread * 10;
+                    let raw = packet::build_udp(
+                        packet::ip_key_from("10.0.2.15".parse().unwrap()),
+                        port,
+                        packet::ip_key_from("203.0.113.7".parse().unwrap()),
+                        443,
+                        &[0u8; 64],
+                    )
+                    .expect("packet");
+                    for _ in 0..250 {
+                        core.handle_packet(&raw);
+                    }
+                });
+            }
+        });
+
+        let flows = core.h3_flows.lock().unwrap();
+        assert_eq!(flows.len(), 4, "one terminated flow per client port");
+        assert!(flows
+            .values()
+            .all(|flow| flow.pending_bytes <= H3_PENDING_BYTES));
+        drop(flows);
+
+        core.stop();
+        let _ = worker.join();
+    }
+
     /// Minimal IPv4 TCP SYN; only the fields `Packet::parse` reads matter.
     fn tcp_packet(dst: [u8; 4], dst_port: u16) -> Vec<u8> {
         let total = 20 + 20;

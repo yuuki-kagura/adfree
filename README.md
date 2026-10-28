@@ -12,10 +12,15 @@ telemetry.
   `0.0.0.0`), so blocking costs no radio time.
 - **Full-tunnel VPN** — TCP on every port is relayed transparently and
   non-DNS UDP goes through a userspace NAT; QUIC and DoT are dropped so apps
-  fall back to filterable TCP.
+  fall back to filterable TCP (QUIC can instead be terminated when HTTP/3
+  filtering is on).
 - **Optional HTTPS filtering** — port 443 can be terminated with a local CA,
   HTML responses rewritten and scripts injected. Off by default and gated on
   the CA being installed.
+- **Optional HTTP/3 filtering** — with HTTPS filtering on, QUIC (UDP/443) is
+  terminated and filtered like HTTPS instead of dropped. Chrome/Cronet still
+  refuse user CAs for QUIC and fall back to TCP; SOCKS5 proxy mode keeps
+  dropping QUIC because the proxy carries TCP.
 - **AdGuard/EasyList/uBO rules** — via adblock-rust, plus the response-body
   modifiers the crate lacks: `$$`/`##^` HTML filtering, `$jsonprune`, `$hls`,
   and `$path`/`$url` masks.

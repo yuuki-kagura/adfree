@@ -57,6 +57,10 @@ const IDLE: Duration = Duration::from_secs(60);
 /// whole runtime.
 const MAX_STREAMS: u32 = 64;
 
+/// Largest QUIC datagram that fits the tunnel's 1500-byte MTU over IPv6
+/// (1500 − 40 IP − 8 UDP).
+const TUNNEL_MAX_UDP: u16 = 1452;
+
 /// What the hub needs to answer a request. Built on the packet path from the
 /// same inputs the HTTP/1.1 splice uses, so the two paths filter identically.
 pub struct FlowInfo {
@@ -303,7 +307,7 @@ fn open_flow(
     };
     server.transport_config(transport());
     let endpoint = match Endpoint::new_with_abstract_socket(
-        EndpointConfig::default(),
+        endpoint_config(),
         Some(server),
         socket,
         Arc::new(TokioRuntime),
@@ -331,6 +335,18 @@ fn transport() -> Arc<quinn::TransportConfig> {
     transport.max_concurrent_bidi_streams(quinn::VarInt::from_u32(MAX_STREAMS));
     transport.max_concurrent_uni_streams(quinn::VarInt::from_u32(MAX_STREAMS));
     Arc::new(transport)
+}
+
+/// The tunnel forwards 1500-byte IP packets, so a QUIC datagram may carry at
+/// most 1452 bytes once IPv6's 48-byte header is added. quinn's default is
+/// 1472 (the IPv4 limit); advertising it would let an IPv6 peer send packets
+/// the tun cannot carry.
+fn endpoint_config() -> EndpointConfig {
+    let mut config = EndpointConfig::default();
+    config
+        .max_udp_payload_size(TUNNEL_MAX_UDP)
+        .expect("1452 is within quinn's bounds");
+    config
 }
 
 async fn accept_loop(
@@ -487,12 +503,7 @@ impl Upstreams {
             return Some(endpoint.clone());
         }
         let socket = self.host.upstream_socket(ipv6)?;
-        match Endpoint::new(
-            EndpointConfig::default(),
-            None,
-            socket,
-            Arc::new(TokioRuntime),
-        ) {
+        match Endpoint::new(endpoint_config(), None, socket, Arc::new(TokioRuntime)) {
             Ok(endpoint) => {
                 *guard = Some(endpoint.clone());
                 Some(endpoint)
@@ -516,4 +527,20 @@ fn cert_alert(error: &quinn::ConnectionError) -> Option<u8> {
     // TLS alerts travel as CRYPTO_ERROR (0x100 | alert) in QUIC.
     let alert = u8::try_from(code.checked_sub(0x100)?).ok()?;
     crate::engine::cert_alert_is_rejection(alert).then_some(alert)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The advertised receive limit must fit an IPv6 packet inside the
+    /// tunnel's 1500-byte MTU, unlike quinn's IPv4-only default.
+    #[test]
+    fn the_advertised_datagram_size_fits_the_tunnel_mtu() {
+        assert_eq!(
+            endpoint_config().get_max_udp_payload_size(),
+            u64::from(TUNNEL_MAX_UDP)
+        );
+        assert!(usize::from(TUNNEL_MAX_UDP) + 48 <= 1500);
+    }
 }

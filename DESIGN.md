@@ -45,7 +45,9 @@ AdGuard.**
 - UDP that is not DNS (QUIC, games, NTP…) goes through a **userspace NAT**:
   one mapping per session, with replies written back into the TUN device.
 - QUIC/UDP 443 and DoT/853 are dropped on purpose so clients fall back to TCP
-  and cannot bypass the filter; every other flow is left intact.
+  and cannot bypass the filter; every other flow is left intact. With HTTPS
+  filtering on, the opt-in **Filter HTTP/3** switch terminates QUIC instead
+  (see [HTTP/3 (QUIC) filtering](#http3-quic-filtering)).
 
 **3. HTTPS can be decrypted when the user asks for it.** With "Filter HTTPS"
 enabled, port 443 is terminated with a locally generated CA, a script is
@@ -86,7 +88,8 @@ with `default-features = false` plus `full-regex-handling`, and **without**
    HTTPS filtering is armed and the host is not excluded, TLS is terminated;
    otherwise the bytes are spliced through untouched.
 5. Non-DNS UDP is mapped in `udpnat.rs` and written back when the reply
-   arrives. QUIC and DoT are dropped before a mapping exists.
+   arrives. QUIC and DoT are dropped before a mapping exists; with HTTP/3
+   filtering armed, UDP/443 goes to the QUIC hub instead.
 
 ## Filtering capabilities
 
@@ -122,7 +125,9 @@ rust/                     core crate (cdylib + rlib)
   src/{htmlfilter,jsonprune,hls,pathmask,appmask,smart}.rs
   src/{assets,store,uidmap,logbuf,fxhash,util}.rs
   src/mitm/               ca, tls, proxy, relay, http, tcp, script, segment,
-                          ech, hpke, hosts, page_runtime.js
+                          ech, hpke, hosts, decide, page_runtime.js,
+  src/mitm/quic/          socket (in-memory AsyncUdpSocket), bridge (engine
+                          side + thread), hub (h3 termination and filtering)
   tests/                  integration tests (DNS round trip, filter, …)
   uniffi.toml             Kotlin binding configuration
 app/src/main/kotlin/
@@ -518,6 +523,35 @@ are spliced rather than filtered.
 Chromium; setting `ADFREE_CDP` adds one more check against the emulator's
 Chrome behind the running VPN.
 
+### HTTP/3 (QUIC) filtering
+
+AdGuard's "Filter HTTP/3" switch has a direct counterpart here. QUIC cannot be
+inspected without terminating it, so the default stays *drop UDP/443* and the
+feature is opt-in (`filter_http3`, effective only with HTTPS filtering on).
+
+- **Client side.** Each client five-tuple gets a quinn server endpoint whose
+  UDP socket lives in memory: `handle_packet` pushes datagrams into it and the
+  forwarder drains quinn's output back into the TUN. No extra fd, no loopback.
+  The endpoint advertises a 1452-byte datagram limit, which fits the tunnel's
+  1500-byte MTU over IPv6 (quinn's IPv4-only default of 1472 does not).
+- **Upstream.** Terminated connections are re-originated over real QUIC from
+  shared, `protect()`ed endpoints (one per address family) to the original
+  destination IP with the SNI as the server name.
+- **Decisions.** Requests reuse `mitm/decide.rs` and the same response rewriter
+  as HTTP/1.1, so block rules, `$removeparam`, `$replace`, injection, cosmetic
+  filtering and `$app` behave identically. Requests blocked inside a
+  terminated flow count in `quic_blocked`.
+- **Splicing.** Hosts excluded from HTTPS filtering, apps that reject the CA
+  and ECH-required hosts are spliced verbatim: the pre-SNI client flight is
+  buffered (16 KiB cap) and replayed into a plain NAT mapping, and the
+  five-tuple is remembered for a minute so a retry does not handshake again.
+- **Failure is clean.** No 0-RTT, no migration, no client ECH termination: an
+  ALPN mismatch, a full flow table (64) or a missing upstream closes the QUIC
+  connection and the client falls back to TCP, which is filtered anyway.
+  Chrome/Cronet reject user CAs for QUIC, so they always take that path.
+- **Not with SOCKS5.** A configured proxy carries TCP only; QUIC is dropped so
+  the browser uses the proxied, filtered transport.
+
 ### Installing the certificate
 
 The toggle is gated: while the CA is not in the trust store, turning it on only
@@ -666,4 +700,7 @@ store, lifecycle), not the rules.
   screen lock before it can be enabled.
 - Full ECH routing is available, but hosts that use it are spliced rather than
   filtered by design.
+- HTTP/3 filtering is opt-in, needs HTTPS filtering, and Chrome/Cronet still
+  reject user CAs for QUIC, so they fall back to TCP. QUIC through SOCKS5 is
+  dropped rather than proxied.
 

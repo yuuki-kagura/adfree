@@ -402,4 +402,25 @@ mod tests {
         }
         assert_eq!(socket.dropped(), 1);
     }
+
+    /// The inbound queue is the only unbounded thing in the flow's memory
+    /// story, so a client that never drains it must be cut off, not allowed
+    /// to grow the heap.
+    #[test]
+    fn a_full_inbound_queue_drops_instead_of_growing() {
+        let (tx, _rx) = sync_channel(1);
+        let socket = TunUdpSocket::new("127.0.0.1:1".parse().unwrap(), tx);
+        let peer = "127.0.0.1:2".parse().unwrap();
+        assert!(socket.recv(Datagram {
+            peer,
+            dst_ip: None,
+            payload: vec![0u8; MAX_QUEUED_BYTES],
+        }));
+        assert!(!socket.recv(Datagram {
+            peer,
+            dst_ip: None,
+            payload: vec![0u8; 1],
+        }));
+        assert_eq!(socket.dropped(), 1);
+    }
 }
