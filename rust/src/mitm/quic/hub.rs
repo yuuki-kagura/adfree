@@ -18,9 +18,12 @@ use http::{
 };
 use tokio::sync::Mutex;
 
+use crate::engine::StealthConfig;
 use crate::filter::FilterEngine;
-use crate::mitm::decide::{self, RequestContext};
-use crate::mitm::proxy::{request_facts, request_url, take_local_request, MitmBlock, MitmSink};
+use crate::mitm::decide::{self, Injector, RequestContext, RequestPlan, ResponsePlans};
+use crate::mitm::proxy::{
+    request_facts, request_url, take_local_request, MitmBlock, MitmSink, ProxySession, LOCAL_ORIGIN,
+};
 use crate::mitm::tls::UpstreamTls;
 
 type ServerStream = RequestStream<h3_quinn::BidiStream<Bytes>, Bytes>;
@@ -56,10 +59,34 @@ pub struct HubConfig {
     /// Path the user script is served from; empty when none is installed.
     pub serve_path: String,
     pub script_body: Arc<str>,
+    /// The origin-absolute URL the user-script tag carries (the versioned
+    /// local asset, the same one the HTTP/1.1 splice injects).
+    pub script_tag_src: String,
+    /// The engine cosmetic rules are read from, when the user enabled element
+    /// hiding; `None` leaves the snippet to the user script and the runtime.
+    pub cosmetic: Option<Arc<FilterEngine>>,
+    /// The stealth switches: request edits run before the rules see the head,
+    /// the WebRTC guard is injected with the rest of the snippet.
+    pub stealth: StealthConfig,
     pub upstream: Arc<UpstreamTls>,
     /// The protected UDP socket the upstream QUIC connections leave through.
     pub endpoint: quinn::Endpoint,
     pub sink: Option<MitmSink>,
+}
+
+impl HubConfig {
+    /// The per-session inputs the shared snippet builder reads.
+    fn injector<'a>(&'a self, page_url: Option<&'a str>) -> Injector<'a> {
+        Injector {
+            script_src: &self.serve_path,
+            script_tag_src: &self.script_tag_src,
+            cosmetic: self.cosmetic.as_deref(),
+            host: Some(&self.server_name),
+            page_url,
+            apps: &self.apps,
+            stealth: self.stealth,
+        }
+    }
 }
 
 /// Serves one terminated QUIC connection until the client closes it.
@@ -198,6 +225,18 @@ async fn handle_request(
         return reply_http1(&mut send_back, &response).await;
     }
 
+    // Stealth mode edits the same serialized head the HTTP/1.1 splice edits,
+    // through the same routine: the tracking parameters, the third-party
+    // cookies and the user agent are as far as this path differs from the TCP
+    // one.
+    let mut stealth_plan = RequestPlan::default();
+    ProxySession::apply_stealth(
+        &mut head,
+        &mut stealth_plan,
+        Some(&config.server_name),
+        config.stealth,
+    );
+
     // The decision layer expects the same HTTP/1.1 head the splice hands it;
     // everything it needs is parsed out before the head is edited.
     let Some(head_end) = crate::mitm::http::head_end(&head) else {
@@ -246,6 +285,10 @@ async fn handle_request(
         &mut head,
         head_end,
     );
+    let mut plan = decision.plan;
+    // A cross-site request went out without its cookies; the answer may not
+    // hand it new ones either.
+    plan.block_cookies |= stealth_plan.block_cookies;
     if let Some(answer) = decision.answer {
         if let Some(sink) = config.sink {
             sink(&MitmBlock {
@@ -295,7 +338,7 @@ async fn handle_request(
             }
         }
     });
-    let result = relay_response(&mut up_recv, &mut send_back).await;
+    let result = relay_response(&mut up_recv, &mut send_back, config, &plan).await;
     body.abort();
     result
 }
@@ -400,34 +443,193 @@ fn build_request(parsed: &ParsedHead, authority: &Authority) -> Result<HttpReque
     Ok(request)
 }
 
-/// Relays the origin's response to the client, minus connection-level headers.
-async fn relay_response(up: &mut ClientRecv, send: &mut ServerSend) -> Result<(), String> {
+/// A response body up to this size may be buffered for the rules that need the
+/// whole of it; a longer one passes through untouched.
+const BODY_EDIT_CAP: usize = 512 * 1024;
+
+/// Relays the origin's response to the client, applying the header and body
+/// edits the request's plan carries.
+///
+/// A response no rule needs whole streams straight through. One that does
+/// (`$replace`, `$jsonprune`, `$hls`, `$$`, injection) is buffered up to
+/// [`BODY_EDIT_CAP`], decoded when it arrived compressed, edited, and encoded
+/// again before it goes out. A body over the cap, or in an encoding this
+/// cannot read, keeps every byte the origin sent.
+async fn relay_response(
+    up: &mut ClientRecv,
+    send: &mut ServerSend,
+    config: &HubConfig,
+    plan: &RequestPlan,
+) -> Result<(), String> {
     let response = up
         .recv_response()
         .await
         .map_err(|e| format!("upstream response: {e}"))?;
-    let mut headers = response.headers().clone();
-    strip_hop_by_hop(&mut headers);
+    let status = response.status();
+    let original = response.headers().clone();
+    let host = config.server_name.as_str();
+    let mut wire = serialize_response_head(status, &original);
+    let info = crate::mitm::http::parse_response_head(&wire);
+
+    // A redirect's body is never rendered, so there is nothing to inject into
+    // and nothing a list rewrites there. `$$` reads only a document that
+    // arrived whole; the other body edits read any text.
+    let renderable = !(300..400).contains(&status.as_u16());
+    let injector = config.injector(plan.page_url.as_deref());
+    let inject = injector.active() && info.html && renderable && !info.bodyless();
+    let text = info.text;
+    let plans = ResponsePlans {
+        replace: plan.replace.clone().filter(|_| text),
+        jsonprune: plan.jsonprune.clone().filter(|_| text),
+        hls: plan.hls.clone().filter(|_| text),
+        html: plan
+            .html
+            .clone()
+            .filter(|_| info.html && status == StatusCode::OK),
+    };
+    let needs_whole_body = inject
+        || plans.replace.is_some()
+        || plans.jsonprune.is_some()
+        || plans.hls.is_some()
+        || plans.html.is_some();
+    let decodable = matches!(
+        info.encoding,
+        crate::mitm::http::Encoding::Identity
+            | crate::mitm::http::Encoding::Gzip
+            | crate::mitm::http::Encoding::Deflate
+    );
+    let hold = needs_whole_body && decodable && !info.bodyless();
+
+    let mut body = Vec::new();
+    let mut overflow = false;
+    if hold {
+        loop {
+            match up.recv_data().await {
+                Ok(Some(mut chunk)) => {
+                    let data = chunk.copy_to_bytes(chunk.remaining());
+                    body.extend_from_slice(&data);
+                    if body.len() > BODY_EDIT_CAP {
+                        overflow = true;
+                        break;
+                    }
+                }
+                Ok(None) => break,
+                Err(e) => return Err(format!("upstream body: {e}")),
+            }
+        }
+    }
+
+    let mut nonce: Option<String> = None;
+    let mut edited_body: Option<Vec<u8>> = None;
+    let mut recompressed = false;
+    if hold && !overflow {
+        let decoded = crate::mitm::http::decode_body(&body, info.encoding);
+        let plain = match (&decoded, info.encoding) {
+            (Some(decoded), _) => Some(decoded.as_slice()),
+            (None, crate::mitm::http::Encoding::Identity) => Some(body.as_slice()),
+            _ => None,
+        };
+        if let Some(plain) = plain {
+            let edited = decide::edit_response(&plans, plain, inject, &injector, host);
+            if edited.decision == crate::mitm::http::Decision::Injected || edited.edited {
+                let mut bytes = edited.body;
+                if decoded.is_some() {
+                    // The page leaves as compressed as it arrived, so the
+                    // phone keeps the win the origin negotiated.
+                    bytes = crate::mitm::http::gzip_encode(&bytes)
+                        .ok_or_else(|| "gzip encode failed".to_string())?;
+                    recompressed = true;
+                }
+                if edited.decision == crate::mitm::http::Decision::Injected {
+                    crate::logbuf::push(&format!(
+                        "quic {host}: injected {} bytes into a {} byte body (recompressed={recompressed})",
+                        edited.injected,
+                        plain.len(),
+                    ));
+                    nonce = Some(edited.nonce);
+                }
+                edited_body = Some(bytes);
+            }
+        }
+    }
+
+    apply_response_plan(&mut wire, plan, host);
+    if let Some(nonce) = nonce.as_deref() {
+        // The page keeps its policy: it just learns the nonce the snippet's
+        // tags carry.
+        wire = crate::mitm::http::csp_with_nonce(&wire, nonce, LOCAL_ORIGIN);
+    }
+    if let Some(bytes) = edited_body.as_ref() {
+        wire = crate::mitm::http::head_for_new_body(
+            &wire,
+            bytes.len(),
+            recompressed.then_some("gzip"),
+        );
+    }
+    let Some((_, headers, _)) = parse_http1_response(&wire) else {
+        return Err("upstream response head is not readable".to_string());
+    };
     let mut out = HttpResponse::builder()
-        .status(response.status())
+        .status(status)
         .body(())
         .map_err(|e| format!("upstream response: {e}"))?;
     *out.headers_mut() = headers;
     send.send_response(out)
         .await
         .map_err(|e| format!("response send: {e}"))?;
-    loop {
-        match up.recv_data().await {
-            Ok(Some(mut chunk)) => {
-                let data = chunk.copy_to_bytes(chunk.remaining());
-                send.send_data(data)
+
+    match edited_body {
+        Some(bytes) => {
+            if !bytes.is_empty() {
+                send.send_data(Bytes::from(bytes))
                     .await
                     .map_err(|e| format!("body send: {e}"))?;
             }
-            Ok(None) => break,
-            Err(e) => return Err(format!("upstream body: {e}")),
         }
+        None if overflow => {
+            // The body outgrew the cap: what was held goes out first, then the
+            // rest streams as it arrives, unedited.
+            if !body.is_empty() {
+                send.send_data(Bytes::from(body))
+                    .await
+                    .map_err(|e| format!("body send: {e}"))?;
+            }
+            loop {
+                match up.recv_data().await {
+                    Ok(Some(mut chunk)) => {
+                        let data = chunk.copy_to_bytes(chunk.remaining());
+                        send.send_data(data)
+                            .await
+                            .map_err(|e| format!("body send: {e}"))?;
+                    }
+                    Ok(None) => break,
+                    Err(e) => return Err(format!("upstream body: {e}")),
+                }
+            }
+        }
+        None if hold => {
+            // Held whole but left alone: an encoding we cannot read, or no
+            // rule actually changed it. The origin's bytes go out as they came.
+            if !body.is_empty() {
+                send.send_data(Bytes::from(body))
+                    .await
+                    .map_err(|e| format!("body send: {e}"))?;
+            }
+        }
+        None => loop {
+            match up.recv_data().await {
+                Ok(Some(mut chunk)) => {
+                    let data = chunk.copy_to_bytes(chunk.remaining());
+                    send.send_data(data)
+                        .await
+                        .map_err(|e| format!("body send: {e}"))?;
+                }
+                Ok(None) => break,
+                Err(e) => return Err(format!("upstream body: {e}")),
+            }
+        },
     }
+
     match up.recv_trailers().await {
         Ok(Some(mut trailers)) => {
             strip_hop_by_hop(&mut trailers);
@@ -437,6 +639,77 @@ async fn relay_response(up: &mut ClientRecv, send: &mut ServerSend) -> Result<()
         }
         Ok(None) => send.finish().await.map_err(|e| format!("finish: {e}")),
         Err(e) => Err(format!("trailers: {e}")),
+    }
+}
+
+/// The h3 response headers as the HTTP/1.1 head the shared editing helpers
+/// read: status line, one line per header, blank line.
+fn serialize_response_head(status: StatusCode, headers: &HeaderMap) -> Vec<u8> {
+    let mut wire = Vec::with_capacity(256);
+    wire.extend_from_slice(
+        format!(
+            "HTTP/1.1 {} {}\r\n",
+            status.as_u16(),
+            status.canonical_reason().unwrap_or("")
+        )
+        .as_bytes(),
+    );
+    for (name, value) in headers {
+        wire.extend_from_slice(name.as_str().as_bytes());
+        wire.extend_from_slice(b": ");
+        wire.extend_from_slice(value.as_bytes());
+        wire.extend_from_slice(b"\r\n");
+    }
+    wire.extend_from_slice(b"\r\n");
+    wire
+}
+
+/// Applies the response-header side of a request's plan to a wire head:
+/// `$removeheader`, `$csp`/`$permissions`, the `$cookie` names the answer may
+/// not set, and the stealth switch that drops every `set-cookie`.
+fn apply_response_plan(wire: &mut Vec<u8>, plan: &RequestPlan, host: &str) {
+    if let Some(edit) = &plan.headers {
+        let done = crate::mitm::http::apply_response_headers(
+            wire,
+            &edit.remove_response,
+            &edit.csp,
+            &edit.permissions,
+        );
+        if !done.dropped.is_empty() {
+            crate::logbuf::push(&format!(
+                "quic {host}: response headers dropped: {} by {} rule(s)",
+                done.dropped.join(", "),
+                edit.rules.len(),
+            ));
+        }
+        if !done.added.is_empty() {
+            crate::logbuf::push(&format!(
+                "quic {host}: response gained {} by {} rule(s)",
+                done.added.join(", "),
+                edit.rules.len(),
+            ));
+        }
+    }
+    if let Some(cookie_plan) = &plan.cookies {
+        let names = crate::mitm::http::set_cookie_names(wire);
+        if let Some(edit) = cookie_plan.dropped(&names) {
+            if let Some((fixed, dropped)) =
+                crate::mitm::http::drop_set_cookie_headers(wire, &edit.drop)
+            {
+                *wire = fixed;
+                crate::logbuf::push(&format!(
+                    "quic {host}: set-cookie dropped: {} by {} rule(s)",
+                    dropped.join(", "),
+                    edit.rules.len(),
+                ));
+            }
+        }
+    }
+    if plan.block_cookies {
+        if let Some(fixed) = crate::mitm::http::drop_headers(wire, &["set-cookie".to_string()]) {
+            *wire = fixed;
+            crate::logbuf::push(&format!("quic {host}: third-party set-cookie dropped"));
+        }
     }
 }
 
@@ -519,6 +792,7 @@ fn strip_hop_by_hop(headers: &mut HeaderMap) {
 mod tests {
     use super::*;
     use crate::mitm::ca::CertificateAuthority;
+    use crate::mitm::proxy::{content_hash, local_asset, versioned_path};
     use crate::mitm::quic::socket::{Datagram, OutDatagram, TunUdpSocket};
     use crate::mitm::tls::{self, SniCertResolver, UpstreamTls};
     use quinn::{Endpoint, EndpointConfig, TokioRuntime};
@@ -572,12 +846,22 @@ mod tests {
         });
     }
 
+    /// What the test origin answers with.
+    #[derive(Clone, Default)]
+    struct OriginAnswer {
+        /// `text/plain` when nothing else is asked for.
+        content_type: Option<&'static str>,
+        /// `None` keeps the echo body (`METHOD URI`).
+        body: Option<&'static str>,
+        headers: Vec<(&'static str, &'static str)>,
+    }
+
     /// An h3 origin on a real loopback socket, echoing what reached it.
     ///
     /// The response body is `METHOD URI`, and the `x-keep`/`cookie` headers
     /// come back as `x-echo-keep`/`x-echo-cookie` — the assertions read the
     /// request the origin actually received, not just the client's view.
-    fn spawn_origin() -> (Endpoint, SocketAddr, rustls::RootCertStore) {
+    fn spawn_origin_with(answer: OriginAnswer) -> (Endpoint, SocketAddr, rustls::RootCertStore) {
         let generated = rcgen::generate_simple_self_signed(vec!["filtered.test".to_string()])
             .expect("self-signed certificate");
         let cert = CertificateDer::from(generated.cert.der().to_vec());
@@ -595,10 +879,13 @@ mod tests {
         let mut roots = rustls::RootCertStore::empty();
         roots.add(cert).expect("origin trust anchor");
 
+        let answer = Arc::new(answer);
         let accept = endpoint.clone();
         tokio::spawn(async move {
             while let Some(incoming) = accept.accept().await {
+                let answer = Arc::clone(&answer);
                 tokio::spawn(async move {
+                    let answer = Arc::clone(&answer);
                     let connection = match incoming.await {
                         Ok(connection) => connection,
                         Err(_) => return,
@@ -611,6 +898,7 @@ mod tests {
                             Err(_) => return,
                         };
                     while let Ok(Some(resolver)) = server.accept().await {
+                        let answer = Arc::clone(&answer);
                         tokio::spawn(async move {
                             let Ok((request, stream)) = resolver.resolve_request().await else {
                                 return;
@@ -619,9 +907,16 @@ mod tests {
                             while let Ok(Some(_)) = recv.recv_data().await {}
                             let mut response = http::Response::builder()
                                 .status(200)
-                                .header("content-type", "text/plain")
+                                .header("content-type", answer.content_type.unwrap_or("text/plain"))
                                 .body(())
                                 .expect("origin response");
+                            for (name, value) in &answer.headers {
+                                let name = HeaderName::from_bytes(name.as_bytes())
+                                    .expect("origin header name");
+                                let value =
+                                    HeaderValue::from_str(value).expect("origin header value");
+                                response.headers_mut().append(name, value);
+                            }
                             for header in ["x-keep", "x-remove", "cookie"] {
                                 if let Some(value) = request.headers().get(header) {
                                     let echo = HeaderName::from_bytes(
@@ -636,7 +931,10 @@ mod tests {
                                 }
                             }
                             let _ = send.send_response(response).await;
-                            let body = format!("{} {}", request.method(), request.uri());
+                            let body = match answer.body {
+                                Some(body) => body.to_string(),
+                                None => format!("{} {}", request.method(), request.uri()),
+                            };
                             let _ = send.send_data(Bytes::from(body)).await;
                             let _ = send.finish().await;
                         });
@@ -655,7 +953,27 @@ mod tests {
         script_body: &str,
         request: HttpRequest<()>,
     ) -> (StatusCode, HeaderMap, Vec<u8>) {
-        let (origin, origin_addr, roots) = spawn_origin();
+        exchange_with(
+            OriginAnswer::default(),
+            rules,
+            tag,
+            local,
+            script_body,
+            request,
+        )
+        .await
+    }
+
+    async fn exchange_with(
+        answer: OriginAnswer,
+        rules: &str,
+        tag: &str,
+        local: bool,
+        script_body: &str,
+        request: HttpRequest<()>,
+    ) -> (StatusCode, HeaderMap, Vec<u8>) {
+        let serve_path = "/adfree-user.js";
+        let (origin, origin_addr, roots) = spawn_origin_with(answer);
         let ca = Arc::new(CertificateAuthority::generate().expect("ca"));
         let resolver = Arc::new(SniCertResolver::new(Arc::clone(&ca)));
         let server_tls = tls::server_config_h3(resolver);
@@ -682,14 +1000,21 @@ mod tests {
         )
         .expect("client endpoint");
 
+        let filter = engine_with(tag, rules);
         let config = Arc::new(HubConfig {
-            filter: engine_with(tag, rules),
+            filter: Arc::clone(&filter),
             apps: Vec::new(),
             server_name: "filtered.test".to_string(),
             origin: origin_addr,
             local,
-            serve_path: "/adfree-user.js".to_string(),
+            serve_path: serve_path.to_string(),
             script_body: Arc::from(script_body),
+            script_tag_src: local_asset(&versioned_path(
+                serve_path,
+                content_hash(script_body.as_bytes()),
+            )),
+            cosmetic: Some(filter),
+            stealth: StealthConfig::default(),
             upstream: UpstreamTls::with_roots(roots),
             endpoint: origin.clone(),
             sink: None,
@@ -817,6 +1142,113 @@ mod tests {
             let cookie = cookie.to_str().expect("cookie text");
             assert!(!cookie.contains("tracker"), "cookie stayed: {cookie}");
             assert!(cookie.contains("session=2"), "cookie lost: {cookie}");
+        });
+    }
+
+    /// The injection the HTTP/1.1 splice performs, over QUIC: the snippet goes
+    /// into the document, and the policy the origin wrote learns its nonce so
+    /// a strict `script-src` does not drop it.
+    #[test]
+    fn injects_the_snippet_and_teaches_the_policy_the_nonce() {
+        run(async {
+            let answer = OriginAnswer {
+                content_type: Some("text/html; charset=utf-8"),
+                body: Some("<html><head><title>t</title></head><body>hi</body></html>"),
+                headers: vec![("content-security-policy", "script-src 'self'")],
+            };
+            let (status, headers, body) = exchange_with(
+                answer,
+                "",
+                "inject",
+                false,
+                "",
+                get("https://filtered.test/page"),
+            )
+            .await;
+            assert_eq!(status, StatusCode::OK);
+            let body = std::str::from_utf8(&body).expect("utf8");
+            assert!(
+                body.starts_with("<html><head>"),
+                "the snippet must land inside the head: {body}"
+            );
+            assert!(
+                body.contains("adfree-page.js?dmn=filtered.test"),
+                "the runtime tag must be injected: {body}"
+            );
+            let nonce = body
+                .split("nonce=\"")
+                .nth(1)
+                .and_then(|rest| rest.split('"').next())
+                .expect("the injected tag carries a nonce");
+            let policy = headers
+                .get("content-security-policy")
+                .expect("the policy survives")
+                .to_str()
+                .expect("policy text");
+            assert!(
+                policy.contains(&format!("'nonce-{nonce}'")),
+                "the policy must learn the tag's nonce: {policy}"
+            );
+            let length: usize = headers
+                .get("content-length")
+                .expect("the edited body declares its length")
+                .to_str()
+                .expect("length text")
+                .parse()
+                .expect("a number");
+            assert_eq!(length, body.len(), "the length must follow the edit");
+        });
+    }
+
+    /// The response-body and response-header modifiers, over QUIC.
+    #[test]
+    fn rewrites_the_response_body_and_headers() {
+        run(async {
+            let answer = OriginAnswer {
+                content_type: Some("text/javascript"),
+                body: Some("var secret = 1;"),
+                headers: vec![("x-internal", "trace")],
+            };
+            let rules = "\
+||filtered.test/page$replace=/secret/redacted/
+||filtered.test^$removeheader=x-internal
+||filtered.test^$csp=script-src 'self'
+";
+            let (status, headers, body) = exchange_with(
+                answer,
+                rules,
+                "response-edits",
+                false,
+                "",
+                get("https://filtered.test/page"),
+            )
+            .await;
+            assert_eq!(status, StatusCode::OK);
+            assert_eq!(
+                std::str::from_utf8(&body).expect("utf8"),
+                "var redacted = 1;",
+                "$replace must rewrite the body"
+            );
+            assert!(
+                headers.get("x-internal").is_none(),
+                "$removeheader must take the response header out"
+            );
+            assert_eq!(
+                headers
+                    .get("content-security-policy")
+                    .expect("$csp adds the policy")
+                    .to_str()
+                    .expect("policy text"),
+                "script-src 'self'"
+            );
+            let length: usize = headers
+                .get("content-length")
+                .expect("the edited body declares its length")
+                .to_str()
+                .expect("length text")
+                .parse()
+                .expect("a number");
+            assert_eq!(length, body.len());
         });
     }
 

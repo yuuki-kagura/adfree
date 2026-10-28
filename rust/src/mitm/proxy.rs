@@ -1178,7 +1178,7 @@ impl ProxySession {
     /// rewrote is stripped on top of its new URL. Only HTTPS flows reach this
     /// point (the engine terminates nothing else), which is why the UI says
     /// the three request edits need HTTPS filtering.
-    fn apply_stealth(
+    pub(super) fn apply_stealth(
         buffer: &mut Vec<u8>,
         plan: &mut RequestPlan,
         session_host: Option<&str>,
