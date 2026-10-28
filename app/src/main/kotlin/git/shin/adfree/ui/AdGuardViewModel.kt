@@ -91,6 +91,18 @@ class AdGuardViewModel(
     private val _privateDnsOn = MutableStateFlow(false)
     val privateDnsOn: StateFlow<Boolean> = _privateDnsOn.asStateFlow()
 
+    /**
+     * One-shot request for the Protection tab to open a specific detail page.
+     * The screen consumes it, so re-selecting the tab later lands on the list.
+     */
+    private val _requestedProtectionSection = MutableStateFlow<ProtectionSection?>(null)
+    val requestedProtectionSection: StateFlow<ProtectionSection?> =
+        _requestedProtectionSection.asStateFlow()
+
+    fun consumeProtectionSection() {
+        _requestedProtectionSection.value = null
+    }
+
     private val _effect = MutableSharedFlow<AdGuardEffect>(
         replay = 0,
         extraBufferCapacity = 8,
@@ -269,6 +281,10 @@ class AdGuardViewModel(
     fun onIntent(intent: AdGuardIntent) {
         when (intent) {
             is AdGuardIntent.SelectTab -> _currentTab.value = intent.tab
+            is AdGuardIntent.OpenProtectionSection -> {
+                _currentTab.value = AdGuardTab.PROTECTION
+                _requestedProtectionSection.value = intent.section
+            }
             is AdGuardIntent.ToggleProtection -> toggleProtection()
             is AdGuardIntent.ToggleAdBlocking ->
                 repository.toggleAdBlocking(!uiState.value.settings.isAdBlockingEnabled)
@@ -287,6 +303,9 @@ class AdGuardViewModel(
                 if (enabling && !coreEngine.isCaTrusted()) {
                     emit(AdGuardEffect.ShowSnackbar(UiText.Resource(R.string.home_https_needs_cert)))
                     _currentTab.value = AdGuardTab.PROTECTION
+                    // Land on the page that installs the CA instead of leaving
+                    // the user on the landing with no idea what to do next.
+                    _requestedProtectionSection.value = ProtectionSection.HTTPS
                 } else {
                     repository.toggleHttpsFiltering(enabling)
                 }

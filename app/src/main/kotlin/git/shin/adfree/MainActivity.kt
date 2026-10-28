@@ -20,17 +20,26 @@ import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInHorizontally
 import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.animation.togetherWith
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.isSystemInDarkTheme
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawing
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ListAlt
 import androidx.compose.material.icons.automirrored.outlined.ListAlt
 import androidx.compose.material.icons.filled.Apps
 import androidx.compose.material.icons.filled.Home
+import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Shield
 import androidx.compose.material.icons.outlined.Apps
@@ -52,11 +61,13 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveableStateHolder
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -71,6 +82,7 @@ import git.shin.adfree.ui.AdGuardIntent
 import git.shin.adfree.ui.AdGuardTab
 import git.shin.adfree.ui.AdGuardViewModel
 import git.shin.adfree.ui.Localization
+import git.shin.adfree.ui.ProtectionSection
 import git.shin.adfree.ui.UiText
 import git.shin.adfree.ui.screens.AppsManagementScreen
 import git.shin.adfree.ui.screens.FilteringLogScreen
@@ -82,6 +94,7 @@ import git.shin.adfree.ui.theme.AdGuardDarkBg
 import git.shin.adfree.ui.theme.AdGuardDarkSurface
 import git.shin.adfree.ui.theme.AdGuardGreenPrimary
 import git.shin.adfree.ui.theme.AdGuardOnAccent
+import git.shin.adfree.ui.theme.AdGuardOrangeWarning
 import git.shin.adfree.ui.theme.AdGuardTextMuted
 import git.shin.adfree.ui.theme.AdGuardTextPrimary
 import git.shin.adfree.ui.theme.AdGuardTextSecondary
@@ -212,10 +225,27 @@ class MainActivity : AppCompatActivity() {
                         }
                     },
                     bottomBar = {
-                        AdGuardBottomBar(
-                            currentTab = state.currentTab,
-                            onTabSelected = { viewModel.onIntent(AdGuardIntent.SelectTab(it)) }
-                        )
+                        Column {
+                            // AdGuard pins this strip above the tab bar: with
+                            // HTTPS off the engine only filters DNS and plain
+                            // HTTP, so the Home screen otherwise overstates
+                            // what is actually blocked.
+                            if (!state.settings.isHttpsFilteringEnabled) {
+                                HttpsOffBar(
+                                    onEnable = {
+                                        viewModel.onIntent(
+                                            AdGuardIntent.OpenProtectionSection(
+                                                ProtectionSection.HTTPS,
+                                            ),
+                                        )
+                                    },
+                                )
+                            }
+                            AdGuardBottomBar(
+                                currentTab = state.currentTab,
+                                onTabSelected = { viewModel.onIntent(AdGuardIntent.SelectTab(it)) }
+                            )
+                        }
                     }
                 ) { innerPadding ->
                     AnimatedContent(
@@ -353,5 +383,40 @@ fun AdGuardBottomBar(
                 modifier = Modifier.testTag(item.tag)
             )
         }
+    }
+}
+
+/** Persistent reminder shown whenever HTTPS filtering is disabled. */
+@Composable
+private fun HttpsOffBar(onEnable: () -> Unit) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .background(AdGuardOrangeWarning.copy(alpha = 0.16f))
+            .clickable(onClick = onEnable)
+            .padding(horizontal = 16.dp, vertical = 8.dp)
+            .testTag("https_off_banner"),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Icon(
+            imageVector = Icons.Default.Lock,
+            contentDescription = null,
+            tint = AdGuardOrangeWarning,
+            modifier = Modifier.size(16.dp),
+        )
+        Spacer(modifier = Modifier.width(8.dp))
+        Text(
+            text = stringResource(R.string.https_off_banner),
+            fontSize = 11.sp,
+            color = AdGuardTextPrimary,
+            modifier = Modifier.weight(1f),
+        )
+        Spacer(modifier = Modifier.width(8.dp))
+        Text(
+            text = stringResource(R.string.https_off_banner_action),
+            fontSize = 11.sp,
+            fontWeight = FontWeight.Bold,
+            color = AdGuardOrangeWarning,
+        )
     }
 }

@@ -49,6 +49,7 @@ import androidx.compose.material3.Switch
 import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -68,6 +69,7 @@ import git.shin.adfree.R
 import git.shin.adfree.ui.AdGuardIntent
 import git.shin.adfree.ui.AdGuardTab
 import git.shin.adfree.ui.AdGuardViewModel
+import git.shin.adfree.ui.ProtectionSection
 import git.shin.adfree.ui.theme.AdGuardBlueDns
 import git.shin.adfree.ui.theme.AdGuardDarkBg
 import git.shin.adfree.ui.theme.AdGuardDarkOutline
@@ -88,6 +90,17 @@ import git.shin.adfree.ui.theme.AdGuardOnAccent
  */
 private enum class ProtectionRoute {
     LIST, AD_BLOCKING, TRACKING, DNS, HTTPS, FIREWALL, ECO, FILTERS, EXTENSIONS
+}
+
+private fun ProtectionSection.route(): ProtectionRoute = when (this) {
+    ProtectionSection.AD_BLOCKING -> ProtectionRoute.AD_BLOCKING
+    ProtectionSection.TRACKING -> ProtectionRoute.TRACKING
+    ProtectionSection.DNS -> ProtectionRoute.DNS
+    ProtectionSection.HTTPS -> ProtectionRoute.HTTPS
+    ProtectionSection.FIREWALL -> ProtectionRoute.FIREWALL
+    ProtectionSection.ECO -> ProtectionRoute.ECO
+    ProtectionSection.FILTERS -> ProtectionRoute.FILTERS
+    ProtectionSection.EXTENSIONS -> ProtectionRoute.EXTENSIONS
 }
 
 /**
@@ -117,6 +130,15 @@ fun ProtectionScreen(
     // The activity-level handler only sees the landing; deeper routes pop one
     // level here so the hub-style screens below keep working.
     BackHandler(enabled = route != ProtectionRoute.LIST) { back() }
+
+    // Home's HTTPS bar and the Home switch (when the CA is missing) ask for a
+    // detail page by name; consume the request so it cannot replay on return.
+    val requestedSection by viewModel.requestedProtectionSection.collectAsState()
+    LaunchedEffect(requestedSection) {
+        val section = requestedSection ?: return@LaunchedEffect
+        viewModel.consumeProtectionSection()
+        navigate(section.route())
+    }
 
     AnimatedContent(
         targetState = route,

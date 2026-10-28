@@ -57,9 +57,17 @@ data class AdGuardUiState(
     val scriptStore: UserScriptStoreState = UserScriptStoreState(),
 )
 
+/** A Protection-tab detail page another screen can navigate to directly. */
+enum class ProtectionSection {
+    AD_BLOCKING, TRACKING, DNS, HTTPS, FIREWALL, ECO, FILTERS, EXTENSIONS
+}
+
 /** MVI intents. */
 sealed interface AdGuardIntent {
     data class SelectTab(val tab: AdGuardTab) : AdGuardIntent
+
+    /** Open the Protection tab landing on one module's detail page. */
+    data class OpenProtectionSection(val section: ProtectionSection) : AdGuardIntent
     data object ToggleProtection : AdGuardIntent
     data object ToggleAdBlocking : AdGuardIntent
     data object ToggleTracking : AdGuardIntent

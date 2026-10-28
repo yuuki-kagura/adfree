@@ -1,5 +1,15 @@
 package git.shin.adfree.ui.screens
 
+import android.Manifest
+import android.content.Context
+import android.content.Intent
+import android.content.pm.PackageManager
+import android.net.Uri
+import android.os.Build
+import android.os.PowerManager
+import android.provider.Settings
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.RepeatMode
@@ -32,6 +42,8 @@ import androidx.compose.material.icons.filled.Block
 import androidx.compose.material.icons.filled.CloudDownload
 import androidx.compose.material.icons.filled.Dns
 import androidx.compose.material.icons.filled.Lock
+import androidx.compose.material.icons.filled.NotificationsActive
+import androidx.compose.material.icons.filled.NotificationsOff
 import androidx.compose.material.icons.filled.PowerSettingsNew
 import androidx.compose.material.icons.filled.Shield
 import androidx.compose.material.icons.filled.TrackChanges
@@ -44,6 +56,9 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -56,6 +71,8 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.core.app.NotificationManagerCompat
+import androidx.core.content.ContextCompat
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LifecycleEventEffect
 import git.shin.adfree.R
@@ -135,6 +152,10 @@ fun HomeScreen(
                 onToggle = { viewModel.onIntent(AdGuardIntent.ToggleProtection) }
             )
 
+            Spacer(modifier = Modifier.height(14.dp))
+
+            HomeSystemStatusRow()
+
             if (privateDnsOn) {
                 Spacer(modifier = Modifier.height(16.dp))
                 PrivateDnsWarningCard(
@@ -200,6 +221,163 @@ private fun StatusChip(isActive: Boolean) {
             fontWeight = FontWeight.Bold,
             color = tint
         )
+    }
+}
+
+/**
+ * The two system-level checks AdGuard surfaces on its dashboard: whether the
+ * app may post notifications (the ongoing protection status is invisible
+ * without them) and whether the OS battery optimizer is exempting the tunnel.
+ * Each chip opens the system screen that changes the answer.
+ */
+@Composable
+private fun HomeSystemStatusRow() {
+    val context = LocalContext.current
+    var notificationsOn by remember { mutableStateOf(notificationsEnabled(context)) }
+    var batteryOptimized by remember { mutableStateOf(!isIgnoringBatteryOptimizations(context)) }
+
+    val permissionLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission(),
+    ) { granted ->
+        notificationsOn = notificationsEnabled(context)
+        // Android stops showing the dialog after two refusals and returns
+        // "denied" silently; the settings page is the only way back.
+        if (!granted) openNotificationSettings(context)
+    }
+
+    LifecycleEventEffect(Lifecycle.Event.ON_RESUME) {
+        notificationsOn = notificationsEnabled(context)
+        batteryOptimized = !isIgnoringBatteryOptimizations(context)
+    }
+
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        SystemStatusChip(
+            icon = if (notificationsOn) Icons.Default.NotificationsActive
+            else Icons.Default.NotificationsOff,
+            title = stringResource(R.string.home_health_notifications),
+            value = stringResource(
+                if (notificationsOn) R.string.home_health_notifications_on
+                else R.string.home_health_notifications_off
+            ),
+            ok = notificationsOn,
+            onClick = {
+                val needsPermission = Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+                    ContextCompat.checkSelfPermission(
+                        context,
+                        Manifest.permission.POST_NOTIFICATIONS,
+                    ) != PackageManager.PERMISSION_GRANTED
+                if (needsPermission) {
+                    permissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+                } else {
+                    openNotificationSettings(context)
+                }
+            },
+            modifier = Modifier
+                .weight(1f)
+                .testTag("home_status_notifications"),
+        )
+        SystemStatusChip(
+            icon = Icons.Default.BatteryChargingFull,
+            title = stringResource(R.string.home_health_battery),
+            value = stringResource(
+                if (batteryOptimized) R.string.home_health_battery_on
+                else R.string.home_health_battery_ok
+            ),
+            ok = !batteryOptimized,
+            onClick = { requestIgnoreBatteryOptimizations(context) },
+            modifier = Modifier
+                .weight(1f)
+                .testTag("home_status_battery"),
+        )
+    }
+}
+
+@Composable
+private fun SystemStatusChip(
+    icon: ImageVector,
+    title: String,
+    value: String,
+    ok: Boolean,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val accent = if (ok) AdGuardGreenPrimary else AdGuardOrangeWarning
+    Row(
+        modifier = modifier
+            .clip(RoundedCornerShape(12.dp))
+            .background(AdGuardDarkSurface)
+            .border(1.dp, accent.copy(alpha = 0.35f), RoundedCornerShape(12.dp))
+            .clickable(onClick = onClick)
+            .padding(horizontal = 10.dp, vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Box(
+            contentAlignment = Alignment.Center,
+            modifier = Modifier
+                .size(26.dp)
+                .clip(RoundedCornerShape(8.dp))
+                .background(accent.copy(alpha = 0.15f)),
+        ) {
+            Icon(
+                imageVector = icon,
+                contentDescription = null,
+                tint = accent,
+                modifier = Modifier.size(15.dp),
+            )
+        }
+        Spacer(modifier = Modifier.width(8.dp))
+        Column {
+            Text(
+                text = title,
+                fontSize = 11.sp,
+                color = AdGuardTextPrimary,
+                maxLines = 1,
+            )
+            Text(
+                text = value,
+                fontSize = 10.sp,
+                fontWeight = FontWeight.SemiBold,
+                color = accent,
+                maxLines = 1,
+            )
+        }
+    }
+}
+
+private fun notificationsEnabled(context: Context): Boolean =
+    NotificationManagerCompat.from(context).areNotificationsEnabled()
+
+private fun openNotificationSettings(context: Context) {
+    val intent = Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS)
+        .putExtra(Settings.EXTRA_APP_PACKAGE, context.packageName)
+    runCatching { context.startActivity(intent) }
+}
+
+private fun isIgnoringBatteryOptimizations(context: Context): Boolean {
+    val power = context.getSystemService(PowerManager::class.java) ?: return false
+    return power.isIgnoringBatteryOptimizations(context.packageName)
+}
+
+private fun requestIgnoreBatteryOptimizations(context: Context) {
+    if (isIgnoringBatteryOptimizations(context)) {
+        // Already exempt: the system list is where the user could undo it.
+        runCatching {
+            context.startActivity(Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS))
+        }
+        return
+    }
+    val direct = Intent(
+        Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS,
+        Uri.parse("package:${context.packageName}"),
+    )
+    // OEMs that do not implement the direct request fall back to the list.
+    if (runCatching { context.startActivity(direct) }.isFailure) {
+        runCatching {
+            context.startActivity(Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS))
+        }
     }
 }
 

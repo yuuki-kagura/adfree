@@ -302,6 +302,14 @@
     <string name="home_quick_firewall">Firewall</string>
     <string name="home_quick_eco">Battery</string>
     <string name="home_https_needs_cert">Install the AdFree certificate first: Protection → HTTPS filtering</string>
+    <string name="home_health_notifications">Notifications</string>
+    <string name="home_health_notifications_on">On</string>
+    <string name="home_health_notifications_off">Off</string>
+    <string name="home_health_battery">Battery optimization</string>
+    <string name="home_health_battery_ok">Off</string>
+    <string name="home_health_battery_on">On</string>
+    <string name="https_off_banner">HTTPS filtering is off — some ads can slip through</string>
+    <string name="https_off_banner_action">Turn on</string>
 
     <!-- Protection tab and module details -->
     <string name="protection_subtitle">Tap a module to open its options</string>

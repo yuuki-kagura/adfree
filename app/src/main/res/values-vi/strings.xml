@@ -301,6 +301,14 @@
     <string name="home_quick_firewall">Tường lửa</string>
     <string name="home_quick_eco">Pin</string>
     <string name="home_https_needs_cert">Hãy cài chứng chỉ AdFree trước: Bảo vệ → Lọc HTTPS</string>
+    <string name="home_health_notifications">Thông báo</string>
+    <string name="home_health_notifications_on">Đã bật</string>
+    <string name="home_health_notifications_off">Chưa bật</string>
+    <string name="home_health_battery">Tối ưu pin</string>
+    <string name="home_health_battery_ok">Đã tắt</string>
+    <string name="home_health_battery_on">Đang bật</string>
+    <string name="https_off_banner">Lọc HTTPS đang tắt — một số quảng cáo sẽ lọt qua</string>
+    <string name="https_off_banner_action">Bật</string>
 
     <!-- Protection tab and module details -->
     <string name="protection_subtitle">Chạm vào một mô-đun để mở tùy chọn</string>
