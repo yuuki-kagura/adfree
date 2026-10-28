@@ -112,9 +112,119 @@ with `default-features = false` plus `full-regex-handling`, and **without**
   the app is assumed to require it and the host is allowed for a minute.
   A host keeps its pass only while it keeps hammering, and the switch clears
   every window at once. On by default.
+- **Module switches** — ad blocking (ads + annoyances), tracking protection
+  (trackers + analytics + social) and DNS protection are read on every
+  decision, so toggling one takes effect without a rebuild. Cosmetics of a
+  module-off list are dropped at build time and a rebuild is ordered when the
+  flags change; a build sequence number stops a stale build from overwriting
+  the newer result.
 - **Request log** — decisions and statistics are written to SQLite in the
   store, and the UI reads them lazily; the packet threads never talk to
   Android.
+
+### HTML filtering
+
+One engine, two syntax profiles chosen by syntax rather than pseudo-class:
+`$$`/`$@$` follows the AdGuard reference (CoreLibs, the engine behind AdGuard
+Android and the syntax AdGuard lists are written for), `##^`/`#@^` follows
+uBO/ABE.
+
+- **AdGuard profile** — `[a="v"]` and `[a*="v"]` are both substring
+  (CoreLibs #2063), `[a]` is presence; only `>` chains; no selector lists;
+  `^=`, `$=`, `~=`, `|=` and the `.x`/`#x` sugar are dropped and counted, not
+  approximated.
+- **uBO profile** — a blocking rule must name a hostname, a generic exception
+  is allowed; `:has-text` is case-insensitive over `textContent`;
+  `##^responseheader(...)` and procedural operators are dropped and counted;
+  regex is only `/re/` or `/re/i`.
+- **Text predicates** — `:contains`, `:-abp-contains` and `:has-text` all mean
+  innerHTML; the argument is raw text to the last `)` of the selector (so
+  unbalanced parentheses in the corpus work), literals are case-sensitive in
+  the AdGuard profile, and an element with empty inner content never matches.
+- **Legacy specials** — `tag-content` is a substring with `""` as the escaped
+  quote, `wildcard` is a glob on `*`, `min-length`/`max-length` measure bytes
+  of innerHTML, and a rule with a content predicate but no maximum gets
+  `max-length = 8192` (the catalogue never writes min-without-max; the
+  KB's uBO conversion adds 262144). Constraints are ANDed.
+- **Cut by bytes, never by DOM re-serialization** — a linear scanner handles
+  tags, attributes, comments, doctype/PI, void elements, raw-text elements and
+  HTML auto-close rules, with a stack for `>` chains. A cut covers the exact
+  open→close range; `<html>` is never cut; a missing close is EOF; bytes
+  outside the cut stay byte-identical, so nonces and CSP hashes survive (the
+  failure ABE hit in #1720). An unknown shape fails closed.
+- **Regex** — `regex::bytes` keeps matching linear (no ReDoS); the canonical
+  `^(?=.{m,n}$)` length patterns are answered by a length check; a pattern
+  that does not compile is dropped and counted.
+- **Exceptions** — `$@$` cancels by canonical equality: lowercase tag/attr
+  names, preserve value/argument case, fold equivalent predicates
+  (`tag-content` ↔ `:contains` literal, `*=` ↔ `=`). It can never widen the
+  filter. `#@^` does not cancel `$$` (different syntax family).
+- **Page exceptions** — only `$content` switches HTML filtering off.
+  `$document` already switches the whole exchange off through `$urlblock`
+  before a plan is built; `$elemhide`, `$generichide`, `$specifichide` and
+  `$jsinject` keep their cosmetic/JS scope. AdGuard draws the same boundary:
+  CoreLibs #1337 records the old behavior — an
+  `$elemhide,jsinject,extension` exception disabling `$$` — as the bug that
+  was fixed in 2021, and #1222 reproduces it. `filter::content_vetoed` and
+  `page_exceptions_switch_html_filtering_off` lock this in.
+- **Body path** — the same Buffer as `$replace`, 512 KiB compressed cap, and
+  a page over the 32 KiB stream threshold is still buffered when an HTML rule
+  exists. Order: `$hls → $jsonprune → HTML → $replace → snippet`. Gates:
+  `text/html`, status 200, not HEAD; byte-level cutting makes UTF-16 fail
+  closed. Rule brackets reuse the `$path`/`$url`/`$app` masks.
+- **Trust** — not gated: the trusted-list catalogue does not name `$$`/`##^`.
+- AdGuard ships this on Windows/Mac/Android/Linux (and ABE in Firefox); the
+  crate has no action for it, so the rewrite stage owns it.
+
+### Userscripts
+
+- **Metadata** — `@match`, `@include`, `@exclude`, `@run-at`, `@noframes`,
+  `@version`, `@grant` and `@require`. A script without a header keeps the old
+  behavior: every page, document-start. A script with a header defaults to
+  document-idle; if every `@match`/`@include` is invalid the script stays
+  off — it never falls back to every URL. Host wildcards accept `*` or a `*.`
+  prefix only (`*example.com` does not become a suffix glob). Patterns become
+  regexes once in Rust; caps are 64 patterns/script, 2048 characters/pattern
+  and 256 header lines.
+- **Run timing** — the `<script src>` tag carries no `defer`. `defer` used to
+  move document-start scripts to `interactive`; now a document-start script
+  runs while `readyState === 'loading'`, and end/idle waits inside the
+  wrapper.
+- **Page-context shims** — `unsafeWindow`, `GM_addStyle`, `GM_log`,
+  `GM_info`, `GM_xmlhttpRequest`, `GM_download`, `GM_openInTab`,
+  `GM_notification`, `GM_setClipboard`, `GM_addElement`, the
+  `GM_*Value`/listener family and `GM_registerMenuCommand`/
+  `GM_unregisterMenuCommand`. Network calls use the page's own `fetch`, so
+  CORS and CSP still apply: this is a compatibility shim, not a bypass.
+  Storage is the page origin's `localStorage`, namespaced per script id, so
+  values do not cross origins the way an extension's storage would. Menu
+  commands render in a closed shadow-root panel on the page.
+- **Deliberately unsupported** — `@resource`, `@connect`, `@sandbox` and a
+  real CORS bypass. Missing grants are named in the console and in the UI.
+- **`@require`** — fetched at install/refresh, at most 8 URLs (deduplicated,
+  order kept), 2 MiB each, 30 s timeout, embedded after the header inside a
+  guard; a failure leaves a console warning. Body plus dependencies stays
+  under 1 MiB.
+- **Store** — the Greasy Fork sheet uses the public API, with paging and
+  sort; 50 rows per page, non-http(s) rows dropped, and an installed script
+  stays disabled until its body actually downloads. Scripts can also be
+  imported from a file, created and edited in-app; `@require` is only fetched
+  when installing from a URL.
+- **Built-in AdFree Extra** — a userscript stub for BlockAdBlock/FuckAdBlock
+  (written locally) ships seeded, on by default under the scripts master
+  switch and only runs with HTTPS filtering. It is the equivalent of
+  AdGuard Extra's anti-adblock shim, not a copy of its code.
+
+### Filter-list lifecycle
+
+A list or script is enabled only after its body downloads; a failure keeps
+the row off with the real message instead of a silent no-op. Enabled lists
+are refreshed when the app opens or resumes (default 24 h, 0 = off, 30 min
+throttle), one engine push after the pass. The catalogue seeds the built-in
+lists; custom lists can be added, edited and deleted with confirmation, user
+rules can be imported/exported, and a master switch disables every userscript
+at once. Filter detail metadata (size, version, source, last error) comes
+from the core, not from placeholders.
 
 ## Module layout
 
@@ -176,7 +286,7 @@ Downloads land in a temporary file and are renamed into place, so a killed
 process never leaves a half-written list behind. The file names predate the
 move from Kotlin, so installed apps keep their data without a migration.
 
-SQLite schema v1 (`PRAGMA user_version`):
+SQLite schema v3 (`PRAGMA user_version`; migrations are additive):
 
 ```sql
 CREATE TABLE settings(
@@ -187,6 +297,7 @@ CREATE TABLE log_events(
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   ts_ms INTEGER NOT NULL, action INTEGER NOT NULL, category INTEGER NOT NULL,
   domain TEXT NOT NULL, ip TEXT NOT NULL, rule TEXT NOT NULL, list_name TEXT NOT NULL,
+  app TEXT NOT NULL DEFAULT '',
   latency_ns INTEGER NOT NULL DEFAULT 0, bytes_saved INTEGER NOT NULL DEFAULT 0,
   ipv6 INTEGER NOT NULL DEFAULT 0);
 CREATE INDEX log_events_ts ON log_events(ts_ms);
@@ -206,6 +317,13 @@ CREATE TABLE scripts(id TEXT PRIMARY KEY, name TEXT, url TEXT, enabled INTEGER, 
   the design and bloat the binary.
 - Settings are stored as opaque JSON: the app owns the shape today, and a
   future platform port can lift the schema into Rust with a migration.
+- Schema v3 adds `log_events.app`; rows written before it keep an empty app
+  rather than a guess. The app is resolved from the uid table on DNS, the
+  firewall and MITM flows (resolved at SYN), so a MITM connection costs one
+  platform binder lookup for its log row.
+- Backup is a versioned JSON envelope (`adfree-backup`) holding the settings
+  and filter blobs, capped at 4 MB; if writing filters fails, settings roll
+  back. Userscript bodies are not part of the backup.
 
 The migration ran in five phases, all complete: (A) store + SQLite + log +
 counters + shared leaf key, (B) the Activity screen reads the database,
@@ -215,7 +333,8 @@ for a worker pool: handshakes dominate, and the work is already split across
 two threads.
 
 Protection settings and the HTTPS toggle persist across restarts; the selected
-filter lists, custom rules, userscripts and per-app choices do too.
+filter lists, custom rules, userscripts, custom DNS providers and per-app
+firewall choices do too.
 
 ## HTML injection and the local asset origin
 
@@ -299,6 +418,10 @@ at everything below it):
 - When `$document` is in play, the snippet builder injects nothing at all: no
   stylesheet, payload or runtime. The user's own script is not the lists' to
   switch off and still goes out.
+- The table covers cosmetics and scriptlets. Response-body filtering has its
+  own veto: only `$content` disables HTML filtering (`$$`/`##^`), while the
+  `$elemhide` family keeps its cosmetic scope (see
+  [HTML filtering](#html-filtering)).
 
 ### What only trusted lists may run
 
@@ -512,12 +635,51 @@ non-TLS flow is spliced intact. A `connect()` that is reset (NAT or `TIME_WAIT`
 when a port is reused on the emulator) is retried **once on a fresh socket**
 before the flow is dropped, so the client sees no interruption.
 
-ECH exists to keep this proxy out of the connection, which is the opposite of
-what HTTPS filtering needs. By default the DNS half rewrites the `ech` SvcParam
-away, so no client can wrap a hello in a config the proxy cannot read, while
-the original ECHConfigList is kept for the upstream half. When full ECH is
-requested, the config reaches the client instead; hosts that use it end-to-end
-are spliced rather than filtered.
+### Encrypted ClientHello (ECH)
+
+ECH aims at the opposite of HTTPS filtering: it hides the inner name. The two
+legs are handled separately, and the default covers only the upstream half.
+
+- **Default: upstream ECH.** The DNS half strips the `ech` SvcParam (key 5)
+  from HTTPS/SVCB answers and clamps the answer TTL to 60 s, so a client
+  cannot wrap a hello in a config the proxy cannot read. The raw
+  ECHConfigList is read *before* the strip and kept for the proxy's own
+  connection; rustls offers it upstream, so an ECH-required origin still
+  accepts the handshake and the plaintext stays filterable. A refused offer is
+  retried once in the clear on a fresh peer socket, and the host sits ECH out
+  for 10 minutes.
+- **Required-host exemption.** One `421`, or two bare `502`s (no `Server`
+  header) within 10 minutes, mark a host as requiring ECH for 6 hours. Its DNS
+  answer keeps the config (still clamped), the browser can run ECH end to
+  end, and a hello whose SNI is that config's public name is spliced by name.
+  A plain hello to the same host is still terminated and filtered — the proxy
+  offers ECH upstream instead.
+- **Public-name hello with full ECH off.** A cached ECHConfig can make Chrome
+  send a real ECH hello long after the switch is off. If the SNI is a known
+  public name and no exempt host publishes it, the hello is terminated (one
+  failed handshake); Chrome retries in the clear, that retry is MITM'd with
+  upstream ECH, and the page stays filtered. Splicing instead would silently
+  drop filtering for a host that merely shares `cloudflare-ech.com` with an
+  exempt one. A name the proxy never learned falls through as GREASE and is
+  terminated anyway, with the same outcome.
+- **Full ECH (`Config::full_ech`, off by default).** The DNS half keeps the
+  config, the client may run ECH end to end, and that host is spliced and
+  unfiltered for flows that actually negotiate ECH. Non-ECH clients (GREASE,
+  older stacks) are still terminated, filtered and offered ECH upstream; the
+  config is still kept for that half, and the refusal fallback still works.
+  No TTL clamp is applied because the answer is the origin's again.
+- **AdGuard parity.** Public evidence shows AdGuard's ECH is likewise the
+  proxy↔origin leg: opt-in (`network.https.ech.enabled`), requiring DNS
+  filtering, and documented as needing support on both sides. Its
+  client↔proxy leg stays plain under HTTPS filtering — ECH checkers behind
+  AdGuard report GREASE/plain (AdguardForAndroid #6249, still open in October
+  2026). AdGuard documents no full-ECH/splice mode. AdFree matches that
+  architecture and adds `full_ech` as an explicit per-host trade; omitting
+  client↔proxy ECH by default is therefore not a parity gap.
+  Evidence: [Mac 2.10 blog](https://adguard.com/en/blog/adguard-v2-10-for-mac.html),
+  [ECH obstacles blog](https://adguard.com/en/blog/encrypted-client-hello-misconceptions-future.html),
+  [AdguardForAndroid #6249](https://github.com/AdguardTeam/AdguardForAndroid/issues/6249),
+  [CoreLibs #1751](https://github.com/AdguardTeam/CoreLibs/issues/1751).
 
 `page_runtime.js` is the script injected into pages. Its tests run it in a real
 Chromium; setting `ADFREE_CDP` adds one more check against the emulator's
@@ -549,8 +711,42 @@ feature is opt-in (`filter_http3`, effective only with HTTPS filtering on).
   ALPN mismatch, a full flow table (64) or a missing upstream closes the QUIC
   connection and the client falls back to TCP, which is filtered anyway.
   Chrome/Cronet reject user CAs for QUIC, so they always take that path.
-- **Not with SOCKS5.** A configured proxy carries TCP only; QUIC is dropped so
-  the browser uses the proxied, filtered transport.
+- **Not with SOCKS5.** A configured proxy carries TCP and non-DNS UDP, but
+  QUIC is dropped so the browser uses the proxied, filtered transport.
+
+### Outbound proxy (SOCKS5)
+
+An opt-in routing mode for the whole tunnel. TCP flows use `CONNECT`;
+non-DNS UDP mappings use `UDP ASSOCIATE`, one bridge thread per mapping
+(`udpproxy.rs`). The handshake is a syscall-free state machine (`socks5.rs`,
+RFC 1928 plus RFC 1929 credentials): the caller writes `take_output()` and
+feeds reads through `on_bytes()`, application bytes stay queued until the
+reply, and bytes beyond the reply are handed back to the relay. Credentials
+are sent only when both halves exist, each capped at 255 bytes. Host and port
+must be an IP literal — the packet loop never resolves names.
+
+Automatic routing is the default: loopback, private, link-local, CGNAT,
+198.18/15, documentation, multicast, 240/4, ULA and other non-internet
+destinations stay direct, because a remote proxy cannot reach them and a
+private destination must not be handed to a third party. Manual mode sends
+every flow through the proxy. The proxy carries TCP and non-DNS UDP, but QUIC
+is still dropped in proxy mode so the browser falls back to TCP, which the
+proxy filters end to end. DNS has its own forwarder and is not proxied. Open
+flows keep the path they started with; only a new flow reads the current
+configuration. The password lives in the app-private SQLite blob, unencrypted
+beyond the OS sandbox.
+
+### Per-app network policy
+
+Three package sets — cellular, Wi-Fi and screen-off — are enforced in Rust
+(`AppNetworkPolicy`). A TCP SYN resolves the uid to packages before any socket
+is opened and is refused with a RST and a reason; a UDP mapping checks at
+creation; DNS is refused before the filter lists and answers in the configured
+block mode. Changing the policy, the transport or screen state also cuts
+flows already open (`drop_restricted_flows`), always from the forwarder
+thread. Flows opened while the policy was still empty are the one gap: they
+are not re-evaluated until they close, while every later change is applied
+live.
 
 ### Installing the certificate
 
@@ -570,6 +766,10 @@ Encryption & credentials → Install a certificate → CA certificate → pick t
 file (screen lock required) → return to the app: "Certificate: installed", and
 the toggle turns itself ON.
 
+The CA card also reads `notAfter` from the PEM and warns in amber under 30
+days, in red once expired; an empty or malformed PEM reports no date instead
+of a fake one.
+
 **Trust store on Android 14+:** certificates are **no longer** read from
 `/system/etc/security/cacerts`; the system store is the
 `com.android.conscrypt` APEX (read-only, and a tmpfs overlay does not convince
@@ -577,6 +777,23 @@ Chrome). The correct path is the **user store**:
 `/data/misc/user/0/cacerts-added/<hash>.0` (system:system, 644, label
 `misc_user_data_file`) — exactly where the dialog installs it. On a rooted
 emulator, `tools/install-emulator-ca.sh` can replace the Settings steps.
+
+**Apps that reject the CA.** Apps targeting API 24+ ignore user-store CAs;
+Cronet in Google apps is the visible case. The engine learns such an app from
+the client's `CertificateUnknown`/`UnknownCA`/`BadCertificate`/
+`CertificateExpired`/`CertificateRevoked` alert (an alert from the origin side
+never counts), splices that app's HTTPS verbatim from then on, logs once per
+app, and keeps DNS filtering and `$app` rules active. A real CA change (not a
+UI refresh) or a successful root install clears the learned set so those apps
+are tried again.
+
+**Root mode.** Where `su` is available, `trust.rs` installs the same CA into
+the system store: a Magisk module on Android (a bind mount over the Conscrypt
+APEX on 14+), a live mount in init's namespace without Magisk, or
+`update-ca-certificates`/`update-ca-trust` on Linux. `su` runs only when the
+user presses the button; status probes never elevate. With the CA in the
+system store, Cronet apps are filtered instead of spliced. The root install
+path is covered by automated tests only — the test device has no root.
 
 ## Threading and resource use
 
@@ -636,12 +853,12 @@ Requirements: JDK 21 (source/target 17), Android SDK, **Android NDK r28c**
 ./gradlew :app:assembleDebug -PskipNative   # skip native code (fast, UI only)
 
 cd rust
-cargo test                            # 576 library tests (2 ignored) + integration tests
+cargo test                            # 708 library tests (2 ignored) + integration tests
 cargo clippy --all-targets            # 0 warnings
 
 cd ..
 ./gradlew :app:assembleDebug :app:testDebugUnitTest
-bun install && bun run test           # 22 browser tests (1 skips without ADFREE_CDP)
+bun install && bun run test           # 32 browser tests (1 skips without ADFREE_CDP)
 ```
 
 The JS tests run `page_runtime.js` in a real Chromium; `bun` is the package
@@ -692,15 +909,63 @@ the engine already reaches the platform only through the protector and UID
 callbacks. What changes per platform is the shell (tunnel plumbing, trust
 store, lifecycle), not the rules.
 
+## Parity notes (AdGuard)
+
+AdGuard's filter engine source is not public (its CoreLibs repository ships
+only a README), so parity questions are settled from the knowledge base, the
+issue tracker, release notes and measured behavior rather than from code.
+
+- **HTML filtering and page exceptions.** AdGuard does not let `$elemhide`,
+  `$generichide`, `$specifichide` or `$jsinject` disable HTML filtering; they
+  keep their cosmetic/JS scope. Only `$content` (and `$document`, through the
+  `$content` part of its expansion) does. CoreLibs
+  [#1337](https://github.com/AdguardTeam/CoreLibs/issues/1337) records the old
+  behavior — a `$elemhide,jsinject,extension` exception disabling `$$` — as
+  the bug that was fixed in 2021, and
+  [#1222](https://github.com/AdguardTeam/CoreLibs/issues/1222) reproduces it.
+  `filter::content_vetoed` matches the fixed behavior.
+- **`$path` is not a network modifier.** It exists only in the bracket
+  (cosmetic/HTML/raw-JS) form. The AdGuard knowledge base's basic-modifier
+  table, AGTree and tsurlfilter have no network `path`, so a network rule
+  carrying `$path=` is dropped by both stacks — parity, not a gap. The live
+  corpus has zero such rows; the bracket form is implemented.
+- **ECH.** AdGuard's ECH is also the proxy↔origin leg, opt-in and dependent
+  on DNS filtering; its client↔proxy leg remains plain under HTTPS filtering
+  (issue #6249 above), and no full-ECH mode is documented. The detailed
+  comparison is in "Encrypted ClientHello (ECH)".
+
 ## Current limitations
 
 - Android is the only shipping shell today; the platform roadmap above is the
   plan for Linux, Windows, macOS and iOS.
 - HTTPS filtering is OFF by default and requires installing the CA and a
-  screen lock before it can be enabled.
-- Full ECH routing is available, but hosts that use it are spliced rather than
-  filtered by design.
+  screen lock before it can be enabled. Apps targeting API 24+ ignore
+  user-store CAs: they are either learned and spliced verbatim, or covered by
+  the root system-store install (automated tests only so far).
+- ECH: by default only the proxy↔origin leg uses ECH. With `full_ech` on, a
+  flow that negotiates ECH is spliced and unfiltered by design; non-ECH flows
+  to the same host stay filtered. A public-name hello without `full_ech` or an
+  exemption for a host behind it costs one failed handshake so the retry is
+  filtered.
 - HTTP/3 filtering is opt-in, needs HTTPS filtering, and Chrome/Cronet still
-  reject user CAs for QUIC, so they fall back to TCP. QUIC through SOCKS5 is
-  dropped rather than proxied.
+  reject user CAs for QUIC, so they fall back to TCP. QUIC is dropped in
+  SOCKS5 proxy mode.
+- SOCKS5: the proxy host must be an IP literal; automatic routing keeps
+  private and other non-internet destinations direct; DNS is not proxied;
+  open flows keep their original path; the password is stored unencrypted in
+  the app-private database.
+- Per-app firewall does not retroactively evaluate flows opened before the
+  first policy arrived.
+- HTML filtering is byte-level: unsupported operators are dropped and
+  counted, UTF-16 documents fail closed, and `<html>` is never cut. The uBO
+  profile approximates `:has-text` without entity decoding.
+- Redirect resources the build cannot serve degrade to the plain block the
+  rule would have produced. `.js` aliases that duplicate a scriptlet ident are
+  not registered, because the engine would drop the duplicate silently and
+  turn the rule into a hard block.
+- Userscripts run in the page's main world. There is no `@resource`,
+  `@connect`, `@sandbox` or CORS bypass; GM storage is page-origin
+  `localStorage`, namespaced per script, and does not cross origins. The
+  Greasy Fork sheet uses a public endpoint and loads one page of 50 rows at a
+  time.
 

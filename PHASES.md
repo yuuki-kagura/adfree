@@ -1,7 +1,7 @@
 # AdFree — 8 phase còn lại
 
-Ghi chú tạm từ phiên Qoder trước (danh sách `#39`–`#46`). Đây là việc đang làm
-tiếp, không phải kế hoạch parity mạng trong `plan.md`.
+Ghi chú tạm từ phiên Qoder trước (danh sách `#39`–`#46`). Thiết kế, các phát
+hiện parity và quyết định cố ý nằm trong `DESIGN.md`.
 
 | # | Phase | Trạng thái |
 |---|-------|------------|

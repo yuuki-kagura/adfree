@@ -19,8 +19,8 @@ telemetry.
   the CA being installed.
 - **Optional HTTP/3 filtering** — with HTTPS filtering on, QUIC (UDP/443) is
   terminated and filtered like HTTPS instead of dropped. Chrome/Cronet still
-  refuse user CAs for QUIC and fall back to TCP; SOCKS5 proxy mode keeps
-  dropping QUIC because the proxy carries TCP.
+  refuse user CAs for QUIC and fall back to TCP; SOCKS5 proxy mode drops QUIC
+  so the browser uses the proxied TCP path.
 - **AdGuard/EasyList/uBO rules** — via adblock-rust, plus the response-body
   modifiers the crate lacks: `$$`/`##^` HTML filtering, `$jsonprune`, `$hls`,
   and `$path`/`$url` masks.
@@ -62,7 +62,7 @@ cargo clippy --all-targets      # must stay warning-free
 
 cd ..
 ./gradlew :app:testDebugUnitTest
-bun install && bun run test     # 22 Chromium tests (1 needs ADFREE_CDP)
+bun install && bun run test     # 32 Chromium tests (1 needs ADFREE_CDP)
 ```
 
 CI runs Vitest, the Rust tests, clippy, Android Lint and a debug build on every
@@ -83,4 +83,5 @@ including the Android 14+ user trust store path, is documented in
   the planned targets — see the
   [platform roadmap](DESIGN.md#platform-roadmap).
 - HTTPS filtering requires installing the CA.
-- Hosts using full ECH are spliced rather than filtered.
+- With full ECH on, flows that negotiate ECH are spliced rather than
+  filtered; flows that do not use ECH stay filtered.
