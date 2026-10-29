@@ -359,6 +359,16 @@ of text; release build, `FilterEngine::rebuild`):
   never match — 14 MB of the engine that blocked nothing. They now block the
   domain and its subdomains (175 k of them are not in the AdGuard DNS filter
   either), for about the memory the dead patterns already took.
-- The device PSS rows above are from the earlier runs and stay as history:
-  this session's device is running a debug APK, so its numbers are not
-  comparable until a release build is installed again.
+- The device PSS rows above are from the earlier runs and stay as history.
+  With the release build installed again (same seven lists as the host run),
+  `dumpsys meminfo` reported **239.4 MB** foreground `TOTAL PSS` (native heap
+  121.8 MB) and **155.6 MB** after 90 s in the background (RSS 131.6 MB, swap
+  PSS 97.0 MB, native heap PSS 26.6 MB with 88.4 MB of it swapped). The
+  pre-change device baselines were 263 MB foreground and 230–247 MB
+  background, so the shrink is visible on the device too.
+- **Log attribution after the change**: the per-host decision cache keeps the
+  verdict and not the rule text, so a repeated block was logged with an empty
+  rule and list — visible on the device as a row whose detail named no rule.
+  The DNS path now asks for the detailed verdict only when a row is actually
+  being written (`logging_live()`), so the write pays for the lookup, not
+  every query. `a_cached_block_still_logs_its_rule` pins the behaviour.

@@ -3242,10 +3242,16 @@ impl Core {
             }
         }
         let t0 = now_ns();
-        let verdict = self.filter.check_host(host);
+        let mut verdict = self.filter.check_host(host);
         let decision_ns = now_ns() - t0;
         self.stats.record_decision(decision_ns);
         let latency_ns = decision_ns.min(u32::MAX as u64) as u32;
+        // A cached decision keeps the verdict but not the rule that made it,
+        // and a log row is supposed to name its list and rule. Only the path
+        // that writes a row pays for the lookup the cache skipped.
+        if verdict.blocked && verdict.rule_text.is_none() && self.logging_live() {
+            verdict = self.filter.check_host_detailed(host);
+        }
 
         // A host whose match wants a `$redirect` is not refused here: the
         // resource stands in for it, and only the HTTPS path knows the URL the
@@ -5942,6 +5948,43 @@ mod tests {
         });
         for _ in 0..crate::smart::RETRY_LIMIT * 2 {
             assert_eq!(dns_reply_rcode(&plain, "ads.test"), Some(NXDOMAIN));
+        }
+    }
+
+    /// A repeated query is answered from the per-host decision cache, which
+    /// keeps the verdict and drops the rule text. The log row still has to
+    /// name the list and the rule that blocked the host.
+    #[test]
+    fn a_cached_block_still_logs_its_rule() {
+        let dir = std::env::temp_dir().join("adfree-engine-cached-log");
+        std::fs::create_dir_all(&dir).expect("temp dir");
+        let path = dir.join("cached-list.txt");
+        std::fs::write(&path, "||cached.ads.test^\n").expect("write list");
+        let lists = vec![FilterListInfo {
+            id: 1,
+            name: "cached-list".to_string(),
+            url: String::new(),
+            enabled: true,
+            local_path: Some(path),
+            format: crate::filter::ListFormat::Standard,
+            category: 0,
+            trusted: true,
+            rule_count: 0,
+            last_error: None,
+        }];
+        const NXDOMAIN: u8 = 3;
+
+        let core = Core::new();
+        core.set_lists(lists, Vec::new());
+        assert_eq!(dns_reply_rcode(&core, "cached.ads.test"), Some(NXDOMAIN));
+        assert_eq!(dns_reply_rcode(&core, "cached.ads.test"), Some(NXDOMAIN));
+
+        let events = core.take_events(10);
+        assert_eq!(events.len(), 2, "one row per query");
+        for event in &events {
+            assert_eq!(event.domain(), "cached.ads.test");
+            assert_eq!(event.rule(), "||cached.ads.test^");
+            assert_eq!(event.list(), "cached-list");
         }
     }
 
