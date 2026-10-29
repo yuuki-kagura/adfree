@@ -147,6 +147,90 @@ answer for names it can still answer quickly.
 - AdGuard's background CPU is spent with no probes in flight; the idle window
   was taken twice (254 then 194 ticks) after two minutes of settling.
 
+## Re-run — after the cache and idle work (2026-10-29, evening)
+
+AdFree `813c87d`, AdGuard nightly 4.14.68, measured back to back in alternating
+order on the same Wi-Fi (AdFree, AdGuard, AdGuard, AdFree, AdFree, AdGuard), so
+network drift is shared by both. Each app was backgrounded and left to settle;
+the probe harness is unchanged (6 rounds × 18 hostnames). Round medians are
+listed rather than one combined figure, because the Wi-Fi moved during the
+session and the spread is the honest result.
+
+| Metric | AdFree | AdGuard | Verdict |
+| --- | --- | --- | --- |
+| Blocked-host latency (per round) | 61 / 65.5 / 57.5 ms | 57.5 / 62.5 ms | parity |
+| Allowed-host latency (per round) | 72.5 / 70 / 71 ms | 58.5 / 61 ms | AdFree ~11 ms slower |
+| Allowed-host mean (per round) | 86 / 87.5 / 184 ms | 82 / 91 ms | AdFree equal except one congested round (2 timeouts) |
+| CPU for the same 108 probes | 1.33 / 1.57 / 1.93 s | 2.09 / 1.99 s | AdFree 20–35 % lower |
+| Background idle CPU (60 s windows) | 0.18 / 0.13 / 0.62 % | 1.53 % | AdFree 3–10× lower |
+| Foreground idle CPU (60 s, app open) | 9.9 % | 10.3 % | parity |
+| RAM background PSS (settled) | ~247 MB (239–253 across processes) | 288 MB | AdFree ~14 % lighter |
+| RAM foreground PSS | 263 MB | 350 MB | AdFree ~25 % lighter |
+
+The idle figures are the point of this run: with nothing in flight the
+forwarder now wakes once every 10 s instead of once a second, and the fresh
+process that still had startup work to settle spent 37 ticks in its first
+measured minute against 8–11 in the settled ones. AdGuard's background cost
+measured lower this session (92 ticks) than in the previous one (194–254); it
+is still an order of magnitude above AdFree's.
+
+### Cold lookups (first query of a never-seen name)
+
+`nc -z -w 5 <unique>.127.0.0.1.nip.io 443`, eight probes per round.
+
+| | AdFree | AdGuard |
+| --- | --- | --- |
+| Median per round | 220.5 / 223 / 230.5 / 226 ms | 145.5 / 144.5 / 138.5 ms |
+| Range | 209–241 ms (one congested round: 306–676) | 109–342 ms |
+
+The ~80 ms gap is the hedge, not the forwarding: `94.140.14.14` takes 350 ms or
+more (sometimes never answers) for a name it has not seen, the hedge hands the
+query to the system resolver (`8.8.8.8`) at 100 ms, and that answers in another
+~110 ms. AdGuard reaches a cold name through an upstream that answers in
+~140 ms here. Lowering the hedge would shrink the gap but hand more warm
+lookups to the system resolver, whose answers carry no DNS-level blocking — the
+hedge stays where it is.
+
+### DNS cache, verified on the device
+
+- First lookup after a restart (the cache is empty): 143–257 ms.
+- The same host 30 s later: 56–84 ms — local, no upstream round trip.
+- Two minutes on, past the record's TTL, one probe cost 235 ms again and the
+  following ones dropped back to 62–84 ms: expiry and refill both behave.
+- `ping` from adb printed `MicRoSOft.COm`: the mixed-case QNAME its resolver
+  had invented came back intact, so a hit re-adopts the caller's spelling
+  instead of replaying the one that happened to be cached.
+- The engine's forwarded-query counter is not readable from adb; the hit path
+  is asserted in `a_repeated_query_is_answered_from_the_cache`, and the
+  miss-then-hit timings above are that path running on the device.
+
+### Fixes applied in this run
+
+| Fix | Where | Commit |
+| --- | --- | --- |
+| Repeated DNS lookups answered from a bounded, TTL-respecting cache | `rust/src/dnscache.rs`, `rust/src/dns.rs`, `rust/src/engine.rs` | `813c87d` |
+| Forwarder sleeps 10 s when no query, relay, NAT mapping or QUIC flow exists | `rust/src/engine.rs` | `813c87d` |
+| Rule-size metric no longer serializes the whole engine just to read its length | `rust/src/filter.rs` | `813c87d` |
+| Live event ring 4 096 → 512 slots (~1.5 MB of anonymous memory) | `rust/src/events.rs` | `813c87d` |
+
+### Notes
+
+- Two rounds had `zq8f8.adnxs.com` allowed for the whole round (6 of 48 blocked
+  probes connected): the smart filter's 60 s allow window after a burst of
+  identical blocks, described above. AdGuard has no equivalent window.
+- The allowed-host gap tracks the Wi-Fi, not the code: connects to a fixed set
+  of public IPs measured 66 ms on both apps in one pair of runs and 69 vs 57 ms
+  in another, and the DNS step on AdFree — same destination IP, name versus
+  address — is 0–5 ms once warm. No forwarding-path change was made in this
+  run.
+- PSS includes swapped pages. AdFree keeps ~70 MB of its total in swap;
+  AdGuard's background total is 288 MB of which 244 MB is swap (RSS 115 MB).
+  The numbers above are the `TOTAL PSS` the system reports, as in the previous
+  sections.
+- The filter rebuild still materializes the list text (~26 MB on this device)
+  for the duration of a rebuild; the compiled engine drops it afterwards. That
+  peak is unchanged and is not part of the settled figures.
+
 ## Re-running
 
 ```
