@@ -21,10 +21,20 @@ use std::os::unix::io::RawFd;
 pub const SOCKET_POOL_PUB: usize = 4;
 const SOCKET_POOL: usize = SOCKET_POOL_PUB;
 const QUERY_TIMEOUT_MS: u64 = 12_000;
-/// A silent primary is retried through the fallback after this long. Short
-/// enough that a dead server is noticed while the client is still waiting,
-/// long enough that one lost datagram does not switch resolvers.
-const BACKUP_AFTER_MS: u64 = 2_000;
+/// A silent primary is retried through the fallback after this long.
+///
+/// The resolver this device talks to drops the odd query, and Android's own
+/// stub gives a lookup roughly a second before it retries or fails, so a
+/// two-second wait turned every dropped packet into a visible stall. The
+/// retry is now hedged: a duplicate is a few dozen bytes, and the first
+/// answer wins, so a short delay can only help. It stays above the warm
+/// latency of a healthy resolver (~60-80 ms here), which keeps every lookup
+/// from being sent twice.
+const BACKUP_AFTER_MS: u64 = 100;
+/// Encrypted transports pay a handshake before the first answer and were
+/// chosen for their privacy, so a slow reply must not be duplicated in the
+/// clear. Only a resolver that is clearly not going to answer is retried.
+pub const SECURE_BACKUP_AFTER_MS: u64 = 2_000;
 const MAX_MESSAGE: usize = 4096;
 const MAX_REPLIES_PER_POLL: usize = 32;
 
@@ -49,6 +59,10 @@ pub struct Pending {
     pub safe_host: String,
     /// The primary never answered and the query now waits on the fallback.
     pub via_backup: bool,
+    /// How long this query waits for the primary before the fallback is
+    /// tried; plain UDP races ahead, encrypted transports are given time to
+    /// finish their handshake.
+    pub backup_after_ms: u64,
 }
 
 /// An answer that came back from upstream.
@@ -255,6 +269,7 @@ impl Upstream {
                 purpose,
                 safe_host: safe_host.to_string(),
                 via_backup: false,
+                backup_after_ms: BACKUP_AFTER_MS,
             },
         );
         Some(key)
@@ -384,7 +399,7 @@ impl Upstream {
             .iter()
             .filter(|(_, p)| {
                 !p.via_backup
-                    && now_ms.saturating_sub(p.sent_ms) > BACKUP_AFTER_MS
+                    && now_ms.saturating_sub(p.sent_ms) > p.backup_after_ms
                     && self.backup.is_some()
             })
             .map(|(k, _)| *k)
@@ -417,6 +432,28 @@ impl Upstream {
             self.timeouts += 1;
         }
         out
+    }
+
+    /// Milliseconds until some pending query is due attention: a silent
+    /// primary is retried through the fallback, and every query is failed at
+    /// the full budget. The forwarder caps its blocking wait with this so a
+    /// retry fires when it is due instead of on the next idle tick, which was
+    /// up to a second later. `None` means nothing is in flight.
+    pub fn next_deadline_in(&self, now_ms: u64) -> Option<u64> {
+        let fallback = self.backup.is_some();
+        self.pending
+            .values()
+            .map(|p| {
+                let due = if fallback && !p.via_backup {
+                    p.sent_ms.saturating_add(p.backup_after_ms)
+                } else {
+                    p.sent_ms.saturating_add(QUERY_TIMEOUT_MS)
+                };
+                // `expire` uses a strict comparison, so a wait that ends
+                // exactly on the deadline must not spin in a zero timeout.
+                due.saturating_sub(now_ms).max(1)
+            })
+            .min()
     }
 
     pub fn clear(&mut self) {
@@ -557,6 +594,7 @@ mod tests {
                 purpose: Purpose::Client,
                 safe_host: String::new(),
                 via_backup: false,
+                backup_after_ms: BACKUP_AFTER_MS,
             },
         );
         assert_eq!(u.expire(1_000 + QUERY_TIMEOUT_MS + 1).len(), 1);
@@ -581,6 +619,7 @@ mod tests {
                 purpose: Purpose::Client,
                 safe_host: String::new(),
                 via_backup: false,
+                backup_after_ms: BACKUP_AFTER_MS,
             },
         );
         // Still inside the retry delay: the primary gets its chance.
@@ -592,6 +631,36 @@ mod tests {
         assert!(expired[0].via_backup);
         assert_eq!(u.pending_len(), 0);
         assert_eq!(u.timeouts(), 1);
+    }
+
+    #[test]
+    fn the_wake_deadline_follows_the_retry_delay() {
+        let mut u = upstream();
+        assert_eq!(u.next_deadline_in(1_000), None);
+        u.pending.insert(
+            7,
+            Pending {
+                client_txid: 1,
+                socket: 0,
+                packet: vec![0u8; 20],
+                sent_ms: 1_000,
+                purpose: Purpose::Client,
+                safe_host: String::new(),
+                via_backup: false,
+                backup_after_ms: BACKUP_AFTER_MS,
+            },
+        );
+        // Without a fallback there is nothing to do before the full budget.
+        assert_eq!(u.next_deadline_in(1_000), Some(QUERY_TIMEOUT_MS));
+        u.set_backup(Some(SocketAddr::V4(SocketAddrV4::new(
+            Ipv4Addr::new(1, 1, 1, 1),
+            53,
+        ))));
+        assert_eq!(u.next_deadline_in(1_000), Some(BACKUP_AFTER_MS));
+        assert_eq!(u.next_deadline_in(1_000 + BACKUP_AFTER_MS - 10), Some(10));
+        // Exactly on the deadline the wait stays non-zero so the loop cannot
+        // spin; the next pass has `expire` firing.
+        assert_eq!(u.next_deadline_in(1_000 + BACKUP_AFTER_MS), Some(1));
     }
 
     #[test]

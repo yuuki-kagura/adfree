@@ -290,6 +290,21 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    /**
+     * The stats poller only runs while a screen is on top. Without this the
+     * repository would keep ticking every 500ms in the background — waking
+     * the process and its threads for a UI nobody can see.
+     */
+    override fun onStart() {
+        super.onStart()
+        container.repository.setUiVisible(true)
+    }
+
+    override fun onStop() {
+        container.repository.setUiVisible(false)
+        super.onStop()
+    }
+
     /** Tile and update-notification deep links arrive here while we are alive. */
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)

@@ -60,6 +60,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.flow.updateAndGet
 import kotlinx.coroutines.launch
@@ -268,12 +269,28 @@ class AdGuardRepository(
     // ------------------------------------------------------ polling the engine
 
     /**
-     * One tick every 500ms with the screen on, 2s when off. This is the
-     * app's entire UI cost: two atomic reads plus a COUNT(*) on the log.
+     * Whether any screen is on top. With the app behind the keyboard nothing
+     * observes the stats flows, and a 500ms tick would wake the process (and
+     * its threads) twice a second for a screen no one is looking at.
+     */
+    private val uiVisible = MutableStateFlow(false)
+
+    /** The Activity reports its lifecycle here; the poller parks while hidden. */
+    fun setUiVisible(visible: Boolean) {
+        uiVisible.value = visible
+    }
+
+    /**
+     * One tick every 500ms with the screen on, 2s when off, and none while the
+     * UI is not visible. This is the app's entire UI cost: two atomic reads
+     * plus a COUNT(*) on the log.
      */
     private fun startStatsPoller() {
         scope.launch {
             while (true) {
+                // Parks the coroutine until the Activity comes back; the flow
+                // replays its current value, so a visible UI ticks at once.
+                uiVisible.first { it }
                 val snapshot = engine.stats()
                 _stats.value = snapshot.toUiStats(engine.isBuilding())
                 // Native warnings are buffered natively so the packet threads

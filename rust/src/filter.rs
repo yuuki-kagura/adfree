@@ -6079,12 +6079,16 @@ fn count_rules(text: &str) -> u64 {
 }
 
 /// Runs one host through the adblock engine.
+///
+/// The request carries the bare hostname, not a URL built around it, because
+/// that is what AdGuard's DNS stage matches: "every hostname is matched
+/// against this mask", and a regex rule is applied to that hostname. A
+/// fabricated `https://host/` would let URL-only rules decide a hostname —
+/// ABPVN's `/^https:\/\/[a-z]{3,}\.com\/$/` blocks every bare `.com` URL and
+/// would take down `github.com` — and would claim a request type and a
+/// third-party source the DNS stage does not have.
 fn evaluate(compiled: &Compiled, host: &str) -> HostVerdict {
-    let url = format!("https://{}/", host);
-    let request = match Request::new(&url, "https://localhost/", "xmlhttprequest", "") {
-        Ok(r) => r,
-        Err(_) => return HostVerdict::default(),
-    };
+    let request = Request::preparsed(host, host, "", "other", false, "");
     let result = compiled.engine.check_network_request(&request);
     if !result.should_block() {
         return HostVerdict::default();
@@ -6554,6 +6558,30 @@ mod tests {
         )]);
         assert!(fe.check_host("adserver-42.net").blocked);
         assert!(!fe.check_host("example.net").blocked);
+    }
+
+    #[test]
+    fn url_regex_rules_do_not_decide_a_hostname() {
+        // ABPVN ships this rule; it matches the *URL* of a bare `.com`
+        // xmlhttprequest, and a fabricated `https://host/` made it block every
+        // `.com` hostname at the DNS stage.
+        let fe = engine(vec![temp_list(
+            "abpvn.txt",
+            "/^https:\\/\\/[a-z]{3,}\\.com\\/$/$xmlhttprequest,third-party\n",
+            ListFormat::Standard,
+            3,
+        )]);
+        for host in ["github.com", "google.com", "facebook.com", "example.com"] {
+            assert!(!fe.check_host(host).blocked, "{host}");
+        }
+        let hit = fe.check_url(
+            "https://github.com/",
+            "https://localhost/",
+            "xmlhttprequest",
+            "GET",
+            &[],
+        );
+        assert!(hit.blocked, "{hit:?}");
     }
 
     #[test]

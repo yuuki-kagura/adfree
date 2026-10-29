@@ -35,6 +35,7 @@ import kotlinx.coroutines.flow.drop
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 import java.io.File
+import java.net.Inet6Address
 import java.util.concurrent.ConcurrentHashMap
 
 /**
@@ -269,8 +270,16 @@ class AdGuardVpnService : VpnService() {
             .addAddress(TUN_ADDRESS, TUN_PREFIX)
             .addDnsServer(tunnelDns)
             .addRoute(ROUTE_IPV4, ROUTE_PREFIX)
-            .addRoute("2000::", 3)
-            .setMtu(1500)
+        if (underlyingHasIpv6()) {
+            // Global IPv6 is live upstream: carry it through the tunnel so v6
+            // traffic is filtered like everything else.
+            builder.addRoute(ROUTE_IPV6, IPV6_PREFIX)
+        }
+        // With no IPv6 address/route/DNS, the framework installs
+        // `::/0 unreachable` itself (Vpn.java), which is exactly AdGuard's
+        // behaviour: clients fail the IPv6 attempt instantly instead of
+        // reaching the tunnel and dying after a relay retry.
+        builder.setMtu(1500)
             .setBlocking(true)
 
         // Không route chính app này qua tunnel: tránh DNS loop.
@@ -333,6 +342,22 @@ class AdGuardVpnService : VpnService() {
         // Protection is up, so the missing-certificate reminder is due.
         container.repository.syncHttpsReminder()
         Log.i(TAG, "TUN up (fd=$fd), dns=$tunnelDns")
+    }
+
+    /**
+     * Whether the physical network under the tunnel has a global IPv6
+     * address. The tunnel is built before `establish()`, so `activeNetwork`
+     * is still the carrier network here.
+     */
+    private fun underlyingHasIpv6(): Boolean {
+        val cm = connectivity ?: return false
+        val props = runCatching { cm.getLinkProperties(cm.activeNetwork) }.getOrNull()
+            ?: return false
+        return props.linkAddresses.any { link ->
+            val ip = link.address
+            ip is Inet6Address && !ip.isLinkLocalAddress && !ip.isLoopbackAddress &&
+                !ip.isSiteLocalAddress && !ip.isMulticastAddress
+        }
     }
 
     private fun stopVpn() {
@@ -512,6 +537,10 @@ class AdGuardVpnService : VpnService() {
         private const val TUN_PREFIX = 32
         private const val ROUTE_IPV4 = "0.0.0.0"
         private const val ROUTE_PREFIX = 0
+
+        /** Global unicast only; link-local and ULA stay on the physical link. */
+        private const val ROUTE_IPV6 = "2000::"
+        private const val IPV6_PREFIX = 3
         private const val MAX_EXCLUDED_PACKAGES = 64
     }
 }

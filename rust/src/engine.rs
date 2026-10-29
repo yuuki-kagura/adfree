@@ -3141,6 +3141,9 @@ impl Core {
             // The fallback retry re-sends this very packet over UDP, so the
             // record must know it came from the encrypted transport.
             via_backup: false,
+            // The handshake on a fresh connection is not a sign of a dead
+            // server, so encrypted queries keep the longer fallback delay.
+            backup_after_ms: crate::upstream::SECURE_BACKUP_AFTER_MS,
             purpose: if safe_host.is_some() {
                 crate::upstream::Purpose::SafeSearch
             } else {
@@ -4095,8 +4098,20 @@ fn forwarder_loop(core: &'static Core) {
             answered = true;
         }
 
-        // The single blocking point of the loop.
-        core.wait_for_events(FORWARD_WAIT_MS);
+        // The single blocking point of the loop. The idle cadence covers
+        // descriptor upkeep, but an in-flight query usually needs attention
+        // sooner than that: its fallback retry and its timeout are timed
+        // events with no descriptor to wake us, so the wait is capped by the
+        // first one due.
+        let wait_ms = {
+            let upstream = core.upstream.lock().unwrap();
+            upstream
+                .next_deadline_in(now)
+                .map_or(FORWARD_WAIT_MS, |due| {
+                    due.min(FORWARD_WAIT_MS as u64) as i32
+                })
+        };
+        core.wait_for_events(wait_ms);
 
         for reply in core.take_secure_replies() {
             core.handle_secure_reply(reply);
@@ -4168,11 +4183,15 @@ impl Core {
             let err = so_error(fd);
             if err != 0 {
                 // A SYN can die with a reset when its source port collides
-                // with stale NAT bookkeeping (seen on emulators). The
-                // client's own retry is seconds away, so try once on a
-                // fresh socket first: a new port usually goes through and
-                // the flow never notices.
+                // with stale NAT bookkeeping (seen on emulators), and an IPv6
+                // destination with no route dies with ENETUNREACH. The
+                // client's own retry is seconds away, so try once on a fresh
+                // socket first: a new port usually goes through and the flow
+                // never notices.
                 if self.retry_peer_connect(client_port) {
+                    crate::logbuf::push(&format!(
+                        "relay: peer connect failed (errno {err}), retrying on a fresh socket"
+                    ));
                     return;
                 }
                 crate::logbuf::push(&format!("relay: connect to the peer failed (errno {err})"));
@@ -4354,7 +4373,6 @@ impl Core {
         if connect == Connect::Connected {
             self.flush_peer(client_port);
         }
-        crate::logbuf::push("relay: peer connect failed, retrying on a fresh socket");
         true
     }
 
@@ -5624,6 +5642,7 @@ mod tests {
                     purpose: crate::upstream::Purpose::Client,
                     safe_host: String::new(),
                     via_backup: false,
+                    backup_after_ms: crate::upstream::SECURE_BACKUP_AFTER_MS,
                 },
                 message: message.clone(),
             });
