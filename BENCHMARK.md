@@ -104,8 +104,8 @@ results were the smart filter's retry-loop allow window, not a coverage gap.
 
 ## Re-run — after fixes (2026-10-29)
 
-AdFree from this working tree, AdGuard nightly 4.14.68, both measured back to
-back on the same Wi-Fi, app backgrounded unless stated.
+AdFree `c8ca524`, AdGuard nightly 4.14.68, both measured back to back on the
+same Wi-Fi, app backgrounded unless stated.
 
 | Metric | AdFree | AdGuard | Verdict |
 | --- | --- | --- | --- |
