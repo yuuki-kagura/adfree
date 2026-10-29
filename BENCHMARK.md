@@ -371,4 +371,10 @@ of text; release build, `FilterEngine::rebuild`):
   rule and list — visible on the device as a row whose detail named no rule.
   The DNS path now asks for the detailed verdict only when a row is actually
   being written (`logging_live()`), so the write pays for the lookup, not
-  every query. `a_cached_block_still_logs_its_rule` pins the behaviour.
+  every query. `a_cached_block_still_logs_its_rule` pins the behaviour, and a
+  host replay of the device's own failure against the two real lists
+  (`builtin_dns`, `cat_ag_mobile_ads`, three queries for `api.dollphoin.site`)
+  names the rule and list on the first answer and on both cache hits. Those
+  blank device rows were written by the pre-update process: MIUI kept the
+  service alive across the install, so it kept running the old code until a
+  real force-stop.
