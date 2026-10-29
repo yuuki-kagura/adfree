@@ -32,10 +32,13 @@ use adblock::resources::{
 };
 use base64::engine::general_purpose::STANDARD as BASE64;
 use base64::Engine as _;
+use std::collections::hash_map::DefaultHasher;
 use std::collections::{BTreeSet, HashMap, HashSet, VecDeque};
+use std::hash::Hasher;
+use std::io::{Read, Write};
 use std::os::unix::fs::FileExt;
-use std::path::PathBuf;
-use std::sync::atomic::{AtomicU64, AtomicU8, AtomicUsize, Ordering};
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicU8, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, OnceLock, RwLock};
 
 /// Format of a subscription file.
@@ -985,6 +988,114 @@ fn line_starts(text: &str) -> Vec<u32> {
     starts
 }
 
+/// Version of the cache file's own header. Bump it when the header layout or
+/// the key inputs change; a list update is covered by the key itself.
+const ENGINE_CACHE_VERSION: u32 = 1;
+const ENGINE_CACHE_MAGIC: [u8; 4] = *b"AFEC";
+const ENGINE_CACHE_HEADER: usize = 16;
+const ENGINE_CACHE_FILE: &str = "engine.dat";
+
+/// Identity of one build: every input that decides the compiled engine.
+///
+/// The engine is compiled from the list texts, the user rules and the ad and
+/// tracking switches (after the scrub and conversions every build runs), so
+/// hashing exactly those plus the crate version is enough: a match means this
+/// build would produce the same engine bytes. URLs and names stay out — they
+/// never reach the compiler, and a rename must not throw away a multi-megabyte
+/// cache. The list id stays in because `sources` maps a match's source index
+/// back to the list: two identical bodies under swapped ids must not share a
+/// cache.
+struct CacheKey {
+    hash: DefaultHasher,
+}
+
+impl CacheKey {
+    fn new(build_flags: u8) -> Self {
+        let mut hash = DefaultHasher::new();
+        hash.write(&ENGINE_CACHE_MAGIC);
+        hash.write_u32(ENGINE_CACHE_VERSION);
+        hash.write(env!("CARGO_PKG_VERSION").as_bytes());
+        // Only the switches that decide which lists are compiled belong in
+        // the key. DNS protection is a runtime gate over the same engine, so
+        // flipping it must not throw a 35 MB cache away.
+        hash.write_u8(build_flags & (MODULE_ADS | MODULE_TRACKING));
+        CacheKey { hash }
+    }
+
+    fn add_list(&mut self, list: &FilterListInfo, text: &str) {
+        self.hash.write(b"list");
+        self.hash.write_u16(list.id);
+        self.hash.write_u8(list.format.as_u8());
+        self.hash.write_u8(list.trusted as u8);
+        self.hash.write_usize(text.len());
+        self.hash.write(text.as_bytes());
+    }
+
+    fn add_user_rules(&mut self, joined: &str) {
+        self.hash.write(b"user");
+        self.hash.write_usize(joined.len());
+        self.hash.write(joined.as_bytes());
+    }
+
+    fn finish(&self) -> u64 {
+        self.hash.finish()
+    }
+}
+
+fn engine_cache_path(dir: &Path) -> PathBuf {
+    dir.join(ENGINE_CACHE_FILE)
+}
+
+/// Returns the cached engine when its key still matches. Every failure —
+/// missing file, stale key, corrupt payload, incompatible crate — is a miss:
+/// the caller compiles the lists and rewrites the cache.
+fn load_cached_engine(dir: &Path, key: u64) -> Option<Engine> {
+    let mut file = std::fs::File::open(engine_cache_path(dir)).ok()?;
+    let mut header = [0u8; ENGINE_CACHE_HEADER];
+    file.read_exact(&mut header).ok()?;
+    if &header[..4] != ENGINE_CACHE_MAGIC.as_slice() {
+        return None;
+    }
+    let version = u32::from_le_bytes(header[4..8].try_into().ok()?);
+    let stored_key = u64::from_le_bytes(header[8..16].try_into().ok()?);
+    if version != ENGINE_CACHE_VERSION || stored_key != key {
+        return None;
+    }
+    let mut payload = Vec::new();
+    file.read_to_end(&mut payload).ok()?;
+    let mut engine = Engine::default();
+    match engine.deserialize(&payload) {
+        Ok(()) => Some(engine),
+        Err(e) => {
+            crate::logbuf::push(&format!("filter: engine cache rejected: {e}"));
+            None
+        }
+    }
+}
+
+/// Writes the compiled engine under `dir` atomically (temp file + rename), so
+/// a crash mid-write leaves the previous cache or no cache, never half a file.
+fn store_engine_cache(dir: &Path, key: u64, engine: &Engine) -> Result<usize, String> {
+    std::fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
+    // `serialize` returns one owned buffer; it is written straight through
+    // instead of being prefixed in place, which would copy the whole engine.
+    let payload = engine.serialize();
+    let bytes = payload.len();
+    let tmp = dir.join("engine.dat.tmp");
+    let mut file = std::fs::File::create(&tmp).map_err(|e| format!("{}: {e}", tmp.display()))?;
+    let mut header = [0u8; ENGINE_CACHE_HEADER];
+    header[..4].copy_from_slice(&ENGINE_CACHE_MAGIC);
+    header[4..8].copy_from_slice(&ENGINE_CACHE_VERSION.to_le_bytes());
+    header[8..16].copy_from_slice(&key.to_le_bytes());
+    file.write_all(&header)
+        .and_then(|_| file.write_all(&payload))
+        .map_err(|e| format!("{}: {e}", tmp.display()))?;
+    drop(file);
+    std::fs::rename(&tmp, engine_cache_path(dir))
+        .map_err(|e| format!("{}: {e}", engine_cache_path(dir).display()))?;
+    Ok(bytes)
+}
+
 struct Compiled {
     engine: Engine,
     generation: u64,
@@ -1171,6 +1282,13 @@ pub struct FilterEngine {
     /// The platform turns these into the row's "last error" so an enabled
     /// list that silently contributes zero rules has a visible reason.
     build_errors: Mutex<Vec<(u16, String)>>,
+    /// Where the compiled engine is cached between launches. `None` until the
+    /// platform hands the data root down; unit tests that never set it simply
+    /// compile every time.
+    cache_dir: OnceLock<PathBuf>,
+    /// Whether the last [`Self::rebuild`] reused a cached engine instead of
+    /// compiling the lists (diagnostics).
+    last_build_cached: AtomicBool,
 }
 
 impl Default for FilterEngine {
@@ -1206,7 +1324,22 @@ impl FilterEngine {
             generation: AtomicU64::new(0),
             module_flags: AtomicU8::new(MODULES_ALL),
             build_errors: Mutex::new(Vec::new()),
+            cache_dir: OnceLock::new(),
+            last_build_cached: AtomicBool::new(false),
         }
+    }
+
+    /// Directory holding the compiled-engine cache. Set once by the core when
+    /// the platform hands the data root down; later calls are no-ops so a live
+    /// build is never redirected mid-flight.
+    pub(crate) fn set_cache_dir(&self, dir: PathBuf) {
+        let _ = self.cache_dir.set(dir);
+    }
+
+    /// Whether the last rebuild served a cached engine (diagnostics; the
+    /// rebuild log line reports the same thing).
+    pub fn last_build_cached(&self) -> bool {
+        self.last_build_cached.load(Ordering::Relaxed)
     }
 
     /// Bodies the last [`rebuild`] could not read, as `(list id, reason)`.
@@ -1256,6 +1389,12 @@ impl FilterEngine {
         // One snapshot for the whole build: a switch flipped mid-compile must
         // not include half of a module's lists.
         let build_flags = self.module_flags.load(Ordering::Relaxed);
+        // The key covers everything the compiled engine depends on: the list
+        // bytes in build order, the user rules, the module switches and the
+        // crate version. A cache whose key matches is byte-for-byte what this
+        // build would compile.
+        let cache_dir = self.cache_dir.get().cloned();
+        let mut cache_key = cache_dir.as_ref().map(|_| CacheKey::new(build_flags));
         let mut set = FilterSet::new(true);
         let mut sources: Vec<SourceMapEntry> = Vec::with_capacity(lists.len() + 1);
         let mut rule_count = 0u64;
@@ -1295,6 +1434,9 @@ impl FilterEngine {
             match std::fs::read(path) {
                 Ok(bytes) => match String::from_utf8(bytes) {
                     Ok(text) => {
+                        if let Some(key) = cache_key.as_mut() {
+                            key.add_list(list, &text);
+                        }
                         // Line numbers are what the engine reports for a
                         // match, and they count the lines of this file (the
                         // two passes below rewrite lines, never split or join
@@ -1390,6 +1532,9 @@ impl FilterEngine {
                 .cloned()
                 .collect::<Vec<_>>()
                 .join("\n");
+            if let Some(key) = cache_key.as_mut() {
+                key.add_user_rules(&joined);
+            }
             redirect_scan.scan(&joined);
             scan_cosmetic_exceptions(&joined, &mut cosmetic_exceptions);
             scan_replace_rules(&joined, &mut replace_scan);
@@ -1418,7 +1563,28 @@ impl FilterEngine {
             });
         }
 
-        let mut engine = Engine::new_with_filter_set(set);
+        // A matching cache skips parsing and optimizing every rule; the
+        // per-list text above still had to be read because the scans and the
+        // line index come from it. On a miss the set is compiled as before.
+        let load_started = std::time::Instant::now();
+        let cached = match (&cache_dir, cache_key.as_ref()) {
+            (Some(dir), Some(key)) => load_cached_engine(dir, key.finish()),
+            _ => None,
+        };
+        let from_cache = cached.is_some();
+        self.last_build_cached.store(from_cache, Ordering::Relaxed);
+        let mut engine = match cached {
+            Some(engine) => {
+                crate::logbuf::push(&format!(
+                    "filter: engine cache hit ({} ms, {} lists)",
+                    load_started.elapsed().as_millis(),
+                    lists.iter().filter(|l| l.enabled).count(),
+                ));
+                drop(set);
+                engine
+            }
+            None => Engine::new_with_filter_set(set),
+        };
         // Scriptlets: `#%#//scriptlet(...)` rules are only assembled when the
         // engine knows the implementations, so the table goes in before any
         // page asks for its cosmetic resources. Redirects ride in the same
@@ -1557,10 +1723,30 @@ impl FilterEngine {
             app_rules,
             html_plans: Mutex::new(HtmlPlanCache::default()),
         });
-        *self.inner.write().unwrap() = compiled;
+        *self.inner.write().unwrap() = Arc::clone(&compiled);
         self.cache.write().unwrap().clear();
+        // Compile time is what the UI reports, so the cache write below is
+        // outside it: the engine is already serving and the file only saves
+        // the next launch's parse.
         self.build_ns
             .fetch_add(build_started.elapsed().as_nanos() as u64, Ordering::SeqCst);
+        // A newer build started while this one was compiling owns the cache
+        // too; writing here would leave an older engine behind its key.
+        if !from_cache && self.build_seq.load(Ordering::SeqCst) == build_seq {
+            if let (Some(dir), Some(key)) = (&cache_dir, cache_key.as_ref()) {
+                let write_started = std::time::Instant::now();
+                match store_engine_cache(dir, key.finish(), &compiled.engine) {
+                    Ok(bytes) => crate::logbuf::push(&format!(
+                        "filter: engine cache written ({} MB in {} ms)",
+                        bytes / (1024 * 1024),
+                        write_started.elapsed().as_millis(),
+                    )),
+                    Err(e) => {
+                        crate::logbuf::push(&format!("filter: engine cache write failed: {e}"))
+                    }
+                }
+            }
+        }
         self.pending_builds.fetch_sub(1, Ordering::SeqCst);
         generation
     }
@@ -6574,6 +6760,131 @@ mod tests {
         fe.rebuild(&[], &[]);
         assert!(fe.build_errors().is_empty());
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    fn cache_root(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("adfree-engine-cache-{name}"));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    fn cached_list(root: &Path, id: u16, name: &str, body: &str) -> FilterListInfo {
+        let path = root.join(name);
+        std::fs::write(&path, body).unwrap();
+        FilterListInfo {
+            id,
+            name: name.to_string(),
+            url: String::new(),
+            enabled: true,
+            local_path: Some(path),
+            format: ListFormat::Standard,
+            category: CAT_AD,
+            trusted: true,
+            rule_count: 0,
+            last_error: None,
+        }
+    }
+
+    #[test]
+    fn a_matching_key_reuses_the_compiled_engine() {
+        let root = cache_root("reuse");
+        let lists = vec![cached_list(
+            &root,
+            1,
+            "base.txt",
+            "||doubleclick.net^\n||ads.example.com^\n",
+        )];
+        let fe = FilterEngine::new();
+        fe.set_cache_dir(root.join("engine"));
+        fe.rebuild(&lists, &[]);
+        assert!(!fe.last_build_cached());
+        assert!(engine_cache_path(&root.join("engine")).exists());
+        let cold = fe.check_host_detailed("ads.example.com");
+        assert!(cold.blocked);
+        assert_eq!(cold.list_name.as_deref(), Some("base.txt"));
+
+        fe.rebuild(&lists, &[]);
+        assert!(fe.last_build_cached());
+        let warm = fe.check_host_detailed("ads.example.com");
+        assert_eq!(warm.blocked, cold.blocked);
+        assert_eq!(warm.list_name, cold.list_name);
+        assert_eq!(warm.rule_text, cold.rule_text);
+        assert_eq!(warm.category, cold.category);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn a_changed_key_rebuilds_instead_of_reusing() {
+        let root = cache_root("invalidate");
+        let mut lists = vec![cached_list(&root, 1, "base.txt", "||ads.example.com^\n")];
+        let fe = FilterEngine::new();
+        fe.set_cache_dir(root.join("engine"));
+        fe.rebuild(&lists, &[]);
+        assert!(!fe.last_build_cached());
+
+        // The user's rules are compiled into the engine, so they key it too.
+        let rules = vec!["||user-rule.test^".to_string()];
+        fe.rebuild(&lists, &rules);
+        assert!(!fe.last_build_cached());
+        assert!(fe.check_host_detailed("user-rule.test").blocked);
+        fe.rebuild(&lists, &rules);
+        assert!(fe.last_build_cached());
+
+        // A list body change must invalidate even though the path is the same.
+        lists[0] = cached_list(
+            &root,
+            1,
+            "base.txt",
+            "||ads.example.com^\n||later.test^\n",
+        );
+        fe.rebuild(&lists, &rules);
+        assert!(!fe.last_build_cached());
+        assert!(fe.check_host_detailed("later.test").blocked);
+
+        // Module switches decide which lists are compiled; flip one and back.
+        fe.set_module_flags(true, false, true);
+        fe.rebuild(&lists, &rules);
+        assert!(!fe.last_build_cached());
+        fe.set_module_flags(true, true, true);
+        fe.rebuild(&lists, &rules);
+        assert!(!fe.last_build_cached());
+        fe.rebuild(&lists, &rules);
+        assert!(fe.last_build_cached());
+
+        // DNS protection gates lookups, not compilation: flipping it must not
+        // discard the engine.
+        fe.set_module_flags(true, true, false);
+        fe.rebuild(&lists, &rules);
+        assert!(fe.last_build_cached());
+        fe.set_module_flags(true, true, true);
+        fe.rebuild(&lists, &rules);
+        assert!(fe.last_build_cached());
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn a_corrupt_cache_falls_back_to_a_build() {
+        let root = cache_root("corrupt");
+        let lists = vec![cached_list(&root, 1, "base.txt", "||ads.example.com^\n")];
+        let fe = FilterEngine::new();
+        fe.set_cache_dir(root.join("engine"));
+        fe.rebuild(&lists, &[]);
+        assert!(!fe.last_build_cached());
+
+        // Keep the header so the key still matches, truncate the payload so
+        // the crate's checksum rejects it.
+        let path = engine_cache_path(&root.join("engine"));
+        let bytes = std::fs::read(&path).unwrap();
+        std::fs::write(&path, &bytes[..ENGINE_CACHE_HEADER + 16]).unwrap();
+        fe.rebuild(&lists, &[]);
+        assert!(!fe.last_build_cached());
+        assert!(fe.check_host_detailed("ads.example.com").blocked);
+
+        // The miss rewrote the file, so the next build is a hit again.
+        fe.rebuild(&lists, &[]);
+        assert!(fe.last_build_cached());
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]

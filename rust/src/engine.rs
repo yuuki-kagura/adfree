@@ -754,6 +754,11 @@ impl Core {
         match crate::store::Store::open(std::path::Path::new(path)) {
             Ok(store) => {
                 let store = Arc::new(store);
+                // The compiled engine survives launches under the data root,
+                // next to the list bodies it was built from. Set here and not
+                // in `rebuild`: the platform pushes lists through the async
+                // path, which never passes through a rebuild that could do it.
+                self.filter.set_cache_dir(store.root().join("engine"));
                 // Opening the state runs the one-time import from the blobs
                 // older builds wrote, so it must happen before the platform
                 // reads the state back.
@@ -7031,5 +7036,54 @@ mod tests {
         .unwrap();
         core.set_secure_resolver(Some(doh));
         assert_eq!(core.dns_server_text(), "https://dns.example:443/dns-query");
+    }
+
+    /// The platform pushes lists through the async path (`core_set_lists_async`),
+    /// so the data root itself has to arm the engine cache; one wired only into
+    /// the sync rebuild never runs in the app.
+    #[test]
+    fn the_async_list_push_persists_the_engine_cache() {
+        let root =
+            std::env::temp_dir().join(format!("adfree-engine-async-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        let body = root.join("base.txt");
+        std::fs::write(&body, "||async-cache.test^\n").unwrap();
+        let lists = vec![FilterListInfo {
+            id: 1,
+            name: "base".to_string(),
+            url: String::new(),
+            enabled: true,
+            local_path: Some(body),
+            format: crate::filter::ListFormat::Standard,
+            category: 0,
+            trusted: true,
+            rule_count: 0,
+            last_error: None,
+        }];
+
+        let first = Core::new();
+        assert!(first.set_data_root(root.to_str().unwrap()));
+        first.rebuild_async(lists.clone(), Vec::new());
+        let cache = root.join("engine").join("engine.dat");
+        let mut written = false;
+        for _ in 0..200 {
+            if cache.exists() {
+                written = true;
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+        assert!(
+            written,
+            "the async build must leave its cache under the data root"
+        );
+
+        let second = Core::new();
+        assert!(second.set_data_root(root.to_str().unwrap()));
+        second.set_lists(lists, Vec::new());
+        assert!(second.filter.last_build_cached());
+        assert!(second.filter.check_host("async-cache.test").blocked);
+        let _ = std::fs::remove_dir_all(&root);
     }
 }

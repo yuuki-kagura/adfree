@@ -455,3 +455,51 @@ So skipping image and segment bodies saves nothing — they are already
 untouched — and further pruning has little headroom. TLS termination and the
 packet loop dominate; the fixed cost left is HTML injection on page loads
 when cosmetic filtering is on, which is what hiding needs.
+
+## Persisted compiled engine (2026-10-30)
+
+`FilterEngine::rebuild` now loads and stores the compiled engine under the
+data root (`files/engine/engine.dat`). The file is a 16-byte header (magic,
+cache version, build key) followed by the adblock-Rust DAT payload from
+`Engine::serialize`. The key covers every compiled input — list id, format,
+trusted bit and raw text in build order, the user rules, the ad and tracking
+switches, and the crate version — so a match is byte-for-byte what this build
+would produce. DNS protection stays out of the key: it only gates lookups,
+never which rules compile, and flipping it must not discard the file. Source
+attribution survives the round trip because the fork keeps each rule's
+`(source index, line)` in the engine and `sources` re-reads the text from the
+list file on demand.
+
+Measured on the 24075RP89G with the release APK, VPN off (so no MITM traffic
+inflates the high-water mark), 7 lists / 866,085 rules, each figure after a
+`force-stop` and a fresh launch, `build_ms` from Settings, VmHWM from
+`/proc/<pid>/status` 30 s after start:
+
+| Cold start | build_ms | Engine load | VmHWM |
+| --- | --- | --- | --- |
+| Before the cache | 6152 | compiled | 620,388 kB |
+| After, cache miss | 5892 | compiled (35 MB written in 97 ms) | 663,856 kB |
+| After, cache hit | 4673 | 244 ms | 615,772 kB |
+
+- A hit saves about **1.5 s of 6.2 s (24 %)**. The rest of the build is not
+  the engine's: the list texts are still read and scanned every launch, since
+  the `$replace`/modifier/cookie/HTML/app/scriptlet/path structures and the
+  canonical line-number index are built from them, and
+  `FilterSet::add_filter_list` only stores text — parsing happens inside
+  `new_with_filter_set`, which the cache replaces.
+- The 35 MB write is outside the reported build time (97–153 ms), and the
+  miss row's higher VmHWM is consistent with that serialization buffer: the
+  parse peak itself is smaller than the app's existing high-water mark, so the
+  hit and the old builds land within noise of each other. The host figures
+  earlier in this file (277 MB → 184 MB peak while building) remain the
+  separation measured without the UI in the same process.
+- Two device findings fixed while measuring: the platform pushes lists through
+  `core_set_lists_async`, so the cache is now armed when the store opens
+  (pinned by `the_async_list_push_persists_the_engine_cache`) rather than in
+  the sync rebuild; and a DNS-protection flip was initially in the key and
+  threw the cache away, now covered by the DNS case in
+  `a_changed_key_rebuilds_instead_of_reusing`.
+- A hit still serves attribution: on the cache-hit process the Security Lab
+  reports `doubleclick.net` blocked by `||doubleclick.net^` from *AdGuard DNS
+  filter*, and the cached-block path re-reads the rule text.
+
