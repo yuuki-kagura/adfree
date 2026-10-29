@@ -59,6 +59,16 @@ const POLL_TIMEOUT_MS: i32 = 250;
 /// so it can be generous without costing latency.
 const FORWARD_WAIT_MS: i32 = 1_000;
 
+/// The forwarder's wait with nothing at all in flight.
+///
+/// No query is pending, no relay or NAT mapping exists and no QUIC flow is
+/// terminated, so the only work left is expiry bookkeeping whose own deadlines
+/// are minutes away. The slow cadence keeps the process out of the 1 Hz wake
+/// the default costs while a browser page is sitting still. Every descriptor
+/// joining the wait set (a relay, a mapping, a query) is announced through the
+/// wake eventfd, so a long sleep never delays real traffic.
+const IDLE_WAIT_MS: i32 = 10_000;
+
 /// Parallel encrypted-DNS exchanges. A DoH query is a TLS handshake plus one
 /// request, so a single worker would serialize a page load; more than a
 /// handful only burns battery.
@@ -443,6 +453,9 @@ pub struct Core {
     /// SafeSearch addresses, keyed by the filtered host: the extra lookup is
     /// an RTT the next query for the same engine should not pay.
     safe_cache: Mutex<FxHashMap<String, SafeCacheEntry>>,
+    /// Answers to repeated queries (see [`crate::dnscache`]). Bounded, and
+    /// cleared when the resolver it repeats changes.
+    dns_cache: Mutex<crate::dnscache::DnsCache>,
     /// Encrypted resolver selected by the user; `None` means the plain UDP
     /// forwarder owns the queries.
     secure_resolver: RwLock<Option<crate::dnssecure::SecureResolver>>,
@@ -629,6 +642,7 @@ impl Core {
             smart: Mutex::new(crate::smart::SmartFilter::new(true)),
             dns_rewrites: RwLock::new(Vec::new()),
             safe_cache: Mutex::new(FxHashMap::default()),
+            dns_cache: Mutex::new(crate::dnscache::DnsCache::new()),
             secure_resolver: RwLock::new(None),
             secure_jobs: Mutex::new(secure_jobs),
             secure_receivers: Mutex::new(secure_receivers),
@@ -981,7 +995,17 @@ impl Core {
     }
 
     pub fn set_resolver(&self, addr: SocketAddr) {
-        *self.resolver.write().unwrap() = addr;
+        let changed = {
+            let mut resolver = self.resolver.write().unwrap();
+            let changed = *resolver != addr;
+            *resolver = addr;
+            changed
+        };
+        // Every config apply names the resolver again; only an actual change
+        // invalidates what is in flight or cached.
+        if !changed {
+            return;
+        }
         {
             let mut upstream = self.upstream.lock().unwrap();
             upstream.set_resolver(addr);
@@ -989,6 +1013,7 @@ impl Core {
         }
         // Answers learned from the previous server are no longer valid.
         self.conntrack.lock().unwrap().clear();
+        self.dns_cache.lock().unwrap().clear();
     }
 
     /// Installs (or removes) the plain UDP resolver retried when the selected
@@ -1000,6 +1025,9 @@ impl Core {
 
     pub fn set_socket_fds(&self, fds: &[RawFd]) {
         self.upstream.lock().unwrap().set_socket_fds(fds);
+        // The DNS descriptors are part of the forwarder's wait set: a parked
+        // loop has to pick up the new ones now, not at its idle cadence.
+        self.wake();
     }
 
     /// Replaces the user's DNS rewrites. The caller parses the rows, so a
@@ -1011,7 +1039,16 @@ impl Core {
     /// Selects the transport upstream queries use. `None` restores the plain
     /// UDP forwarder; a `Some` value bypasses it entirely.
     pub fn set_secure_resolver(&self, resolver: Option<crate::dnssecure::SecureResolver>) {
-        *self.secure_resolver.write().unwrap() = resolver;
+        let changed = {
+            let mut slot = self.secure_resolver.write().unwrap();
+            let changed = *slot != resolver;
+            *slot = resolver;
+            changed
+        };
+        if changed {
+            // The cached answers came from the previous transport's server.
+            self.dns_cache.lock().unwrap().clear();
+        }
     }
 
     /// Sends one `example.com` query to a resolver the user is editing.
@@ -2983,6 +3020,9 @@ impl Core {
                 }
             }
             if !forwarded {
+                forwarded = self.serve_cached_answer(pkt, &query);
+            }
+            if !forwarded {
                 self.forward_query(pkt, Some(&query), None);
             }
             if cfg.log_allowed && self.logging_live() {
@@ -2994,6 +3034,47 @@ impl Core {
                 self.log_event(event);
             }
         }
+    }
+
+    /// Answers a client query from the DNS cache when a fresh entry exists.
+    ///
+    /// The hit is replayed through [`Self::handle_reply`], exactly like the
+    /// upstream answer it stands in for, so the ECH policy, the TTL aging and
+    /// the connection learning all apply to it unchanged. It runs after the
+    /// filter and the SafeSearch rewrite, so only a query that would have been
+    /// forwarded can ever be served from here. Returns whether the client was
+    /// answered; a miss leaves the query to the forwarder.
+    fn serve_cached_answer(&self, pkt: &Packet<'_>, query: &dns::Query<'_>) -> bool {
+        let now = now_ms();
+        let hit = self.dns_cache.lock().unwrap().get(
+            query.qname.as_str(),
+            query.qtype,
+            query.qclass,
+            now,
+        );
+        let Some((mut message, age_secs)) = hit else {
+            return false;
+        };
+        if !dns::adopt_question(&mut message, query) {
+            return false;
+        }
+        dns::age_ttls(&mut message, age_secs);
+        let reply = crate::upstream::Reply {
+            pending: crate::upstream::Pending {
+                client_txid: query.id,
+                socket: 0,
+                packet: pkt.raw.to_vec(),
+                sent_ms: now,
+                purpose: crate::upstream::Purpose::Client,
+                safe_host: String::new(),
+                via_backup: false,
+                backup_after_ms: 0,
+            },
+            socket: 0,
+            message,
+        };
+        self.handle_reply(&reply);
+        true
     }
 
     /// Sends the query upstream through a protected socket.
@@ -3282,6 +3363,10 @@ impl Core {
         let Some(client_packet) = Packet::parse(&reply.pending.packet) else {
             return;
         };
+        // Cached as the origin sent it, before the rewrites below: a hit
+        // replays this same path, so whichever ECH policy is in force when it
+        // is served still decides what the client sees.
+        self.cache_answer(&reply.message);
         let mut message = reply.message.clone();
         dns::patch_txid(&mut message, reply.pending.client_txid);
         // A client that is about to have its TLS terminated must not be told
@@ -3424,6 +3509,27 @@ impl Core {
         }
         self.stats.inc(&self.stats.dns_replies);
         self.learn_answers(&message, mitm);
+    }
+
+    /// Remembers one upstream answer for later queries for the same name.
+    fn cache_answer(&self, message: &[u8]) {
+        let Some(query) = dns::parse_query(message) else {
+            return;
+        };
+        if !query.has_question {
+            return;
+        }
+        let Some(ttl) = dns::cache_ttl(message) else {
+            return;
+        };
+        self.dns_cache.lock().unwrap().insert(
+            query.qname.as_str(),
+            query.qtype,
+            query.qclass,
+            message,
+            ttl,
+            now_ms(),
+        );
     }
 
     /// Teaches the connection tracker which addresses belong to which host.
@@ -3919,6 +4025,31 @@ impl Core {
         format!("udp://{}", self.resolver_addr())
     }
 
+    /// The longest the forwarder may sleep right now.
+    ///
+    /// The ordinary cadence, shortened to the first retry or timeout that is
+    /// due. When nothing at all is in flight — no query, no relay, no NAT
+    /// mapping, no terminated QUIC flow — the slow idle cadence applies; every
+    /// descriptor that joins the wait set is announced through the wake
+    /// eventfd, so the long sleep cannot delay its first byte.
+    fn forward_wait_ms(&self, now_ms: u64) -> libc::c_int {
+        let quiet = {
+            let no_relays = self.relays.lock().unwrap().is_empty();
+            let no_nat = self.udp_nat.lock().unwrap().is_empty();
+            let no_h3 = self.h3_flows.lock().unwrap().is_empty();
+            no_relays && no_nat && no_h3
+        };
+        let upstream = self.upstream.lock().unwrap();
+        let cadence = if quiet && upstream.pending_len() == 0 {
+            IDLE_WAIT_MS
+        } else {
+            FORWARD_WAIT_MS
+        };
+        upstream
+            .next_deadline_in(now_ms)
+            .map_or(cadence, |due| due.min(cadence as u64) as libc::c_int)
+    }
+
     /// Sleeps until a descriptor is ready or the cadence ticks.
     ///
     /// One `poll()` covers the wake eventfd, the upstream DNS sockets and
@@ -4102,15 +4233,8 @@ fn forwarder_loop(core: &'static Core) {
         // descriptor upkeep, but an in-flight query usually needs attention
         // sooner than that: its fallback retry and its timeout are timed
         // events with no descriptor to wake us, so the wait is capped by the
-        // first one due.
-        let wait_ms = {
-            let upstream = core.upstream.lock().unwrap();
-            upstream
-                .next_deadline_in(now)
-                .map_or(FORWARD_WAIT_MS, |due| {
-                    due.min(FORWARD_WAIT_MS as u64) as i32
-                })
-        };
+        // first one due. With nothing in flight the slow cadence applies.
+        let wait_ms = core.forward_wait_ms(now);
         core.wait_for_events(wait_ms);
 
         for reply in core.take_secure_replies() {
@@ -4808,6 +4932,27 @@ mod tests {
         let core = Core::new();
         assert!(core.handle_packet(&[]).is_empty());
         assert!(core.handle_packet(&[0u8; 5]).is_empty());
+    }
+
+    /// The forwarder sleeps on the slow cadence only while nothing at all is
+    /// in flight; one descriptor suffices to bring back the ordinary one.
+    #[test]
+    fn the_forwarder_sleeps_longer_when_it_has_nothing_to_do() {
+        let core = Core::new();
+        assert_eq!(core.forward_wait_ms(0), IDLE_WAIT_MS);
+
+        let fd = unsafe { libc::socket(libc::AF_INET, libc::SOCK_DGRAM, 0) };
+        assert!(fd > 0, "socket: {}", std::io::Error::last_os_error());
+        core.udp_nat.lock().unwrap().insert(UdpFlow {
+            fd,
+            key: quic_key(50000, [203, 0, 113, 7]),
+            template: Vec::new(),
+            last_ms: 0,
+            app_packages: Vec::new(),
+            retire: false,
+            proxied: false,
+        });
+        assert_eq!(core.forward_wait_ms(0), FORWARD_WAIT_MS);
     }
 
     /// Pause is a runtime gate, not a settings edit: the persisted switches
@@ -5658,6 +5803,84 @@ mod tests {
             pkt.l4_payload().get(3).map(|flags| flags & 0x0f),
             Some(NOERROR)
         );
+    }
+
+    /// Hands `core` an upstream answer for `packet`, as the forwarder would.
+    fn deliver_answer(core: &Core, packet: &[u8], ttl: u32) -> std::net::IpAddr {
+        let address = "203.0.113.5".parse::<std::net::IpAddr>().unwrap();
+        let parsed = Packet::parse(packet).expect("packet");
+        let query = dns::parse_query(parsed.l4_payload()).expect("query");
+        let message = dns::answer_message(&query, &[address], ttl).expect("answer");
+        core.secure_outstanding.store(1, Ordering::Relaxed);
+        core.handle_secure_reply(crate::dnssecure::SecureReply {
+            pending: crate::upstream::Pending {
+                client_txid: query.id,
+                socket: 0,
+                packet: packet.to_vec(),
+                sent_ms: now_ms(),
+                purpose: crate::upstream::Purpose::Client,
+                safe_host: String::new(),
+                via_backup: false,
+                backup_after_ms: crate::upstream::SECURE_BACKUP_AFTER_MS,
+            },
+            message,
+        });
+        core.take_outbox();
+        address
+    }
+
+    #[test]
+    fn a_repeated_query_is_answered_from_the_cache() {
+        let core = Core::new();
+        let address = deliver_answer(&core, &dns_query_packet("cached.example"), 300);
+        let before = core.snapshot();
+
+        // A different transaction id, so a patched echo is visible.
+        let mut second = dns_query_packet("cached.example");
+        second[28] = 0xab;
+        second[29] = 0xcd;
+        let mut out = core.handle_packet(&second);
+        out.extend(core.take_outbox());
+        let raw = out.first().expect("answer packet");
+        let pkt = Packet::parse(raw).expect("packet");
+        assert_eq!(&pkt.l4_payload()[0..2], &[0xab, 0xcd]);
+        assert_eq!(pkt.l4_payload()[2] & 0x80, 0x80, "it is a response");
+        assert_eq!(dns::answer_addresses(pkt.l4_payload()), vec![(address, 300)]);
+
+        // Nothing was forwarded; the client was answered from memory. (The
+        // reply counter only moves when a tun accepted the write, and a test
+        // has none, so the forwarded-query count is the signal.)
+        let after = core.snapshot();
+        assert_eq!(after.dns_queries, before.dns_queries);
+    }
+
+    #[test]
+    fn a_cached_answer_never_outranks_a_new_block() {
+        let core = Core::new();
+        deliver_answer(&core, &dns_query_packet("later.test"), 300);
+
+        let dir = std::env::temp_dir().join("adfree-engine-dns-cache");
+        std::fs::create_dir_all(&dir).expect("temp dir");
+        let path = dir.join("cache-list.txt");
+        std::fs::write(&path, "||later.test^\n").expect("write list");
+        core.set_lists(
+            vec![FilterListInfo {
+                id: 1,
+                name: "cache-list".to_string(),
+                url: String::new(),
+                enabled: true,
+                local_path: Some(path),
+                format: crate::filter::ListFormat::Standard,
+                category: 0,
+                trusted: true,
+                rule_count: 0,
+                last_error: None,
+            }],
+            Vec::new(),
+        );
+        // The filter runs before the cache: a blocked host is sinkholed even
+        // though a fresh answer for it is sitting in memory.
+        assert_eq!(dns_reply_rcode(&core, "later.test"), Some(3));
     }
 
     #[test]

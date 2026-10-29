@@ -901,6 +901,7 @@ struct SourceMapEntry {
 struct Compiled {
     engine: Engine,
     generation: u64,
+    /// Rule text the engine was built from; see [`FilterEngine::memory_bytes`].
     memory_bytes: usize,
     sources: Vec<SourceMapEntry>,
     rule_count: u64,
@@ -1171,6 +1172,13 @@ impl FilterEngine {
         let mut set = FilterSet::new(true);
         let mut sources: Vec<SourceMapEntry> = Vec::with_capacity(lists.len() + 1);
         let mut rule_count = 0u64;
+        // What the engine was fed, in bytes. `Engine::serialize` would say how
+        // much the compiled data weighs, but it materializes the whole engine a
+        // second time (twice, actually: the data copy plus the serialized
+        // buffer) just to take its length — a peak the rebuild does not need
+        // to pay on a phone. The text is a stable, monotonic stand-in for a
+        // number the UI only ever displays.
+        let mut text_bytes = 0usize;
         // (list id, reason): the platform maps the id back to the row.
         let mut errors: Vec<(u16, String)> = Vec::new();
         let mut cosmetic_exceptions = CosmeticExceptionScan::default();
@@ -1238,6 +1246,7 @@ impl FilterEngine {
                             ListFormat::Hosts => text,
                         };
                         let counted = count_rules(&text);
+                        text_bytes += text.len();
                         let record = set.add_filter_list(
                             text,
                             ParseOptions {
@@ -1294,6 +1303,7 @@ impl FilterEngine {
             // User rules have no list row: id 0 is the source map's own
             // "User Custom Filter" entry.
             scan_app_rules(&joined, &mut app_scan, 0, CAT_CUSTOM);
+            text_bytes += joined.len();
             let record = set.add_filter_list(
                 convert_adguard_cosmetics(joined, &mut path_scan),
                 ParseOptions::default(),
@@ -1325,7 +1335,7 @@ impl FilterEngine {
             self.pending_builds.fetch_sub(1, Ordering::SeqCst);
             return self.generation.load(Ordering::SeqCst);
         }
-        let memory_bytes = engine.serialize().len();
+        let memory_bytes = text_bytes;
         let generation = self.generation.fetch_add(1, Ordering::SeqCst) + 1;
         if untrusted_dropped > 0 {
             crate::logbuf::push(&format!(
@@ -1470,6 +1480,8 @@ impl FilterEngine {
         self.generation.load(Ordering::SeqCst)
     }
 
+    /// Bytes of rule text the engine was built from. Not the compiled data's own
+    /// size — that is only obtainable by serializing the whole engine again.
     pub fn memory_bytes(&self) -> usize {
         let compiled = self.inner.read().unwrap();
         compiled.memory_bytes

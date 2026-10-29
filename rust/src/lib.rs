@@ -21,6 +21,7 @@ mod appmask;
 pub mod assets;
 pub mod conntrack;
 pub mod dns;
+pub mod dnscache;
 pub mod dnsrewrite;
 pub mod dnssecure;
 pub mod engine;

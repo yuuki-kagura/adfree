@@ -38,7 +38,11 @@ pub const MAX_LIST: usize = 24;
 /// packages; the log keeps the first, which is what attribution reports.
 pub const MAX_APP: usize = 96;
 const RECORD_HEADER: usize = 24;
-const CAPACITY: usize = 4_096;
+/// Events kept in the live ring. The durable log is the database the store
+/// writes first ([`crate::store`]); this ring only feeds the in-process tail,
+/// and an `Event` is ~360 bytes, so the previous 4 096 slots held ~1.5 MB of
+/// anonymous memory for a buffer a poll of the tail drains in one go.
+const CAPACITY: usize = 512;
 
 #[derive(Clone, Copy)]
 pub struct Event {

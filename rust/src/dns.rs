@@ -15,6 +15,7 @@ pub const TYPE_AAAA: u16 = 28;
 pub const TYPE_SVCB: u16 = 64;
 pub const TYPE_HTTPS: u16 = 65;
 pub const TYPE_ANY: u16 = 255;
+pub const TYPE_SOA: u16 = 6;
 
 pub const RCODE_NOERROR: u16 = 0;
 pub const RCODE_SERVFAIL: u16 = 2;
@@ -76,6 +77,7 @@ pub struct Query<'a> {
     pub flags: u16,
     pub qd_count: u16,
     pub qtype: u16,
+    pub qclass: u16,
     pub qname: QName,
     /// Offset just past the question section.
     pub q_end: usize,
@@ -112,6 +114,7 @@ pub fn parse_query<'a>(body: &'a [u8]) -> Option<Query<'a>> {
             flags,
             qd_count,
             qtype: 0,
+            qclass: 0,
             qname: QName::EMPTY,
             q_end: 12,
             has_question: false,
@@ -151,7 +154,7 @@ pub fn parse_query<'a>(body: &'a [u8]) -> Option<Query<'a>> {
         off += label_len;
     }
     let qtype = u16::from_be_bytes([*body.get(off)?, *body.get(off + 1)?]);
-    let _qclass = u16::from_be_bytes([*body.get(off + 2)?, *body.get(off + 3)?]);
+    let qclass = u16::from_be_bytes([*body.get(off + 2)?, *body.get(off + 3)?]);
     off += 4;
 
     Some(Query {
@@ -160,6 +163,7 @@ pub fn parse_query<'a>(body: &'a [u8]) -> Option<Query<'a>> {
         flags,
         qd_count,
         qtype,
+        qclass,
         qname: QName {
             buf,
             len: len as u16,
@@ -561,6 +565,174 @@ pub fn clamp_answer_ttl(message: &mut [u8], max: u32) -> usize {
     clamped
 }
 
+/// One resource record located inside a message.
+#[derive(Clone, Copy)]
+struct RecordSpan {
+    rtype: u16,
+    ttl: u32,
+    /// Offset of the TTL field, for in-place aging.
+    ttl_at: usize,
+    /// RDATA bounds.
+    rdata: (usize, usize),
+}
+
+/// Reads the record at `*off`, advancing past it.
+fn read_record(message: &[u8], off: &mut usize) -> Option<RecordSpan> {
+    if !skip_name(message, off) || *off + 10 > message.len() {
+        return None;
+    }
+    let rtype = u16::from_be_bytes([message[*off], message[*off + 1]]);
+    let ttl_at = *off + 4;
+    let ttl = u32::from_be_bytes([
+        message[*off + 4],
+        message[*off + 5],
+        message[*off + 6],
+        message[*off + 7],
+    ]);
+    let rdlen = u16::from_be_bytes([message[*off + 8], message[*off + 9]]) as usize;
+    *off += 10;
+    let end = *off + rdlen;
+    if end > message.len() {
+        return None;
+    }
+    let span = RecordSpan {
+        rtype,
+        ttl,
+        ttl_at,
+        rdata: (*off, end),
+    };
+    *off = end;
+    Some(span)
+}
+
+/// The SOA `minimum` field of one SOA record's RDATA (RFC 2308 §4).
+fn soa_minimum(message: &[u8], (start, end): (usize, usize)) -> Option<u32> {
+    let mut off = start;
+    // MNAME, RNAME, then serial/refresh/retry/expire/minimum.
+    if !skip_name(message, &mut off) || !skip_name(message, &mut off) || off + 20 > end {
+        return None;
+    }
+    Some(u32::from_be_bytes([
+        message[off + 16],
+        message[off + 17],
+        message[off + 18],
+        message[off + 19],
+    ]))
+}
+
+/// How long an answer may be reused, in seconds.
+///
+/// Only a NOERROR or NXDOMAIN answer is cacheable: SERVFAIL and the rest
+/// describe a moment of the resolver, not the record. A positive answer lives
+/// as long as its shortest record, a negative one as long as its SOA allows
+/// (RFC 2308 §5) — without that SOA a negative answer is not cached, because
+/// nothing says how long the resolver will stand by it. A zero TTL is the
+/// server saying "do not reuse this"; the rest is capped so a long-lived
+/// record still expires within the hour.
+pub fn cache_ttl(message: &[u8]) -> Option<u32> {
+    const MAX_TTL: u32 = 3_600;
+    let cacheable = |ttl: u32| (ttl > 0).then(|| ttl.min(MAX_TTL));
+    if message.len() < 12 {
+        return None;
+    }
+    let flags = u16::from_be_bytes([message[2], message[3]]);
+    let rcode = flags & 0x000f;
+    if flags & 0x8000 == 0 || flags & 0x0200 != 0 || (flags >> 11) & 0x000f != 0 {
+        return None;
+    }
+    let qd = u16::from_be_bytes([message[4], message[5]]) as usize;
+    let an = u16::from_be_bytes([message[6], message[7]]) as usize;
+    let ns = u16::from_be_bytes([message[8], message[9]]) as usize;
+    if qd != 1 || an > 64 || ns > 16 {
+        return None;
+    }
+    let mut off = 12usize;
+    if !skip_name(message, &mut off) {
+        return None;
+    }
+    off += 4;
+    if off > message.len() {
+        return None;
+    }
+    match rcode {
+        RCODE_NOERROR if an > 0 => {
+            let mut ttl = u32::MAX;
+            for _ in 0..an {
+                ttl = ttl.min(read_record(message, &mut off)?.ttl);
+            }
+            cacheable(ttl)
+        }
+        RCODE_NOERROR | RCODE_NXDOMAIN => {
+            for _ in 0..an {
+                read_record(message, &mut off)?;
+            }
+            for _ in 0..ns {
+                let record = read_record(message, &mut off)?;
+                if record.rtype == TYPE_SOA {
+                    let minimum = soa_minimum(message, record.rdata)?;
+                    return cacheable(record.ttl.min(minimum));
+                }
+            }
+            None
+        }
+        _ => None,
+    }
+}
+
+/// Subtracts `elapsed_secs` from every answer and authority record TTL.
+///
+/// A cached answer must leave the client at the origin's deadline, not restart
+/// it: without this the client would hold the record for the full TTL again
+/// from the moment it was served. The additional section is left alone — its
+/// TTL field is OPT flags, not a lifetime. Returns how many records were aged.
+pub fn age_ttls(message: &mut [u8], elapsed_secs: u32) -> usize {
+    if elapsed_secs == 0 || message.len() < 12 {
+        return 0;
+    }
+    let qd = u16::from_be_bytes([message[4], message[5]]) as usize;
+    let an = u16::from_be_bytes([message[6], message[7]]) as usize;
+    let ns = u16::from_be_bytes([message[8], message[9]]) as usize;
+    if qd != 1 || an > 64 || ns > 16 {
+        return 0;
+    }
+    let mut off = 12usize;
+    if !skip_name(message, &mut off) {
+        return 0;
+    }
+    off += 4;
+    if off > message.len() {
+        return 0;
+    }
+    let mut aged = 0;
+    for _ in 0..(an + ns) {
+        let Some(record) = read_record(message, &mut off) else {
+            break;
+        };
+        let ttl = record.ttl.saturating_sub(elapsed_secs);
+        message[record.ttl_at..record.ttl_at + 4].copy_from_slice(&ttl.to_be_bytes());
+        aged += 1;
+    }
+    aged
+}
+
+/// Copies the client's spelling of the question into a cached answer.
+///
+/// Clients that randomize the case of the QNAME (0x20 encoding) check that the
+/// reply echoes it; an answer cached for one spelling must not be served to a
+/// client that asked with another. Returns `false` when the two questions do
+/// not line up, in which case the caller forwards instead.
+pub fn adopt_question(message: &mut [u8], query: &Query<'_>) -> bool {
+    let (own_end, own_has_question) = match parse_query(message) {
+        Some(own) => (own.q_end, own.has_question),
+        None => return false,
+    };
+    if !own_has_question || !query.has_question || own_end != query.q_end {
+        return false;
+    }
+    message[12..own_end].copy_from_slice(&query.body[12..query.q_end]);
+    true
+}
+
 /// Rewrites the `ech` key inside one record's RDATA, if it carries one.
 fn strip_ech_param(message: &mut [u8], start: usize, end: usize) -> bool {
     // SvcPriority (2 bytes), then the target name (never compressed in
@@ -830,6 +1002,7 @@ mod tests {
         assert!(q.is_query());
         assert_eq!(q.qname.as_str(), "example.com");
         assert_eq!(q.qtype, TYPE_A);
+        assert_eq!(q.qclass, 1);
         assert_eq!(q.q_end, 12 + qname.len() + 1 + 4);
     }
 
@@ -970,12 +1143,101 @@ mod tests {
     }
 
     fn add_answer(b: &mut Vec<u8>, rtype: u16, rdata: &[u8]) {
+        add_answer_ttl(b, rtype, 300, rdata);
+    }
+
+    fn add_answer_ttl(b: &mut Vec<u8>, rtype: u16, ttl: u32, rdata: &[u8]) {
         b.extend_from_slice(&[0xc0, 0x0c]);
         b.extend_from_slice(&rtype.to_be_bytes());
         b.extend_from_slice(&1u16.to_be_bytes());
-        b.extend_from_slice(&300u32.to_be_bytes());
+        b.extend_from_slice(&ttl.to_be_bytes());
         b.extend_from_slice(&(rdata.len() as u16).to_be_bytes());
         b.extend_from_slice(rdata);
+    }
+
+    #[test]
+    fn a_cacheable_answer_lives_as_long_as_its_shortest_record() {
+        let mut msg = response_skeleton(2);
+        add_answer_ttl(&mut msg, TYPE_A, 300, &[1, 2, 3, 4]);
+        add_answer_ttl(&mut msg, TYPE_A, 60, &[5, 6, 7, 8]);
+        assert_eq!(cache_ttl(&msg), Some(60));
+        // A zero TTL asks for the answer to be used once, not kept.
+        let mut zero = response_skeleton(1);
+        add_answer_ttl(&mut zero, TYPE_A, 0, &[1, 2, 3, 4]);
+        assert_eq!(cache_ttl(&zero), None);
+        // A truncated answer stops at the records it carried: the client's
+        // retry must reach a resolver, not this cache.
+        let mut tc = response_skeleton(1);
+        add_answer(&mut tc, TYPE_A, &[1, 2, 3, 4]);
+        tc[2] |= 0x02;
+        assert_eq!(cache_ttl(&tc), None);
+        // SERVFAIL describes a moment of the resolver, not the record.
+        let mut servfail = response_skeleton(0);
+        servfail[3] = (servfail[3] & 0xf0) | RCODE_SERVFAIL as u8;
+        assert_eq!(cache_ttl(&servfail), None);
+        // Nothing says how long an empty answer without an SOA holds.
+        assert_eq!(cache_ttl(&response_skeleton(0)), None);
+    }
+
+    #[test]
+    fn a_negative_answer_lives_as_long_as_its_soa_allows() {
+        let mut msg = response_skeleton(0);
+        msg[3] = (msg[3] & 0xf0) | RCODE_NXDOMAIN as u8;
+        msg[9] = 1; // one authority record
+        add_answer_ttl(&mut msg, TYPE_SOA, 900, &soa_rdata(120));
+        assert_eq!(cache_ttl(&msg), Some(120));
+    }
+
+    fn soa_rdata(minimum: u32) -> Vec<u8> {
+        let mut r = Vec::new();
+        for label in [&b"ns"[..], &b"example"[..], &b"com"[..]] {
+            r.push(label.len() as u8);
+            r.extend_from_slice(label);
+        }
+        r.push(0);
+        for label in [&b"hostmaster"[..], &b"example"[..], &b"com"[..]] {
+            r.push(label.len() as u8);
+            r.extend_from_slice(label);
+        }
+        r.push(0);
+        r.extend_from_slice(&1u32.to_be_bytes()); // serial
+        r.extend_from_slice(&3_600u32.to_be_bytes()); // refresh
+        r.extend_from_slice(&600u32.to_be_bytes()); // retry
+        r.extend_from_slice(&86_400u32.to_be_bytes()); // expire
+        r.extend_from_slice(&minimum.to_be_bytes());
+        r
+    }
+
+    #[test]
+    fn a_cached_answer_ages_instead_of_restarting_its_clock() {
+        let mut msg = response_skeleton(1);
+        add_answer(&mut msg, TYPE_A, &[1, 2, 3, 4]);
+        assert_eq!(age_ttls(&mut msg, 0), 0);
+        assert_eq!(age_ttls(&mut msg, 90), 1);
+        assert_eq!(u32::from_be_bytes([msg[35], msg[36], msg[37], msg[38]]), 210);
+        // Never underflows into a huge lifetime.
+        assert_eq!(age_ttls(&mut msg, 9_999), 1);
+        assert_eq!(u32::from_be_bytes([msg[35], msg[36], msg[37], msg[38]]), 0);
+    }
+
+    #[test]
+    fn a_cached_answer_echoes_the_clients_own_spelling() {
+        let mut msg = response_skeleton(1);
+        add_answer(&mut msg, TYPE_A, &[1, 2, 3, 4]);
+        // The client randomized the case (0x20 encoding) and checks that the
+        // reply echoes it.
+        let mut qname = Vec::new();
+        qname.push(7u8);
+        qname.extend_from_slice(b"ExAmPlE");
+        qname.push(3u8);
+        qname.extend_from_slice(b"CoM");
+        let client = make_query(&qname, TYPE_A);
+        let query = parse_query(&client).expect("q");
+        assert!(adopt_question(&mut msg, &query));
+        assert_eq!(&msg[12..29], &client[12..29]);
+        // A question of a different length does not line up.
+        let other = make_query(&[3u8, b'w', b'w', b'w'], TYPE_A);
+        assert!(!adopt_question(&mut msg, &parse_query(&other).expect("q")));
     }
 
     /// The parameter list of the first SVCB/HTTPS answer, parsed the way a
