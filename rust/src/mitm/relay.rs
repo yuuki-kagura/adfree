@@ -93,6 +93,18 @@ pub struct Relay {
     pub proxy: Option<Arc<ProxyEndpoint>>,
     /// SOCKS5 negotiation for this flow; `None` on direct connections.
     pub handshake: Option<Socks5Handshake>,
+    /// The SYN was answered, but the upstream half — app attribution, the
+    /// protected socket, the TLS session — is still being built by the setup
+    /// worker. The packet reader never runs that machinery inline, or every
+    /// connection would wait for the previous one's setup.
+    pub setup_pending: bool,
+    /// Client segments that arrived before the upstream half existed, with
+    /// their sequence numbers: replayed through the session once it lands,
+    /// which is also when they are acknowledged.
+    pub pending_client: Vec<(u32, Vec<u8>)>,
+    /// Bytes buffered in [`Self::pending_client`]. Capped so a client that
+    /// keeps sending during a slow setup cannot grow it without bound.
+    pub pending_client_bytes: usize,
 }
 
 impl Relay {
@@ -126,6 +138,9 @@ impl Relay {
             app_packages: Vec::new(),
             proxy: None,
             handshake: None,
+            setup_pending: false,
+            pending_client: Vec::new(),
+            pending_client_bytes: 0,
         }
     }
 
@@ -158,6 +173,9 @@ impl Relay {
             app_packages: Vec::new(),
             proxy: None,
             handshake: None,
+            setup_pending: false,
+            pending_client: Vec::new(),
+            pending_client_bytes: 0,
         }
     }
 

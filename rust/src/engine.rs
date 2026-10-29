@@ -16,13 +16,18 @@
 //!   dns-thread   poll(upstream sockets) ─► rewrite answer ─► learn IPs ─► TUN
 //!                poll(peer sockets)     ─► splice back ─► TUN
 //!                                          └► reap finished relays
+//!   setup-thread answered SYN ─► app attribution, protect(), dial, TLS session
+//!                └► install the upstream half ─► TUN (replayed client bytes)
 //! ```
 //!
-//! Two threads total, each blocked in a `poll` most of the time: that is why a
-//! DNS level filter costs a fraction of a percent of battery. Nothing is
-//! allocated on the packet path but the (rare) synthetic DNS answer. Relays are
-//! added from the tun-thread but only reaped on the dns-thread (which also
-//! polls their descriptors), so a peer socket is never closed under `poll()`.
+//! Each thread is blocked in a `poll` most of the time: that is why a DNS level
+//! filter costs a fraction of a percent of battery. Nothing is allocated on the
+//! packet path but the (rare) synthetic DNS answer. Relays are added from the
+//! tun-thread but only reaped on the dns-thread (which also polls their
+//! descriptors), so a peer socket is never closed under `poll()`. The upstream
+//! half of a new flow is built on the setup-thread, never on the reader: the
+//! client's SYN-ACK is answered first, so a burst of connections does not make
+//! each `connect()` wait for the previous flow's dial.
 
 use crate::conntrack::{CidrSet, ConnTable, IpVerdict};
 use crate::dns::{self, BlockMode, Query};
@@ -48,6 +53,7 @@ use std::sync::{Arc, Mutex, OnceLock, RwLock};
 
 /// Read size for the TUN descriptor.
 const TUN_BUF_BYTES: usize = 64 * 1024;
+
 /// How long the tun loop waits before re-checking the shutdown flag. Short
 /// because nothing wakes it but a packet or the timeout.
 const POLL_TIMEOUT_MS: i32 = 250;
@@ -118,6 +124,11 @@ fn record_ttl(records: &[(std::net::IpAddr, u32)]) -> u32 {
 /// Client bytes a relay may buffer while its peer socket is full; beyond this
 /// the flow counts as stuck and is reset rather than buffering forever.
 const MAX_PENDING_TO_PEER: usize = 4 * 1024 * 1024;
+
+/// Client bytes buffered while a flow's upstream half is being built. A
+/// ClientHello is a few hundred bytes; the cap only bounds a client that
+/// keeps sending into a setup that is not finishing.
+const MAX_PENDING_CLIENT_SETUP: usize = 64 * 1024;
 
 /// Client bytes buffered per QUIC flow until its SNI decides the path.
 const H3_PENDING_BYTES: usize = 16 * 1024;
@@ -344,11 +355,41 @@ impl AppNetworkPolicy {
 /// Result of trying to open a TCP relay.
 enum RelayStart {
     Started,
-    /// The app firewall refuses this flow; the caller resets the client and
-    /// logs this reason instead of the generic "connection dropped".
-    Blocked(&'static str),
-    /// No descriptor or no route: fail the client now.
+    /// The flow was answered and then refused or dropped: the SYN-ACK went
+    /// out first and any reset has already followed it.
+    Answered,
+    /// Nothing went out (the packet itself was unusable): fail the client
+    /// from its own SYN.
     Failed,
+}
+
+/// One answered flow whose upstream half is not built yet.
+///
+/// The packet reader writes the SYN-ACK and queues this; the setup worker
+/// runs the slow half (app attribution through the platform, `protect()`, the
+/// dial, the TLS session) so a burst of connections does not serialize on the
+/// reader, one setup per connect.
+struct SetupJob {
+    /// Client port, which is also the relay table key.
+    port: u16,
+    /// Our ISN for this flow: a pruned and reused port is told apart by it.
+    my_seq: u32,
+    /// The client's SYN, from which the destination and the reply template
+    /// are parsed again on the worker.
+    syn: Vec<u8>,
+    /// The config the SYN was classified under; a settings change mid-setup
+    /// must not rewrite a flow that already started.
+    cfg: Config,
+}
+
+/// The upstream half of an answered flow, ready to be installed.
+struct UpstreamHalf {
+    peer_fd: RawFd,
+    connecting: bool,
+    session: Option<crate::mitm::proxy::ProxySession>,
+    app_packages: Vec<String>,
+    proxy: Option<Arc<crate::socks5::ProxyEndpoint>>,
+    handshake: Option<Socks5Handshake>,
 }
 
 /// What a relay's peer socket delivered.
@@ -444,6 +485,12 @@ pub struct Core {
     /// A negative value means creation failed and the loop runs on its
     /// timeout cadence instead.
     wake_fd: RawFd,
+    /// Eventfd the setup worker sleeps on. Separate from `wake_fd` so the
+    /// forwarder never wakes for a job it does not service.
+    setup_fd: RawFd,
+    /// Answered flows waiting for their upstream half. FIFO: two connections
+    /// opened back to back are set up in the order they were answered.
+    setup_jobs: Mutex<std::collections::VecDeque<SetupJob>>,
     conntrack: Mutex<ConnTable>,
     /// Hosts let through because their block is being retried in a loop
     /// (see [`crate::smart`]); disabled by the matching config switch.
@@ -638,6 +685,8 @@ impl Core {
             user_rules: RwLock::new(Vec::new()),
             upstream: Mutex::new(Upstream::new(resolver)),
             wake_fd: unsafe { libc::eventfd(0, libc::EFD_CLOEXEC | libc::EFD_NONBLOCK) },
+            setup_fd: unsafe { libc::eventfd(0, libc::EFD_CLOEXEC | libc::EFD_NONBLOCK) },
+            setup_jobs: Mutex::new(std::collections::VecDeque::new()),
             conntrack: Mutex::new(ConnTable::new()),
             smart: Mutex::new(crate::smart::SmartFilter::new(true)),
             dns_rewrites: RwLock::new(Vec::new()),
@@ -1346,11 +1395,15 @@ impl Core {
         // its poll timeout, so this blocks for a few hundred milliseconds at
         // most (and not at all when the tunnel was already down).
         self.join_workers();
+        // Jobs left behind by the previous session belong to flows whose
+        // relays are gone; answering them now would dial for nobody.
+        self.setup_jobs.lock().unwrap().clear();
+        self.drain_setup_wake();
         self.start_secure_workers();
         self.tun_fd.store(tun_fd, Ordering::SeqCst);
         self.running.store(true, Ordering::SeqCst);
         let statics: &'static Core = core();
-        let mut workers = Vec::with_capacity(2);
+        let mut workers = Vec::with_capacity(3);
         // The tun worker runs the whole data path — TLS, the response rewriter
         // and gzip bodies — in one call chain, and a 128 KiB stack overflowed
         // it on a real response (SIGSEGV in `decode_body`, measured on the
@@ -1366,6 +1419,17 @@ impl Core {
             .name("adfree-dns".into())
             .stack_size(1024 * 1024)
             .spawn(move || forwarder_loop(statics))
+        {
+            workers.push(worker);
+        }
+        // The upstream half of every intercepted flow is built here, off the
+        // packet reader: app attribution (a platform round-trip), protect()
+        // and the TLS session together cost milliseconds that would otherwise
+        // delay the next SYN the client sends.
+        if let Ok(worker) = std::thread::Builder::new()
+            .name("adfree-setup".into())
+            .stack_size(1024 * 1024)
+            .spawn(move || setup_loop(statics))
         {
             workers.push(worker);
         }
@@ -1395,6 +1459,7 @@ impl Core {
         // The forwarder may be halfway through its one-second wait; without
         // this it would only notice the stop on the next timeout.
         self.wake();
+        self.poke_setup();
     }
 
     /// Asks the forwarder to take a pass now.
@@ -1411,6 +1476,35 @@ impl Core {
                 self.wake_fd,
                 &one as *const u64 as *const libc::c_void,
                 std::mem::size_of::<u64>(),
+            );
+        }
+    }
+
+    /// Asks the setup worker to take the queued flows now.
+    fn poke_setup(&self) {
+        if self.setup_fd < 0 {
+            return;
+        }
+        let one: u64 = 1;
+        unsafe {
+            libc::write(
+                self.setup_fd,
+                &one as *const u64 as *const libc::c_void,
+                std::mem::size_of::<u64>(),
+            );
+        }
+    }
+
+    fn drain_setup_wake(&self) {
+        if self.setup_fd < 0 {
+            return;
+        }
+        let mut buf = [0u8; 8];
+        unsafe {
+            libc::read(
+                self.setup_fd,
+                buf.as_mut_ptr() as *mut libc::c_void,
+                buf.len(),
             );
         }
     }
@@ -1501,11 +1595,10 @@ impl Core {
             return;
         }
         if pkt.is_syn {
-            match self.start_tcp_relay(pkt, cfg, out) {
-                RelayStart::Started => {}
-                // The app firewall refused this flow: say why instead of the
-                // generic "connection dropped" the other failures get.
-                RelayStart::Blocked(reason) => self.reset_tcp_with_reason(pkt, reason),
+            match self.begin_tcp_relay(pkt, cfg, out) {
+                // The two answered outcomes: a live relay, or a SYN-ACK that
+                // was already followed by whatever refusal applied.
+                RelayStart::Started | RelayStart::Answered => {}
                 RelayStart::Failed => self.reset_tcp(pkt),
             }
         } else if !pkt.is_rst && !pkt.l4_payload().is_empty() {
@@ -2179,6 +2272,16 @@ impl Core {
             // body leaves in window-sized bursts, one burst per ACK.
             relay.on_client_ack(pkt.ack_seq, pkt.window);
             let payload = pkt.l4_payload();
+            // While the upstream half is being built, client bytes are only
+            // buffered: the replay on the setup worker is what acknowledges
+            // them, through the session the flow will actually use.
+            if relay.setup_pending && !payload.is_empty() {
+                if relay.pending_client_bytes + payload.len() <= MAX_PENDING_CLIENT_SETUP {
+                    relay.pending_client_bytes += payload.len();
+                    relay.pending_client.push((pkt.seq, payload.to_vec()));
+                }
+                return true;
+            }
             let mut saw_data = false;
             if !payload.is_empty() {
                 match relay.on_client_segment(pkt.seq, payload) {
@@ -2274,13 +2377,17 @@ impl Core {
             let Some(relay) = guard.get_mut(client_port) else {
                 return;
             };
-            if relay.pending_to_peer.is_empty() && !relay.flushing {
-                relay.peer_fd
-            } else {
+            if !relay.pending_to_peer.is_empty() || relay.flushing {
                 relay.shutdown_after_flush = true;
                 return;
             }
+            // A flow still waiting for its upstream half has no descriptor
+            // yet; the install closes its write side once the socket exists.
+            relay.peer_fd
         };
+        if fd < 0 {
+            return;
+        }
         unsafe {
             libc::shutdown(fd, libc::SHUT_WR);
         }
@@ -2295,13 +2402,19 @@ impl Core {
         pkt.tcp_mss().map(|m| (m as usize).min(cap)).unwrap_or(cap)
     }
 
-    /// Starts a relay for a new TCP flow.
+    /// Answers a new TCP flow and queues its upstream half.
+    ///
+    /// The SYN-ACK goes out here, before any of the expensive work: the
+    /// client's handshake completes on it, and the rest (app attribution
+    /// through the platform, `protect()`, the dial, the TLS session) runs on
+    /// the setup worker. Doing that work inline would make every `connect()`
+    /// wait for the previous flow's setup.
     ///
     /// Port 443 is additionally TLS-terminated (and filtered) when HTTPS
     /// filtering is armed and the destination hostname is known; every other
     /// flow is a transparent splice. The one exception is the app's own
     /// injection origin: it is answered locally, with no peer socket at all.
-    fn start_tcp_relay(
+    fn begin_tcp_relay(
         &self,
         pkt: &Packet<'_>,
         cfg: &Config,
@@ -2310,14 +2423,78 @@ impl Core {
         let Some(client_ip) = pkt.src_ip() else {
             return RelayStart::Failed;
         };
-        let Some(dst) = pkt.dst_ip() else {
+        if pkt.dst_ip().is_none() {
+            return RelayStart::Failed;
+        }
+        let mut flow = crate::mitm::tcp::Flow::new(
+            client_ip,
+            pkt.src_port,
+            pkt.dst_port,
+            pkt.seq,
+            crate::mitm::tcp::initial_seq(pkt.seq as u64),
+        );
+        let my_seq = flow.my_seq;
+        let Some(syn_ack) = crate::mitm::segment::build_ack(pkt, my_seq, flow.acked_seq, true)
+        else {
             return RelayStart::Failed;
         };
+        // With a tunnel attached the answer goes out now. Without one (tests)
+        // it is collected like any other reply for whoever inspects them.
+        if self.tun_fd.load(Ordering::SeqCst) > 0 {
+            self.write_raw(&syn_ack);
+        } else {
+            out.push(syn_ack);
+        }
+        // The handshake we just answered consumed one sequence number.
+        flow.up_bytes = 1;
+        let mss = self.relay_mss(pkt);
+        let mut relay =
+            crate::mitm::relay::Relay::new_plain(flow, -1, pkt.raw.to_vec(), mss, true);
+        relay.setup_pending = true;
+        {
+            let mut guard = self.relays.lock().unwrap();
+            if guard.get(pkt.src_port).is_some() {
+                // A finished relay for this port is waiting for the poller to
+                // reap it. Inserting now would swap it out from under a
+                // concurrent poll(), so the answered flow is refused instead.
+                drop(guard);
+                self.refuse_answered_flow(pkt, my_seq, None);
+                return RelayStart::Answered;
+            }
+            guard.insert(relay);
+        }
+        self.setup_jobs.lock().unwrap().push_back(SetupJob {
+            port: pkt.src_port,
+            my_seq,
+            syn: pkt.raw.to_vec(),
+            cfg: cfg.clone(),
+        });
+        self.poke_setup();
+        RelayStart::Started
+    }
+
+    /// Builds the upstream half of an answered flow, or refuses it.
+    ///
+    /// Runs on the setup worker: nothing here may hold the relay table across
+    /// the platform round-trips or the dial — the packet reader keeps feeding
+    /// every other flow meanwhile.
+    fn complete_setup(&self, job: SetupJob) {
+        let cfg = &job.cfg;
+        let Some(pkt) = Packet::parse(&job.syn) else {
+            return;
+        };
+        let Some(dst) = pkt.dst_ip() else {
+            return;
+        };
+        if !self.pending_relay(job.port, job.my_seq) {
+            return;
+        }
         // The per-app firewall decides before any socket is opened: a blocked
-        // app costs no upstream connection and gets a RST with a reason.
-        let app_packages = self.apps_for_packet(pkt, cfg);
+        // app costs no upstream connection and is told why.
+        let app_packages = self.apps_for_packet(&pkt, cfg);
         if let Some(reason) = self.app_blocked_reason(&app_packages) {
-            return RelayStart::Blocked(reason);
+            self.refuse_setup(&pkt, job.port, job.my_seq, Some(reason));
+            return;
         }
         // The local injection origin: a reserved address (TEST-NET-1) that the
         // app answers out of the tunnel. Nothing is ever dialed for it — and
@@ -2329,7 +2506,8 @@ impl Core {
             self.mitm_ready(cfg) && pkt.dst_port == self.mitm_port.load(Ordering::Relaxed);
         if local && !mitm_armed {
             crate::logbuf::push("relay: local origin asked without HTTPS filtering");
-            return RelayStart::Failed;
+            self.refuse_setup(&pkt, job.port, job.my_seq, None);
+            return;
         }
         // In proxy mode every flow dials the SOCKS5 endpoint; the destination
         // moves into the CONNECT request instead of the socket address. The
@@ -2348,7 +2526,8 @@ impl Core {
                 Ok(h) => Some(h),
                 Err(e) => {
                     crate::logbuf::push(&format!("relay: {e}"));
-                    return RelayStart::Failed;
+                    self.refuse_setup(&pkt, job.port, job.my_seq, None);
+                    return;
                 }
             },
             None => None,
@@ -2361,7 +2540,8 @@ impl Core {
             (-1, false)
         } else {
             let Some(peer_fd) = self.open_peer_socket(dial_addr, libc::SOCK_STREAM) else {
-                return RelayStart::Failed;
+                self.refuse_setup(&pkt, job.port, job.my_seq, None);
+                return;
             };
             let connect = connect_fd(peer_fd, dial_addr, dial_port);
             if connect == Connect::Failed {
@@ -2371,18 +2551,11 @@ impl Core {
                     "relay: connect() to the peer failed"
                 });
                 unsafe { libc::close(peer_fd) };
-                return RelayStart::Failed;
+                self.refuse_setup(&pkt, job.port, job.my_seq, None);
+                return;
             }
             (peer_fd, connect == Connect::InProgress)
         };
-        let flow = crate::mitm::tcp::Flow::new(
-            client_ip,
-            pkt.src_port,
-            pkt.dst_port,
-            pkt.seq,
-            crate::mitm::tcp::initial_seq(pkt.seq as u64),
-        );
-        let mss = self.relay_mss(pkt);
         // TLS termination needs a loaded CA. The hostname to present upstream
         // comes from the ClientHello itself, not from the DNS table: a
         // browser's own cache, DoH or a shared CDN address can put a flow on
@@ -2410,7 +2583,8 @@ impl Core {
                 }
                 Err(e) => {
                     crate::logbuf::push(&format!("open local session: {e}"));
-                    return RelayStart::Failed;
+                    self.refuse_setup(&pkt, job.port, job.my_seq, None);
+                    return;
                 }
             }
         } else if mitm_armed {
@@ -2469,60 +2643,160 @@ impl Core {
         } else {
             None
         };
-        let mut relay = match session {
-            Some(proxy) => crate::mitm::relay::Relay::new_tls(
-                flow,
+        self.install_upstream(
+            job.port,
+            job.my_seq,
+            UpstreamHalf {
                 peer_fd,
+                connecting,
+                session,
+                app_packages,
                 proxy,
-                pkt.raw.to_vec(),
-                mss,
-                connecting,
-            ),
-            None => crate::mitm::relay::Relay::new_plain(
-                flow,
-                peer_fd,
-                pkt.raw.to_vec(),
-                mss,
-                connecting,
-            ),
-        };
-        // Our own SYN-ACK (the client-facing sequence starts here).
-        let syn_ack = match crate::mitm::segment::build_ack(
-            pkt,
-            relay.flow.my_seq,
-            relay.flow.acked_seq,
-            true,
-        ) {
-            Some(s) => s,
-            // The relay drops here, which closes the peer descriptor.
-            None => return RelayStart::Failed,
-        };
-        // The handshake we just answered consumed one sequence number.
-        relay.flow.up_bytes = 1;
-        // The client's SYN also carried the scale its window fields use; all
-        // later windows are relative to it (RFC 7323).
-        relay.flow.client_window_scale = pkt.tcp_window_scale().unwrap_or(0);
-        relay.app_packages = app_packages;
-        relay.proxy = proxy;
-        relay.handshake = handshake;
+                handshake,
+            },
+        );
+    }
 
+    /// Installs a completed upstream half on its answered flow and replays
+    /// whatever the client sent while it was being built.
+    ///
+    /// The relay entry itself was inserted by [`Self::begin_tcp_relay`], which
+    /// is what lets the reader buffer client bytes without a gap: from the
+    /// SYN-ACK on, the flow already exists.
+    fn install_upstream(&self, port: u16, my_seq: u32, half: UpstreamHalf) {
+        let UpstreamHalf {
+            peer_fd,
+            connecting,
+            session,
+            app_packages,
+            proxy,
+            handshake,
+        } = half;
+        let mut segments = Vec::new();
+        let mut to_peer = Vec::new();
+        let mut reset = false;
+        let replayed;
+        let mut fin = false;
         {
             let mut guard = self.relays.lock().unwrap();
-            if guard.get(pkt.src_port).is_some() {
-                // A finished relay for this port is waiting for the poller to
-                // reap it. Inserting now would swap it out from under a
-                // concurrent poll(), so let the client retransmit instead.
-                return RelayStart::Failed;
+            let Some(relay) = guard.get_mut(port) else {
+                // The flow was retired (client reset, idle expiry) while its
+                // half was being built: the descriptor is ours to close.
+                drop(guard);
+                if peer_fd >= 0 {
+                    unsafe { libc::close(peer_fd) };
+                }
+                return;
+            };
+            if relay.closed || relay.flow.my_seq != my_seq {
+                drop(guard);
+                if peer_fd >= 0 {
+                    unsafe { libc::close(peer_fd) };
+                }
+                return;
             }
-            guard.insert(relay);
+            relay.peer_fd = peer_fd;
+            relay.connecting = connecting;
+            relay.session = session;
+            relay.app_packages = app_packages;
+            relay.proxy = proxy;
+            relay.handshake = handshake;
+            relay.setup_pending = false;
+            relay.last_ms = now_ms();
+            let pending = std::mem::take(&mut relay.pending_client);
+            relay.pending_client_bytes = 0;
+            replayed = !pending.is_empty();
+            for (seq, payload) in pending {
+                match relay.on_client_segment(seq, &payload) {
+                    Ok((peer_bytes, to_client)) => {
+                        to_peer.extend_from_slice(&peer_bytes);
+                        for segment in relay.segments_for_client(&to_client) {
+                            segments.push(segment);
+                        }
+                    }
+                    Err(e) => {
+                        let host = relay
+                            .session
+                            .as_ref()
+                            .and_then(|s| s.captured_sni())
+                            .unwrap_or_else(|| "?".to_string());
+                        crate::logbuf::push(&format!("relay client step: {e} ({host})"));
+                        self.note_client_cert_rejection(&e, &relay.app_packages, &host);
+                        if let Some(rst) = relay.rst_to_client() {
+                            segments.push(rst);
+                        }
+                        reset = true;
+                        break;
+                    }
+                }
+            }
+            if reset {
+                relay.close();
+            } else {
+                fin = relay.client_fin;
+                if replayed {
+                    // Replayed bytes need their own acknowledgement, exactly
+                    // like the reader's data path; without it a plain splice
+                    // never stops retransmitting the request.
+                    if let Some(ack) = relay.ack_to_client() {
+                        segments.push(ack);
+                    }
+                }
+            }
+        }
+        if reset {
+            for segment in &segments {
+                self.write_raw(segment);
+            }
+            return;
+        }
+        for segment in &segments {
+            self.write_raw(segment);
+        }
+        if !to_peer.is_empty() {
+            self.push_to_peer(port, &to_peer);
+        }
+        if fin {
+            // The client half-closed while its half was being built; the FIN
+            // can only go out now that the peer descriptor exists.
+            self.half_close_peer(port);
         }
         // The peer descriptor has to join the wait set before the server can
         // possibly answer: waking here is what makes a long forwarder wait
         // safe, including for a connect() that finishes after the poll began.
         self.wake();
-        out.push(syn_ack);
         self.stats.inc(&self.stats.tcp_relayed);
-        RelayStart::Started
+    }
+
+    /// Is this flow still waiting for its upstream half, under the ISN it was
+    /// answered with? A reused client port must not receive another flow's
+    /// session.
+    fn pending_relay(&self, port: u16, my_seq: u32) -> bool {
+        self.relays
+            .lock()
+            .unwrap()
+            .get(port)
+            .is_some_and(|r| r.setup_pending && !r.closed && r.flow.my_seq == my_seq)
+    }
+
+    /// Refuses a flow whose upstream half failed, after its SYN-ACK went out:
+    /// the reset sits in the client's window, and the relay is marked closed
+    /// so the poller reaps it.
+    fn refuse_setup(&self, pkt: &Packet<'_>, port: u16, my_seq: u32, reason: Option<&'static str>) {
+        self.refuse_answered_flow(pkt, my_seq, reason);
+        if let Some(relay) = self.relays.lock().unwrap().get_mut(port) {
+            relay.close();
+        }
+    }
+
+    /// Builds every queued upstream half. Tests call this directly (through
+    /// `pump_once`) because they never start threads; the device has the
+    /// setup worker do the same in [`setup_loop`].
+    #[cfg(test)]
+    fn run_setup_jobs(&self) {
+        while let Some(job) = self.setup_jobs.lock().unwrap().pop_front() {
+            self.complete_setup(job);
+        }
     }
 
     /// Opens a non-blocking socket towards `dst` and asks the app to route it
@@ -2825,6 +3099,27 @@ impl Core {
         if !self.write_raw(&reply) {
             return;
         }
+        self.record_tcp_reset(pkt, reason);
+    }
+
+    /// Refuses a flow whose SYN-ACK is already on the wire.
+    ///
+    /// The reset has to carry our own sequence number: the client's stack is
+    /// ESTABLISHED by now, and a reset built from its SYN again (as
+    /// [`reset_tcp_inner`] does) would be dropped as out of window, leaving it
+    /// to time out instead of seeing the refusal.
+    fn refuse_answered_flow(&self, pkt: &Packet<'_>, my_seq: u32, reason: Option<&'static str>) {
+        let Some(reply) = crate::mitm::segment::build_rst(pkt, my_seq) else {
+            return;
+        };
+        if !self.write_raw(&reply) {
+            return;
+        }
+        self.record_tcp_reset(pkt, reason);
+    }
+
+    /// Counts and logs a refused flow whose reset has already been sent.
+    fn record_tcp_reset(&self, pkt: &Packet<'_>, reason: Option<&'static str>) {
         self.stats.inc(&self.stats.tcp_reset);
         let saved = BYTES_PER_BLOCKED_REQUEST;
         self.stats.add(&self.stats.bytes_saved, saved);
@@ -3948,6 +4243,9 @@ impl Core {
     /// and the peer socket; in production the forwarder thread owns this.
     #[cfg(test)]
     pub fn pump_once(&self, timeout_ms: libc::c_int) {
+        // No setup worker runs in tests: whichever thread drives the packet
+        // loop also completes the flows the SYN path queued.
+        self.run_setup_jobs();
         self.wait_for_events(timeout_ms);
         // The wait itself services the queued DNS and relay work; QUIC
         // datagrams are turned into packets here, like the forwarder does.
@@ -4273,6 +4571,37 @@ fn forwarder_loop(core: &'static Core) {
     // Same for the QUIC side: `stop()` already asked the bridge to shut down,
     // but a loop that exits for any other reason must not leave flows behind.
     core.stop_h3();
+}
+
+/// Builds the upstream half of answered flows until the engine stops.
+///
+/// One worker, FIFO: connections opened back to back are set up in the order
+/// they were answered. Each setup costs a platform round-trip (attribution), a
+/// `protect()`, a dial and a TLS session — milliseconds the packet reader must
+/// not spend, or every `connect()` would queue behind the previous flow.
+fn setup_loop(core: &'static Core) {
+    let mut pfd = [libc::pollfd {
+        fd: core.setup_fd,
+        events: libc::POLLIN,
+        revents: 0,
+    }];
+    while core.is_running() {
+        let rc = unsafe { libc::poll(pfd.as_mut_ptr(), 1, POLL_TIMEOUT_MS) };
+        if rc > 0 {
+            core.drain_setup_wake();
+        }
+        loop {
+            if !core.is_running() {
+                break;
+            }
+            let job = core.setup_jobs.lock().unwrap().pop_front();
+            let Some(job) = job else {
+                break;
+            };
+            core.complete_setup(job);
+        }
+    }
+    core.setup_jobs.lock().unwrap().clear();
 }
 
 /// Services every flow descriptor the engine owns.
@@ -6139,6 +6468,7 @@ mod tests {
 
         core.set_network_type(NETWORK_WIFI);
         core.handle_packet(&tcp_syn(40000, [93, 184, 216, 34], 80));
+        core.run_setup_jobs();
         assert_eq!(core.relay_count(), 1, "Wi-Fi is allowed by this policy");
 
         let other = Core::new();
@@ -6148,11 +6478,56 @@ mod tests {
         other.set_app_network_policy(vec!["com.example.news".to_string()], Vec::new(), Vec::new());
         other.set_network_type(NETWORK_CELLULAR);
         other.handle_packet(&tcp_syn(40000, [93, 184, 216, 34], 80));
-        assert_eq!(other.relay_count(), 0, "no peer socket may be opened");
+        other.run_setup_jobs();
+        // The answered flow is refused before any socket is opened; the entry
+        // is marked closed for the poller to reap.
+        assert!(
+            other
+                .relays
+                .lock()
+                .unwrap()
+                .get(40000)
+                .is_some_and(|r| r.closed && r.peer_fd < 0),
+            "no peer socket may be opened"
+        );
         let reset = other.take_outbox();
         assert_eq!(reset.len(), 1, "the client gets one segment back");
         // IPv4 + TCP headers: the flags byte is 13 bytes into the TCP header.
         assert_eq!(reset[0][33] & 0x04, 0x04, "and it is a RST");
+    }
+
+    /// A flow that is refused after its SYN-ACK has gone out is reset with our
+    /// own sequence: the client's stack is ESTABLISHED there, and a reset
+    /// built from its SYN again (seq 0) would be dropped as out of window.
+    #[test]
+    fn a_refused_flow_resets_with_the_answered_sequence() {
+        use std::os::fd::IntoRawFd;
+        let core = Core::new();
+        core.set_socket_protector(Arc::new(AllowAll));
+        // A real descriptor so the writes count as delivered, as on device.
+        let tun = std::fs::OpenOptions::new()
+            .write(true)
+            .open("/dev/null")
+            .expect("write end")
+            .into_raw_fd();
+        core.set_tun_fd_for_test(tun);
+        core.set_uid_apps(vec![(10_123, vec!["com.example.news".to_string()])]);
+        core.pin_uid_for_port(40000, 10_123);
+        core.set_app_network_policy(vec!["com.example.news".to_string()], Vec::new(), Vec::new());
+        core.set_network_type(NETWORK_CELLULAR);
+
+        core.handle_packet(&tcp_syn(40000, [93, 184, 216, 34], 80));
+        core.run_setup_jobs();
+        let out = core.take_outbox();
+        assert_eq!(out.len(), 2, "the answer and then the refusal");
+        let syn_ack = Packet::parse(&out[0]).expect("answer");
+        let rst = Packet::parse(&out[1]).expect("refusal");
+        assert!(syn_ack.is_syn && syn_ack.is_ack, "the SYN-ACK goes first");
+        assert!(rst.is_rst, "then the flow is reset");
+        assert_eq!(
+            rst.seq, syn_ack.seq,
+            "the reset must sit in the client's receive window"
+        );
     }
 
     /// Turning the screen off cuts an open flow belonging to an app that is
@@ -6166,6 +6541,8 @@ mod tests {
         core.set_app_network_policy(Vec::new(), Vec::new(), vec!["com.example.news".to_string()]);
         core.set_network_type(NETWORK_WIFI);
         core.handle_packet(&tcp_syn(40000, [93, 184, 216, 34], 80));
+        // The flow only carries its app once the setup worker attributed it.
+        core.run_setup_jobs();
         assert_eq!(core.relay_count(), 1);
 
         core.set_screen_off(true);
@@ -6283,6 +6660,7 @@ mod tests {
         core.set_app_network_policy(vec!["com.example.news".to_string()], Vec::new(), Vec::new());
 
         core.handle_packet(&tcp_syn(40000, [93, 184, 216, 34], 80));
+        core.run_setup_jobs();
         let events = core.take_events(8);
         assert_eq!(events.len(), 1);
         assert_eq!(events[0].action, crate::events::ACTION_TCP_RESET);

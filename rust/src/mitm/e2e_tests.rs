@@ -123,6 +123,10 @@ impl Client {
         let ack = tcp_packet(c.dst_ip, ACK, c.seq, c.their_seq, dst_port, &[], &[]);
         let out = c.core.handle_packet(&ack);
         c.absorb(out);
+        // The upstream half is built by the setup worker on a device; the
+        // tests have no threads, so the pump that follows every exchange is
+        // asked to do it before any bytes are sent.
+        c.pump(0);
         c
     }
 
