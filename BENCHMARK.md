@@ -22,7 +22,7 @@ unless stated otherwise.
 
 | Metric | How |
 | --- | --- |
-| Blocked-host latency | median wall time of `nc -z -w 3 host 443` (DNS + TCP handshake through the tunnel) over known ad hosts |
+| Blocked-host latency | median of `bench/probe.c` over known ad hosts: in-process `getaddrinfo` + non-blocking connect through the tunnel, DNS and TCP halves reported separately |
 | Allowed-host latency | same probe over ordinary hosts, with the failure count |
 | Filtering decision cost | `stats.record_decision` counters inside the engine (DNS match time) |
 | CPU | `utime + stime` from `/proc/<pid>/stat` of the measured app, sampled before/after the probe burst |
@@ -31,10 +31,14 @@ unless stated otherwise.
 | RAM | `dumpsys meminfo <pkg>` → `TOTAL PSS` |
 | Battery | `dumpsys batterystats --charged`, UID mAh delta |
 
-The probe harness (`/data/local/tmp/bench.sh`) runs 6 rounds × (10 allowed +
-8 blocked hosts), timing each probe with `date +%s%3N`. AdFree's shell capture
-marker (`files/capture-shell`, debug builds only) routes adb's `nc` through
-the tunnel so the probe measures the app, not the host network.
+The probe harness (`bench/probe.c`) runs 6 rounds × (10 allowed + 8 blocked
+hosts) inside one process: `getaddrinfo` and a non-blocking connect are timed
+separately and printed as CSV. It replaced the earlier `date`+`nc` loop, whose
+fork/exec cost ~50 ms per sample and swamped the tunnel's own cost. The binary
+must stay dynamically linked so lookups reach netd (a static build answers
+EAI_NODATA), and AdFree's shell capture marker (`files/capture-shell`, debug
+builds only) routes adb's traffic through the tunnel so the probe measures the
+app, not the host network.
 
 ## Baseline — 2026-10-28
 
@@ -231,6 +235,57 @@ hedge stays where it is.
   for the duration of a rebuild; the compiled engine drops it afterwards. That
   peak is unchanged and is not part of the settled figures.
 
+## Re-run — after moving flow setup off the reader (2026-10-29, night)
+
+AdFree `6617ea9`, AdGuard nightly 4.14.68, measured back to back on the same
+Wi-Fi in alternating order (AdFree, AdGuard, AdFree, AdGuard). Each app was
+backgrounded; the probe is the in-process `bench/probe.c`, so the numbers are
+the tunnel's cost rather than the shell's fork/exec. Filter state is the same
+seven lists as the runs above.
+
+| Metric | AdFree | AdGuard | Verdict |
+| --- | --- | --- | --- |
+| Allowed-host total (median, 60 probes per run) | **4.6 / 4.8 ms** | 8.3 / 8.4 ms | AdFree ~45 % lower |
+| Allowed DNS half (median) | 3.0 / 3.1 ms | 3.0 ms | parity |
+| Allowed TCP half (median) | **1.4 / 1.4 ms** | 5.2 / 5.2 ms | AdFree ~3.7× lower |
+| Blocked-host total (median, 48 probes per run) | **4.5 / 4.8 ms** | 9.6 / 10.6 ms | AdFree ~2× lower |
+| CPU for the same 108 probes | **1.08 / 1.12 s** | 1.19 / 1.25 s | AdFree ~10 % lower |
+
+### What changed
+
+The reader used to build the whole upstream half of every intercepted flow
+inline: app attribution (`ConnectivityManager.getConnectionOwnerUid`, ~4 ms),
+`protect()` (1.3–3.6 ms) and the rustls session (2.3–6.4 ms) ran on the same
+thread that reads the tun. Back-to-back SYNs queued behind the previous flow's
+setup, which is why the handshake floor was 1.2 ms but its median stayed at
+5.9 ms under load.
+
+Now the reader answers the SYN-ACK immediately, parks the flow as pending and
+buffers whatever the client sends, and a dedicated `adfree-setup` worker
+builds the peer socket and TLS session off the packet path. The buffered
+segments are replayed with their sequence numbers once the upstream half is
+installed; a failed setup resets the answered flow with our sequence. The
+allowed-host TCP median fell from 5.9 ms to 1.4 ms, which is the reader no
+longer waiting on platform calls between SYNs.
+
+| Fix | Where | Commit |
+| --- | --- | --- |
+| Upstream half built on a setup worker; client bytes buffered and replayed | `rust/src/engine.rs`, `rust/src/mitm/relay.rs` | `6617ea9` |
+| In-process latency probe replacing the `date`+`nc` loop | `bench/probe.c` | `67c0a68` |
+
+### Notes
+
+- Blocked probes: AdFree answers NXDOMAIN in ~3 ms (AdGuard 9.6–10.6 ms).
+  After the smart filter's 60 s allow window, four of the eight probe names
+  were served `0.0.0.0` (the client still fails fast with ECONNREFUSED) and
+  `zq8f8.adnxs.com` reconnected in every round — the documented retry-loop
+  window, unchanged by this work. AdGuard has no such window and blocked
+  48/48.
+- The earlier ~60–70 ms totals in this document were dominated by the old
+  harness: `date`+`nc` cost ~50 ms of fork/exec per sample on this device.
+  The per-probe figures from this run and earlier ones are not directly
+  comparable; the AdFree/AdGuard pairs within each run are.
+
 ## Re-running
 
 ```
@@ -244,35 +299,23 @@ adb install -r app/build/outputs/apk/debug/app-debug.apk
 adb shell run-as git.shin.adfree touch files/capture-shell
 # restart protection in the app, then background it
 
-# 3. Run the harness (script below)
-adb push bench.sh /data/local/tmp/ && adb shell 'sh /data/local/tmp/bench.sh adfree'
+# 3. Build and run the probe
+"$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android26-clang" \
+  -O2 -o bench/probe bench/probe.c
+adb push bench/probe /data/local/tmp/
+adb shell '/data/local/tmp/probe 6 google.com facebook.com youtube.com shopee.vn \
+  vnexpress.net github.com wikipedia.org cloudflare.com apple.com microsoft.com \
+  zq8f1.doubleclick.net zq8f2.googlesyndication.com zq8f3.google-analytics.com \
+  zq8f4.scorecardresearch.com zq8f5.criteo.com zq8f6.taboola.com \
+  zq8f7.outbrain.com zq8f8.adnxs.com' > probe.csv
 ```
 
-`bench.sh` (the `$1` tag names the CSV):
-
-```sh
-#!/system/bin/sh
-tag="$1"
-out="/data/local/tmp/bench_${tag}.csv"
-echo "round,host,kind,rc,ms" > "$out"
-ok="google.com facebook.com youtube.com shopee.vn vnexpress.net github.com wikipedia.org cloudflare.com apple.com microsoft.com"
-bad="zq8f1.doubleclick.net zq8f2.googlesyndication.com zq8f3.google-analytics.com zq8f4.scorecardresearch.com zq8f5.criteo.com zq8f6.taboola.com zq8f7.outbrain.com zq8f8.adnxs.com"
-r=1
-while [ $r -le 6 ]; do
-  for h in $ok; do
-    t0=$(date +%s%3N); nc -z -w 3 "$h" 443 >/dev/null 2>&1; rc=$?
-    t1=$(date +%s%3N); echo "$r,$h,allow,$rc,$((t1-t0))" >> "$out"
-  done
-  for h in $bad; do
-    t0=$(date +%s%3N); nc -z -w 3 "$h" 443 >/dev/null 2>&1; rc=$?
-    t1=$(date +%s%3N); echo "$r,$h,block,$rc,$((t1-t0))" >> "$out"
-  done
-  r=$((r+1))
-done
-```
-
-CPU is read from `/proc/<pid>/stat` (`utime` + `stime`, 100 ticks/s), RAM from
-`dumpsys meminfo <pkg> | grep 'TOTAL PSS'`, battery from
+The probe prints `round,host,gai,rc,addr,dns_ms,connect_ms,total_ms`: `gai` is
+`getaddrinfo`'s code (`0` = resolved, `7` = NXDOMAIN from the tunnel), `rc`
+the connect result (`0` or an errno), and the DNS and connect halves are timed
+separately. Read medians per host class from the CSV, and sample
+`/proc/<pid>/stat` (`utime`+`stime`, 100 ticks/s) around a burst for CPU.
+RAM comes from `dumpsys meminfo <pkg> | grep 'TOTAL PSS'`, battery from
 `dumpsys batterystats --charged | grep '^  UID (<uid>):'`.
 
 Remove the marker and restart protection when the measurement is done: with it
