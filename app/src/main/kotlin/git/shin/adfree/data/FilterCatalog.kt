@@ -17,6 +17,10 @@ import git.shin.adfree.R
  * * [CatalogFilter.listId] lets an entry reuse a file older builds already
  *   downloaded (`builtin_dns`, `builtin_oisd`, `builtin_stevenblack`);
  * * [CatalogFilter.defaultEnabled] is what "Khôi phục mặc định" restores;
+ * * [CatalogFilter.locales] names the interface languages this list is the
+ *   default for: a device running one of them gets the list switched on at
+ *   first start, the way AdGuard picks a language filter for the system
+ *   locale;
  * * display text lives in `strings.xml`; [CatalogFilter.name] is the stable
  *   brand name used in downloads and diagnostics.
  */
@@ -72,6 +76,8 @@ data class CatalogFilter(
     val homepage: String? = null,
     val defaultEnabled: Boolean = false,
     val listId: String? = null,
+    /** ISO 639-1 codes this list is the default language filter for. */
+    val locales: List<String> = emptyList(),
 ) {
     companion object {
         const val FORMAT_STANDARD = "standard"
@@ -313,6 +319,7 @@ object FilterCatalog {
             descriptionRes = R.string.filter_desc_ag_russian,
             group = FilterGroup.LANGUAGE,
             url = ADGUARD_URL + "1_optimized.txt",
+            locales = listOf("ru"),
         ),
         CatalogFilter(
             id = "ag-german",
@@ -320,6 +327,7 @@ object FilterCatalog {
             descriptionRes = R.string.filter_desc_ag_german,
             group = FilterGroup.LANGUAGE,
             url = ADGUARD_URL + "6_optimized.txt",
+            locales = listOf("de"),
         ),
         CatalogFilter(
             id = "ag-japanese",
@@ -327,6 +335,7 @@ object FilterCatalog {
             descriptionRes = R.string.filter_desc_ag_japanese,
             group = FilterGroup.LANGUAGE,
             url = ADGUARD_URL + "7_optimized.txt",
+            locales = listOf("ja"),
         ),
         CatalogFilter(
             id = "ag-dutch",
@@ -334,6 +343,7 @@ object FilterCatalog {
             descriptionRes = R.string.filter_desc_ag_dutch,
             group = FilterGroup.LANGUAGE,
             url = ADGUARD_URL + "8_optimized.txt",
+            locales = listOf("nl"),
         ),
         CatalogFilter(
             id = "ag-spanish",
@@ -341,6 +351,7 @@ object FilterCatalog {
             descriptionRes = R.string.filter_desc_ag_spanish,
             group = FilterGroup.LANGUAGE,
             url = ADGUARD_URL + "9_optimized.txt",
+            locales = listOf("es", "pt"),
         ),
         CatalogFilter(
             id = "ag-turkish",
@@ -348,6 +359,7 @@ object FilterCatalog {
             descriptionRes = R.string.filter_desc_ag_turkish,
             group = FilterGroup.LANGUAGE,
             url = ADGUARD_URL + "13_optimized.txt",
+            locales = listOf("tr"),
         ),
         CatalogFilter(
             id = "ag-french",
@@ -355,6 +367,7 @@ object FilterCatalog {
             descriptionRes = R.string.filter_desc_ag_french,
             group = FilterGroup.LANGUAGE,
             url = ADGUARD_URL + "16_optimized.txt",
+            locales = listOf("fr"),
         ),
         CatalogFilter(
             id = "ag-ukrainian",
@@ -362,6 +375,7 @@ object FilterCatalog {
             descriptionRes = R.string.filter_desc_ag_ukrainian,
             group = FilterGroup.LANGUAGE,
             url = ADGUARD_URL + "23_optimized.txt",
+            locales = listOf("uk"),
         ),
         CatalogFilter(
             id = "ag-chinese",
@@ -369,6 +383,7 @@ object FilterCatalog {
             descriptionRes = R.string.filter_desc_ag_chinese,
             group = FilterGroup.LANGUAGE,
             url = ADGUARD_URL + "224_optimized.txt",
+            locales = listOf("zh"),
         ),
         CatalogFilter(
             id = "polish",
@@ -376,6 +391,7 @@ object FilterCatalog {
             descriptionRes = R.string.filter_desc_polish,
             group = FilterGroup.LANGUAGE,
             url = "https://raw.githubusercontent.com/MajkiIT/polish-ads-filter/master/polish-adblock-filters/adblock.txt",
+            locales = listOf("pl"),
         ),
         CatalogFilter(
             id = "hostsvn",
@@ -391,6 +407,7 @@ object FilterCatalog {
             descriptionRes = R.string.filter_desc_abpvn,
             group = FilterGroup.LANGUAGE,
             url = "https://raw.githubusercontent.com/abpvn/abpvn/master/filter/abpvn_adguard.txt",
+            locales = listOf("vi"),
         ),
         // AdGuard's own language filters, same Android `_optimized` bodies the
         // catalogue above uses. Coverage for the languages a Vietnamese user
@@ -401,6 +418,7 @@ object FilterCatalog {
             descriptionRes = R.string.filter_desc_ag_italian,
             group = FilterGroup.LANGUAGE,
             url = ADGUARD_URL + "26_optimized.txt",
+            locales = listOf("it"),
         ),
         CatalogFilter(
             id = "easylist-germany",
@@ -443,6 +461,7 @@ object FilterCatalog {
             descriptionRes = R.string.filter_desc_easylist_thailand,
             group = FilterGroup.LANGUAGE,
             url = ADGUARD_URL + "202_optimized.txt",
+            locales = listOf("th"),
         ),
         CatalogFilter(
             id = "adblock-id",
@@ -450,6 +469,7 @@ object FilterCatalog {
             descriptionRes = R.string.filter_desc_adblock_id,
             group = FilterGroup.LANGUAGE,
             url = ADGUARD_URL + "120_optimized.txt",
+            locales = listOf("id"),
         ),
         CatalogFilter(
             id = "youslist",
@@ -457,6 +477,7 @@ object FilterCatalog {
             descriptionRes = R.string.filter_desc_youslist,
             group = FilterGroup.LANGUAGE,
             url = ADGUARD_URL + "244_optimized.txt",
+            locales = listOf("ko"),
         ),
         CatalogFilter(
             id = "indianlist",
@@ -464,10 +485,19 @@ object FilterCatalog {
             descriptionRes = R.string.filter_desc_indianlist,
             group = FilterGroup.LANGUAGE,
             url = ADGUARD_URL + "253_optimized.txt",
+            locales = listOf("hi"),
         ),
     )
 
     fun byId(id: String): CatalogFilter? = filters.firstOrNull { it.id == id }
+
+    /**
+     * The language filter AdGuard would pick for a device whose interface
+     * runs [language] (an ISO 639-1 code): the list tagged with that code,
+     * or nothing for a language the catalogue does not cover.
+     */
+    fun forLanguage(language: String): List<CatalogFilter> =
+        if (language.isBlank()) emptyList() else filters.filter { language in it.locales }
 }
 
 /** One userscript offered in the Extensions section. */

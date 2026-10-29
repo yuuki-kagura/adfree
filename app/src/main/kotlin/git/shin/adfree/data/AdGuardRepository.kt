@@ -69,6 +69,7 @@ import okhttp3.OkHttpClient
 import okhttp3.Request
 import org.json.JSONArray
 import org.json.JSONObject
+import java.util.Locale
 
 /** Greasy Fork's public JSON search endpoint; blank query returns the top list. */
 private const val GREASY_FORK_API = "https://api.greasyfork.org/en/scripts.json"
@@ -103,6 +104,17 @@ class AdGuardRepository(
     private val onConfigApplied: () -> Unit = {},
 ) {
     private val scope = CoroutineScope(Dispatchers.Default)
+
+    /**
+     * The interface language as an ISO 639-1 code, used to pick the language
+     * filter a fresh install starts with (Vietnamese → ABPVN, like AdGuard's
+     * own locale detection). The app's resources follow the in-app language
+     * setting, so an explicit choice there wins over the system locale.
+     */
+    private fun deviceLanguage(): String {
+        val locales = context.resources.configuration.locales
+        return if (locales.isEmpty) "" else locales[0].language.lowercase(Locale.ROOT)
+    }
 
     private val _settings = MutableStateFlow(ProtectionSettings())
     val settings: StateFlow<ProtectionSettings> = _settings.asStateFlow()
@@ -678,11 +690,17 @@ class AdGuardRepository(
     fun loadFilterState(saved: FilterState = engine.stateLoad().filters) {
         scope.launch {
             val savedIds = saved.enabledCatalogIds.toSet()
+            val language = deviceLanguage()
             val lists = mutableListOf<FilterList>()
             for (entry in FilterCatalog.filters) {
-                // Never chosen: the catalogue defaults decide. Once the user
+                // Never chosen: the catalogue defaults decide, plus the
+                // language filter matching the device locale. Once the user
                 // saved a choice, the saved set wins even when it is empty.
-                val enabled = if (saved.catalogConfigured) savedIds.contains(entry.id) else entry.defaultEnabled
+                val enabled = if (saved.catalogConfigured) {
+                    savedIds.contains(entry.id)
+                } else {
+                    entry.defaultEnabled || language in entry.locales
+                }
                 lists += FilterList(
                     id = entry.listId ?: "cat_${entry.id}",
                     name = entry.name,
@@ -1275,10 +1293,19 @@ class AdGuardRepository(
     /** AdGuard's "Khôi phục mặc định": the catalogue back to factory state. */
     fun restoreDefaultFilters() {
         scope.launch {
+            val language = deviceLanguage()
             _filterLists.update { lists ->
                 lists.map { list ->
                     val catalog = list.catalogId?.let { FilterCatalog.byId(it) }
-                    if (catalog != null) list.copy(isEnabled = catalog.defaultEnabled) else list
+                    if (catalog != null) {
+                        // Factory state includes the locale's language filter,
+                        // exactly like the seeding of a fresh install.
+                        list.copy(
+                            isEnabled = catalog.defaultEnabled || language in catalog.locales,
+                        )
+                    } else {
+                        list
+                    }
                 }
             }
             val missing = _filterLists.value.filter {
