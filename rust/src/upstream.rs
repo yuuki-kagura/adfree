@@ -25,11 +25,10 @@ const QUERY_TIMEOUT_MS: u64 = 12_000;
 ///
 /// The resolver this device talks to drops the odd query, and Android's own
 /// stub gives a lookup roughly a second before it retries or fails, so a
-/// two-second wait turned every dropped packet into a visible stall. The
-/// retry is now hedged: a duplicate is a few dozen bytes, and the first
-/// answer wins, so a short delay can only help. It stays above the warm
-/// latency of a healthy resolver (~60-80 ms here), which keeps every lookup
-/// from being sent twice.
+/// two-second wait turned every dropped packet into a visible stall. Once the
+/// retry fires the fallback's answer is the one the client gets, so the delay
+/// stays above a healthy resolver's warm latency (~60-80 ms here): the
+/// duplicate costs a few dozen bytes, a two-second silence costs a page.
 const BACKUP_AFTER_MS: u64 = 100;
 /// Encrypted transports pay a handshake before the first answer and were
 /// chosen for their privacy, so a slow reply must not be duplicated in the
