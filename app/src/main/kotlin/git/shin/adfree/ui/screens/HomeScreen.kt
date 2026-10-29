@@ -11,12 +11,6 @@ import android.provider.Settings
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.animateColorAsState
-import androidx.compose.animation.core.FastOutSlowInEasing
-import androidx.compose.animation.core.RepeatMode
-import androidx.compose.animation.core.animateFloat
-import androidx.compose.animation.core.infiniteRepeatable
-import androidx.compose.animation.core.rememberInfiniteTransition
-import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -601,17 +595,6 @@ fun AdGuardShieldHero(
     isActive: Boolean,
     onToggle: () -> Unit
 ) {
-    val infiniteTransition = rememberInfiniteTransition(label = "pulse")
-    val pulseScale by infiniteTransition.animateFloat(
-        initialValue = 1f,
-        targetValue = 1.08f,
-        animationSpec = infiniteRepeatable(
-            animation = tween(1800, easing = FastOutSlowInEasing),
-            repeatMode = RepeatMode.Reverse
-        ),
-        label = "pulseScale"
-    )
-
     val shieldBgColor by animateColorAsState(
         targetValue = if (isActive) AdGuardGreenPrimary else Color(0xFF232D37),
         label = "shieldColor"
@@ -634,7 +617,7 @@ fun AdGuardShieldHero(
             if (isActive) {
                 Canvas(modifier = Modifier.fillMaxSize()) {
                     val base = size.minDimension * 0.40f
-                    val radius = base + (size.minDimension * 0.055f) * pulseScale
+                    val radius = base + size.minDimension * 0.055f
                     drawCircle(color = Color(0x1A00D06C), radius = radius)
                     drawCircle(color = Color(0x2800D06C), radius = radius * 0.88f)
                 }
