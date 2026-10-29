@@ -276,6 +276,30 @@ pub struct DnsRewrite {
     pub answer: String,
 }
 
+/// Plain UDP resolver queried once when the selected server stays silent.
+/// Kept transport-agnostic on purpose: AdGuard's fallback is also plain DNS,
+/// and a fallback that needs TLS would share the failure it exists to cover.
+#[derive(uniffi::Record, Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DnsBackup {
+    /// An IPv4 literal, like the primary UDP providers.
+    pub address: String,
+    pub port: u16,
+}
+
+/// Where the fallback query goes.
+///
+/// `System` is the default, like AdGuard: the network's own resolvers are
+/// handed over by Android before every apply, so resolution survives a dead
+/// or misconfigured upstream. `Fixed` stores one address in `DnsState::backup`.
+#[derive(uniffi::Enum, Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DnsBackupMode {
+    #[default]
+    System,
+    Off,
+    Fixed,
+}
+
 #[derive(uniffi::Record, Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct DnsState {
@@ -283,6 +307,10 @@ pub struct DnsState {
     /// written to disk, so a future build can add or fix a built-in.
     pub providers: Vec<DnsProviderRecord>,
     pub rewrites: Vec<DnsRewrite>,
+    pub backup_mode: DnsBackupMode,
+    /// Only used when `backup_mode` is `Fixed`. Persisted as-is: unlike the
+    /// provider list there is no built-in entry to re-merge on load.
+    pub backup: Option<DnsBackup>,
 }
 
 impl Default for DnsState {
@@ -290,6 +318,8 @@ impl Default for DnsState {
         DnsState {
             providers: builtin_dns_providers(),
             rewrites: Vec::new(),
+            backup_mode: DnsBackupMode::default(),
+            backup: None,
         }
     }
 }
@@ -305,6 +335,8 @@ impl DnsState {
                 .cloned()
                 .collect(),
             rewrites: self.rewrites.clone(),
+            backup_mode: self.backup_mode,
+            backup: self.backup.clone(),
         }
     }
 
@@ -326,6 +358,8 @@ impl DnsState {
                 .into_iter()
                 .filter(|r| !r.host.trim().is_empty() && !r.answer.trim().is_empty())
                 .collect(),
+            backup_mode: stored.backup_mode,
+            backup: stored.backup,
         }
     }
 

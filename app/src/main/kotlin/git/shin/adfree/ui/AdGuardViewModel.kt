@@ -10,6 +10,8 @@ import git.shin.adfree.data.AdGuardRepository
 import git.shin.adfree.model.AppCategory
 import git.shin.adfree.model.AppCategoryFilter
 import git.shin.adfree.model.AppFirewallRule
+import git.shin.adfree.model.DnsBackup
+import git.shin.adfree.model.DnsBackupMode
 import git.shin.adfree.model.DnsBlockMode
 import git.shin.adfree.model.FilterStatus
 import git.shin.adfree.model.NetworkRequestLog
@@ -134,11 +136,25 @@ class AdGuardViewModel(
             combine(
                 repository.dnsProviders,
                 repository.dnsRewrites,
+                repository.dnsBackup,
+                repository.dnsBackupMode,
                 _dnsProbeRunning,
-            ) { providers, rewrites, probing -> UiDns(providers, rewrites, probing) },
+            ) { providers, rewrites, backup, backupMode, probing ->
+                UiDns(providers, rewrites, backup, backupMode, probing)
+            },
             vpnController.isVpnActive,
         ) { status, filters, apps, dns, active ->
-            UiPartB(status, filters, apps, dns.providers, dns.rewrites, dns.probing, active)
+            UiPartB(
+                status,
+                filters,
+                apps,
+                dns.providers,
+                dns.rewrites,
+                dns.backup,
+                dns.backupMode,
+                dns.probing,
+                active,
+            )
         },
         combine(
             _inspectedLog,
@@ -227,6 +243,8 @@ class AdGuardViewModel(
             appNames = b.apps.associate { it.packageName to it.appName },
             dnsProviders = b.dns,
             dnsRewrites = b.rewrites,
+            dnsBackup = b.backup,
+            dnsBackupMode = b.backupMode,
             isDnsProbeRunning = b.isProbing,
             isVpnActive = b.isVpnActive,
             inspectedLog = c.inspected,
@@ -405,6 +423,9 @@ class AdGuardViewModel(
             }
 
             is AdGuardIntent.ProbeDnsProvider -> probeDnsProvider(intent.id)
+
+            is AdGuardIntent.SetBackupDns ->
+                repository.setBackupDns(intent.mode, intent.providerId)
 
             is AdGuardIntent.AddDnsRewrite -> {
                 val message = repository.addDnsRewrite(intent.host, intent.answer)
@@ -810,6 +831,8 @@ class AdGuardViewModel(
         val apps: List<AppFirewallRule>,
         val dns: List<git.shin.adfree.model.DnsProvider>,
         val rewrites: List<git.shin.adfree.model.DnsRewriteRule>,
+        val backup: DnsBackup?,
+        val backupMode: DnsBackupMode,
         val isProbing: Boolean,
         val isVpnActive: Boolean,
     )
@@ -817,6 +840,8 @@ class AdGuardViewModel(
     private data class UiDns(
         val providers: List<git.shin.adfree.model.DnsProvider>,
         val rewrites: List<git.shin.adfree.model.DnsRewriteRule>,
+        val backup: DnsBackup?,
+        val backupMode: DnsBackupMode,
         val probing: Boolean,
     )
 

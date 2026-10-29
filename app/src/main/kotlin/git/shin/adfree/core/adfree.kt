@@ -831,6 +831,8 @@ internal object IntegrityCheckingUniffiLib {
     ): Int
     external fun uniffi_adfree_core_checksum_func_core_set_socket_protector(
     ): Int
+    external fun uniffi_adfree_core_checksum_func_core_set_system_dns(
+    ): Int
     external fun uniffi_adfree_core_checksum_func_core_set_uid_apps(
     ): Int
     external fun uniffi_adfree_core_checksum_func_core_set_uid_lookup(
@@ -1006,6 +1008,8 @@ internal object UniffiLib {
     external fun uniffi_adfree_core_fn_func_core_set_scripts(`scripts`: RustBuffer.ByValue,`enabled`: Byte,uniffi_out_err: UniffiRustCallStatus, 
     ): Byte
     external fun uniffi_adfree_core_fn_func_core_set_socket_protector(`protector`: Long,uniffi_out_err: UniffiRustCallStatus, 
+    ): Unit
+    external fun uniffi_adfree_core_fn_func_core_set_system_dns(`servers`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): Unit
     external fun uniffi_adfree_core_fn_func_core_set_uid_apps(`entries`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): Byte
@@ -1314,6 +1318,9 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if ((lib.uniffi_adfree_core_checksum_func_core_set_socket_protector() and 0xFFFF) != 21576) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if ((lib.uniffi_adfree_core_checksum_func_core_set_system_dns() and 0xFFFF) != 17669) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if ((lib.uniffi_adfree_core_checksum_func_core_set_uid_apps() and 0xFFFF) != 29932) {
@@ -2687,6 +2694,52 @@ public object FfiConverterTypeConfigOutcome: FfiConverterRustBuffer<ConfigOutcom
 
 
 
+/**
+ * Plain UDP resolver queried once when the selected server stays silent.
+ * Kept transport-agnostic on purpose: AdGuard's fallback is also plain DNS,
+ * and a fallback that needs TLS would share the failure it exists to cover.
+ */
+data class DnsBackup (
+    /**
+     * An IPv4 literal, like the primary UDP providers.
+     */
+    var `address`: kotlin.String
+    , 
+    var `port`: kotlin.UShort
+    
+){
+    
+
+    
+
+    
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeDnsBackup: FfiConverterRustBuffer<DnsBackup> {
+    override fun read(buf: ByteBuffer): DnsBackup {
+        return DnsBackup(
+            FfiConverterString.read(buf),
+            FfiConverterUShort.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: DnsBackup) = (
+            FfiConverterString.allocationSize(value.`address`) +
+            FfiConverterUShort.allocationSize(value.`port`)
+    )
+
+    override fun write(value: DnsBackup, buf: ByteBuffer) {
+            FfiConverterString.write(value.`address`, buf)
+            FfiConverterUShort.write(value.`port`, buf)
+    }
+}
+
+
+
 data class DnsProbeResult (
     var `ok`: kotlin.Boolean
     , 
@@ -2913,6 +2966,14 @@ data class DnsState (
     var `providers`: List<DnsProviderRecord>
     , 
     var `rewrites`: List<DnsRewrite>
+    , 
+    var `backupMode`: DnsBackupMode
+    , 
+    /**
+     * Only used when `backup_mode` is `Fixed`. Persisted as-is: unlike the
+     * provider list there is no built-in entry to re-merge on load.
+     */
+    var `backup`: DnsBackup?
     
 ){
     
@@ -2931,17 +2992,23 @@ public object FfiConverterTypeDnsState: FfiConverterRustBuffer<DnsState> {
         return DnsState(
             FfiConverterSequenceTypeDnsProviderRecord.read(buf),
             FfiConverterSequenceTypeDnsRewrite.read(buf),
+            FfiConverterTypeDnsBackupMode.read(buf),
+            FfiConverterOptionalTypeDnsBackup.read(buf),
         )
     }
 
     override fun allocationSize(value: DnsState) = (
             FfiConverterSequenceTypeDnsProviderRecord.allocationSize(value.`providers`) +
-            FfiConverterSequenceTypeDnsRewrite.allocationSize(value.`rewrites`)
+            FfiConverterSequenceTypeDnsRewrite.allocationSize(value.`rewrites`) +
+            FfiConverterTypeDnsBackupMode.allocationSize(value.`backupMode`) +
+            FfiConverterOptionalTypeDnsBackup.allocationSize(value.`backup`)
     )
 
     override fun write(value: DnsState, buf: ByteBuffer) {
             FfiConverterSequenceTypeDnsProviderRecord.write(value.`providers`, buf)
             FfiConverterSequenceTypeDnsRewrite.write(value.`rewrites`, buf)
+            FfiConverterTypeDnsBackupMode.write(value.`backupMode`, buf)
+            FfiConverterOptionalTypeDnsBackup.write(value.`backup`, buf)
     }
 }
 
@@ -4554,6 +4621,48 @@ public object FfiConverterTypeConfigWarning: FfiConverterRustBuffer<ConfigWarnin
 
 
 
+/**
+ * Where the fallback query goes.
+ *
+ * `System` is the default, like AdGuard: the network's own resolvers are
+ * handed over by Android before every apply, so resolution survives a dead
+ * or misconfigured upstream. `Fixed` stores one address in `DnsState::backup`.
+ */
+
+enum class DnsBackupMode {
+    
+    SYSTEM,
+    OFF,
+    FIXED;
+
+    
+
+
+    companion object
+}
+
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeDnsBackupMode: FfiConverterRustBuffer<DnsBackupMode> {
+    override fun read(buf: ByteBuffer) = try {
+        DnsBackupMode.values()[buf.getInt() - 1]
+    } catch (e: IndexOutOfBoundsException) {
+        throw RuntimeException("invalid enum value, something is very wrong!!", e)
+    }
+
+    override fun allocationSize(value: DnsBackupMode) = 4UL
+
+    override fun write(value: DnsBackupMode, buf: ByteBuffer) {
+        buf.putInt(value.ordinal + 1)
+    }
+}
+
+
+
+
+
 
 enum class DnsBlockMode {
     
@@ -4984,6 +5093,38 @@ public object FfiConverterOptionalTypeAssetState: FfiConverterRustBuffer<AssetSt
         } else {
             buf.put(1)
             FfiConverterTypeAssetState.write(value, buf)
+        }
+    }
+}
+
+
+
+
+/**
+ * @suppress
+ */
+public object FfiConverterOptionalTypeDnsBackup: FfiConverterRustBuffer<DnsBackup?> {
+    override fun read(buf: ByteBuffer): DnsBackup? {
+        if (buf.get().toInt() == 0) {
+            return null
+        }
+        return FfiConverterTypeDnsBackup.read(buf)
+    }
+
+    override fun allocationSize(value: DnsBackup?): ULong {
+        if (value == null) {
+            return 1UL
+        } else {
+            return 1UL + FfiConverterTypeDnsBackup.allocationSize(value)
+        }
+    }
+
+    override fun write(value: DnsBackup?, buf: ByteBuffer) {
+        if (value == null) {
+            buf.put(0)
+        } else {
+            buf.put(1)
+            FfiConverterTypeDnsBackup.write(value, buf)
         }
     }
 }
@@ -6107,6 +6248,21 @@ public object FfiConverterSequenceTypeUidApps: FfiConverterRustBuffer<List<UidAp
     
         
         FfiConverterTypeSocketProtector.lower(`protector`),_status)
+}
+    
+    
+
+        /**
+         * The active network's DNS servers, as Android reports them. Feeds the
+         * "system" fallback mode; call it before `core_apply_config`. An empty list
+         * means no network resolver is available, so that fallback stays off.
+         */ fun `coreSetSystemDns`(`servers`: List<kotlin.String>)
+        = 
+    uniffiRustCall() { _status ->
+    UniffiLib.uniffi_adfree_core_fn_func_core_set_system_dns(
+    
+        
+        FfiConverterSequenceString.lower(`servers`),_status)
 }
     
     

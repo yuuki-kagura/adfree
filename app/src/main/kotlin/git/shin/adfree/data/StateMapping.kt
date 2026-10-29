@@ -2,6 +2,8 @@ package git.shin.adfree.data
 
 import git.shin.adfree.core.AppFirewallRule as CoreFirewallRule
 import git.shin.adfree.core.AppLanguage as CoreAppLanguage
+import git.shin.adfree.core.DnsBackup as CoreDnsBackup
+import git.shin.adfree.core.DnsBackupMode as CoreDnsBackupMode
 import git.shin.adfree.core.DnsBlockMode as CoreDnsBlockMode
 import git.shin.adfree.core.DnsProtocol as CoreDnsProtocol
 import git.shin.adfree.core.DnsProviderRecord as CoreDnsProvider
@@ -11,6 +13,8 @@ import git.shin.adfree.core.ProxyState as CoreProxyState
 import git.shin.adfree.core.ThemeMode as CoreThemeMode
 import git.shin.adfree.model.AppFirewallRule
 import git.shin.adfree.model.AppLanguage
+import git.shin.adfree.model.DnsBackup
+import git.shin.adfree.model.DnsBackupMode
 import git.shin.adfree.model.DnsBlockMode
 import git.shin.adfree.model.DnsProvider
 import git.shin.adfree.model.DnsRewriteRule
@@ -220,6 +224,28 @@ internal fun CoreDnsRewrite.toModel(): DnsRewriteRule = DnsRewriteRule(
     host = host,
     answer = answer,
 )
+
+internal fun DnsBackup.toCore(): CoreDnsBackup = CoreDnsBackup(
+    address = address,
+    port = port.coerceIn(0, 65535).toUShort(),
+)
+
+internal fun CoreDnsBackup.toModel(): DnsBackup = DnsBackup(
+    address = address,
+    port = port.toInt(),
+)
+
+internal fun DnsBackupMode.toCore(): CoreDnsBackupMode = when (this) {
+    DnsBackupMode.SYSTEM -> CoreDnsBackupMode.SYSTEM
+    DnsBackupMode.OFF -> CoreDnsBackupMode.OFF
+    DnsBackupMode.FIXED -> CoreDnsBackupMode.FIXED
+}
+
+internal fun CoreDnsBackupMode.toModel(): DnsBackupMode = when (this) {
+    CoreDnsBackupMode.SYSTEM -> DnsBackupMode.SYSTEM
+    CoreDnsBackupMode.OFF -> DnsBackupMode.OFF
+    CoreDnsBackupMode.FIXED -> DnsBackupMode.FIXED
+}
 
 internal fun DnsRewriteRule.toCore(): CoreDnsRewrite = CoreDnsRewrite(
     host = host,

@@ -1060,7 +1060,7 @@ private fun DnsProviderDialog(
 
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text(stringResource(R.string.settings_dns_title), fontSize = 16.sp) },
+        title = { Text(stringResource(R.string.settings_dns_title), fontSize = 18.sp) },
         text = {
             Column(
                 modifier = Modifier
@@ -1072,7 +1072,7 @@ private fun DnsProviderDialog(
                         modifier = Modifier
                             .fillMaxWidth()
                             .clickable { onSelect(provider.id) }
-                            .padding(vertical = 4.dp),
+                            .padding(vertical = 6.dp),
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
                         RadioButton(
@@ -1082,7 +1082,7 @@ private fun DnsProviderDialog(
                         Column(modifier = Modifier.weight(1f)) {
                             Text(
                                 text = provider.name,
-                                fontSize = 13.sp,
+                                fontSize = 15.sp,
                                 color = AdGuardTextPrimary,
                             )
                             Text(
@@ -1091,12 +1091,12 @@ private fun DnsProviderDialog(
                                     protocolLabel(provider.type),
                                     provider.address,
                                 ),
-                                fontSize = 11.sp,
+                                fontSize = 13.sp,
                                 color = AdGuardTextMuted,
                                 fontFamily = FontFamily.Monospace,
                             )
                             if (provider.isCustom) {
-                                Text(stringResource(R.string.settings_dns_custom), fontSize = 10.sp, color = AdGuardBlueDns)
+                                Text(stringResource(R.string.settings_dns_custom), fontSize = 11.sp, color = AdGuardBlueDns)
                             }
                         }
                     }
@@ -1105,14 +1105,14 @@ private fun DnsProviderDialog(
                 Spacer(modifier = Modifier.height(12.dp))
                 Text(
                     text = stringResource(R.string.settings_dns_add_title),
-                    fontSize = 12.sp,
+                    fontSize = 14.sp,
                     fontWeight = FontWeight.Bold,
                     color = AdGuardTextSecondary,
                 )
                 Spacer(modifier = Modifier.height(6.dp))
                 Text(
                     text = stringResource(R.string.settings_dns_protocol_label),
-                    fontSize = 11.sp,
+                    fontSize = 13.sp,
                     color = AdGuardTextMuted,
                 )
                 Row(
@@ -1129,7 +1129,7 @@ private fun DnsProviderDialog(
                         FilterChip(
                             selected = protocol == type,
                             onClick = { protocol = type },
-                            label = { Text(protocolLabel(type), fontSize = 11.sp) },
+                            label = { Text(protocolLabel(type), fontSize = 13.sp) },
                             colors = FilterChipDefaults.filterChipColors(
                                 selectedContainerColor = AdGuardGreenPrimary,
                                 selectedLabelColor = AdGuardOnAccent,
@@ -1141,7 +1141,7 @@ private fun DnsProviderDialog(
                 OutlinedTextField(
                     value = name,
                     onValueChange = { name = it },
-                    label = { Text(stringResource(R.string.settings_dns_name_label), fontSize = 11.sp) },
+                    label = { Text(stringResource(R.string.settings_dns_name_label), fontSize = 13.sp) },
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth(),
                 )
@@ -1149,7 +1149,7 @@ private fun DnsProviderDialog(
                 OutlinedTextField(
                     value = address,
                     onValueChange = { address = it },
-                    label = { Text(stringResource(R.string.settings_dns_address_label), fontSize = 11.sp) },
+                    label = { Text(stringResource(R.string.settings_dns_address_label), fontSize = 13.sp) },
                     placeholder = {
                         Text(
                             text = stringResource(
@@ -1159,7 +1159,7 @@ private fun DnsProviderDialog(
                                     else -> R.string.settings_dns_address_hint
                                 },
                             ),
-                            fontSize = 11.sp,
+                            fontSize = 13.sp,
                         )
                     },
                     singleLine = true,
@@ -1173,7 +1173,7 @@ private fun DnsProviderDialog(
                     enabled = address.isNotBlank(),
                     modifier = Modifier.fillMaxWidth(),
                 ) {
-                    Text(stringResource(R.string.settings_dns_add), fontSize = 12.sp)
+                    Text(stringResource(R.string.settings_dns_add), fontSize = 14.sp)
                 }
             }
         },

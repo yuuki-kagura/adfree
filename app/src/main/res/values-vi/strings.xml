@@ -333,6 +333,14 @@
     <string name="network_dot_title">Chặn DNS mã hóa (DoT)</string>
     <string name="network_dot_subtitle">Chặn DNS-over-TLS (cổng 853) để client không đi vòng qua bộ lọc</string>
     <string name="network_dot_private_dns">Private DNS nghiêm ngặt đang bật: hệ thống giữ resolver riêng, cổng 853 không bị chặn.</string>
+    <string name="network_backup_title">DNS dự phòng</string>
+    <string name="network_backup_body">Một truy vấn UDP thuần được gửi khi máy chủ đã chọn không trả lời trong 2 giây. DNS của hệ thống giữ bạn online khi chính máy chủ — hoặc TLS của nó — gặp sự cố.</string>
+    <string name="network_backup_system">DNS hệ thống</string>
+    <string name="network_backup_system_subtitle">Dùng resolver của mạng hiện tại khi máy chủ đã chọn không phản hồi</string>
+    <string name="network_backup_off">Tắt</string>
+    <string name="network_backup_off_subtitle">Nhấn để chọn máy chủ cho lúc sự cố</string>
+    <string name="network_backup_summary">Dùng khi %1$s không phản hồi</string>
+    <string name="network_backup_udp_only">Chỉ liệt kê resolver UDP thuần: dự phòng bằng TLS sẽ chung số phận với lỗi mà nó cần khắc phục.</string>
     <string name="network_safe_search_title">Tìm kiếm an toàn</string>
     <string name="network_safe_search_subtitle">Buộc kết quả an toàn trên Google, Bing và YouTube</string>
     <string name="network_rewrites_title">Ghi đè DNS</string>

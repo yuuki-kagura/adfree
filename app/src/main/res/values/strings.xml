@@ -333,6 +333,14 @@
     <string name="network_dot_title">Block encrypted DNS (DoT)</string>
     <string name="network_dot_subtitle">Blocks DNS-over-TLS (port 853) so clients cannot bypass the filter</string>
     <string name="network_dot_private_dns">Strict Private DNS is on: the system keeps its own resolver, so port 853 is not blocked.</string>
+    <string name="network_backup_title">Fallback DNS</string>
+    <string name="network_backup_body">One plain UDP query is sent when the selected server stays silent for 2 seconds. The system DNS keeps you online when the chosen server — or its TLS — is what broke.</string>
+    <string name="network_backup_system">System DNS</string>
+    <string name="network_backup_system_subtitle">Use the network\'s own resolvers when the selected server is silent</string>
+    <string name="network_backup_off">Off</string>
+    <string name="network_backup_off_subtitle">Tap to choose a server for outages</string>
+    <string name="network_backup_summary">Used when %1$s does not answer</string>
+    <string name="network_backup_udp_only">Only plain UDP resolvers are listed: a TLS fallback would share the failure it exists to cover.</string>
     <string name="network_safe_search_title">Safe Search</string>
     <string name="network_safe_search_subtitle">Force safe results on Google, Bing and YouTube</string>
     <string name="network_rewrites_title">DNS rewrites</string>

@@ -18,6 +18,8 @@ import git.shin.adfree.core.ScriptState
 import git.shin.adfree.core.StatsSnapshot
 import git.shin.adfree.model.AppCategory
 import git.shin.adfree.model.AppFirewallRule
+import git.shin.adfree.model.DnsBackup
+import git.shin.adfree.model.DnsBackupMode
 import git.shin.adfree.model.DnsBlockMode
 import git.shin.adfree.model.DnsProvider
 import git.shin.adfree.model.DnsRewriteRule
@@ -136,6 +138,12 @@ class AdGuardRepository(
     private val _dnsRewrites = MutableStateFlow<List<DnsRewriteRule>>(emptyList())
     val dnsRewrites: StateFlow<List<DnsRewriteRule>> = _dnsRewrites.asStateFlow()
 
+    private val _dnsBackup = MutableStateFlow<DnsBackup?>(null)
+    val dnsBackup: StateFlow<DnsBackup?> = _dnsBackup.asStateFlow()
+
+    private val _dnsBackupMode = MutableStateFlow(DnsBackupMode.SYSTEM)
+    val dnsBackupMode: StateFlow<DnsBackupMode> = _dnsBackupMode.asStateFlow()
+
     private val _loadingMessage = MutableStateFlow<UiText?>(null)
     val loadingMessage: StateFlow<UiText?> = _loadingMessage.asStateFlow()
 
@@ -203,6 +211,8 @@ class AdGuardRepository(
         val snapshot = engine.stateLoad()
         _dnsProviders.value = snapshot.dns.providers.map { it.toModel() }
         _dnsRewrites.value = snapshot.dns.rewrites.map { it.toModel() }
+        _dnsBackup.value = snapshot.dns.backup?.toModel()
+        _dnsBackupMode.value = snapshot.dns.backupMode.toModel()
         _scriptsMasterEnabled.value = snapshot.scripts.master
         // Enumerating installed apps is binder work; keep it off the caller
         // (the Application's main thread) while the rest hydrates at once.
@@ -563,6 +573,23 @@ class AdGuardRepository(
             }
         }
 
+    /**
+     * Chooses where the one-shot fallback query goes: the active network's
+     * own resolvers (the sane default, like AdGuard), nowhere, or one saved
+     * UDP provider. A TLS provider would share the failure the fallback
+     * exists to cover, so it is not offered.
+     */
+    fun setBackupDns(mode: DnsBackupMode, providerId: String? = null) {
+        if (mode == DnsBackupMode.FIXED) {
+            val provider = _dnsProviders.value.firstOrNull { it.id == providerId } ?: return
+            if (provider.type != ProtocolType.DNS_UDP) return
+            _dnsBackup.value = DnsBackup(address = provider.address, port = provider.port)
+        }
+        _dnsBackupMode.value = mode
+        persistDnsState()
+        onConfigApplied()
+    }
+
     /** Sends one probe query to a saved resolver; `null` when it disappeared. */
     suspend fun probeDnsProvider(id: String): DnsProbeResult? = withContext(Dispatchers.IO) {
         val provider = _dnsProviders.value.firstOrNull { it.id == id }
@@ -616,6 +643,8 @@ class AdGuardRepository(
             DnsState(
                 providers = _dnsProviders.value.map { it.toCoreRecord() },
                 rewrites = _dnsRewrites.value.map { it.toCore() },
+                backupMode = _dnsBackupMode.value.toCore(),
+                backup = _dnsBackup.value?.toCore(),
             )
         )
     }

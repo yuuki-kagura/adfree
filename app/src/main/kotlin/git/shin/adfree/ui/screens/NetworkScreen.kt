@@ -1,15 +1,19 @@
 package git.shin.adfree.ui.screens
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
@@ -22,6 +26,8 @@ import androidx.compose.material.icons.filled.Language
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.Public
 import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.SettingsBackupRestore
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
@@ -32,14 +38,18 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
+import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
@@ -48,9 +58,14 @@ import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import git.shin.adfree.R
+import git.shin.adfree.model.DnsBackup
+import git.shin.adfree.model.DnsBackupMode
 import git.shin.adfree.model.DnsBlockMode
+import git.shin.adfree.model.DnsProvider
+import git.shin.adfree.model.ProtocolType
 import git.shin.adfree.model.ProxySettings
 import git.shin.adfree.model.normalizeProxyHost
+import git.shin.adfree.model.probeAddress
 import git.shin.adfree.ui.AdGuardIntent
 import git.shin.adfree.ui.AdGuardViewModel
 import git.shin.adfree.ui.theme.AdGuardBlueDns
@@ -123,6 +138,17 @@ fun NetworkScreen(
                     viewModel.onIntent(AdGuardIntent.AddCustomDnsProvider(name, address, type))
                 },
                 onProbe = { viewModel.onIntent(AdGuardIntent.ProbeDnsProvider(it)) },
+            )
+
+            Spacer(modifier = Modifier.height(18.dp))
+
+            DnsBackupSection(
+                providers = state.dnsProviders,
+                backup = state.dnsBackup,
+                mode = state.dnsBackupMode,
+                onSelect = { mode, id ->
+                    viewModel.onIntent(AdGuardIntent.SetBackupDns(mode, id))
+                },
             )
 
             Spacer(modifier = Modifier.height(18.dp))
@@ -228,6 +254,180 @@ private fun blockModeLabel(mode: DnsBlockMode): String = stringResource(
         DnsBlockMode.REFUSED -> R.string.settings_block_mode_refused
     }
 )
+
+/**
+ * AdGuard's fallback servers: one plain UDP query when the selected resolver
+ * stays silent. Only UDP entries are offered because a TLS fallback would
+ * share the failure it exists to cover.
+ */
+@Composable
+private fun DnsBackupSection(
+    providers: List<DnsProvider>,
+    backup: DnsBackup?,
+    mode: DnsBackupMode,
+    onSelect: (DnsBackupMode, String?) -> Unit,
+) {
+    var showDialog by remember { mutableStateOf(false) }
+    val udp = providers.filter { it.type == ProtocolType.DNS_UDP }
+    val selected = udp.firstOrNull { backup?.matches(it) == true }
+
+    Column {
+        Text(
+            text = stringResource(R.string.network_backup_title),
+            fontSize = 12.sp,
+            fontWeight = FontWeight.Bold,
+            color = AdGuardTextSecondary,
+            modifier = Modifier.padding(bottom = 6.dp),
+        )
+        Card(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clickable { showDialog = true },
+            shape = RoundedCornerShape(12.dp),
+            colors = CardDefaults.cardColors(containerColor = AdGuardDarkSurface),
+        ) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 14.dp, vertical = 12.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Box(
+                    modifier = Modifier
+                        .size(36.dp)
+                        .clip(RoundedCornerShape(10.dp))
+                        .background(AdGuardBlueDns.copy(alpha = 0.12f)),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.SettingsBackupRestore,
+                        contentDescription = null,
+                        tint = AdGuardBlueDns,
+                        modifier = Modifier.size(18.dp),
+                    )
+                }
+                Spacer(modifier = Modifier.size(12.dp))
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = when (mode) {
+                            DnsBackupMode.SYSTEM -> stringResource(R.string.network_backup_system)
+                            DnsBackupMode.OFF -> stringResource(R.string.network_backup_off)
+                            DnsBackupMode.FIXED -> selected?.name
+                                ?: backup?.let { "${it.address}:${it.port}" }
+                                ?: stringResource(R.string.network_backup_off)
+                        },
+                        fontSize = 13.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = AdGuardTextPrimary,
+                    )
+                    Text(
+                        text = when (mode) {
+                            DnsBackupMode.SYSTEM ->
+                                stringResource(R.string.network_backup_system_subtitle)
+                            DnsBackupMode.OFF ->
+                                stringResource(R.string.network_backup_off_subtitle)
+                            DnsBackupMode.FIXED -> stringResource(
+                                R.string.network_backup_summary,
+                                selected?.address ?: backup?.address.orEmpty(),
+                            )
+                        },
+                        fontSize = 13.sp,
+                        color = AdGuardTextMuted,
+                    )
+                }
+                Text(
+                    text = stringResource(R.string.settings_dns_change),
+                    fontSize = 12.sp,
+                    color = AdGuardBlueDns,
+                )
+            }
+        }
+    }
+
+    if (showDialog) {
+        AlertDialog(
+            onDismissRequest = { showDialog = false },
+            title = { Text(stringResource(R.string.network_backup_title), fontSize = 18.sp) },
+            text = {
+                Column(
+                    modifier = Modifier
+                        .heightIn(max = 430.dp)
+                        .verticalScroll(rememberScrollState()),
+                ) {
+                    Text(
+                        text = stringResource(R.string.network_backup_body),
+                        fontSize = 13.sp,
+                        color = AdGuardTextMuted,
+                    )
+                    Spacer(modifier = Modifier.height(8.dp))
+                    BackupOptionRow(
+                        selected = mode == DnsBackupMode.SYSTEM,
+                        title = stringResource(R.string.network_backup_system),
+                        subtitle = stringResource(R.string.network_backup_system_subtitle),
+                        onSelect = {
+                            onSelect(DnsBackupMode.SYSTEM, null)
+                            showDialog = false
+                        },
+                    )
+                    BackupOptionRow(
+                        selected = mode == DnsBackupMode.OFF,
+                        title = stringResource(R.string.network_backup_off),
+                        subtitle = stringResource(R.string.network_backup_off_subtitle),
+                        onSelect = {
+                            onSelect(DnsBackupMode.OFF, null)
+                            showDialog = false
+                        },
+                    )
+                    udp.forEach { provider ->
+                        BackupOptionRow(
+                            selected = mode == DnsBackupMode.FIXED &&
+                                backup?.matches(provider) == true,
+                            title = provider.name,
+                            subtitle = provider.probeAddress(),
+                            onSelect = {
+                                onSelect(DnsBackupMode.FIXED, provider.id)
+                                showDialog = false
+                            },
+                        )
+                    }
+                    Spacer(modifier = Modifier.height(6.dp))
+                    Text(
+                        text = stringResource(R.string.network_backup_udp_only),
+                        fontSize = 11.sp,
+                        color = AdGuardTextMuted,
+                    )
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { showDialog = false }) {
+                    Text(stringResource(R.string.common_close))
+                }
+            },
+        )
+    }
+}
+
+@Composable
+private fun BackupOptionRow(
+    selected: Boolean,
+    title: String,
+    subtitle: String,
+    onSelect: () -> Unit,
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onSelect)
+            .padding(vertical = 6.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        RadioButton(selected = selected, onClick = onSelect)
+        Column(modifier = Modifier.weight(1f)) {
+            Text(title, fontSize = 15.sp, color = AdGuardTextPrimary)
+            Text(subtitle, fontSize = 13.sp, color = AdGuardTextMuted)
+        }
+    }
+}
 
 /**
  * Routing mode: outbound SOCKS5 for TCP flows.

@@ -464,6 +464,14 @@ pub fn core_dns_save(value: crate::state::model::DnsState) -> bool {
     })
 }
 
+/// The active network's DNS servers, as Android reports them. Feeds the
+/// "system" fallback mode; call it before `core_apply_config`. An empty list
+/// means no network resolver is available, so that fallback stays off.
+#[uniffi::export]
+pub fn core_set_system_dns(servers: Vec<String>) {
+    crate::state::config::set_system_dns(servers);
+}
+
 #[uniffi::export]
 pub fn core_filters_save(value: crate::state::model::FilterState) -> bool {
     guard(false, || {

@@ -146,6 +146,11 @@ class CoreEngine {
     fun saveDns(value: git.shin.adfree.core.DnsState): Boolean =
         runCatching { git.shin.adfree.core.coreDnsSave(value) }.getOrDefault(false)
 
+    /** The active network's resolvers, used by the "system" fallback mode. */
+    fun setSystemDns(servers: List<String>) {
+        runCatching { git.shin.adfree.core.coreSetSystemDns(servers) }
+    }
+
     fun saveFilters(value: git.shin.adfree.core.FilterState): Boolean =
         runCatching { git.shin.adfree.core.coreFiltersSave(value) }.getOrDefault(false)
 

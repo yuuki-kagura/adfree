@@ -6,6 +6,7 @@
 //! the only source of truth: the UI writes a record, the core applies it.
 
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+use std::sync::Mutex;
 
 use crate::engine::{Config, Core, StealthConfig};
 
@@ -30,6 +31,8 @@ pub struct Plan {
     pub upstream: SocketAddr,
     /// DoT/DoH transport selected by the provider, if any.
     pub secure: Option<crate::dnssecure::SecureResolver>,
+    /// Plain UDP resolver retried once when the selected one is silent.
+    pub backup: Option<SocketAddr>,
     pub outcome: ConfigOutcome,
     pub resolver: ResolverSnapshot,
     pub policy: PolicyPlan,
@@ -49,6 +52,29 @@ fn default_upstream() -> SocketAddr {
     SocketAddr::new(IpAddr::V4(DEFAULT_IP), DEFAULT_PORT)
 }
 
+/// The active network's resolver as Android reported it. The core cannot read
+/// `LinkProperties`, and a VPN's `/etc/resolv.conf` is not the device's, so
+/// Kotlin hands this over before every apply.
+static SYSTEM_DNS: Mutex<Option<SocketAddr>> = Mutex::new(None);
+
+/// Installs the servers Android sees for the active network. Only the first
+/// IPv4 entry is kept: the fallback sends plain UDP from an IPv4 socket, and
+/// one spare answer is already more than AdGuard's single fallback.
+pub fn set_system_dns(servers: Vec<String>) {
+    let parsed = servers
+        .iter()
+        .filter_map(|s| s.trim().parse::<Ipv4Addr>().ok())
+        .map(|ip| SocketAddr::new(IpAddr::V4(ip), 53))
+        .next();
+    if let Ok(mut slot) = SYSTEM_DNS.lock() {
+        *slot = parsed;
+    }
+}
+
+fn system_dns() -> Option<SocketAddr> {
+    SYSTEM_DNS.lock().map(|slot| *slot).unwrap_or(None)
+}
+
 /// Applies the current state to the engine. Returns the warning Kotlin shows
 /// (if any); the engine always ends up with a usable resolver, so a missing or
 /// unusable provider never leaves the VPN down.
@@ -64,6 +90,7 @@ pub fn apply(state: &StateStore, core: &Core, private_dns_strict: bool) -> Confi
     core.set_https_skip_apps(plan.policy.https_skip_apps);
     core.set_resolver(plan.upstream);
     core.set_secure_resolver(plan.secure);
+    core.set_backup_resolver(plan.backup);
     plan.outcome
 }
 
@@ -72,6 +99,7 @@ pub fn build(snapshot: &StateSnapshot, private_dns_strict: bool) -> Plan {
     let policy = policy(snapshot);
     let (provider, provider_warning) = selected_provider(snapshot);
     let (upstream, secure, tunnel_dns, address_warning) = upstream(&provider);
+    let backup = backup_resolver(&snapshot.dns);
     let (proxy, proxy_warning) = proxy(&protection.proxy);
 
     let warning = if provider_warning != ConfigWarning::None {
@@ -133,6 +161,7 @@ pub fn build(snapshot: &StateSnapshot, private_dns_strict: bool) -> Plan {
         config,
         upstream,
         secure,
+        backup,
         outcome: ConfigOutcome {
             ok: warning == ConfigWarning::None,
             warning,
@@ -220,6 +249,31 @@ fn upstream(
                         DEFAULT_IP.to_string(),
                         ConfigWarning::AddressInvalid,
                     )
+                }
+            }
+        }
+    }
+}
+
+/// The fallback resolver, or `None` when it is off or unusable. A bad backup
+/// must not produce a warning banner: the primary still works, and the user
+/// only enabled the fallback as insurance.
+fn backup_resolver(state: &DnsState) -> Option<SocketAddr> {
+    match state.backup_mode {
+        DnsBackupMode::Off => None,
+        DnsBackupMode::System => system_dns(),
+        DnsBackupMode::Fixed => {
+            let backup = state.backup.as_ref()?;
+            match backup.address.trim().parse::<IpAddr>() {
+                Ok(ip) => Some(SocketAddr::new(
+                    ip,
+                    if backup.port == 0 { 53 } else { backup.port },
+                )),
+                Err(_) => {
+                    crate::logbuf::push(
+                        "state: backup resolver is not an IP literal; fallback disabled",
+                    );
+                    None
                 }
             }
         }
@@ -395,6 +449,50 @@ mod tests {
         assert!(plan.outcome.ok);
         assert_eq!(plan.resolver.tunnel_dns, "9.9.9.9");
         assert_eq!(plan.upstream.port(), 5353);
+    }
+
+    #[test]
+    fn the_backup_resolver_follows_the_selected_mode() {
+        fn addr(a: [u8; 4]) -> Option<SocketAddr> {
+            Some(SocketAddr::new(IpAddr::V4(Ipv4Addr::from(a)), 53))
+        }
+
+        let mut s = snapshot();
+        // Default is the system resolver, like AdGuard. Nothing reported yet,
+        // so there is nothing to fall back to until Android hands it over.
+        assert_eq!(s.dns.backup_mode, DnsBackupMode::System);
+        assert!(build(&s, false).backup.is_none());
+
+        set_system_dns(vec!["1.1.1.1".to_string(), "2001:db8::1".to_string()]);
+        assert_eq!(build(&s, false).backup, addr([1, 1, 1, 1]));
+
+        s.dns.backup_mode = DnsBackupMode::Off;
+        assert!(build(&s, false).backup.is_none());
+
+        s.dns.backup_mode = DnsBackupMode::Fixed;
+        assert!(build(&s, false).backup.is_none());
+        s.dns.backup = Some(DnsBackup {
+            address: "9.9.9.9".to_string(),
+            port: 0,
+        });
+        assert_eq!(build(&s, false).backup, addr([9, 9, 9, 9]));
+
+        // Plain DNS needs a literal; a hostname would need a resolver to
+        // resolve, which is exactly what is broken when the fallback matters.
+        s.dns.backup = Some(DnsBackup {
+            address: "dns.example".to_string(),
+            port: 53,
+        });
+        assert!(build(&s, false).backup.is_none());
+
+        set_system_dns(Vec::new());
+    }
+
+    #[test]
+    fn an_older_dns_blob_defaults_the_fallback_to_the_system() {
+        let parsed: DnsState = serde_json::from_str(r#"{"providers":[],"rewrites":[]}"#).unwrap();
+        assert_eq!(parsed.backup_mode, DnsBackupMode::System);
+        assert!(parsed.backup.is_none());
     }
 
     #[test]

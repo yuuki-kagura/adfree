@@ -367,6 +367,24 @@ data class DnsRewriteRule(
 )
 
 /**
+ * Plain UDP resolver the core retries once when the selected server stays
+ * silent. Mirrors AdGuard's "fallback servers": it has to work when the
+ * primary transport (including TLS) is what broke, so only UDP qualifies.
+ */
+data class DnsBackup(
+    val address: String,
+    val port: Int,
+) {
+    fun matches(provider: DnsProvider): Boolean =
+        provider.type == ProtocolType.DNS_UDP &&
+            provider.address == address &&
+            provider.port == port
+}
+
+/** Where the one-shot fallback query goes; [SYSTEM] is the default. */
+enum class DnsBackupMode { SYSTEM, OFF, FIXED }
+
+/**
  * The address in the form the core validator accepts, including [DnsProvider.port].
  *
  * DoH already stores a complete URL; the other transports keep the port in a

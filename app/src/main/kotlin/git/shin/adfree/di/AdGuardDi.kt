@@ -1,6 +1,10 @@
 package git.shin.adfree.di
 
 import android.content.Context
+import android.net.ConnectivityManager
+import android.net.LinkProperties
+import android.net.Network
+import android.net.NetworkCapabilities
 import android.util.Log
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
@@ -15,6 +19,7 @@ import git.shin.adfree.vpn.VpnController
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import java.net.Inet4Address
 
 /**
  * Hand-rolled DI container (enough here, no Hilt needed).
@@ -62,6 +67,22 @@ class AdGuardAppContainer(private val context: Context) {
     private val _configWarning = MutableStateFlow(ConfigWarning.NONE)
     val configWarning: StateFlow<ConfigWarning> = _configWarning.asStateFlow()
 
+    init {
+        // A Wi-Fi/mobile switch changes the system DNS the fallback retries
+        // through, so the plan has to be rebuilt on that network's behalf.
+        runCatching {
+            context.getSystemService(ConnectivityManager::class.java)
+                ?.registerDefaultNetworkCallback(object : ConnectivityManager.NetworkCallback() {
+                    override fun onLinkPropertiesChanged(
+                        network: Network,
+                        linkProperties: LinkProperties,
+                    ) {
+                        applyConfig()
+                    }
+                })
+        }
+    }
+
     fun provideViewModelFactory(): ViewModelProvider.Factory {
         return object : ViewModelProvider.Factory {
             @Suppress("UNCHECKED_CAST")
@@ -92,12 +113,36 @@ class AdGuardAppContainer(private val context: Context) {
      * carves it out and the UI explains that filtering is weaker.
      */
     fun applyConfig(): ConfigOutcome {
+        // The core's default fallback retries through the network's own
+        // resolvers, and only Android can read those. Refreshing them on
+        // every apply also follows Wi-Fi/mobile switches.
+        coreEngine.setSystemDns(systemDnsServers())
         val outcome = coreEngine.applyConfig(privateDnsStrict)
         _configWarning.value = outcome.warning
         if (outcome.warning != ConfigWarning.NONE) {
             Log.w(TAG, "config fell back: ${outcome.warning}")
         }
         return outcome
+    }
+
+    private fun systemDnsServers(): List<String> {
+        val manager = context.getSystemService(ConnectivityManager::class.java) ?: return emptyList()
+        // While the tunnel runs it is the default network, and its DNS server
+        // is this very forwarder. Using that as the fallback would loop the
+        // query back into the core, so only non-VPN networks qualify.
+        val props = manager.allNetworks
+            .asSequence()
+            .filter { network ->
+                val caps = manager.getNetworkCapabilities(network) ?: return@filter false
+                caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) &&
+                    !caps.hasTransport(NetworkCapabilities.TRANSPORT_VPN)
+            }
+            .mapNotNull { manager.getLinkProperties(it) }
+            .firstOrNull { it.dnsServers.isNotEmpty() }
+            ?: return emptyList()
+        // The fallback sends from an IPv4 UDP socket, so IPv6 entries would
+        // only fail silently.
+        return props.dnsServers.filterIsInstance<Inet4Address>().mapNotNull { it.hostAddress }
     }
 
     private companion object {

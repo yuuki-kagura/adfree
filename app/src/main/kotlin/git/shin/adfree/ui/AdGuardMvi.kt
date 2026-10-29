@@ -2,6 +2,8 @@ package git.shin.adfree.ui
 
 import git.shin.adfree.model.AppFirewallRule
 import git.shin.adfree.model.AppLanguage
+import git.shin.adfree.model.DnsBackup
+import git.shin.adfree.model.DnsBackupMode
 import git.shin.adfree.model.DnsBlockMode
 import git.shin.adfree.model.DnsProvider
 import git.shin.adfree.model.DnsRewriteRule
@@ -31,6 +33,8 @@ data class AdGuardUiState(
     val appNames: Map<String, String> = emptyMap(),
     val dnsProviders: List<DnsProvider> = emptyList(),
     val dnsRewrites: List<DnsRewriteRule> = emptyList(),
+    val dnsBackup: DnsBackup? = null,
+    val dnsBackupMode: DnsBackupMode = DnsBackupMode.SYSTEM,
     val isDnsProbeRunning: Boolean = false,
     val isVpnActive: Boolean = false,
     val inspectedLog: NetworkRequestLog? = null,
@@ -108,6 +112,11 @@ sealed interface AdGuardIntent {
         val type: ProtocolType = ProtocolType.DNS_UDP,
     ) : AdGuardIntent
     data class ProbeDnsProvider(val id: String) : AdGuardIntent
+    /** Fallback choice; [providerId] is required only for [DnsBackupMode.FIXED]. */
+    data class SetBackupDns(
+        val mode: DnsBackupMode,
+        val providerId: String? = null,
+    ) : AdGuardIntent
     data class AddDnsRewrite(val host: String, val answer: String) : AdGuardIntent
     data class RemoveDnsRewrite(val host: String) : AdGuardIntent
     data class UpdateAppFirewall(

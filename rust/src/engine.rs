@@ -990,6 +990,13 @@ impl Core {
         self.conntrack.lock().unwrap().clear();
     }
 
+    /// Installs (or removes) the plain UDP resolver retried when the selected
+    /// server stays silent. Works for every primary transport, including
+    /// DoT/DoH, because the retry always travels over the UDP pool.
+    pub fn set_backup_resolver(&self, backup: Option<SocketAddr>) {
+        self.upstream.lock().unwrap().set_backup(backup);
+    }
+
     pub fn set_socket_fds(&self, fds: &[RawFd]) {
         self.upstream.lock().unwrap().set_socket_fds(fds);
     }
@@ -1106,6 +1113,17 @@ impl Core {
     fn handle_secure_reply(&self, reply: crate::dnssecure::SecureReply) {
         self.secure_outstanding.fetch_sub(1, Ordering::Relaxed);
         if reply.message.is_empty() {
+            // The encrypted transport failed. The fallback is plain UDP, so it
+            // can still answer even when TLS is what broke.
+            if !reply.pending.via_backup
+                && self
+                    .upstream
+                    .lock()
+                    .unwrap()
+                    .retry_via_backup(&reply.pending, now_ms())
+            {
+                return;
+            }
             self.fail_pending(&reply.pending);
             return;
         }
@@ -3117,6 +3135,9 @@ impl Core {
             socket: 0,
             packet: pkt.raw.to_vec(),
             sent_ms: now_ms(),
+            // The fallback retry re-sends this very packet over UDP, so the
+            // record must know it came from the encrypted transport.
+            via_backup: false,
             purpose: if safe_host.is_some() {
                 crate::upstream::Purpose::SafeSearch
             } else {
@@ -3141,6 +3162,17 @@ impl Core {
         self.secure_outstanding.fetch_add(1, Ordering::Relaxed);
         self.stats.inc(&self.stats.dns_queries);
         self.stats.inc(&self.stats.packets_forwarded);
+    }
+
+    /// A pending query left the forwarder. One that already used the fallback
+    /// has no path left, so the client gets SERVFAIL at once instead of
+    /// retrying against the same dead resolvers.
+    fn on_pending_expired(&self, pending: &crate::upstream::Pending) {
+        if pending.via_backup {
+            self.fail_pending(pending);
+            return;
+        }
+        self.safe_search_expired(pending);
     }
 
     /// A SafeSearch lookup timed out: the client that was waiting on it gets
@@ -4027,7 +4059,7 @@ fn forwarder_loop(core: &'static Core) {
             let mut upstream = core.upstream.lock().unwrap();
             upstream.poll(&mut replies, 0);
             for pending in upstream.expire(now) {
-                core.safe_search_expired(&pending);
+                core.on_pending_expired(&pending);
             }
         }
         for reply in &replies {
@@ -5569,6 +5601,7 @@ mod tests {
                     sent_ms: now_ms(),
                     purpose: crate::upstream::Purpose::Client,
                     safe_host: String::new(),
+                    via_backup: false,
                 },
                 message: message.clone(),
             });

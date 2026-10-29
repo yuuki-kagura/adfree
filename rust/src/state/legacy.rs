@@ -287,6 +287,7 @@ fn settings_from(blob: LegacySettings) -> LegacySettingsPart {
         dns: DnsState {
             providers: custom,
             rewrites: Vec::new(),
+            ..DnsState::default()
         },
     }
 }

@@ -21,6 +21,10 @@ use std::os::unix::io::RawFd;
 pub const SOCKET_POOL_PUB: usize = 4;
 const SOCKET_POOL: usize = SOCKET_POOL_PUB;
 const QUERY_TIMEOUT_MS: u64 = 12_000;
+/// A silent primary is retried through the fallback after this long. Short
+/// enough that a dead server is noticed while the client is still waiting,
+/// long enough that one lost datagram does not switch resolvers.
+const BACKUP_AFTER_MS: u64 = 2_000;
 const MAX_MESSAGE: usize = 4096;
 const MAX_REPLIES_PER_POLL: usize = 32;
 
@@ -43,6 +47,8 @@ pub struct Pending {
     pub purpose: Purpose,
     /// The filtered host a SafeSearch query was sent to; empty otherwise.
     pub safe_host: String,
+    /// The primary never answered and the query now waits on the fallback.
+    pub via_backup: bool,
 }
 
 /// An answer that came back from upstream.
@@ -55,6 +61,8 @@ pub struct Reply {
 pub struct Upstream {
     fds: Vec<RawFd>,
     resolver: SocketAddr,
+    /// Plain UDP resolver tried once when the primary stays silent.
+    backup: Option<SocketAddr>,
     pending: HashMap<u32, Pending>,
     next_txid: u32,
     timeouts: u64,
@@ -65,6 +73,7 @@ impl Upstream {
         Upstream {
             fds: vec![-1; SOCKET_POOL],
             resolver,
+            backup: None,
             pending: HashMap::new(),
             next_txid: 0x8000,
             timeouts: 0,
@@ -97,6 +106,16 @@ impl Upstream {
         if self.resolver != resolver {
             self.resolver = resolver;
         }
+    }
+
+    /// Installs (or removes) the fallback resolver. Queries already waiting
+    /// are unaffected until they are retried.
+    pub fn set_backup(&mut self, backup: Option<SocketAddr>) {
+        self.backup = backup;
+    }
+
+    pub fn backup(&self) -> Option<SocketAddr> {
+        self.backup
     }
 
     pub fn pending_len(&self) -> usize {
@@ -215,16 +234,12 @@ impl Upstream {
         if payload.len() > MAX_MESSAGE {
             return None;
         }
-        // One place builds the sockaddr (byte order covered by a unit test).
-        let sent = match self.resolver {
-            SocketAddr::V4(_) => sendto(fd, payload, Self::sockaddr_for(&self.resolver)),
-            SocketAddr::V6(a) => sendto6(fd, payload, a),
-        };
-        if sent < 0 {
-            let err = std::io::Error::last_os_error();
+        if !send_query(fd, payload, self.resolver) {
             crate::logbuf::push(&format!(
                 "dns forward: sendto {} on fd {} (slot {slot}) failed: {}",
-                self.resolver, fd, err
+                self.resolver,
+                fd,
+                std::io::Error::last_os_error()
             ));
             return None;
         }
@@ -239,9 +254,58 @@ impl Upstream {
                 sent_ms: now_ms,
                 purpose,
                 safe_host: safe_host.to_string(),
+                via_backup: false,
             },
         );
         Some(key)
+    }
+
+    /// Re-sends a waiting query to the fallback resolver.
+    ///
+    /// The message already carries our transaction id, so the client keeps
+    /// waiting for the same answer; the record moves to whichever pool slot
+    /// actually sent it. `false` means no fallback is configured or the send
+    /// failed, and the caller should give up on this query.
+    pub fn retry_via_backup(&mut self, pending: &Pending, now_ms: u64) -> bool {
+        let Some(backup) = self.backup else {
+            return false;
+        };
+        let Some(payload) = dns_payload(&pending.packet) else {
+            return false;
+        };
+        if payload.len() > MAX_MESSAGE {
+            return false;
+        }
+        let Some(slot) = self.slot(pending.socket as usize) else {
+            return false;
+        };
+        let fd = self.fds[slot];
+        if !send_query(fd, payload, backup) {
+            crate::logbuf::push(&format!(
+                "dns fallback: sendto {backup} on fd {fd} failed: {}",
+                std::io::Error::last_os_error()
+            ));
+            return false;
+        }
+        let txid = u16::from_be_bytes([payload[0], payload[1]]);
+        let key = pending_key(slot, txid);
+        let mut retried = pending.clone();
+        retried.socket = slot as u8;
+        retried.sent_ms = now_ms;
+        retried.via_backup = true;
+        // The old record may sit under a different slot; leaving it would let
+        // a late primary answer race the fallback one.
+        let stale: Vec<u32> = self
+            .pending
+            .iter()
+            .filter(|(_, p)| p.client_txid == pending.client_txid && p.packet == pending.packet)
+            .map(|(k, _)| *k)
+            .collect();
+        for k in stale {
+            self.pending.remove(&k);
+        }
+        self.pending.insert(key, retried);
+        true
     }
 
     /// Waits for answers, reusing `out` to avoid allocating per wakeup.
@@ -313,13 +377,39 @@ impl Upstream {
     /// caller can answer SafeSearch clients with SERVFAIL instead of leaving
     /// them to time out.
     pub fn expire(&mut self, now_ms: u64) -> Vec<Pending> {
+        // A silent primary moves to the fallback first; only a query that has
+        // also waited out the full budget there is handed back as failed.
+        let retry_due: Vec<u32> = self
+            .pending
+            .iter()
+            .filter(|(_, p)| {
+                !p.via_backup
+                    && now_ms.saturating_sub(p.sent_ms) > BACKUP_AFTER_MS
+                    && self.backup.is_some()
+            })
+            .map(|(k, _)| *k)
+            .collect();
+        let mut out = Vec::with_capacity(retry_due.len());
+        for key in retry_due {
+            let Some(pending) = self.pending.remove(&key) else {
+                continue;
+            };
+            if !self.retry_via_backup(&pending, now_ms) {
+                self.timeouts += 1;
+                let mut failed = pending;
+                // The fallback was the last resort, so callers answer the
+                // client now instead of waiting for the primary's budget.
+                failed.via_backup = true;
+                out.push(failed);
+            }
+        }
+
         let expired: Vec<u32> = self
             .pending
             .iter()
             .filter(|(_, p)| now_ms.saturating_sub(p.sent_ms) > QUERY_TIMEOUT_MS)
             .map(|(k, _)| *k)
             .collect();
-        let mut out = Vec::with_capacity(expired.len());
         for key in expired {
             if let Some(pending) = self.pending.remove(&key) {
                 out.push(pending);
@@ -345,6 +435,15 @@ fn dns_payload(packet: &[u8]) -> Option<&[u8]> {
         return None;
     }
     Some(&packet[start..parsed.total_len.min(packet.len())])
+}
+
+/// One datagram to `resolver`, whichever address family it uses.
+fn send_query(fd: RawFd, payload: &[u8], resolver: SocketAddr) -> bool {
+    let sent = match resolver {
+        SocketAddr::V4(_) => sendto(fd, payload, Upstream::sockaddr_for(&resolver)),
+        SocketAddr::V6(a) => sendto6(fd, payload, a),
+    };
+    sent >= 0
 }
 
 #[inline]
@@ -457,9 +556,40 @@ mod tests {
                 sent_ms: 1_000,
                 purpose: Purpose::Client,
                 safe_host: String::new(),
+                via_backup: false,
             },
         );
         assert_eq!(u.expire(1_000 + QUERY_TIMEOUT_MS + 1).len(), 1);
+        assert_eq!(u.pending_len(), 0);
+        assert_eq!(u.timeouts(), 1);
+    }
+
+    #[test]
+    fn a_silent_primary_falls_back_before_the_full_budget() {
+        let mut u = upstream();
+        u.set_backup(Some(SocketAddr::V4(SocketAddrV4::new(
+            Ipv4Addr::new(1, 1, 1, 1),
+            53,
+        ))));
+        u.pending.insert(
+            7,
+            Pending {
+                client_txid: 1,
+                socket: 0,
+                packet: vec![0u8; 20],
+                sent_ms: 1_000,
+                purpose: Purpose::Client,
+                safe_host: String::new(),
+                via_backup: false,
+            },
+        );
+        // Still inside the retry delay: the primary gets its chance.
+        assert!(u.expire(1_000 + BACKUP_AFTER_MS).is_empty());
+        // The retry delay lapsed. No pool socket exists here, so the send
+        // fails and the query is handed back as a fallback failure.
+        let expired = u.expire(1_000 + BACKUP_AFTER_MS + 1);
+        assert_eq!(expired.len(), 1);
+        assert!(expired[0].via_backup);
         assert_eq!(u.pending_len(), 0);
         assert_eq!(u.timeouts(), 1);
     }
