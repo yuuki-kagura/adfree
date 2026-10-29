@@ -745,13 +745,13 @@ class AdGuardViewModel(
     }
 
     /**
-     * Full ECH: hand clients the origin's ECHConfigs so they can wrap their
-     * hello end to end. The hosts that use it are then spliced, not filtered —
-     * the trade this switch exists for. The engine reads the flag per DNS
-     * answer, so this takes effect with the next lookup.
+     * Block ECH (AdGuard's low-level switch): strip the ECH config from DNS
+     * answers so every host stays decryptable. Off by default; with it off an
+     * ECH host is spliced and left unfiltered instead of failing. The engine
+     * reads the flag per DNS answer, so this takes effect with the next lookup.
      */
-    fun setFullEch(enabled: Boolean) {
-        repository.toggleFullEch(enabled)
+    fun setEchBlocking(enabled: Boolean) {
+        repository.toggleEchBlocking(enabled)
     }
 
     /** HTTPS allowlist: hosts the proxy must not decrypt. */

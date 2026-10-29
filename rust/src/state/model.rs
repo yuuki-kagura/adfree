@@ -114,7 +114,10 @@ pub struct ProtectionState {
     /// Terminate and filter QUIC (HTTP/3) instead of dropping it. Needs HTTPS
     /// filtering, because the same certificate and decision layer are used.
     pub filter_http3: bool,
-    pub is_full_ech_enabled: bool,
+    /// AdGuard's "Block ECH", off by default: strip the `ech` SvcParam from
+    /// DNS answers so those hosts stay decryptable. With it off an ECH
+    /// connection is spliced and left unfiltered instead of failing.
+    pub is_ech_blocking_enabled: bool,
     pub is_firewall_enabled: bool,
     pub is_eco_battery_mode_enabled: bool,
     pub is_stealth_mode_enabled: bool,
@@ -156,7 +159,9 @@ impl Default for ProtectionState {
             // AdGuard keeps HTTP/3 blocked until the user opts in: the
             // termination is new and browser support varies.
             filter_http3: false,
-            is_full_ech_enabled: false,
+            // AdGuard's Block ECH is off by default; an ECH connection is
+            // spliced rather than stripped, so nothing breaks.
+            is_ech_blocking_enabled: false,
             is_firewall_enabled: true,
             is_eco_battery_mode_enabled: true,
             // Stealth now has real side effects (WebRTC, cookies, UA), so it

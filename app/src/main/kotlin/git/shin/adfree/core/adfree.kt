@@ -3688,7 +3688,12 @@ data class ProtectionState (
      */
     var `filterHttp3`: kotlin.Boolean
     , 
-    var `isFullEchEnabled`: kotlin.Boolean
+    /**
+     * AdGuard's "Block ECH", off by default: strip the `ech` SvcParam from
+     * DNS answers so those hosts stay decryptable. With it off an ECH
+     * connection is spliced and left unfiltered instead of failing.
+     */
+    var `isEchBlockingEnabled`: kotlin.Boolean
     , 
     var `isFirewallEnabled`: kotlin.Boolean
     , 
@@ -3805,7 +3810,7 @@ public object FfiConverterTypeProtectionState: FfiConverterRustBuffer<Protection
             FfiConverterBoolean.allocationSize(value.`isSmartFilteringEnabled`) +
             FfiConverterBoolean.allocationSize(value.`isHttpsFilteringEnabled`) +
             FfiConverterBoolean.allocationSize(value.`filterHttp3`) +
-            FfiConverterBoolean.allocationSize(value.`isFullEchEnabled`) +
+            FfiConverterBoolean.allocationSize(value.`isEchBlockingEnabled`) +
             FfiConverterBoolean.allocationSize(value.`isFirewallEnabled`) +
             FfiConverterBoolean.allocationSize(value.`isEcoBatteryModeEnabled`) +
             FfiConverterBoolean.allocationSize(value.`isStealthModeEnabled`) +
@@ -3839,7 +3844,7 @@ public object FfiConverterTypeProtectionState: FfiConverterRustBuffer<Protection
             FfiConverterBoolean.write(value.`isSmartFilteringEnabled`, buf)
             FfiConverterBoolean.write(value.`isHttpsFilteringEnabled`, buf)
             FfiConverterBoolean.write(value.`filterHttp3`, buf)
-            FfiConverterBoolean.write(value.`isFullEchEnabled`, buf)
+            FfiConverterBoolean.write(value.`isEchBlockingEnabled`, buf)
             FfiConverterBoolean.write(value.`isFirewallEnabled`, buf)
             FfiConverterBoolean.write(value.`isEcoBatteryModeEnabled`, buf)
             FfiConverterBoolean.write(value.`isStealthModeEnabled`, buf)

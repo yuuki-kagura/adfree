@@ -671,7 +671,7 @@
     <string name="log_status_whitelisted">Trắng</string>
     <string name="log_detail_title">Chi tiết truy vấn</string>
     <string name="log_dest_header">TÊN MIỀN ĐÍCH</string>
-    <string name="log_ip_protocol">IP: %1$s • Giao thức: %2$s</string>
+    <string name="log_ip_protocol">Máy chủ: %1$s • Giao thức: %2$s</string>
     <string name="log_detail_domain">Tên miền</string>
     <string name="log_detail_action">Quyết định xử lý</string>
     <string name="log_detail_category">Phân loại</string>
@@ -758,8 +758,8 @@
     <string name="settings_https_enable_subtitle">Giải mã HTTPS để lọc quảng cáo và chèn script</string>
     <string name="settings_cosmetic_title">Lọc giao diện</string>
     <string name="settings_cosmetic_subtitle">Ẩn khung quảng cáo còn sót trên trang; cần bật lọc HTTPS</string>
-    <string name="settings_ech_title">ECH đầy đủ</string>
-    <string name="settings_ech_subtitle">Cho trình duyệt tự mã hoá ECH end-to-end. Host dùng ECH sẽ được nối thẳng, không lọc được.</string>
+    <string name="settings_ech_title">Chặn ECH</string>
+    <string name="settings_ech_subtitle">Loại bỏ ECH khỏi câu trả lời DNS để mọi trang vẫn lọc được. Mặc định tắt: kết nối ECH khi đó được cho đi qua mà không lọc.</string>
     <string name="settings_http3_title">Lọc HTTP/3</string>
     <string name="settings_http3_subtitle">Giải mã và lọc QUIC (HTTP/3) thay vì chặn; cần bật lọc HTTPS. Chrome không tin chứng chỉ người dùng cho QUIC nên sẽ tự chuyển sang TCP.</string>
     <string name="settings_ca_created">CA đã tạo</string>

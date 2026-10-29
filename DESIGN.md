@@ -692,20 +692,20 @@ legs are handled separately, and the default covers only the upstream half.
   drop filtering for a host that merely shares `cloudflare-ech.com` with an
   exempt one. A name the proxy never learned falls through as GREASE and is
   terminated anyway, with the same outcome.
-- **Full ECH (`Config::full_ech`, off by default).** The DNS half keeps the
-  config, the client may run ECH end to end, and that host is spliced and
-  unfiltered for flows that actually negotiate ECH. Non-ECH clients (GREASE,
-  older stacks) are still terminated, filtered and offered ECH upstream; the
-  config is still kept for that half, and the refusal fallback still works.
-  No TTL clamp is applied because the answer is the origin's again.
+- **ECH (`Config::full_ech`, on unless "Block ECH" is enabled).** The DNS half
+  keeps the config, the client may run ECH end to end, and that host is spliced
+  and unfiltered for flows that actually negotiate ECH. Non-ECH clients
+  (GREASE, older stacks) are still terminated, filtered and offered ECH
+  upstream; the config is still kept for that half, and the refusal fallback
+  still works. No TTL clamp is applied because the answer is the origin's
+  again. AdGuard likewise ships "Block ECH" off, so this is the default.
 - **AdGuard parity.** Public evidence shows AdGuard's ECH is likewise the
   proxy↔origin leg: opt-in (`network.https.ech.enabled`), requiring DNS
-  filtering, and documented as needing support on both sides. Its
-  client↔proxy leg stays plain under HTTPS filtering — ECH checkers behind
-  AdGuard report GREASE/plain (AdguardForAndroid #6249, still open in October
-  2026). AdGuard documents no full-ECH/splice mode. AdFree matches that
-  architecture and adds `full_ech` as an explicit per-host trade; omitting
-  client↔proxy ECH by default is therefore not a parity gap.
+  filtering, and documented as needing support on both sides. Its low-level
+  "Block ECH" switch (`pref.dns.block.ech`) ships off, which is what AdFree
+  now mirrors: off, an ECH-capable host is spliced and unfiltered rather than
+  broken; on, the DNS half strips the config so the client cannot start ECH
+  at all. AdGuard documents no full-ECH/splice mode of its own.
   Evidence: [Mac 2.10 blog](https://adguard.com/en/blog/adguard-v2-10-for-mac.html),
   [ECH obstacles blog](https://adguard.com/en/blog/encrypted-client-hello-misconceptions-future.html),
   [AdguardForAndroid #6249](https://github.com/AdguardTeam/AdguardForAndroid/issues/6249),
@@ -1072,11 +1072,12 @@ issue tracker, release notes and measured behavior rather than from code.
   screen lock before it can be enabled. Apps targeting API 24+ ignore
   user-store CAs: they are either learned and spliced verbatim, or covered by
   the root system-store install (automated tests only so far).
-- ECH: by default only the proxy↔origin leg uses ECH. With `full_ech` on, a
-  flow that negotiates ECH is spliced and unfiltered by design; non-ECH flows
-  to the same host stay filtered. A public-name hello without `full_ech` or an
-  exemption for a host behind it costs one failed handshake so the retry is
-  filtered.
+- ECH: by default the proxy↔origin leg and the client↔proxy leg may both use
+  ECH (`Block ECH` off, like AdGuard); a flow that negotiates ECH is spliced
+  and unfiltered by design, non-ECH flows to the same host stay filtered.
+  With `Block ECH` on, the config never reaches the client: a public-name
+  hello without an exemption for a host behind it costs one failed handshake
+  so the retry is filtered.
 - HTTP/3 filtering is opt-in, needs HTTPS filtering, and Chrome/Cronet still
   reject user CAs for QUIC, so they fall back to TCP. QUIC is dropped in
   SOCKS5 proxy mode.

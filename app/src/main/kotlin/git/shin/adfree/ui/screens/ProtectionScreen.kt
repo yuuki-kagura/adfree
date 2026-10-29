@@ -571,7 +571,7 @@ private fun HttpsDetail(
 
         HttpsFilterSection(
             viewModel = viewModel,
-            fullEchEnabled = state.settings.isFullEchEnabled,
+            echBlockingEnabled = state.settings.isEchBlockingEnabled,
             onManageScripts = onManageScripts,
         )
     }

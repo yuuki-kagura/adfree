@@ -483,7 +483,7 @@ private fun SettingsLink(
 @Composable
 internal fun HttpsFilterSection(
     viewModel: AdGuardViewModel,
-    fullEchEnabled: Boolean,
+    echBlockingEnabled: Boolean,
     onManageScripts: () -> Unit,
 ) {
     var status by remember { mutableStateOf<MitmStatus?>(null) }
@@ -584,18 +584,19 @@ internal fun HttpsFilterSection(
 
         Spacer(modifier = Modifier.height(10.dp))
 
-        // The opt-in trade: ECH hides the inner name from the proxy, so a host
-        // that uses it has to be spliced — unfiltered. Off by default; nothing
-        // changes for clients that do not use ECH. Read straight from the
-        // collected settings, not a remembered snapshot: the saved switches
-        // arrive after the first composition, and a snapshot would keep
-        // showing the default until the next tap.
+        // AdGuard's low-level "Block ECH": when on, the DNS half strips the
+        // ECH config so clients cannot hide the inner name and every host
+        // stays decryptable. Off by default; an ECH host is then spliced and
+        // left unfiltered instead. Read straight from the collected settings,
+        // not a remembered snapshot: the saved switches arrive after the first
+        // composition, and a snapshot would keep showing the default until the
+        // next tap.
         SettingsSwitch(
-            icon = Icons.Default.Visibility,
+            icon = Icons.Default.VisibilityOff,
             title = stringResource(R.string.settings_ech_title),
             subtitle = stringResource(R.string.settings_ech_subtitle),
-            checked = fullEchEnabled,
-            onCheckedChange = { enabled -> viewModel.setFullEch(enabled) }
+            checked = echBlockingEnabled,
+            onCheckedChange = { enabled -> viewModel.setEchBlocking(enabled) }
         )
 
         Spacer(modifier = Modifier.height(12.dp))

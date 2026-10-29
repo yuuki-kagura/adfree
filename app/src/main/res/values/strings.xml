@@ -671,7 +671,7 @@
     <string name="log_status_whitelisted">Allowlisted</string>
     <string name="log_detail_title">Query details</string>
     <string name="log_dest_header">TARGET DOMAIN</string>
-    <string name="log_ip_protocol">IP: %1$s • Protocol: %2$s</string>
+    <string name="log_ip_protocol">Server: %1$s • Protocol: %2$s</string>
     <string name="log_detail_domain">Domain</string>
     <string name="log_detail_action">Action</string>
     <string name="log_detail_category">Category</string>
@@ -758,8 +758,8 @@
     <string name="settings_https_enable_subtitle">Decrypt HTTPS to filter ads and inject scripts</string>
     <string name="settings_cosmetic_title">Cosmetic filtering</string>
     <string name="settings_cosmetic_subtitle">Hide leftover ad placeholders on pages; requires HTTPS filtering</string>
-    <string name="settings_ech_title">Full ECH</string>
-    <string name="settings_ech_subtitle">Let the browser encrypt ECH end-to-end. Hosts that use ECH are connected directly and cannot be filtered.</string>
+    <string name="settings_ech_title">Block ECH</string>
+    <string name="settings_ech_subtitle">Strip ECH from DNS answers so every site stays filterable. Off by default: an ECH connection is then let through unfiltered.</string>
     <string name="settings_http3_title">Filter HTTP/3</string>
     <string name="settings_http3_subtitle">Decrypt and filter QUIC (HTTP/3) instead of blocking it; needs HTTPS filtering. Chrome does not trust user certificates for QUIC, so it falls back to TCP.</string>
     <string name="settings_ca_created">CA created</string>

@@ -458,9 +458,10 @@ data class ProtectionSettings(
     // on, UDP/443 is terminated and filtered like HTTPS instead of dropped;
     // needs HTTPS filtering for the same certificate and decision layer.
     val filterHttp3: Boolean = false,
-    // Off by default: letting clients run ECH end to end means the proxy can no
-    // longer see (or filter) the names they hide. The user opts into that trade.
-    val isFullEchEnabled: Boolean = false,
+    // Off by default, matching AdGuard's "Block ECH": with it off a host that
+    // negotiates ECH is connected through (spliced) instead of broken. On, the
+    // DNS answer loses its ECH config so every host stays decryptable.
+    val isEchBlockingEnabled: Boolean = false,
     val isFirewallEnabled: Boolean = true,
     val isEcoBatteryModeEnabled: Boolean = true,
     // Stealth effects are opt-in; the sub-switches remember the choice.

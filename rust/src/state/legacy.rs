@@ -184,7 +184,12 @@ fn settings_from(blob: LegacySettings) -> LegacySettingsPart {
     take!(is_dns_protection_enabled, dns);
     take!(is_smart_filtering_enabled, smart_filtering);
     take!(is_https_filtering_enabled, https);
-    take!(is_full_ech_enabled, full_ech);
+    // The old switch meant "Full ECH" (allow ECH end to end), the inverse of
+    // today's Block ECH. Carrying it over inverted keeps the choice the user
+    // made; a blob without it lands on the new default (blocking off).
+    if let Some(full_ech) = blob.full_ech {
+        p.is_ech_blocking_enabled = !full_ech;
+    }
     take!(is_firewall_enabled, firewall);
     take!(is_eco_battery_mode_enabled, eco);
     take!(block_quic, block_quic);
@@ -400,6 +405,19 @@ mod tests {
         assert!(p.proxy.enabled);
         assert_eq!(p.proxy.port, 1080);
         assert!(!p.safe_search);
+    }
+
+    #[test]
+    fn legacy_full_ech_becomes_block_ech_inverted() {
+        let part = settings_from_str(r#"{"fullEch": true}"#);
+        assert!(!part.protection.is_ech_blocking_enabled);
+        let part = settings_from_str(r#"{"fullEch": false}"#);
+        assert!(part.protection.is_ech_blocking_enabled);
+        let part = settings_from_str(r#"{}"#);
+        assert!(
+            !part.protection.is_ech_blocking_enabled,
+            "an absent key keeps the new default (blocking off)"
+        );
     }
 
     #[test]

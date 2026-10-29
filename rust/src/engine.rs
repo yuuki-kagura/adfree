@@ -203,11 +203,12 @@ pub struct Config {
     pub filter_http3: bool,
     /// Leave ECHConfigs in DNS answers so clients can run ECH end to end.
     ///
-    /// Off by default: ECH hides the inner name from the proxy, so an ECH
-    /// hello can only be spliced, and the host behind it goes unfiltered.
-    /// Turned on, the user chooses that trade for every host that offers ECH;
-    /// clients that do not use ECH (GREASE, older stacks) are still terminated
-    /// and filtered as usual. See `mitm::ech`.
+    /// This is the shipped default (AdGuard's "Block ECH" is off): ECH hides
+    /// the inner name from the proxy, so an ECH hello can only be spliced, and
+    /// the host behind it goes unfiltered. When the user turns Block ECH on,
+    /// the config is stripped instead and clients that do not use ECH (GREASE,
+    /// older stacks) are still terminated and filtered as usual. See
+    /// `mitm::ech`.
     pub full_ech: bool,
     pub block_quic: bool,
     pub block_doh: bool,
@@ -2808,7 +2809,9 @@ impl Core {
             events::block_event(
                 events::ACTION_TCP_RESET,
                 &host,
-                &pkt.dst_ip_text(),
+                // The port belongs to the destination: AdGuard's log shows the
+                // connection as `ip:port`, not the bare address.
+                &format!("{}:{}", pkt.dst_ip_text(), pkt.dst_port),
                 rule,
                 "Protection",
                 category,
@@ -2868,7 +2871,7 @@ impl Core {
                     events::block_event(
                         events::ACTION_BLOCK,
                         host,
-                        &pkt.dst_ip_text(),
+                        &self.dns_server_text(),
                         reason,
                         "App firewall",
                         crate::filter::CAT_AD,
@@ -2897,7 +2900,7 @@ impl Core {
                     if cfg.log_allowed && self.logging_live() {
                         let packages = app_packages.unwrap_or_else(|| self.apps_for_udp(pkt));
                         let event = events::with_app(
-                            events::allow_event(host, &pkt.dst_ip_text(), 0),
+                            events::allow_event(host, &self.dns_server_text(), 0),
                             first_app(&packages),
                         );
                         self.log_event(event);
@@ -2940,7 +2943,7 @@ impl Core {
                 events::block_event(
                     events::ACTION_BLOCK,
                     host,
-                    &pkt.dst_ip_text(),
+                    &self.dns_server_text(),
                     verdict.rule_text.as_deref().unwrap_or(""),
                     verdict.list_name.as_deref().unwrap_or(""),
                     verdict.category,
@@ -2985,7 +2988,7 @@ impl Core {
             if cfg.log_allowed && self.logging_live() {
                 let packages = app_packages.unwrap_or_else(|| self.apps_for_udp(pkt));
                 let event = events::with_app(
-                    events::allow_event(host, &pkt.dst_ip_text(), latency_ns),
+                    events::allow_event(host, &self.dns_server_text(), latency_ns),
                     first_app(&packages),
                 );
                 self.log_event(event);
@@ -3355,15 +3358,16 @@ impl Core {
                 }
             }
         } else if mitm && full_ech {
-            // Full ECH, the opt-in trade: the client keeps the origin's
-            // config and may hide its inner name. Its hello can then only be
-            // spliced (`mitm::ech`), so that host goes unfiltered — exactly
-            // what the switch asks for. The config is still remembered for
-            // the upstream half, because clients that do *not* use ECH
-            // (GREASE, older stacks) are terminated and filtered as usual,
-            // even against an origin that requires ECH.
+            // ECH runs end to end (Block ECH is off): the client keeps the
+            // origin's config and may hide its inner name. Its hello can then
+            // only be spliced (`mitm::ech`), so that host goes unfiltered —
+            // the trade both AdGuard and this engine accept by default. The
+            // config is still remembered for the upstream half, because
+            // clients that do *not* use ECH (GREASE, older stacks) are
+            // terminated and filtered as usual, even against an origin that
+            // requires ECH.
             if let (Some(host), Some(list)) = (host.as_deref(), config) {
-                crate::logbuf::push(&format!("dns: ECH kept for {host} (full ECH is on)"));
+                crate::logbuf::push(&format!("dns: ECH kept for {host} (Block ECH is off)"));
                 self.ech_hosts
                     .note_config(host, list, crate::util::now_ms());
                 // The refusal fallback still applies: if the origin turns down
@@ -3892,6 +3896,24 @@ impl Core {
 
     pub fn resolver_addr(&self) -> SocketAddr {
         *self.resolver.read().unwrap()
+    }
+
+    /// The DNS server the next query travels to, rendered the way the request
+    /// log shows a destination: `udp://94.140.14.14:53`, `tls://host:853` or
+    /// the DoH URL.
+    fn dns_server_text(&self) -> String {
+        if let Some(resolver) = self.secure_resolver.read().unwrap().as_ref() {
+            return match resolver.protocol {
+                crate::state::model::DnsProtocol::Dot => {
+                    format!("tls://{}:{}", resolver.host, resolver.port)
+                }
+                _ => format!(
+                    "https://{}:{}{}",
+                    resolver.host, resolver.port, resolver.path
+                ),
+            };
+        }
+        format!("udp://{}", self.resolver_addr())
     }
 
     /// Sleeps until a descriptor is ready or the cadence ticks.
@@ -6321,5 +6343,30 @@ mod tests {
             res.hide_selectors
         );
         assert!(res.hide_selectors.iter().any(|s| s == ".track-hide"));
+    }
+
+    #[test]
+    fn the_log_names_the_dns_server_the_way_adguard_does() {
+        let core = Core::new();
+        core.set_resolver("1.1.1.1:5353".parse().unwrap());
+        assert_eq!(core.dns_server_text(), "udp://1.1.1.1:5353");
+
+        let dot = crate::dnssecure::SecureResolver::from_parts(
+            crate::state::model::DnsProtocol::Dot,
+            "dns.example",
+            853,
+        )
+        .unwrap();
+        core.set_secure_resolver(Some(dot));
+        assert_eq!(core.dns_server_text(), "tls://dns.example:853");
+
+        let doh = crate::dnssecure::SecureResolver::from_parts(
+            crate::state::model::DnsProtocol::Doh,
+            "https://dns.example/dns-query",
+            443,
+        )
+        .unwrap();
+        core.set_secure_resolver(Some(doh));
+        assert_eq!(core.dns_server_text(), "https://dns.example:443/dns-query");
     }
 }

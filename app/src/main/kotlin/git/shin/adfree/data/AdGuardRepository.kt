@@ -419,8 +419,8 @@ class AdGuardRepository(
     fun toggleCosmeticFiltering(enabled: Boolean) =
         updateSettings { it.copy(cosmeticFiltering = enabled) }
 
-    fun toggleFullEch(enabled: Boolean) =
-        updateSettings { it.copy(isFullEchEnabled = enabled) }
+    fun toggleEchBlocking(enabled: Boolean) =
+        updateSettings { it.copy(isEchBlockingEnabled = enabled) }
 
     /** Adds a host pattern to the HTTPS allowlist (sites left undecrypted). */
     fun addHttpsSkipHost(raw: String) {

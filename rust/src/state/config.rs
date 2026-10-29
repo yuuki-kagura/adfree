@@ -122,7 +122,9 @@ pub fn build(snapshot: &StateSnapshot, private_dns_strict: bool) -> Plan {
         // brings; the UI disables the switch, and the core refuses to arm it
         // on its own (a stored `true` must not survive turning HTTPS off).
         filter_http3: protection.filter_http3 && protection.is_https_filtering_enabled,
-        full_ech: protection.is_full_ech_enabled,
+        // Blocking ECH is the inverse of letting it run end to end; AdGuard
+        // ships its "Block ECH" switch off, so ECH is allowed by default.
+        full_ech: !protection.is_ech_blocking_enabled,
         block_quic: protection.block_quic,
         block_doh: protection.block_doh,
         // With the system's Private DNS in strict mode the platform already
@@ -493,6 +495,19 @@ mod tests {
         let parsed: DnsState = serde_json::from_str(r#"{"providers":[],"rewrites":[]}"#).unwrap();
         assert_eq!(parsed.backup_mode, DnsBackupMode::System);
         assert!(parsed.backup.is_none());
+    }
+
+    #[test]
+    fn ech_is_allowed_unless_the_user_blocks_it() {
+        // AdGuard's "Block ECH" ships off, and the engine flag is its
+        // inverse: ECHConfigs stay in the answers by default.
+        let s = snapshot();
+        assert!(!s.protection.is_ech_blocking_enabled);
+        assert!(build(&s, false).config.full_ech);
+
+        let mut s = snapshot();
+        s.protection.is_ech_blocking_enabled = true;
+        assert!(!build(&s, false).config.full_ech);
     }
 
     #[test]
