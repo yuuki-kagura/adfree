@@ -419,3 +419,39 @@ If RAM becomes a target again, the safe order is to measure the composition
 first (network flatbuffer vs cosmetic cache vs decision caches), then dedupe
 rules that appear in more than one list — same verdict, category union and a
 deterministic source for the log — which keeps the engine's semantics intact.
+
+## Response rewriting vs TLS cost (2026-10-30)
+
+The proposal was to prune response handling further — skip `m3u8`/`ts` and
+image responses entirely unless a filter could use them. The engine's own
+counters answer whether that is where the cost is: `tls_ns` (decrypt +
+re-encrypt), `rewrite_ns` (the response path, holding, injecting and copying
+bodies) and `busy_ns` (the packet loop), all in `rust/src/stats.rs`. They were
+logged from a debug APK that packaged the release native library; counters
+start at process start, so the table is deltas between two reads. The log line
+was removed and the release APK reinstalled after the run.
+
+| Workload | TLS ms | rewrite ms | busy ms | packets |
+| --- | --- | --- | --- | --- |
+| Idle, app foreground, 20 s | 2.0 | 0 | 115.7 | 72 |
+| Chrome on `vnexpress.net`, scrolls, 47 s | 423.4 | 76.4 | 553.4 | 2588 |
+| Same page again, 35 s | 189.7 | 58.2 | 299.2 | 1377 |
+| YouTube video, 96 s (QUIC) | 12.9 | 0 | 384.4 | 5314 |
+
+- Rewriting is **14–19 % of the packet loop** and 18–31 % of TLS on
+  image-heavy page loads. Over the whole 6.5-minute session it is 135 ms
+  against 2.84 s busy (4.7 %) and 393 s uptime (0.03 % of one core).
+- The video watch added almost no TLS work and **zero rewriting**: YouTube
+  carries the stream over QUIC, which the TLS path never sees, and the bodies
+  that did arrive were not held.
+- The code already prunes the rest by class and content type: a response is
+  inspected only when its URL matched a `$replace`/`$jsonprune`/`$hls`/`$$`
+  plan, and only when the content type is text
+  (`rust/src/mitm/proxy.rs:1852-1867`); images, `video/mp2t` segments and
+  media never are. `m3u8` counts as text only because `$hls` needs it, and
+  only when a rule matched that manifest.
+
+So skipping image and segment bodies saves nothing — they are already
+untouched — and further pruning has little headroom. TLS termination and the
+packet loop dominate; the fixed cost left is HTML injection on page loads
+when cosmetic filtering is on, which is what hiding needs.
