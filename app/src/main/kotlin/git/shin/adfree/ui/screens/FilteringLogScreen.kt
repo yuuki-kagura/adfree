@@ -1,5 +1,6 @@
 package git.shin.adfree.ui.screens
 
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
@@ -27,6 +28,7 @@ import androidx.compose.material.icons.filled.Clear
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.DeleteSweep
 import androidx.compose.material.icons.filled.FilterList
+import androidx.compose.material.icons.filled.Public
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Shield
 import androidx.compose.material3.AlertDialog
@@ -76,6 +78,7 @@ import git.shin.adfree.model.RequestCategory
 import git.shin.adfree.ui.AdGuardIntent
 import git.shin.adfree.ui.AdGuardTab
 import git.shin.adfree.ui.AdGuardViewModel
+import git.shin.adfree.ui.rememberAppIcon
 import git.shin.adfree.ui.theme.AdGuardBlueDns
 import git.shin.adfree.ui.theme.AdGuardDarkBg
 import git.shin.adfree.ui.theme.AdGuardDarkOutline
@@ -482,8 +485,9 @@ fun LogItemCard(
         FilterStatus.WHITELISTED -> AdGuardBlueDns
     }
 
-    val timeFormat = SimpleDateFormat("HH:mm:ss", Locale.getDefault())
+    val timeFormat = remember { SimpleDateFormat("HH:mm:ss", Locale.getDefault()) }
     val timeStr = timeFormat.format(Date(log.timestampMs))
+    val appIcon = rememberAppIcon(log.appPackage)
 
     Card(
         modifier = Modifier
@@ -501,6 +505,33 @@ fun LogItemCard(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.SpaceBetween
         ) {
+            // Which app asked: the log names it, and a launcher icon makes it
+            // scannable at a glance instead of reading every package name.
+            Box(
+                modifier = Modifier
+                    .size(34.dp)
+                    .clip(RoundedCornerShape(9.dp))
+                    .background(AdGuardDarkSurfaceVariant),
+                contentAlignment = Alignment.Center
+            ) {
+                if (appIcon != null) {
+                    Image(
+                        bitmap = appIcon,
+                        contentDescription = null,
+                        modifier = Modifier.size(26.dp)
+                    )
+                } else {
+                    Icon(
+                        imageVector = Icons.Default.Public,
+                        contentDescription = null,
+                        tint = AdGuardTextMuted,
+                        modifier = Modifier.size(18.dp)
+                    )
+                }
+            }
+
+            Spacer(modifier = Modifier.width(10.dp))
+
             Column(modifier = Modifier.weight(1f)) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Box(
@@ -673,10 +704,35 @@ fun PacketInspectionSheetContent(
                 value = logActionLabel(log.status)
             )
             DetailRow(label = stringResource(R.string.log_detail_category), value = requestCategoryLabel(log.category))
-            DetailRow(
-                label = stringResource(R.string.log_detail_app),
-                value = appLabel ?: stringResource(R.string.log_app_unknown)
-            )
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    text = stringResource(R.string.log_detail_app),
+                    fontSize = 12.sp,
+                    color = AdGuardTextSecondary,
+                )
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    val appIcon = rememberAppIcon(log.appPackage)
+                    if (appIcon != null) {
+                        Image(
+                            bitmap = appIcon,
+                            contentDescription = null,
+                            modifier = Modifier.size(20.dp),
+                        )
+                        Spacer(modifier = Modifier.width(6.dp))
+                    }
+                    Text(
+                        text = appLabel ?: stringResource(R.string.log_app_unknown),
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        color = AdGuardTextPrimary,
+                        fontFamily = FontFamily.Monospace,
+                    )
+                }
+            }
             if (log.matchedRule != null) {
                 DetailRow(label = stringResource(R.string.log_detail_rule), value = log.matchedRule)
             }

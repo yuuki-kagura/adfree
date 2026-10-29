@@ -1,7 +1,5 @@
 package git.shin.adfree.ui.screens
 
-import android.graphics.Bitmap
-import android.graphics.drawable.BitmapDrawable
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -36,6 +34,7 @@ import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Security
 import androidx.compose.material.icons.filled.Shield
 import androidx.compose.material.icons.filled.Wifi
+import git.shin.adfree.ui.rememberAppIcon
 import git.shin.adfree.model.FilterStatus
 import git.shin.adfree.model.NetworkRequestLog
 import androidx.compose.material3.Button
@@ -61,11 +60,8 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.ImageBitmap
-import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
@@ -499,35 +495,6 @@ private fun AppQuickAction(
             tint = tint,
             modifier = Modifier.size(16.dp)
         )
-    }
-}
-
-/**
- * Loads the launcher icon of [packageName], or null when it cannot be read.
- *
- * Icons are drawn once per row and cached by `remember`: the PackageManager has
- * to decode a bitmap, which is far too slow to do on every recomposition of a
- * list of apps.
- */
-@Composable
-private fun rememberAppIcon(packageName: String): ImageBitmap? {
-    val context = LocalContext.current
-    return remember(packageName) {
-        runCatching {
-            val drawable = context.packageManager.getApplicationIcon(packageName)
-            val bitmap = (drawable as? BitmapDrawable)?.bitmap
-                ?: Bitmap.createBitmap(
-                    drawable.intrinsicWidth.coerceAtLeast(1),
-                    drawable.intrinsicHeight.coerceAtLeast(1),
-                    Bitmap.Config.ARGB_8888,
-                ).also { bmp ->
-                    android.graphics.Canvas(bmp).let { canvas ->
-                        drawable.setBounds(0, 0, canvas.width, canvas.height)
-                        drawable.draw(canvas)
-                    }
-                }
-            bitmap.asImageBitmap()
-        }.getOrNull()
     }
 }
 

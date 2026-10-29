@@ -631,7 +631,7 @@
     <string name="apps_detail_screen_off_title">Block when the screen is off (battery saving)</string>
     <string name="apps_detail_screen_off_body">Stop the app from downloading data in the background while the device is locked</string>
     <string name="apps_detail_bypass_warning">This app bypasses the VPN: the network limits above have no effect until filtering is turned back on.</string>
-    <string name="apps_detail_data_today">Data today</string>
+    <string name="apps_detail_data_today">Data saved today</string>
     <string name="apps_detail_data_value">%1$d MB</string>
     <string name="apps_detail_blocked_queries">Blocked queries</string>
     <string name="apps_detail_view_logs">View filtering log for %1$s</string>

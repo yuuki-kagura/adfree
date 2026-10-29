@@ -658,6 +658,11 @@ class CoreEngine {
     /** Total rows in the persisted log (0 while the store is not open). */
     fun logCount(): Long = runCatching { git.shin.adfree.core.coreLogCount() }.getOrDefault(0L)
 
+    /** Blocked counts and bytes saved per package since [sinceMs]. */
+    fun appUsageSince(sinceMs: Long): List<git.shin.adfree.core.AppUsage> =
+        runCatching { git.shin.adfree.core.coreAppUsageSince(sinceMs) }
+            .getOrDefault(emptyList())
+
     /** Empties the persisted log, queued rows included. */
     fun logClear() = runCatching { git.shin.adfree.core.coreLogClear() }
 

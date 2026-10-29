@@ -630,6 +630,33 @@ pub fn core_log_count() -> i64 {
     })
 }
 
+/// What one package did in the window the Apps tab shows.
+#[derive(uniffi::Record, Clone, Debug, Default, PartialEq, Eq)]
+pub struct AppUsage {
+    pub app: String,
+    /// Requests the engine answered without forwarding.
+    pub blocked: u32,
+    pub bytes_saved: u64,
+}
+
+/// Per-package totals since `since_ms` (the UI passes local midnight), biggest
+/// blocked count first. Unattributed rows are left out.
+#[uniffi::export]
+pub fn core_app_usage_since(since_ms: i64) -> Vec<AppUsage> {
+    guard(Vec::new(), || match crate::core().store() {
+        Some(store) => store
+            .log_usage_by_app(since_ms)
+            .into_iter()
+            .map(|(app, blocked, bytes_saved)| AppUsage {
+                app,
+                blocked: blocked.min(u32::MAX as u64) as u32,
+                bytes_saved,
+            })
+            .collect(),
+        None => Vec::new(),
+    })
+}
+
 /// Empties the request log: the database and the live in-memory tail.
 #[uniffi::export]
 pub fn core_log_clear() -> bool {

@@ -1,7 +1,6 @@
 package git.shin.adfree.data
 
 import android.content.Context
-import android.util.Log
 import android.content.pm.ApplicationInfo
 import android.content.pm.PackageManager
 import git.shin.adfree.R
@@ -48,6 +47,7 @@ import git.shin.adfree.vpn.HttpsReminder
 import git.shin.adfree.work.FilterUpdateScheduler
 import java.io.IOException
 import java.net.URLEncoder
+import java.util.Calendar
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlinx.coroutines.CancellationException
@@ -209,6 +209,9 @@ class AdGuardRepository(
         val firewall = snapshot.firewall
         scope.launch {
             _appFirewallRules.value = withContext(Dispatchers.IO) { readInstalledApps(firewall) }
+            // Rows hydrated above start at zero; overlay what the log already
+            // knows so the Apps tab never opens on empty counters.
+            refreshAppUsage()
         }
         var settings = snapshot.protection.toModel()
         if (settings.isHttpsFilteringEnabled && !engine.isCaTrusted()) {
@@ -266,7 +269,11 @@ class AdGuardRepository(
                 // Native warnings are buffered natively so the packet threads
                 // never do I/O; drain them here or they are lost.
                 engine.flushNativeLogLines()
-                refreshLogIfChanged()
+                val logGrew = refreshLogIfChanged()
+                // The Apps tab shows per-app totals from the same table, so new
+                // rows mean its numbers are stale too. Only pay for the
+                // aggregation while that tab is actually on screen.
+                if (logGrew && appUsageVisible) refreshAppUsage()
                 delay(if (engine.isScreenOff()) 2_000 else 500)
             }
         }
@@ -278,13 +285,14 @@ class AdGuardRepository(
      * While the user has paged back into history the window stays put, so the
      * rows under their finger do not shift every time traffic arrives.
      */
-    private fun refreshLogIfChanged() {
+    private fun refreshLogIfChanged(): Boolean {
         val total = engine.logCount()
-        if (total == lastLogCount) return
+        if (total == lastLogCount) return false
         lastLogCount = total
         _logTotal.value = total
-        if (!logTailing) return
+        if (!logTailing) return true
         reloadLogWindow()
+        return true
     }
 
     /** The log screen reports its scroll state here; see [logTailing]. */
@@ -1413,6 +1421,45 @@ class AdGuardRepository(
 
     // ------------------------------------------------------------ app firewall
 
+    /**
+     * Whether the Apps tab is on screen. The poller re-aggregates the log only
+     * while it is, since the SQL grouping is pointless otherwise.
+     */
+    @Volatile
+    private var appUsageVisible = false
+
+    /** The Apps screen reports its visibility so the poller can keep it live. */
+    fun setAppUsageVisible(visible: Boolean) {
+        appUsageVisible = visible
+        if (visible) refreshAppUsage()
+    }
+
+    /**
+     * Overlays today's per-app totals from the request log. The log is the
+     * only record of what each package asked for, and it is persisted, so the
+     * numbers survive a restart even though the counters live in memory.
+     */
+    fun refreshAppUsage() {
+        scope.launch {
+            val startOfDay = Calendar.getInstance().apply {
+                set(Calendar.HOUR_OF_DAY, 0)
+                set(Calendar.MINUTE, 0)
+                set(Calendar.SECOND, 0)
+                set(Calendar.MILLISECOND, 0)
+            }.timeInMillis
+            val usage = engine.appUsageSince(startOfDay).associateBy { it.app }
+            _appFirewallRules.update { apps ->
+                apps.map { app ->
+                    val row = usage[app.packageName]
+                    app.copy(
+                        blockedRequestsToday = row?.blocked?.toInt() ?: 0,
+                        dataTransferredBytes = row?.bytesSaved?.toLong() ?: 0L,
+                    )
+                }
+            }
+        }
+    }
+
     /** Read installed apps through PackageManager and overlay the persisted rows. */
     private fun readInstalledApps(
         overrides: List<git.shin.adfree.core.AppFirewallRule>,
@@ -2042,8 +2089,6 @@ class AdGuardRepository(
     }
 
     private companion object {
-        private const val TAG = "AdFreeRepo"
-
         /** Rows fetched per page; the log screen loads more on demand. */
         private const val LOG_PAGE_SIZE = 200
 

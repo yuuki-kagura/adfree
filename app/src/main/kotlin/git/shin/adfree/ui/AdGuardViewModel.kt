@@ -283,7 +283,13 @@ class AdGuardViewModel(
 
     fun onIntent(intent: AdGuardIntent) {
         when (intent) {
-            is AdGuardIntent.SelectTab -> _currentTab.value = intent.tab
+            is AdGuardIntent.SelectTab -> {
+                _currentTab.value = intent.tab
+                // The Apps tab shows today's per-app totals, which only the
+                // persisted log can answer; load them as it comes into view
+                // and keep them fresh while it stays there.
+                repository.setAppUsageVisible(intent.tab == AdGuardTab.APPS)
+            }
             is AdGuardIntent.OpenProtectionSection -> {
                 _currentTab.value = AdGuardTab.PROTECTION
                 _requestedProtectionSection.value = intent.section

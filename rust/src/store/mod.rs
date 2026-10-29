@@ -142,6 +142,21 @@ impl Store {
         }
     }
 
+    /// `(package, blocked, bytes_saved)` since `since_ms`, biggest first. The
+    /// UI passes its local midnight, so "today" means the user's day.
+    pub fn log_usage_by_app(&self, since_ms: i64) -> Vec<(String, u64, u64)> {
+        match log::usage_by_app(&self.db, since_ms) {
+            Ok(rows) => rows
+                .into_iter()
+                .map(|(app, blocked, bytes)| (app, blocked.max(0) as u64, bytes.max(0) as u64))
+                .collect(),
+            Err(e) => {
+                crate::logbuf::push(&format!("store: app usage: {e}"));
+                Vec::new()
+            }
+        }
+    }
+
     // ------------------------------------------------------------ typed state
 
     /// One typed state record, serialized by the core. `None` means it was
@@ -507,6 +522,65 @@ mod tests {
         // Past the end and a bogus limit stay sane.
         assert!(store.log_page(700, 300).is_empty());
         assert!(store.log_page(0, 0).is_empty());
+    }
+
+    #[test]
+    fn app_usage_counts_blocked_rows_and_bytes() {
+        let (store, _) = temp_store("usage");
+        let mut blocked = with_app(
+            block_event(
+                ACTION_BLOCK,
+                "ads.test",
+                "",
+                "||ads.test^",
+                "Ads",
+                0,
+                10,
+                100,
+                false,
+            ),
+            "com.example.browser",
+        );
+        blocked.ts_ms = 2_000;
+        store.log_enqueue(&blocked);
+        let mut blocked2 = with_app(
+            block_event(
+                ACTION_BLOCK,
+                "track.test",
+                "",
+                "||track.test^",
+                "Ads",
+                1,
+                10,
+                50,
+                false,
+            ),
+            "com.example.browser",
+        );
+        blocked2.ts_ms = 2_100;
+        store.log_enqueue(&blocked2);
+        // An allowed row bumps the row count but not the blocked count.
+        let mut allowed = with_app(allow_event("ok.test", "10.0.0.2", 5), "com.example.browser");
+        allowed.ts_ms = 2_200;
+        store.log_enqueue(&allowed);
+        // Before the window, and unattributed: both excluded.
+        let mut old = with_app(
+            block_event(ACTION_BLOCK, "old.test", "", "", "Ads", 0, 10, 999, false),
+            "com.example.browser",
+        );
+        old.ts_ms = 500;
+        store.log_enqueue(&old);
+        let mut orphan = block_event(ACTION_BLOCK, "orphan.test", "", "", "Ads", 0, 10, 7, false);
+        orphan.ts_ms = 2_300;
+        store.log_enqueue(&orphan);
+        store.log_flush();
+
+        let usage = store.log_usage_by_app(1_000);
+        assert_eq!(
+            usage,
+            vec![("com.example.browser".to_string(), 2, 150)],
+            "window and attribution both apply"
+        );
     }
 
     #[test]

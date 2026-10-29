@@ -631,7 +631,7 @@
     <string name="apps_detail_screen_off_title">Chặn khi màn hình tắt (Tiết kiệm pin)</string>
     <string name="apps_detail_screen_off_body">Không cho phép ứng dụng chạy ngầm tải dữ liệu khi khóa máy</string>
     <string name="apps_detail_bypass_warning">App này đang bỏ qua VPN: các giới hạn mạng ở trên không có tác dụng cho tới khi bật lại lọc.</string>
-    <string name="apps_detail_data_today">Dữ liệu hôm nay</string>
+    <string name="apps_detail_data_today">Dữ liệu tiết kiệm hôm nay</string>
     <string name="apps_detail_data_value">%1$d MB</string>
     <string name="apps_detail_blocked_queries">Truy vấn đã chặn</string>
     <string name="apps_detail_view_logs">Xem nhật ký lọc của %1$s</string>

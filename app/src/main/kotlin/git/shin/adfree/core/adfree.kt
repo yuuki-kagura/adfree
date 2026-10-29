@@ -719,6 +719,8 @@ internal object IntegrityCheckingUniffiLib {
     }
 
     internal fun ensureInitialized() = Unit
+    external fun uniffi_adfree_core_checksum_func_core_app_usage_since(
+    ): Int
     external fun uniffi_adfree_core_checksum_func_core_apply_config(
     ): Int
     external fun uniffi_adfree_core_checksum_func_core_backup_export(
@@ -893,6 +895,8 @@ internal object UniffiLib {
     ): Unit
     external fun uniffi_adfree_core_fn_method_socketprotector_protect(`ptr`: Long,`fd`: Int,uniffi_out_err: UniffiRustCallStatus, 
     ): Byte
+    external fun uniffi_adfree_core_fn_func_core_app_usage_since(`sinceMs`: Long,uniffi_out_err: UniffiRustCallStatus, 
+    ): RustBuffer.ByValue
     external fun uniffi_adfree_core_fn_func_core_apply_config(`privateDnsStrict`: Byte,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
     external fun uniffi_adfree_core_fn_func_core_backup_export(uniffi_out_err: UniffiRustCallStatus, 
@@ -1144,6 +1148,9 @@ private fun uniffiCheckContractApiVersion(lib: IntegrityCheckingUniffiLib) {
 }
 @Suppress("UNUSED_PARAMETER")
 private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
+    if ((lib.uniffi_adfree_core_checksum_func_core_app_usage_since() and 0xFFFF) != 35767) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
     if ((lib.uniffi_adfree_core_checksum_func_core_apply_config() and 0xFFFF) != 14598) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
@@ -1606,6 +1613,29 @@ public object FfiConverterInt: FfiConverter<Int, Int> {
 
     override fun write(value: Int, buf: ByteBuffer) {
         buf.putInt(value)
+    }
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterULong: FfiConverter<ULong, Long> {
+    override fun lift(value: Long): ULong {
+        return value.toULong()
+    }
+
+    override fun read(buf: ByteBuffer): ULong {
+        return lift(buf.getLong())
+    }
+
+    override fun lower(value: ULong): Long {
+        return value.toLong()
+    }
+
+    override fun allocationSize(value: ULong) = 8UL
+
+    override fun write(value: ULong, buf: ByteBuffer) {
+        buf.putLong(value.toLong())
     }
 }
 
@@ -2455,6 +2485,55 @@ public object FfiConverterTypeAppFirewallRule: FfiConverterRustBuffer<AppFirewal
             FfiConverterBoolean.write(value.`filtered`, buf)
             FfiConverterBoolean.write(value.`screenOff`, buf)
             FfiConverterBoolean.write(value.`https`, buf)
+    }
+}
+
+
+
+/**
+ * What one package did in the window the Apps tab shows.
+ */
+data class AppUsage (
+    var `app`: kotlin.String
+    , 
+    /**
+     * Requests the engine answered without forwarding.
+     */
+    var `blocked`: kotlin.UInt
+    , 
+    var `bytesSaved`: kotlin.ULong
+    
+){
+    
+
+    
+
+    
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeAppUsage: FfiConverterRustBuffer<AppUsage> {
+    override fun read(buf: ByteBuffer): AppUsage {
+        return AppUsage(
+            FfiConverterString.read(buf),
+            FfiConverterUInt.read(buf),
+            FfiConverterULong.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: AppUsage) = (
+            FfiConverterString.allocationSize(value.`app`) +
+            FfiConverterUInt.allocationSize(value.`blocked`) +
+            FfiConverterULong.allocationSize(value.`bytesSaved`)
+    )
+
+    override fun write(value: AppUsage, buf: ByteBuffer) {
+            FfiConverterString.write(value.`app`, buf)
+            FfiConverterUInt.write(value.`blocked`, buf)
+            FfiConverterULong.write(value.`bytesSaved`, buf)
     }
 }
 
@@ -4999,6 +5078,34 @@ public object FfiConverterSequenceTypeAppFirewallRule: FfiConverterRustBuffer<Li
 /**
  * @suppress
  */
+public object FfiConverterSequenceTypeAppUsage: FfiConverterRustBuffer<List<AppUsage>> {
+    override fun read(buf: ByteBuffer): List<AppUsage> {
+        val len = buf.getInt()
+        return List<AppUsage>(len) {
+            FfiConverterTypeAppUsage.read(buf)
+        }
+    }
+
+    override fun allocationSize(value: List<AppUsage>): ULong {
+        val sizeForLength = 4UL
+        val sizeForItems = value.map { FfiConverterTypeAppUsage.allocationSize(it) }.sum()
+        return sizeForLength + sizeForItems
+    }
+
+    override fun write(value: List<AppUsage>, buf: ByteBuffer) {
+        buf.putInt(value.size)
+        value.iterator().forEach {
+            FfiConverterTypeAppUsage.write(it, buf)
+        }
+    }
+}
+
+
+
+
+/**
+ * @suppress
+ */
 public object FfiConverterSequenceTypeDnsProviderRecord: FfiConverterRustBuffer<List<DnsProviderRecord>> {
     override fun read(buf: ByteBuffer): List<DnsProviderRecord> {
         val len = buf.getInt()
@@ -5244,6 +5351,21 @@ public object FfiConverterSequenceTypeUidApps: FfiConverterRustBuffer<List<UidAp
         }
     }
 }
+        /**
+         * Per-package totals since `since_ms` (the UI passes local midnight), biggest
+         * blocked count first. Unattributed rows are left out.
+         */ fun `coreAppUsageSince`(`sinceMs`: kotlin.Long): List<AppUsage> {
+            return FfiConverterSequenceTypeAppUsage.lift(
+    uniffiRustCall() { _status ->
+    UniffiLib.uniffi_adfree_core_fn_func_core_app_usage_since(
+    
+        
+        FfiConverterLong.lower(`sinceMs`),_status)
+}
+    )
+    }
+    
+
         /**
          * Rebuilds the engine config from the persisted state. Kotlin calls this
          * after every save and once the data root is open; a warning means the

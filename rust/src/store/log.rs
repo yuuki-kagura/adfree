@@ -240,6 +240,23 @@ pub(super) fn count(db: &Db) -> rusqlite::Result<i64> {
         .query_row("SELECT COUNT(*) FROM log_events", [], |r| r.get(0))
 }
 
+/// Blocked rows grouped by owning package since `since_ms`, plus the bytes they
+/// claim to have saved. Anything but an allow decision counts as blocked.
+pub(super) fn usage_by_app(db: &Db, since_ms: i64) -> rusqlite::Result<Vec<(String, i64, i64)>> {
+    let conn = db.lock();
+    let mut stmt = conn.prepare_cached(
+        "SELECT app, \
+                SUM(CASE WHEN action != 0 THEN 1 ELSE 0 END), \
+                SUM(bytes_saved) \
+         FROM log_events \
+         WHERE app != '' AND ts_ms >= ?1 \
+         GROUP BY app \
+         ORDER BY 2 DESC",
+    )?;
+    let rows = stmt.query_map([since_ms], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?;
+    rows.collect()
+}
+
 pub(super) fn clear(db: &Db) -> rusqlite::Result<()> {
     db.lock().execute("DELETE FROM log_events", [])?;
     Ok(())
