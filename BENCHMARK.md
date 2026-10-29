@@ -95,12 +95,12 @@ results were the smart filter's retry-loop allow window, not a coverage gap.
 | Fix | Where | Commit |
 | --- | --- | --- |
 | Static hero rings (foreground CPU 98 % → 8.7 %) | `ui/screens/HomeScreen.kt` | `7c58efa` |
-| Poller parks while the UI is not visible | `data/AdGuardRepository.kt`, `MainActivity.kt` | this change |
-| IPv6 routed only when the underlying network has a global IPv6 address; otherwise `::/0` unreachable | `vpn/AdGuardVpnService.kt` | this change |
-| Retry log line now carries the errno | `rust/src/engine.rs` | this change |
-| DNS-stage rules match the bare hostname, not a fabricated URL | `rust/src/filter.rs` | this change |
-| Fallback retry hedged at 100 ms (2 s for DoT/DoH, where a handshake is expected) | `rust/src/upstream.rs` | this change |
-| Forwarder wait capped by the first DNS deadline instead of a fixed 1 s | `rust/src/engine.rs` | this change |
+| Poller parks while the UI is not visible | `data/AdGuardRepository.kt`, `MainActivity.kt` | `c8ca524` |
+| IPv6 routed only when the underlying network has a global IPv6 address; otherwise `::/0` unreachable | `vpn/AdGuardVpnService.kt` | `c8ca524` |
+| Retry log line now carries the errno | `rust/src/engine.rs` | `c8ca524` |
+| DNS-stage rules match the bare hostname, not a fabricated URL | `rust/src/filter.rs` | `c8ca524` |
+| Fallback retry hedged at 100 ms (2 s for DoT/DoH, where a handshake is expected) | `rust/src/upstream.rs` | `c8ca524` |
+| Forwarder wait capped by the first DNS deadline instead of a fixed 1 s | `rust/src/engine.rs` | `c8ca524` |
 
 ## Re-run — after fixes (2026-10-29)
 
