@@ -378,3 +378,44 @@ of text; release build, `FilterEngine::rebuild`):
   blank device rows were written by the pre-update process: MIUI kept the
   service alive across the install, so it kept running the old code until a
   real force-stop.
+
+## Rejected: moving `||x^` rules into a domain set (2026-10-30)
+
+The next memory cut considered was to move the hostname-only `||x^` rules out
+of the engine into a compact set/trie: a rule costs on the order of 50 B
+today and a domain perhaps 10 B, for an estimated 20–30 MB. The idea was
+rejected. Those rules are not just a domain string — the engine attaches
+semantics to them that a domain-keyed set does not carry — and the RAM target
+is already met (239.4 MB foreground / 155.6 MB background against AdGuard's
+311–350 / 288 MB).
+
+Why the representation cannot be swapped 1:1:
+
+- **Options are evaluated per context.** DNS evaluates
+  `Request::preparsed(host, host, "", "other", false, "")`
+  (`rust/src/filter.rs:6243`): source equals the request host and there is no
+  URL, so `$third-party`, request type and method behave differently than on
+  the MITM path (`src/filters/network_matchers.rs:406-418`). One set cannot
+  hold one answer for both callers.
+- **`$redirect-rule` and exceptions attach to a block.** A redirect rule only
+  fires when another filter blocks (`src/blocker.rs:52-55`), and exceptions,
+  `$important` precedence and the forced exception-only queries
+  (`rust/src/filter.rs:6340-6366`) are resolved inside `Blocker::check`
+  (`src/blocker.rs:188-223`). Removing the blocking rule from the engine
+  leaves those passes with nothing to attach to.
+- **Attribution and category live on the rule.** The log names the rule via
+  `source_index` + line (read back through `ListLines`), and the category is
+  gated after the engine answer (`rust/src/filter.rs:1959-1987`). A
+  deduplicated set entry loses both, and which list a row names would change.
+- **Hostname matching is more than an exact key.** It has to reproduce
+  label-boundary suffix matching, IDN/punycode decoding and hosts-form
+  normalisation (`src/filters/network.rs:475`, `:917-954`); any mismatch
+  silently changes what is blocked or allowed.
+- **The saving was a guess.** The flatbuffer is already 46 MB for the seven
+  lists, and no per-class byte census was taken, so 20–30 MB was never
+  verified.
+
+If RAM becomes a target again, the safe order is to measure the composition
+first (network flatbuffer vs cosmetic cache vs decision caches), then dedupe
+rules that appear in more than one list — same verdict, category union and a
+deterministic source for the log — which keeps the engine's semantics intact.
