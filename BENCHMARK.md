@@ -331,3 +331,34 @@ in place, adb's own traffic goes through the tunnel.
   app; on a charging device they are noise.
 - `stats.record_decision` covers DNS matching only; HTTPS request filtering has
   its own timing counters in the stats snapshot.
+## Engine memory — slim debug info and dnsmasq lists (2026-10-29, night)
+
+The filter engine was carrying more than the rules. Two changes, measured on
+the host over the exact seven lists the device has enabled (876 k lines, 25 MB
+of text; release build, `FilterEngine::rebuild`):
+
+| Metric | adblock 0.13.3 | fork + dnsmasq fix |
+| --- | --- | --- |
+| Engine flatbuffer | 75 MB | 46 MB |
+| RSS after build | 150 MB | 121 MB |
+| Peak RSS while building (`VmHWM`) | 277 MB | 184 MB |
+| Debug-info cost per rule | 8 B + the rule's text | 8 B |
+
+- **Fork**: `/home/shin/adblock-rust`, branch `adfree-slim-debug`, two signed
+  commits on top of tag `v0.13.3`, wired in through `[patch.crates-io]`:
+  - debug builds keep each rule's source location (list index + line) but no
+    longer its text. A matched rule's text is read back from the list file on
+    demand (`pread` at the recorded line, fed by a 4-byte-per-line offset
+    index); user rules keep their text inline.
+  - rejected lines no longer ship their text either. Only the count is
+    serialized. A list whose syntax is not parsed (a dnsmasq list read as
+    standard) used to cost one stored string per line.
+- **dnsmasq rules**: `local=/domain/` and `address=/domain/` are rewritten to
+  `||domain^` line for line during the rebuild. OISD ships dnsmasq2 and was
+  loaded as a standard list, so its 234 k lines became patterns that could
+  never match — 14 MB of the engine that blocked nothing. They now block the
+  domain and its subdomains (175 k of them are not in the AdGuard DNS filter
+  either), for about the memory the dead patterns already took.
+- The device PSS rows above are from the earlier runs and stay as history:
+  this session's device is running a debug APK, so its numbers are not
+  comparable until a release build is installed again.

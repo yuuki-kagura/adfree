@@ -13,6 +13,7 @@ crate-type = ["cdylib", "rlib"]
 # The real AdGuard / Brave filtering engine: every AdGuard, EasyList, uBO and
 # hosts-list rule is parsed and matched by the code these projects use.
 # `single-thread` is disabled on purpose: it makes the engine !Send/!Sync.
+# Patched fork, see `[patch.crates-io]` below.
 adblock = { version = "0.13.3", default-features = false, features = [
   "full-regex-handling",
   "embedded-domain-resolver",
@@ -76,6 +77,16 @@ tokio = { version = "1", features = ["rt", "time", "sync", "macros", "io-util"] 
 # h3 passes request/response heads around with these types.
 http = "1"
 bytes = "1"
+
+# Stock 0.13.3 plus two changes (`adfree-slim-debug` branch): a debug-info
+# engine stores each matched rule's source line, not the rule text itself, and
+# rejected lines keep only their count. The text is read back from the list
+# file when a block is logged, which takes ~40 MB of resident strings (one per
+# rule) off every loaded engine.
+# The fork is cloned beside the repository (`~/adblock-rust`) until it is
+# published; switch this to `git = "…"` once the fork has a URL.
+[patch.crates-io]
+adblock = { path = "../../adblock-rust" }
 
 [profile.release]
 opt-level = 3

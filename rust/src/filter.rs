@@ -33,6 +33,7 @@ use adblock::resources::{
 use base64::engine::general_purpose::STANDARD as BASE64;
 use base64::Engine as _;
 use std::collections::{BTreeSet, HashMap, HashSet, VecDeque};
+use std::os::unix::fs::FileExt;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, AtomicU8, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, OnceLock, RwLock};
@@ -896,6 +897,92 @@ struct SourceMapEntry {
     list_id: u16,
     name: String,
     category: u8,
+    /// Where the list's text can be read back from, line by line; `None` when
+    /// neither the file nor an inline copy is available.
+    rules: Option<RuleText>,
+}
+
+/// A source's rule text, kept out of the compiled engine.
+///
+/// The engine records which line a match came from (the fork's debug info),
+/// and the text is read back only when a block is logged. A copy per rule
+/// cost ~40 MB resident with real lists — one string for every rule — to
+/// serve the handful of matches the log ever shows.
+#[derive(Clone)]
+enum RuleText {
+    /// A list file on disk, indexed by line start.
+    File(Arc<ListLines>),
+    /// The user's own rules, which have no file.
+    Inline(Arc<str>),
+}
+
+/// One list file, open for reading a single line back.
+///
+/// Longest rule text read back for the log; longer lines are truncated (a
+/// rule that long is a data blob, and the log would not show it whole anyway).
+const MAX_LOGGED_RULE: u32 = 4096;
+
+struct ListLines {
+    file: std::fs::File,
+    /// Byte offset of every line start; line `n` ends where `n + 1` begins.
+    starts: Vec<u32>,
+}
+
+impl ListLines {
+    fn open(path: &std::path::Path, starts: Vec<u32>) -> Option<Arc<Self>> {
+        Some(Arc::new(Self {
+            file: std::fs::File::open(path).ok()?,
+            starts,
+        }))
+    }
+
+    /// Line `number` (zero-based), the way the list wrote it.
+    fn line(&self, number: u32) -> Option<String> {
+        let start = *self.starts.get(number as usize)?;
+        let end = self
+            .starts
+            .get(number as usize + 1)
+            .copied()
+            .unwrap_or(u32::MAX);
+        let len = end.saturating_sub(start).min(MAX_LOGGED_RULE) as usize;
+        let mut buf = vec![0u8; len];
+        let mut read = 0;
+        while read < len {
+            match self
+                .file
+                .read_at(&mut buf[read..], u64::from(start) + read as u64)
+            {
+                Ok(0) => break,
+                Ok(n) => read += n,
+                Err(e) if e.kind() == std::io::ErrorKind::Interrupted => {}
+                Err(_) => return None,
+            }
+        }
+        let text = String::from_utf8_lossy(&buf[..read]);
+        let text = text.trim_end_matches(['\r', '\n']);
+        (!text.is_empty()).then(|| text.to_string())
+    }
+}
+
+impl SourceMapEntry {
+    /// The text of the rule on `line` of this source.
+    fn rule(&self, line: u32) -> Option<String> {
+        match self.rules.as_ref()? {
+            RuleText::File(lines) => lines.line(line),
+            RuleText::Inline(text) => text
+                .lines()
+                .nth(line as usize)
+                .map(|line| line.trim_end_matches('\r').to_string()),
+        }
+    }
+}
+
+/// Byte offset of every line start in `text`.
+fn line_starts(text: &str) -> Vec<u32> {
+    let mut starts = Vec::with_capacity(text.len() / 32 + 1);
+    starts.push(0);
+    starts.extend(memchr::memchr_iter(b'\n', text.as_bytes()).map(|i| i as u32 + 1));
+    starts
 }
 
 struct Compiled {
@@ -1208,6 +1295,12 @@ impl FilterEngine {
             match std::fs::read(path) {
                 Ok(bytes) => match String::from_utf8(bytes) {
                     Ok(text) => {
+                        // Line numbers are what the engine reports for a
+                        // match, and they count the lines of this file (the
+                        // two passes below rewrite lines, never split or join
+                        // them), so the offsets have to come from the text as
+                        // it was read.
+                        let rules = ListLines::open(path, line_starts(&text)).map(RuleText::File);
                         let format = match list.format {
                             ListFormat::Hosts => FilterFormat::Hosts,
                             ListFormat::Standard => FilterFormat::Standard,
@@ -1241,7 +1334,10 @@ impl FilterEngine {
                                 }
                                 scan_html_rules(&text, &mut html_scan);
                                 scan_app_rules(&text, &mut app_scan, list.id, list.category);
-                                convert_adguard_cosmetics(text, &mut path_scan)
+                                convert_dnsmasq_rules(convert_adguard_cosmetics(
+                                    text,
+                                    &mut path_scan,
+                                ))
                             }
                             ListFormat::Hosts => text,
                         };
@@ -1269,6 +1365,7 @@ impl FilterEngine {
                             list_id: list.id,
                             name,
                             category: list.category,
+                            rules,
                         });
                         rule_count += counted;
                     }
@@ -1304,6 +1401,10 @@ impl FilterEngine {
             // "User Custom Filter" entry.
             scan_app_rules(&joined, &mut app_scan, 0, CAT_CUSTOM);
             text_bytes += joined.len();
+            // The user's rules have no file to read back from; they are few,
+            // so the text stays. The line numbers the engine reports are the
+            // ones of this text (the conversion rewrites lines in place).
+            let rules = RuleText::Inline(Arc::from(joined.as_str()));
             let record = set.add_filter_list(
                 convert_adguard_cosmetics(joined, &mut path_scan),
                 ParseOptions::default(),
@@ -1313,6 +1414,7 @@ impl FilterEngine {
                 list_id: 0,
                 name: "User Custom Filter".to_string(),
                 category: CAT_CUSTOM,
+                rules: Some(rules),
             });
         }
 
@@ -2722,6 +2824,44 @@ fn scrub_untrusted(text: String) -> (String, u32) {
         out.push('\n');
     }
     (out, removed)
+}
+
+/// Rewrites dnsmasq rules into the network syntax the engine parses, line for
+/// line. `local=/domain/` and `address=/domain/` mean "answer for this domain
+/// locally", i.e. block it together with its subdomains — the same rule as
+/// `||domain^`. Without this the engine sees the line as a bare pattern that
+/// can never match a URL, so the list (oisd ships dnsmasq2) would occupy
+/// memory and block nothing. Lines with several domains or a replacement
+/// address are left as written.
+fn convert_dnsmasq_rules(text: String) -> String {
+    if !text.contains("local=/") && !text.contains("address=/") {
+        return text;
+    }
+    let mut out = String::with_capacity(text.len());
+    for line in text.lines() {
+        let t = line.trim();
+        let domain = t
+            .strip_prefix("local=/")
+            .or_else(|| t.strip_prefix("address=/"))
+            .and_then(|rest| rest.strip_suffix('/'))
+            .filter(|d| {
+                !d.is_empty()
+                    && !d.chars().any(|c| {
+                        c.is_whitespace() || matches!(c, '/' | '|' | '^' | '*' | '=' | '!' | '$')
+                    })
+            });
+        match domain {
+            Some(d) => {
+                out.push_str("||");
+                out.push_str(d);
+                out.push('^');
+            }
+            // Blank and comment lines are passed through untouched.
+            None => out.push_str(line),
+        }
+        out.push('\n');
+    }
+    out
 }
 
 /// Rewrites AdGuard-only cosmetic syntax into the uBO/ABP forms the engine
@@ -6290,10 +6430,20 @@ fn matched_details(
     host: &str,
 ) -> (Option<String>, Option<String>, u8) {
     let (rule_text, source) = match &result.filter {
-        Some(info) => (
-            info.raw_line.clone(),
-            info.source_location.as_ref().map(|loc| loc.source_index),
-        ),
+        Some(info) => {
+            let rule = info.raw_line.clone().or_else(|| {
+                let location = info.source_location.as_ref()?;
+                compiled
+                    .sources
+                    .iter()
+                    .find(|s| s.source_index == location.source_index)?
+                    .rule(location.line_number)
+            });
+            (
+                rule,
+                info.source_location.as_ref().map(|loc| loc.source_index),
+            )
+        }
         None => (None, None),
     };
     let list = source
@@ -6456,6 +6606,83 @@ mod tests {
         assert!(v.blocked);
         assert_eq!(v.rule_text.as_deref(), Some("||doubleclick.net^"));
         assert_eq!(v.list_name.as_deref(), Some("base.txt"));
+    }
+
+    #[test]
+    fn the_rule_text_is_read_back_from_the_line_the_match_points_at() {
+        // The match is on the third rule of a list with comments above it and
+        // a CRLF ending on its own line: the text has to come from that line
+        // of the file, not from a copy the engine kept.
+        let fe = engine(vec![temp_list(
+            "mapped.txt",
+            "! a comment\r\n\
+             ||first.test^\r\n\
+             ||second.test^\r\n\
+             ||third.test^$important\r\n",
+            ListFormat::Standard,
+            1,
+        )]);
+        let v = fe.check_host_detailed("www.third.test");
+        assert!(v.blocked);
+        assert_eq!(v.rule_text.as_deref(), Some("||third.test^$important"));
+        assert_eq!(v.list_name.as_deref(), Some("mapped.txt"));
+        // A hosts line reports the way the list wrote it, hint and all.
+        let hosts = engine(vec![temp_list(
+            "mapped-hosts.txt",
+            "# hosts list\n0.0.0.0 only.here\n",
+            ListFormat::Hosts,
+            2,
+        )]);
+        let v = hosts.check_host_detailed("only.here");
+        assert_eq!(v.rule_text.as_deref(), Some("0.0.0.0 only.here"));
+        assert_eq!(v.list_name.as_deref(), Some("mapped-hosts.txt"));
+    }
+
+    #[test]
+    fn a_list_whose_file_went_away_still_blocks_without_its_text() {
+        let lists = default_lists();
+        let path = lists[0].local_path.clone().unwrap();
+        let fe = engine(lists);
+        std::fs::write(&path, "").unwrap();
+        let v = fe.check_host_detailed("doubleclick.net");
+        assert!(v.blocked);
+        // The attribution is the engine's own; only the text needed the file.
+        assert_eq!(v.list_name.as_deref(), Some("base.txt"));
+        assert_eq!(v.rule_text, None);
+    }
+
+    #[test]
+    fn user_rules_report_their_own_text() {
+        let fe = FilterEngine::new();
+        fe.rebuild(&default_lists(), &["||my-block.test^".to_string()]);
+        let v = fe.check_host_detailed("my-block.test");
+        assert!(v.blocked);
+        assert_eq!(v.rule_text.as_deref(), Some("||my-block.test^"));
+        assert_eq!(v.list_name.as_deref(), Some("User Custom Filter"));
+    }
+
+    #[test]
+    fn dnsmasq_rules_block_the_domains_they_name() {
+        let fe = engine(vec![temp_list(
+            "oisd.txt",
+            "# Title: oisd big\n\
+             local=/blocked.dns.test/\n\
+             address=/also.dns.test/\n\
+             local=/a/b/\n\
+             address=/kept.dns.test/1.2.3.4\n",
+            ListFormat::Standard,
+            1,
+        )]);
+        assert!(fe.check_host("blocked.dns.test").blocked);
+        assert!(fe.check_host("deep.blocked.dns.test").blocked);
+        assert!(fe.check_host("also.dns.test").blocked);
+        // Several domains or a replacement address are not a plain block.
+        assert!(!fe.check_host("a").blocked);
+        assert!(!fe.check_host("kept.dns.test").blocked);
+        // The log names the line the list wrote, not the rewritten form.
+        let v = fe.check_host_detailed("blocked.dns.test");
+        assert_eq!(v.rule_text.as_deref(), Some("local=/blocked.dns.test/"));
+        assert_eq!(v.list_name.as_deref(), Some("oisd.txt"));
     }
 
     #[test]
