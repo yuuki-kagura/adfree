@@ -81,8 +81,8 @@ bytes = "1"
 # Stock 0.13.3 plus two changes (`adfree-slim-debug` branch): a debug-info
 # engine stores each matched rule's source line, not the rule text itself, and
 # rejected lines keep only their count. The text is read back from the list
-# file when a block is logged, which takes ~40 MB of resident strings (one per
-# rule) off every loaded engine.
+# file when a block is logged, which keeps ~20 MB of stored rule text (one
+# string per rule) out of every loaded engine.
 # The fork is cloned beside the repository (`~/adblock-rust`) until it is
 # published; switch this to `git = "…"` once the fork has a URL.
 [patch.crates-io]

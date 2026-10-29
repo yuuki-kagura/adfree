@@ -906,7 +906,7 @@ struct SourceMapEntry {
 ///
 /// The engine records which line a match came from (the fork's debug info),
 /// and the text is read back only when a block is logged. A copy per rule
-/// cost ~40 MB resident with real lists — one string for every rule — to
+/// cost ~20 MB resident with real lists — one string for every rule — to
 /// serve the handful of matches the log ever shows.
 #[derive(Clone)]
 enum RuleText {
