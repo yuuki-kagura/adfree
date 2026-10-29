@@ -78,15 +78,16 @@ tokio = { version = "1", features = ["rt", "time", "sync", "macros", "io-util"] 
 http = "1"
 bytes = "1"
 
-# Stock 0.13.3 plus two changes (`adfree-slim-debug` branch): a debug-info
-# engine stores each matched rule's source line, not the rule text itself, and
-# rejected lines keep only their count. The text is read back from the list
-# file when a block is logged, which keeps ~20 MB of stored rule text (one
-# string per rule) out of every loaded engine.
-# The fork is cloned beside the repository (`~/adblock-rust`) until it is
-# published; switch this to `git = "…"` once the fork has a URL.
+# Upstream 0.13.5 plus two changes: a debug-info engine stores each matched
+# rule's source line, not the rule text itself, and rejected lines keep only
+# their count. The text is read back from the list file when a block is
+# logged, which keeps ~20 MB of stored rule text (one string per rule) out of
+# every loaded engine.
+# Published fork: https://github.com/tachibana-shin/adblock-rust (branch
+# `master`). Cargo.lock pins the exact revision, so builds stay reproducible
+# until the fork is updated deliberately.
 [patch.crates-io]
-adblock = { path = "../../adblock-rust" }
+adblock = { git = "https://github.com/tachibana-shin/adblock-rust", branch = "master" }
 
 [profile.release]
 opt-level = 3
