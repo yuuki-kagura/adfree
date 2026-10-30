@@ -167,12 +167,28 @@ Master plus five switches:
   `Đã áp dụng quy tắc tùy chỉnh`, and `Quy tắc tùy chỉnh có sẵn` with one `+`
   row per network type (adding an override; global rules stay the default).
 
-### Quick actions (`09-firewall-quick-actions.png`)
+### Quick actions (`09-firewall-quick-actions.png`, `62`)
 
 - Search field
 - Cards per recent app: age (`3 phút trước`), icon/name, network icon with
   `Có quyền truy cập Wi-Fi`, `Được phép bởi quy tắc tường lửa toàn cầu`, and a
   large orange `Chặn truy cập` button; per-card overflow menu.
+- Per-card overflow (`62-quick-actions-overflow.png`) is a four-item popup:
+  `Hoạt động gần đây của ứng dụng`, `Quy tắc tường lửa ứng dụng`,
+  `Quản lý ứng dụng`, `Tắt tiếng thông báo`. Left of the quick actions there is
+  a shortcut to the recent activity, the app firewall rule, the app management
+  screen, and a one-tap mute for that app's firewall notifications.
+
+### Firewall overflow (`60`, `61`)
+
+The top-right overflow has no dropdown; it adds a single orange toolbar action
+`Đặt lại mặc định` (`60-firewall-overflow.png`). Tapping it opens a bottom
+sheet (`61-firewall-reset-dialog.png`):
+
+- `Đặt lại về mặc định?`
+- `Tất cả các cài đặt trong phần này sẽ được đặt lại về giá trị mặc định của
+  chúng`
+- `Đặt lại` (orange confirm), dismissed with Back without resetting.
 
 ## 3b. Apps, settings, statistics, log
 
@@ -247,6 +263,19 @@ Reached from Settings → Đang lọc → `Bộ lọc`.
   `uBlock Origin – Badware risks`, `Dandelion Sprout's Anti-Malware List`.
   This is a separate group from `Bộ lọc bảo mật`; AdGuard uses it for the
   browsing-security/malware coverage.
+- Social filters (`63-filter-social.png`): `Bộ lọc phương tiện mạng xã hội`
+  v2.1.34.54 (on, updated 30 Oct 2026 07:21) and `Fanboy's Social Blocking
+  List` v2.1.41.43 (off, updated 15 May 2025 19:44). Description: hide social
+  widgets such as Like and Share buttons.
+- Annoyances filters (`64`, `65`): 11 rows, 5 enabled. On: `Bộ lọc Thông báo
+  Cookie AdGuard` 2.0.98.4, `Bộ lọc Quảng cáo AdGuard` 2.0.86.47, `Bộ lọc
+  AdGuard Mobile App Banners` 2.0.33.56, `Bộ lọc Những phiền toái khác của
+  AdGuard` 2.0.49.81, `Bộ lọc Tiện ích con AdGuard` 2.0.15.31. Off: `Bộ lọc
+  phiền toái` 2.2.30.49, `Adblock Warning Removal List` 2.1.69.94, `Fanboy's
+  Annoyances` 2.1.47.24, `EasyList Cookie List` 2.1.52.96, `Stevo's AI
+  Blocklist` 2.0.1.78, `Web Annoyances Ultralist` 2.0.0.38. The category
+  screen uses the same row template (name, version, update time, switch) as
+  the other categories; no description text at this level.
 - Other filters (`48`): `Bộ lọc quảng cáo hữu ích`, `Bộ lọc tên miền đơn giản`,
   `Bộ lọc thử nghiệm`, `Fanboy's Anti-thirdparty Fonts`.
 - Custom filters (`50`): `Thêm bộ lọc tuỳ chỉnh`, empty state
@@ -397,6 +426,12 @@ Existing AdFree code references for the follow-up:
 | `57-stats-sort.png` | All apps sort menu |
 | `58-stats-all-apps-scrolled.png` | All apps list, scrolled to tracker-heavy apps |
 | `59-stats-all-companies.png` | All services/companies list |
+| `60-firewall-overflow.png` | Firewall top bar with the `Đặt lại mặc định` action |
+| `61-firewall-reset-dialog.png` | Firewall reset confirmation sheet |
+| `62-quick-actions-overflow.png` | Quick action card overflow (activity, rule, app, mute) |
+| `63-filter-social.png` | Social filter category |
+| `64-filter-annoyances.png` | Annoyances filter category |
+| `65-filter-annoyances-scrolled.png` | Annoyances list scrolled to the disabled filters |
 
 Still not captured (relevant only if we implement the matching screen):
 
@@ -405,6 +440,4 @@ Still not captured (relevant only if we implement the matching screen):
   settings).
 - Add dialogs: allowlist `Thêm trang`, user rule `Quy tắc người dùng mới`,
   DNS `Thêm bộ lọc DNS`, custom filter `Thêm bộ lọc tuỳ chỉnh`.
-- Quick actions per-card overflow menu and the firewall overflow menu.
-- Social/annoyances category screens (same template as the captured ones).
 - YouTube how-to page and the private-browser external link (navigation only).

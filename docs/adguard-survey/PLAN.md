@@ -120,9 +120,15 @@ Goal: global five-rule grid, per-app overrides, quick actions, notifications.
    - Custom rules screen: app list with overrides (`06`), app picker sheet
      with search and grouped system apps (`07`), per-app override screen
      (`08`).
-   - Quick actions (`09`): recent log entries grouped by app, `Chặn truy cập`
-     button mapping to the same per-app rule update; reuse the infinite-log
-     data already loaded by the repository.
+   - Quick actions (`09`, `62`): recent log entries grouped by app, `Chặn truy
+     cập` button mapping to the same per-app rule update; reuse the
+     infinite-log data already loaded by the repository. Per-card overflow
+     offers recent app activity, app firewall rule, app management and a
+     one-tap `Tắt tiếng thông báo`; the first three are navigation shortcuts,
+     the last flips the per-app notification toggle.
+   - Firewall overflow (`60`, `61`): a single `Đặt lại mặc định` action with a
+     confirmation sheet. If added, reset only the firewall section (global
+     defaults, per-app overrides, quick-action mutes), not other modules.
    - Notifications toggle: only notify for apps the user selected; post on
      the first blocked attempt per app/window to avoid spam.
 3. Keep the existing Apps-tab sheet working; the new screens should call
@@ -202,8 +208,8 @@ matching feature:
 | Log entry detail + "create rule from request" | not captured | user-rule creation from the log |
 | Settings → General → `Thông báo ứng dụng` | not captured | notification channel controls (Phase 1) |
 | `Thêm trang` (allowlist), `Quy tắc người dùng mới`, `Thêm bộ lọc DNS`, `Thêm bộ lọc tuỳ chỉnh` dialogs | not captured | add-flow parity |
-| Quick actions / firewall overflow menus | not captured | minor UI parity |
-| Social and annoyances filter categories | not captured | same template as `45`/`47`; capture only if list ordering differs |
+| Quick actions / firewall overflow menus | captured (`60`–`62`) | navigation shortcuts, per-app mute, firewall reset |
+| Social and annoyances filter categories | captured (`63`–`65`) | same row template; annoyances has 11 filters, social 2 |
 | YouTube how-to page, private browser link | out of scope | navigation only |
 
 ## Out of scope
