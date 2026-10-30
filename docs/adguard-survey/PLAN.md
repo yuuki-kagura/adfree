@@ -87,6 +87,14 @@ the ad-blocking flag.
    - Decide whether a warning UI is needed when a malicious domain is hit; if
      yes, reuse the log/blocked path and add a localized notification on the
      existing alert channel rather than a new channel.
+   - AdGuard keeps two separate groups (`47`, `49`): `Bộ lọc bảo mật` is
+     tracking-gated (spyware, URL tracking, EasyPrivacy, ...) while
+     `Bộ lọc bảo vệ` holds the malware/phishing lists and is **not** gated by
+     the tracking switch. AdFree's single `FilterGroup.SECURITY` is currently
+     ungated and mixes both. Split it (or add a subgroup flag) so the
+     browsing-security gate covers malware lists without switching off the
+     tracking lists, and show the inactive warning when the owning module is
+     off.
 
 ## Phase 3 — Firewall parity
 
@@ -126,26 +134,64 @@ Goal: global five-rule grid, per-app overrides, quick actions, notifications.
 - Optional: `Cách chặn quảng cáo trên YouTube` help row and private-browser
   link, if the user wants them; both are navigation-only in AdGuard.
 
-## Phase 5 — app management and settings (second-pass additions)
+## Phase 5 — app management, settings and remaining screens
 
-- Per-app parity (`25-app-detail.png`): the current Apps tab sheet has
-  filtering/HTTPS/firewall switches. Add routing (`Định tuyến qua AdGuard`),
-  proxy routing, per-app firewall shortcut and a stats row. The firewall
-  shortcut should open the new per-app rule screen from Phase 3 instead of a
-  second sheet.
-- Settings → `Mạng` (`39`, `40`): AdFree's HTTPS filter switch already exists
-  as a Protection module; expose a `Chế độ định tuyến` row that names the
-  active mode (local VPN today, SOCKS5 endpoint when the proxy is configured)
-  so the settings map matches AdGuard's vocabulary.
-- Settings → General (`35`): verify AdFree already covers auto-start, theme,
-  language, update schedule and notification settings; add missing rows only
-  where they change engine behavior.
+### Filter catalog parity (`43`–`51`)
+
+AdFree already has `FiltersScreen`/`FiltersExtensions` and
+`FilterCatalog` groups. Bring the UI to parity:
+
+- Category landing: show `Đã bật: X trên Y` per group.
+- Inactive warning: when the gate module is off, grey the affected category
+  and offer `Kích hoạt` (AdGuard does this for tracking-gated security
+  filters; AdFree needs it once annoyances/security have their own gates).
+- Filter detail: description, last update, rule count, homepage, source URL
+  and feature bullets. `FilterCatalog` already stores URL and description;
+  rule count comes from the downloaded list metadata.
+- Custom filters: `Thêm bộ lọc tuỳ chỉnh` plus the empty state.
+- Language filters: the existing language group already matches AdGuard's
+  list (ABPVN for Vietnamese); add version/update rows if the store has them.
+
+### Per-app screen (`25-app-detail.png`)
+
+The current Apps tab sheet has filtering/HTTPS/firewall switches. Add routing
+(`Định tuyến qua AdGuard`), proxy routing, per-app firewall shortcut and a
+stats row. The firewall shortcut should open the new per-app rule screen from
+Phase 3 instead of a second sheet.
+
+### Settings (`34`–`40`)
+
+- `Mạng`: AdFree's HTTPS filter switch already exists as a Protection module;
+  expose a `Chế độ định tuyến` row that names the active mode (local VPN
+  today, SOCKS5 endpoint when the proxy is configured).
+- General: verify AdFree already covers auto-start, theme, language, update
+  schedule and notification settings; add missing rows only where they change
+  engine behavior.
+
+### Allowlist, statistics, log
+
 - Allowlist: give the website allowlist a dedicated screen (search + add) or
   document that HTTPS website rules cover it. AdGuard keeps it separate from
   user rules.
 - Statistics/log wording: AdGuard advertises "newest 10k requests stored";
   AdFree already shows `log_window_capped` at 10k in RAM, but the SQLite store
   keeps 200k rows for 7 days. Keep the UI honest about the difference.
+
+### Screens still missing from the survey
+
+These do not block Phase 1–4, but capture them before implementing the
+matching feature:
+
+| Screen | Status | Use for |
+| --- | --- | --- |
+| Per-app statistics behind `0/0/0` (`25`) | not captured | decide whether AdFree shows per-app totals from `log_events` |
+| Statistics → `Xem tất cả ứng dụng` and time-range picker | not captured | statistics parity (Phase 5) |
+| Log entry detail + "create rule from request" | not captured | user-rule creation from the log |
+| Settings → General → `Thông báo ứng dụng` | not captured | notification channel controls (Phase 1) |
+| `Thêm trang` (allowlist), `Quy tắc người dùng mới`, `Thêm bộ lọc DNS`, `Thêm bộ lọc tuỳ chỉnh` dialogs | not captured | add-flow parity |
+| Quick actions / firewall overflow menus | not captured | minor UI parity |
+| Social and annoyances filter categories | not captured | same template as `45`/`47`; capture only if list ordering differs |
+| YouTube how-to page, private browser link | out of scope | navigation only |
 
 ## Out of scope
 

@@ -216,6 +216,45 @@ Internet`).
   `Bộ lọc của Người dùng` (DNS syntax), `Bộ lọc tên miền đơn giản`
   v2.1.39.80 with update timestamp.
 
+### Filter catalog (`43`–`51`)
+
+Reached from Settings → Đang lọc → `Bộ lọc`.
+
+- Landing (`43`, `44`): search plus eight categories, each with
+  `Đã bật: X trên Y`:
+  - `Bộ lọc quảng cáo` — 2/3
+  - `Bộ lọc bảo mật` — 1/7, with the warning
+    `Các bộ lọc này không hoạt động vì Bảo vệ theo dõi bị tắt`
+  - `Bộ lọc xã hội` — 1/2
+  - `Bộ lọc phiền toái` — 5/11
+  - `Bộ lọc bảo vệ` — 1/5
+  - `Ngôn ngữ hỗ trợ` — 2/55
+  - `Các bộ lọc khác` — 0/4
+  - `Bộ lọc tuỳ chỉnh` — 0/0
+- Category screen (`45`): rows show the filter name, version and last-update
+  timestamp, with a switch on the right (the description appears only inside
+  the filter).
+- Filter detail (`46`): description, switch, `Cập nhật lần cuối`, `Quy tắc`
+  (45,735 rules for the English filter), `Trang chủ` link, `Nguồn` URL and a
+  `Tính năng` list (`Đề xuất AdGuard`, `Chặn quảng cáo`, ...).
+- Security category (`47`): `Bộ lọc gián điệp`, `Bộ lọc URL Theo Dõi Của
+  AdGuard`, `AdGuard Mail Tracking Protection filter`, `EasyPrivacy`,
+  `Legitimate URL Shortener`, `Peter Lowe's Blocklist`; a snackbar offers
+  `Kích hoạt` next to the "does not work while tracking protection is off"
+  message.
+- Protection filters (`49`): `Online Malicious URL Blocklist` (on),
+  `Phishing URL Blocklist`, `Scam Blocklist by DurableNapkin`,
+  `uBlock Origin – Badware risks`, `Dandelion Sprout's Anti-Malware List`.
+  This is a separate group from `Bộ lọc bảo mật`; AdGuard uses it for the
+  browsing-security/malware coverage.
+- Other filters (`48`): `Bộ lọc quảng cáo hữu ích`, `Bộ lọc tên miền đơn giản`,
+  `Bộ lọc thử nghiệm`, `Fanboy's Anti-thirdparty Fonts`.
+- Custom filters (`50`): `Thêm bộ lọc tuỳ chỉnh`, empty state
+  `Chưa có bộ lọc nào`.
+- Language filters (`51`): Japanese, `ABPVN List` (Vietnamese, enabled),
+  Russian, German, Dutch, Spanish/Portuguese, Turkish, ... Each row shows
+  version and update time.
+
 ### Settings (`34`–`40`)
 
 - Landing: `General`, `Đang lọc`, `Bản quyền`, `Hỗ trợ`, `Thông tin`,
@@ -260,6 +299,8 @@ Internet`).
 | Log | `Hoạt động gần đây`, newest 10k requests, search | Log tab with whole-log counts, cursor paging, filters (10k in-memory cap) |
 | Routing | local VPN / automatic proxy / manual proxy (root) | local VPN plus SOCKS5 proxy support |
 | Extensions | userstyles/userscripts manager | Extensions screen exists |
+| Filter catalog | eight categories with `X/Y` counts, inactive-module warning, per-filter version, rule count, source and features, custom and language filters | filter store with similar groups but no counts, no inactive warning, no per-filter rule count/source |
+| Security vs protection filters | `Bộ lọc bảo mật` (tracking-gated) and `Bộ lọc bảo vệ` (malware/phishing) are separate groups | one `SECURITY` group, currently ungated |
 
 Existing AdFree code references for the follow-up:
 
@@ -323,8 +364,25 @@ Existing AdFree code references for the follow-up:
 | `40-routing-mode.png` | Routing mode (local VPN / proxies) |
 | `41-statistics.png` | Statistics tab |
 | `42-filtering-log.png` | `Hoạt động gần đây` log |
+| `43-filter-catalog.png` | Filter catalog landing (categories with X/Y counts) |
+| `44-filter-catalog-bottom.png` | Filter catalog scrolled to custom filters |
+| `45-filter-ads-category.png` | Ads filter category |
+| `46-filter-detail.png` | One filter's detail (rules, source, features) |
+| `47-filter-security-category.png` | Security category with the inactive warning |
+| `48-other-filters.png` | Other filters category |
+| `49-protection-filters.png` | Protection (malware/phishing) filter category |
+| `50-custom-filters.png` | Custom filters empty state |
+| `51-filter-languages.png` | Language filters (ABPVN enabled) |
 
-Not captured: the filter-list catalog screens behind `Bộ lọc` (the AdFree
-filter store already covers the same catalogs), the YouTube how-to page, the
-private browser link, and the per-app statistics detail behind the `0/0/0`
-row. Those are navigation-only or already covered by AdFree equivalents.
+Still not captured (relevant only if we implement the matching screen):
+
+- Per-app statistics detail behind the `0/0/0` row in `25-app-detail.png`.
+- Statistics `Xem tất cả ứng dụng` list and the time-range picker.
+- Log entry detail and the "create rule from this request" flow.
+- Settings → General → `Thông báo ứng dụng` (per-channel notification
+  settings).
+- Add dialogs: allowlist `Thêm trang`, user rule `Quy tắc người dùng mới`,
+  DNS `Thêm bộ lọc DNS`, custom filter `Thêm bộ lọc tuỳ chỉnh`.
+- Quick actions per-card overflow menu and the firewall overflow menu.
+- Social/annoyances category screens (same template as the captured ones).
+- YouTube how-to page and the private-browser external link (navigation only).
