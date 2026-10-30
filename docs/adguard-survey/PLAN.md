@@ -126,6 +126,27 @@ Goal: global five-rule grid, per-app overrides, quick actions, notifications.
 - Optional: `Cách chặn quảng cáo trên YouTube` help row and private-browser
   link, if the user wants them; both are navigation-only in AdGuard.
 
+## Phase 5 — app management and settings (second-pass additions)
+
+- Per-app parity (`25-app-detail.png`): the current Apps tab sheet has
+  filtering/HTTPS/firewall switches. Add routing (`Định tuyến qua AdGuard`),
+  proxy routing, per-app firewall shortcut and a stats row. The firewall
+  shortcut should open the new per-app rule screen from Phase 3 instead of a
+  second sheet.
+- Settings → `Mạng` (`39`, `40`): AdFree's HTTPS filter switch already exists
+  as a Protection module; expose a `Chế độ định tuyến` row that names the
+  active mode (local VPN today, SOCKS5 endpoint when the proxy is configured)
+  so the settings map matches AdGuard's vocabulary.
+- Settings → General (`35`): verify AdFree already covers auto-start, theme,
+  language, update schedule and notification settings; add missing rows only
+  where they change engine behavior.
+- Allowlist: give the website allowlist a dedicated screen (search + add) or
+  document that HTTPS website rules cover it. AdGuard keeps it separate from
+  user rules.
+- Statistics/log wording: AdGuard advertises "newest 10k requests stored";
+  AdFree already shows `log_window_capped` at 10k in RAM, but the SQLite store
+  keeps 200k rows for 7 days. Keep the UI honest about the difference.
+
 ## Out of scope
 
 - AdGuard VPN and private browser (separate products).

@@ -93,7 +93,16 @@ detail screen:
   - `Cực` — also limits first-party cookie lifetime, blocks browser APIs
     (worse warning)
   - `Tuỳ chọn` — manual settings
-- `General`: `Chặn trình theo dõi`, `Xóa tham số theo dõi khỏi URL`, ...
+- `General` (fully captured in `27-tracking-general.png`):
+  - `Chặn trình theo dõi` — blocks trackers/analytics through the AdGuard
+    Tracking Protection filter
+  - `Xóa tham số theo dõi khỏi URL` — strips UTM-style parameters using the
+    AdGuard URL Tracking filter
+  - `Ẩn truy vấn tìm kiếm` — opens search results directly, hiding the query
+  - `Yêu cầu các trang web không theo dõi tôi` — sends Global Privacy Control
+    and Do Not Track
+- `Tuỳ chọn` level (`26-tracking-custom-level.png`) unlocks the manual
+  General section; choosing it selected the radio in place.
 - `Cách theo dõi`:
   - `Xóa cookie của bên thứ ba` (current lifetime 180 min)
   - `Xóa cookie của bên thứ nhất (không khuyến khích)` (4320 min)
@@ -165,6 +174,74 @@ Master plus five switches:
   `Có quyền truy cập Wi-Fi`, `Được phép bởi quy tắc tường lửa toàn cầu`, and a
   large orange `Chặn truy cập` button; per-card overflow menu.
 
+## 3b. Apps, settings, statistics, log
+
+Captured on the second pass, after the module screens above.
+
+### Quản lý ứng dụng (`24-apps-management.png`, `25-app-detail.png`)
+
+- Search plus a list grouped by shared system process (Bluetooth, telephony,
+  Google services, Mi Cloud, tethering, ...); each group expands and shows a
+  warning `Không được định tuyến qua AdGuard` when it bypasses the VPN.
+- Per-app (or per-group) screen:
+  - `Định tuyến lưu lượng truy cập qua AdGuard`
+  - `Lọc nội dung ứng dụng` (unencrypted traffic)
+  - `Lọc lưu lượng HTTPS` (encrypted traffic; warns that apps can misbehave
+    without a trusted CA)
+  - `Định tuyến ứng dụng thông qua proxy`
+  - `Cài đặt tường lửa ứng dụng` — the same five network icons as the firewall
+    screens
+  - App stats row (`0/0/0`) linking to per-app statistics
+
+### Firewall notifications (`32-firewall-notifications.png`)
+
+Master switch plus per-app notification toggles, grouped the same way as app
+management (`Thông báo cho bạn khi các ứng dụng được chọn cố gắng sử dụng
+Internet`).
+
+### Ad blocking sub-screens
+
+- `33-allowlist.png`: `Danh sách cho phép của trang web` — master, search,
+  `Thêm trang`.
+- `31-user-rules.png`: `Bộ lọc của Người dùng` — master, search,
+  `Quy tắc người dùng mới`; header explains it holds allowlist rules, rules
+  created from the log, and manually added rules.
+
+### DNS sub-screens
+
+- `28-dns-servers.png`: `DNS tự động` (currently active, resolves through a
+  chosen provider), `AdGuard DNS`, `AdGuard DNS Family Protection`,
+  `AdGuard DNS Không lọc`, then public servers (Google, Cloudflare, ...).
+- `29-dns-filters.png`: `Các bộ lọc` master, `Thêm bộ lọc DNS`,
+  `Bộ lọc của Người dùng` (DNS syntax), `Bộ lọc tên miền đơn giản`
+  v2.1.39.80 with update timestamp.
+
+### Settings (`34`–`40`)
+
+- Landing: `General`, `Đang lọc`, `Bản quyền`, `Hỗ trợ`, `Thông tin`,
+  `Thoát`.
+- General (`35`): auto-start with the system, theme, high contrast, app
+  language, update app and filters, app notifications, technical data,
+  automatic error reports, `Nâng cao`.
+- Advanced (`36`): tasker automation, watchdog, log level, export log,
+  low-level settings.
+- `Đang lọc` (`37`): `Bộ lọc`, `Tiện ích mở rộng`, `Mạng`.
+- Extensions (`38`): master, add extension, `AdGuard Extra`.
+- `Mạng` (`39`): `HTTPS filtering` toggle, `Proxy` toggle, routing mode row
+  (currently `VPN cục bộ`).
+- Routing mode (`40`): `VPN cục bộ`, `Proxy tự động` (root),
+  `Proxy thủ công` (root, port 8080).
+
+### Statistics and log (`41`, `42`)
+
+- Statistics: requests split into ads / trackers / total with a share bar,
+  data saved / uploaded / downloaded, per-app top list, `Xem tất cả ứng
+  dụng`.
+- Log: `Hoạt động gần đây` with the subtitle
+  `Từ 10 nghìn yêu cầu được lưu trữ gần đây nhất`, search, rows showing app
+  icon, host or IP:port, protocol scheme (`udp://`, `tcp://`, `https://`,
+  `iquic://`) and time.
+
 ## 4. AdFree gaps observed
 
 | Area | AdGuard | AdFree today |
@@ -176,6 +253,13 @@ Master plus five switches:
 | Annoyances | own module | annoyances live inside the ad-blocking module gate |
 | Firewall | global 5-rule grid, per-app overrides, quick actions, notifications | master switch + per-app sheet (cellular/Wi-Fi/screen-off), no roaming, no quick actions, no notifications |
 | Browsing security | phishing/malware warning module | security filter group exists in the catalog (URLhaus, phishing, anti-malware) but no module/UI |
+| HTTPS filtering | Settings → Đang lọc → Mạng | own Protection row |
+| Per-app controls | routing, content filtering, HTTPS filtering, proxy, firewall, stats in one screen | Apps tab sheet with filtering/HTTPS/firewall toggles, no routing/proxy/stat row grouping |
+| Allowlist | dedicated `Danh sách cho phép của trang web` screen (search + add) | allowlist lives in custom rules and HTTPS website rules; no dedicated screen |
+| Statistics | dedicated tab with request/data breakdown and top apps | summary cards on Home |
+| Log | `Hoạt động gần đây`, newest 10k requests, search | Log tab with whole-log counts, cursor paging, filters (10k in-memory cap) |
+| Routing | local VPN / automatic proxy / manual proxy (root) | local VPN plus SOCKS5 proxy support |
+| Extensions | userstyles/userscripts manager | Extensions screen exists |
 
 Existing AdFree code references for the follow-up:
 
@@ -221,7 +305,26 @@ Existing AdFree code references for the follow-up:
 | `20-assistant-app.png` | Assistant shortcuts for one app |
 | `21-assistant-web.png` | Assistant Web tab (empty state) |
 | `23-disable-action.png` | Tap-to-enable state after "Vô hiệu" |
+| `24-apps-management.png` | Apps management, grouped by shared process |
+| `25-app-detail.png` | Per-app screen: routing, filtering, HTTPS, proxy, firewall, stats |
+| `26-tracking-custom-level.png` | Tracking protection with the `Tuỳ chọn` level selected |
+| `27-tracking-general.png` | Tracking `General` section |
+| `28-dns-servers.png` | DNS server picker |
+| `29-dns-filters.png` | DNS filters and user rules |
+| `31-user-rules.png` | User filter editor |
+| `32-firewall-notifications.png` | Firewall notifications, per-app toggles |
+| `33-allowlist.png` | Website allowlist |
+| `34-settings.png` | Settings landing |
+| `35-settings-general.png` | Settings → General |
+| `36-settings-advanced.png` | Settings → General → Advanced |
+| `37-settings-filtering.png` | Settings → Đang lọc |
+| `38-settings-extensions.png` | Settings → Đang lọc → Tiện ích mở rộng |
+| `39-settings-network.png` | Settings → Đang lọc → Mạng |
+| `40-routing-mode.png` | Routing mode (local VPN / proxies) |
+| `41-statistics.png` | Statistics tab |
+| `42-filtering-log.png` | `Hoạt động gần đây` log |
 
-Not captured: AdGuard's HTTPS filtering detail, filter-list screens, the
-YouTube how-to page, and the private browser link (all either already covered
-by AdFree equivalents or out of scope).
+Not captured: the filter-list catalog screens behind `Bộ lọc` (the AdFree
+filter store already covers the same catalogs), the YouTube how-to page, the
+private browser link, and the per-app statistics detail behind the `0/0/0`
+row. Those are navigation-only or already covered by AdFree equivalents.
