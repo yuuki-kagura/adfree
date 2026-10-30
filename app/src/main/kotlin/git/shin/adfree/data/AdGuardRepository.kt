@@ -332,7 +332,7 @@ class AdGuardRepository(
      * While the user has paged back into history the window stays put, so the
      * rows under their finger do not shift every time traffic arrives.
      */
-    private fun refreshLogIfChanged(): Boolean {
+    private fun refreshLogIfChanged(forceReload: Boolean = false): Boolean {
         val total = engine.logCount()
         if (total == lastLogCount) return false
         lastLogCount = total
@@ -340,9 +340,18 @@ class AdGuardRepository(
         val counts = engine.logStatusCounts()
         _logBlockedTotal.value = counts.blocked
         _logAllowedTotal.value = counts.allowed
-        if (!logTailing) return true
+        if (!logTailing && !forceReload) return true
         reloadLogWindow()
         return true
+    }
+
+    /**
+     * Pulls the newest log rows on demand. The assistant is a short-lived
+     * overlay that should not drive the Activity's visibility-gated poller,
+     * so it asks for a refresh while it is on screen instead.
+     */
+    fun refreshLogsNow() {
+        scope.launch { refreshLogIfChanged(forceReload = true) }
     }
 
     /** The log screen reports its scroll state here; see [logTailing]. */

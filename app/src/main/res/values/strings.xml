@@ -243,14 +243,16 @@
     <string name="vpn_session_name">AdFree protection</string>
     <string name="vpn_channel_name">AdFree protection status</string>
     <string name="vpn_channel_description">Shows when AdFree is filtering your traffic</string>
-    <string name="vpn_notification_title">AdFree is protecting you</string>
-    <string name="vpn_notification_text">Filtering ads and trackers at the DNS level</string>
-    <string name="vpn_notification_text_https">Filtering ads and trackers over HTTPS and DNS</string>
-    <string name="vpn_notification_pause">Pause</string>
+    <string name="vpn_notification_title">Blocking ads and trackers</string>
+    <string name="vpn_notification_blocked">Blocked: %1$d</string>
+    <string name="vpn_notification_saved">Data saved: %1$d MB</string>
     <string name="vpn_notification_paused_title">Protection paused</string>
     <string name="vpn_notification_paused_text">The VPN is on; ads and trackers are not filtered</string>
     <string name="vpn_notification_resume">Resume</string>
-    <string name="vpn_notification_stop">Stop</string>
+    <string name="vpn_notification_disable">Disable</string>
+    <string name="vpn_notification_assistant">Assistant</string>
+    <string name="vpn_notification_disabled_title">Protection is disabled</string>
+    <string name="vpn_notification_disabled_text">Ads and trackers are not blocked. Tap to enable</string>
     <string name="vpn_start_blocked_title">AdFree could not start</string>
     <string name="vpn_start_blocked_text">Tap to open AdFree and restart protection</string>
     <string name="tile_state_on">Protection on</string>
@@ -261,6 +263,24 @@
     <string name="notification_filter_update_title">Filters updated</string>
     <string name="notification_filter_update_text">Refreshed %1$d lists</string>
     <string name="threat_analyzing">Analyzing %1$s on this device…</string>
+
+    <!-- Assistant -->
+    <string name="assistant_title">AdFree Assistant</string>
+    <string name="assistant_subtitle">Quickly change filtering for recent apps or websites</string>
+    <string name="assistant_tab_apps">Apps</string>
+    <string name="assistant_tab_websites">Websites</string>
+    <string name="assistant_empty">No activity yet</string>
+    <string name="assistant_used_now">just now</string>
+    <string name="assistant_used_minutes">%1$d min ago</string>
+    <string name="assistant_used_hours">%1$d h ago</string>
+    <string name="assistant_used_days">%1$d d ago</string>
+    <string name="assistant_row_subtitle">%1$d blocked · %2$s</string>
+    <string name="assistant_pause">Pause protection</string>
+    <string name="assistant_resume">Resume protection</string>
+    <string name="assistant_shortcut_recent">Recent activity</string>
+    <string name="assistant_shortcut_apps">Manage apps</string>
+    <string name="assistant_vpn_off">VPN is off</string>
+    <string name="assistant_close">Close assistant</string>
 
     <!-- Navigation -->
     <string name="nav_home">Home</string>

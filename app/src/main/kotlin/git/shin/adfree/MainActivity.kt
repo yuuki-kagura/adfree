@@ -317,6 +317,16 @@ class MainActivity : AppCompatActivity() {
             ACTION_ENABLE_PROTECTION -> viewModel.enableProtectionFromShortcut()
             ACTION_OPEN_FILTERS -> viewModel.openFilters()
             ACTION_OPEN_PROTECTION -> viewModel.onIntent(AdGuardIntent.SelectTab(AdGuardTab.PROTECTION))
+            ACTION_OPEN_ACTIVITY -> {
+                val app = intent.getStringExtra(EXTRA_LOG_APP)
+                val domain = intent.getStringExtra(EXTRA_LOG_DOMAIN)
+                when {
+                    app != null -> viewModel.openLogForApp(app)
+                    domain != null -> viewModel.openLogForDomain(domain)
+                    else -> viewModel.openRecentActivity()
+                }
+            }
+            ACTION_OPEN_APPS -> viewModel.onIntent(AdGuardIntent.SelectTab(AdGuardTab.APPS))
         }
     }
 
@@ -344,6 +354,14 @@ class MainActivity : AppCompatActivity() {
 
         /** Certificate reminder tapped: land on the Protection tab. */
         const val ACTION_OPEN_PROTECTION = "git.shin.adfree.action.OPEN_PROTECTION"
+
+        /** Assistant row tapped: land on the Activity tab, optionally filtered. */
+        const val ACTION_OPEN_ACTIVITY = "git.shin.adfree.action.OPEN_ACTIVITY"
+        const val EXTRA_LOG_APP = "git.shin.adfree.extra.LOG_APP"
+        const val EXTRA_LOG_DOMAIN = "git.shin.adfree.extra.LOG_DOMAIN"
+
+        /** Assistant shortcut: land on the Apps tab. */
+        const val ACTION_OPEN_APPS = "git.shin.adfree.action.OPEN_APPS"
 
         private const val NOTIFICATION_PREFS = "notification_permission"
         private const val KEY_NOTIFICATION_ASKED = "asked"

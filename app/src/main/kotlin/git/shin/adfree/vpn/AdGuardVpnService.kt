@@ -21,6 +21,7 @@ import android.os.ParcelFileDescriptor
 import android.util.Log
 import androidx.core.app.NotificationCompat
 import git.shin.adfree.AdGuardApplication
+import git.shin.adfree.AssistantActivity
 import git.shin.adfree.BuildConfig
 import git.shin.adfree.MainActivity
 import git.shin.adfree.R
@@ -30,6 +31,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.drop
 import kotlinx.coroutines.flow.map
@@ -63,6 +65,16 @@ class AdGuardVpnService : VpnService() {
 
     /** Guards the tunnel build itself, not just the running state. */
     private val establishing = java.util.concurrent.atomic.AtomicBoolean(false)
+
+    /** Whether the ongoing notification currently owns the foreground slot. */
+    @Volatile
+    private var foregroundActive = false
+
+    /** Last numbers drawn into the notification; the ticker compares against them. */
+    @Volatile
+    private var lastNotifiedBlocked = -1L
+    @Volatile
+    private var lastNotifiedSavedMb = -1L
 
     private val screenReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
@@ -174,6 +186,19 @@ class AdGuardVpnService : VpnService() {
                     }
                 }
         }
+        // AdGuard keeps the blocked/data counters live in the shade. The UI
+        // poller parks while the app is hidden, so the service ticks its own
+        // cheap native read and only redraws when a number actually moved.
+        serviceScope.launch {
+            while (true) {
+                delay(NOTIFICATION_STATS_INTERVAL_MS)
+                if (!isRunning || container.coreEngine.isProtectionPaused()) continue
+                val (blocked, savedMb) = notificationStats()
+                if (blocked != lastNotifiedBlocked || savedMb != lastNotifiedSavedMb) {
+                    promoteToForeground(NOTIFICATION_ID, buildStatusNotification())
+                }
+            }
+        }
         val request = NetworkRequest.Builder()
             .addCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
             .addCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED)
@@ -187,7 +212,9 @@ class AdGuardVpnService : VpnService() {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         when (intent?.action) {
             ACTION_STOP_VPN -> {
-                stopVpn()
+                // A restart keeps the persisted switch on and must not leave a
+                // "disabled" reminder behind; turning protection off must.
+                stopVpn(showDisabledReminder = !container.repository.settings.value.isProtectionActive)
                 return START_NOT_STICKY
             }
             ACTION_PAUSE_VPN -> {
@@ -201,10 +228,10 @@ class AdGuardVpnService : VpnService() {
                 return START_STICKY
             }
             ACTION_DISABLE_PROTECTION -> {
-                // The notification's stop button: the user is done, so the
+                // The notification's disable button: the user is done, so the
                 // remembered state has to say so.
                 container.repository.toggleProtection(false)
-                stopVpn()
+                stopVpn(showDisabledReminder = true)
                 return START_NOT_STICKY
             }
             ACTION_REFRESH_NOTIFICATION -> {
@@ -360,7 +387,13 @@ class AdGuardVpnService : VpnService() {
         }
     }
 
-    private fun stopVpn() {
+    /**
+     * [showDisabledReminder] posts the tap-to-enable notification after the
+     * tunnel is gone. Only a user-initiated disable does that: a restart is
+     * about to bring the tunnel back, and a revoke/destroy has no user intent
+     * behind it.
+     */
+    private fun stopVpn(showDisabledReminder: Boolean = false) {
         isRunning = false
         container.repository.syncHttpsReminder()
         container.coreEngine.stop()
@@ -371,7 +404,14 @@ class AdGuardVpnService : VpnService() {
             Log.w(TAG, "close TUN failed", e)
         }
         vpnInterface = null
-        stopForeground(STOP_FOREGROUND_REMOVE)
+        // `onDestroy` stops the service again after `stopSelf()`. Calling
+        // stopForeground twice would cancel the reminder posted below, because
+        // Android ties the removal to the notification id.
+        if (foregroundActive) {
+            foregroundActive = false
+            stopForeground(STOP_FOREGROUND_REMOVE)
+        }
+        if (showDisabledReminder) postDisabledReminder()
         stopSelf()
     }
 
@@ -386,6 +426,7 @@ class AdGuardVpnService : VpnService() {
         } else {
             startForeground(id, notification)
         }
+        foregroundActive = true
     }
 
     override fun onDestroy() {
@@ -441,11 +482,22 @@ class AdGuardVpnService : VpnService() {
         }
     }
 
+    /** The counters AdGuard puts in the shade: blocked requests and saved data. */
+    private fun notificationStats(): Pair<Long, Long> {
+        val snapshot = container.coreEngine.stats()
+        val blocked = snapshot.dnsBlocked + snapshot.tcpReset + snapshot.quicDropped +
+            snapshot.quicBlocked + snapshot.udpDropped
+        return blocked to snapshot.bytesSaved / (1024L * 1024L)
+    }
+
     private fun buildStatusNotification(): Notification {
         val ui = localizedContext()
         val paused = container.coreEngine.isProtectionPaused()
-        val httpsFiltering = container.repository.settings.value.isHttpsFilteringEnabled &&
-            container.coreEngine.isCaTrusted()
+        val (blocked, savedMb) = if (paused) 0L to 0L else notificationStats()
+        if (!paused) {
+            lastNotifiedBlocked = blocked
+            lastNotifiedSavedMb = savedMb
+        }
         val open = PendingIntent.getActivity(
             this,
             0,
@@ -464,7 +516,7 @@ class AdGuardVpnService : VpnService() {
             },
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
         )
-        val stop = PendingIntent.getService(
+        val disable = PendingIntent.getService(
             this,
             2,
             Intent(this, AdGuardVpnService::class.java).apply {
@@ -472,41 +524,85 @@ class AdGuardVpnService : VpnService() {
             },
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
         )
-        return NotificationCompat.Builder(this, NOTIFICATION_CHANNEL_ID)
-            .setContentTitle(
-                ui.getString(
-                    if (paused) R.string.vpn_notification_paused_title
-                    else R.string.vpn_notification_title,
-                ),
-            )
-            .setContentText(
-                ui.getString(
-                    when {
-                        paused -> R.string.vpn_notification_paused_text
-                        httpsFiltering -> R.string.vpn_notification_text_https
-                        else -> R.string.vpn_notification_text
-                    },
-                ),
-            )
+        val assistant = PendingIntent.getActivity(
+            this,
+            4,
+            Intent(this, AssistantActivity::class.java).apply {
+                flags = Intent.FLAG_ACTIVITY_NEW_TASK
+            },
+            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
+        )
+        val builder = NotificationCompat.Builder(this, NOTIFICATION_CHANNEL_ID)
             .setSmallIcon(R.drawable.ic_qs_shield)
             .setContentIntent(open)
-            .addAction(
-                R.drawable.ic_qs_shield,
-                ui.getString(
-                    if (paused) R.string.vpn_notification_resume
-                    else R.string.vpn_notification_pause,
-                ),
-                toggle,
-            )
-            .addAction(
-                R.drawable.ic_qs_shield,
-                ui.getString(R.string.vpn_notification_stop),
-                stop,
-            )
             .setOngoing(true)
             .setPriority(NotificationCompat.PRIORITY_LOW)
             .setCategory(NotificationCompat.CATEGORY_SERVICE)
+        if (paused) {
+            builder
+                .setContentTitle(ui.getString(R.string.vpn_notification_paused_title))
+                .setContentText(ui.getString(R.string.vpn_notification_paused_text))
+                .addAction(
+                    R.drawable.ic_qs_shield,
+                    ui.getString(R.string.vpn_notification_resume),
+                    toggle,
+                )
+        } else {
+            val blockedLine = ui.getString(R.string.vpn_notification_blocked, blocked)
+            builder
+                .setContentTitle(ui.getString(R.string.vpn_notification_title))
+                .setContentText(blockedLine)
+                .setStyle(
+                    NotificationCompat.BigTextStyle().bigText(
+                        blockedLine + "\n" +
+                            ui.getString(R.string.vpn_notification_saved, savedMb),
+                    ),
+                )
+                .addAction(
+                    R.drawable.ic_qs_shield,
+                    ui.getString(R.string.vpn_notification_disable),
+                    disable,
+                )
+        }
+        builder.addAction(
+            R.drawable.ic_qs_shield,
+            ui.getString(R.string.vpn_notification_assistant),
+            assistant,
+        )
+        return builder.build()
+    }
+
+    /**
+     * The state AdGuard leaves behind when protection is disabled: a normal
+     * ongoing notification that re-opens the consent/enable flow on tap. It
+     * uses the same id the foreground service had, so re-enabling replaces it
+     * instead of stacking a second shade entry.
+     */
+    private fun postDisabledReminder() {
+        val ui = localizedContext()
+        createNotificationChannel()
+        val open = PendingIntent.getActivity(
+            this,
+            3,
+            Intent(this, MainActivity::class.java).apply {
+                action = MainActivity.ACTION_ENABLE_PROTECTION
+                flags = Intent.FLAG_ACTIVITY_NEW_TASK or
+                    Intent.FLAG_ACTIVITY_CLEAR_TOP or
+                    Intent.FLAG_ACTIVITY_SINGLE_TOP
+            },
+            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
+        )
+        val notification = NotificationCompat.Builder(this, NOTIFICATION_CHANNEL_ID)
+            .setContentTitle(ui.getString(R.string.vpn_notification_disabled_title))
+            .setContentText(ui.getString(R.string.vpn_notification_disabled_text))
+            .setSmallIcon(R.drawable.ic_qs_shield)
+            .setContentIntent(open)
+            .setOngoing(true)
+            .setSilent(true)
+            .setPriority(NotificationCompat.PRIORITY_LOW)
+            .setCategory(NotificationCompat.CATEGORY_SERVICE)
             .build()
+        getSystemService(NotificationManager::class.java)?.notify(NOTIFICATION_ID, notification)
     }
 
     /** Applies the transient pause and redraws the foreground notification. */
@@ -533,6 +629,8 @@ class AdGuardVpnService : VpnService() {
         private const val CAPTURE_SHELL_MARKER = "capture-shell"
         const val NOTIFICATION_CHANNEL_ID = "adfree_status"
         private const val NOTIFICATION_ID = 1001
+        /** Stats change slowly enough that ten seconds is imperceptible. */
+        private const val NOTIFICATION_STATS_INTERVAL_MS = 10_000L
         private const val TUN_ADDRESS = "10.111.42.1"
         private const val TUN_PREFIX = 32
         private const val ROUTE_IPV4 = "0.0.0.0"

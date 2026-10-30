@@ -242,14 +242,16 @@
     <string name="vpn_session_name">Bảo vệ AdFree</string>
     <string name="vpn_channel_name">Trạng thái bảo vệ AdFree</string>
     <string name="vpn_channel_description">Chỉ báo AdFree đang lọc lưu lượng mạng</string>
-    <string name="vpn_notification_title">AdFree đang bảo vệ</string>
-    <string name="vpn_notification_text">Lọc quảng cáo &amp; tracker mức DNS</string>
-    <string name="vpn_notification_text_https">Lọc quảng cáo &amp; tracker qua HTTPS và DNS</string>
-    <string name="vpn_notification_pause">Tạm dừng</string>
+    <string name="vpn_notification_title">Đang chặn quảng cáo và công cụ theo dõi</string>
+    <string name="vpn_notification_blocked">Bị chặn: %1$d</string>
+    <string name="vpn_notification_saved">Dữ liệu đã lưu: %1$d MB</string>
     <string name="vpn_notification_paused_title">Đã tạm dừng bảo vệ</string>
     <string name="vpn_notification_paused_text">VPN vẫn bật; quảng cáo &amp; tracker chưa bị lọc</string>
     <string name="vpn_notification_resume">Tiếp tục</string>
-    <string name="vpn_notification_stop">Dừng</string>
+    <string name="vpn_notification_disable">Vô hiệu</string>
+    <string name="vpn_notification_assistant">Trợ lý</string>
+    <string name="vpn_notification_disabled_title">Bảo vệ bị vô hiệu hóa</string>
+    <string name="vpn_notification_disabled_text">Quảng cáo và trình theo dõi không bị chặn. Nhấn để bật</string>
     <string name="vpn_start_blocked_title">AdFree không thể khởi động</string>
     <string name="vpn_start_blocked_text">Chạm để mở AdFree và bật lại bảo vệ</string>
     <string name="tile_state_on">Đang bảo vệ</string>
@@ -260,6 +262,24 @@
     <string name="notification_filter_update_title">Đã cập nhật bộ lọc</string>
     <string name="notification_filter_update_text">Đã làm mới %1$d danh sách</string>
     <string name="threat_analyzing">Đang phân tích %1$s trên thiết bị…</string>
+
+    <!-- Assistant -->
+    <string name="assistant_title">Trợ lý AdFree</string>
+    <string name="assistant_subtitle">Nhanh chóng thay đổi cài đặt lọc cho ứng dụng hoặc trang web gần đây</string>
+    <string name="assistant_tab_apps">Ứng dụng</string>
+    <string name="assistant_tab_websites">Trang Web</string>
+    <string name="assistant_empty">Chưa có hoạt động nào</string>
+    <string name="assistant_used_now">vừa xong</string>
+    <string name="assistant_used_minutes">%1$d phút trước</string>
+    <string name="assistant_used_hours">%1$d giờ trước</string>
+    <string name="assistant_used_days">%1$d ngày trước</string>
+    <string name="assistant_row_subtitle">%1$d bị chặn · %2$s</string>
+    <string name="assistant_pause">Tạm dừng bảo vệ</string>
+    <string name="assistant_resume">Tiếp tục bảo vệ</string>
+    <string name="assistant_shortcut_recent">Hoạt động gần đây</string>
+    <string name="assistant_shortcut_apps">Quản lý ứng dụng</string>
+    <string name="assistant_vpn_off">VPN đang tắt</string>
+    <string name="assistant_close">Đóng trợ lý</string>
 
     <!-- Navigation -->
     <string name="nav_home">Trang chủ</string>

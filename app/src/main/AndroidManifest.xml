@@ -40,6 +40,14 @@
             </intent-filter>
         </activity>
 
+        <!-- Notification "Assistant" action: a sheet over the current app. -->
+        <activity
+            android:name=".AssistantActivity"
+            android:excludeFromRecents="true"
+            android:exported="false"
+            android:launchMode="singleTop"
+            android:theme="@style/Theme.Assistant" />
+
         <service
             android:name=".vpn.AdGuardVpnService"
             android:permission="android.permission.BIND_VPN_SERVICE"

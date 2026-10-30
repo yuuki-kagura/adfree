@@ -612,6 +612,26 @@ class AdGuardViewModel(
     /** Update notification tapped: the refreshed lists live behind Protection. */
     fun openFilters() = onIntent(AdGuardIntent.SelectTab(AdGuardTab.PROTECTION))
 
+    /** Assistant deep link: the Activity tab filtered to one app. */
+    fun openLogForApp(packageName: String) {
+        _selectedAppFilter.value = packageName
+        _currentTab.value = AdGuardTab.ACTIVITY
+    }
+
+    /** Assistant shortcut: the Activity tab with no leftover app or domain filter. */
+    fun openRecentActivity() {
+        _selectedAppFilter.value = null
+        _searchQuery.value = ""
+        _currentTab.value = AdGuardTab.ACTIVITY
+    }
+
+    /** Assistant deep link: the Activity tab searched for one domain. */
+    fun openLogForDomain(domain: String) {
+        _selectedAppFilter.value = null
+        _searchQuery.value = domain
+        _currentTab.value = AdGuardTab.ACTIVITY
+    }
+
     private fun toggleProtection() {
         // The switch follows the VPN itself, not a remembered flag: the flag
         // defaulted to on while no tunnel existed, so the first tap after a
