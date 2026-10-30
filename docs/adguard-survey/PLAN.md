@@ -154,9 +154,13 @@ AdFree already has `FiltersScreen`/`FiltersExtensions` and
 - Filter detail: description, last update, rule count, homepage, source URL
   and feature bullets. `FilterCatalog` already stores URL and description;
   rule count comes from the downloaded list metadata.
-- Custom filters: `Thêm bộ lọc tuỳ chỉnh` plus the empty state.
+- Custom filters: `Thêm bộ lọc tuỳ chỉnh` plus the empty state; the add sheet
+  takes a URL/local path with `Tiếp theo` and a file `Duyệt` picker (`66`).
 - Language filters: the existing language group already matches AdGuard's
   list (ABPVN for Vietnamese); add version/update rows if the store has them.
+- Allowlist add sheet (`67`): single `Địa chỉ trang web` field and `Thêm`.
+- DNS add sheet (`69`) mirrors the custom-filter sheet with DNS-specific hint
+  text; user-rule sheet (`68`) takes a raw rule with a syntax help link.
 
 ### Per-app screen (`25-app-detail.png`)
 
@@ -173,12 +177,25 @@ Phase 3 instead of a second sheet.
 - General: verify AdFree already covers auto-start, theme, language, update
   schedule and notification settings; add missing rows only where they change
   engine behavior.
+- `Thông báo ứng dụng` is only a deep link to the OS channel settings in
+  AdGuard (`70`–`72`); AdFree can add the same shortcut
+  (`Settings.ACTION_APP_NOTIFICATION_SETTINGS`) instead of building an
+  options screen, and should register separate channels per feature
+  (protection, firewall, updates) like AdGuard's six OS channels.
 
 ### Allowlist, statistics, log
 
 - Allowlist: give the website allowlist a dedicated screen (search + add) or
   document that HTTPS website rules cover it. AdGuard keeps it separate from
   user rules.
+- Log detail (`73`–`79`): a request-detail screen with status, event type,
+  domain/URL/address, DNS answer, timings, connection id and sizes, plus the
+  applied rule. From an allowed request offer `Thêm quy tắc chặn`, from a
+  blocked one `Thêm quy tắc cho phép`; the sheet pre-fills the rule from the
+  request and scopes it to the app (block rules also get a priority option).
+  AdFree's Log tab already has the needed fields in `log_events` (action,
+  host, app, protocol, time) except sizes/connection id; store those if the
+  detail screen is built. Log overflow (`77`) adds export and clear.
 - Statistics (`52`–`59`): AdFree can build most of this from `log_events`:
   - data-type filter (all / mobile / Wi-Fi) and four time-range presets
     (24 h / 7 d / 30 d / all time);
@@ -205,9 +222,9 @@ matching feature:
 | Screen | Status | Use for |
 | --- | --- | --- |
 | Per-app statistics and `Xem tất cả ứng dụng` | captured (`55`–`59`) | implement from `log_events` as described above |
-| Log entry detail + "create rule from request" | not captured | user-rule creation from the log |
-| Settings → General → `Thông báo ứng dụng` | not captured | notification channel controls (Phase 1) |
-| `Thêm trang` (allowlist), `Quy tắc người dùng mới`, `Thêm bộ lọc DNS`, `Thêm bộ lọc tuỳ chỉnh` dialogs | not captured | add-flow parity |
+| Log entry detail + "create rule from request" | captured (`73`–`78`) | request detail, applied rule, block/allow rule creation |
+| Settings → General → `Thông báo ứng dụng` | captured (`70`–`72`) | OS deep link; six AdGuard channels |
+| `Thêm trang` (allowlist), `Quy tắc người dùng mới`, `Thêm bộ lọc DNS`, `Thêm bộ lọc tuỳ chỉnh` dialogs | captured (`66`–`69`) | add-flow parity |
 | Quick actions / firewall overflow menus | captured (`60`–`62`) | navigation shortcuts, per-app mute, firewall reset |
 | Social and annoyances filter categories | captured (`63`–`65`) | same row template; annoyances has 11 filters, social 2 |
 | YouTube how-to page, private browser link | out of scope | navigation only |

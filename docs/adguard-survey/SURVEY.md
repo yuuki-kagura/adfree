@@ -219,9 +219,14 @@ Internet`).
 
 - `33-allowlist.png`: `Danh sách cho phép của trang web` — master, search,
   `Thêm trang`.
+- Add-site sheet (`67`): `Thêm trang`, `Địa chỉ trang web` field with the
+  `example.com` hint and a `Thêm` button.
 - `31-user-rules.png`: `Bộ lọc của Người dùng` — master, search,
   `Quy tắc người dùng mới`; header explains it holds allowlist rules, rules
   created from the log, and manually added rules.
+- New-rule sheet (`68`): `Quy tắc người dùng mới`, `Cú pháp quy tắc` help
+  link, field pre-filled with the `example.com^` hint (keyboard opens
+  immediately) and a full-width `Thêm` button.
 
 ### DNS sub-screens
 
@@ -231,6 +236,11 @@ Internet`).
 - `29-dns-filters.png`: `Các bộ lọc` master, `Thêm bộ lọc DNS`,
   `Bộ lọc của Người dùng` (DNS syntax), `Bộ lọc tên miền đơn giản`
   v2.1.39.80 with update timestamp.
+- Add-DNS-filter sheet (`69`): `Thêm bộ lọc DNS`, `Lọc URL hoặc đường dẫn
+  tệp cục bộ` label, field hint `Nhập URL hoặc đường dẫn file nội bộ`,
+  `Tiếp theo` and `Duyệt` buttons.
+- Turning the `Các bộ lọc` master off greys both child filters (their
+  switches stay on and re-enable with the master).
 
 ### Filter catalog (`43`–`51`)
 
@@ -280,6 +290,9 @@ Reached from Settings → Đang lọc → `Bộ lọc`.
   `Bộ lọc thử nghiệm`, `Fanboy's Anti-thirdparty Fonts`.
 - Custom filters (`50`): `Thêm bộ lọc tuỳ chỉnh`, empty state
   `Chưa có bộ lọc nào`.
+- Add-custom-filter sheet (`66`): `Thêm bộ lọc tuỳ chỉnh`, tip
+  `Bạn có thể tìm thêm bộ lọc tại filterlists.com`, field `URL hoặc đường
+  dẫn`, `Tiếp theo` and `Duyệt` buttons.
 - Language filters (`51`): Japanese, `ABPVN List` (Vietnamese, enabled),
   Russian, German, Dutch, Spanish/Portuguese, Turkish, ... Each row shows
   version and update time.
@@ -291,6 +304,12 @@ Reached from Settings → Đang lọc → `Bộ lọc`.
 - General (`35`): auto-start with the system, theme, high contrast, app
   language, update app and filters, app notifications, technical data,
   automatic error reports, `Nâng cao`.
+- `Thông báo ứng dụng` (`70`–`72`) does not open an in-app screen; it
+  deep-links to the OS app-notification settings (MIUI split-pane). The OS
+  page shows the master, badge/pop-up/lock-screen/sound/ongoing toggles and
+  AdGuard's channels: `Ứng dụng xung đột`, `Cập nhật ứng dụng`, `Tường lửa`,
+  `Bản quyền`, `Đa phương tiện`, `Sự bảo vệ` — i.e. AdGuard relies on system
+  channel controls instead of building its own options screen.
 - Advanced (`36`): tasker automation, watchdog, log level, export log,
   low-level settings.
 - `Đang lọc` (`37`): `Bộ lọc`, `Tiện ích mở rộng`, `Mạng`.
@@ -325,7 +344,24 @@ Reached from Settings → Đang lọc → `Bộ lọc`.
 - Log: `Hoạt động gần đây` with the subtitle
   `Từ 10 nghìn yêu cầu được lưu trữ gần đây nhất`, search, rows showing app
   icon, host or IP:port, protocol scheme (`udp://`, `tcp://`, `https://`,
-  `iquic://`) and time.
+  `iquic://`) and time. Blocked rows are tinted red/brown and show `REFUSED`
+  for DNS answers; the overflow menu (`77`) holds `Tuỳ chỉnh`, `Export` and
+  `Xóa hoạt động gần đây`.
+- Request detail (`73`, `74`, `78`): `Chi tiết yêu cầu` with the app icon,
+  name and time header, then `Trạng thái` (`Đã xử lý` / `Bị chặn`),
+  `Sự kiện` (`HTTPS tunnel`, `Yêu cầu DNS (A)`), `Blocking reason` (English
+  string `Domain name matched a rule`), `Tên miền`, `URL yêu cầu`, `Địa chỉ`,
+  `Trả lời DNS` (`REFUSED`), `Thời gian bắt đầu`, `Thời gian ước lượng`,
+  `ID kết nối` and `Kích cỡ` (down/up bytes), each with a copy button.
+  `Quy tắc áp dụng` shows either `Không có quy tắc áp dụng` or
+  `Yêu cầu bị chặn bởi: <filter name>` plus the matching rule.
+- Create rule from the log: allowed requests offer `Thêm quy tắc chặn`
+  (`75`) and blocked requests offer `Thêm quy tắc cho phép` (`79`). Both open
+  a full screen with an editable rule pre-filled from the request
+  (`||api.onesignal.com^$app=com.eup.heyjapan`, `@@||config.ads.vungle.com^`),
+  radio options for the scope (`Những gì nên bị chặn` / `... được phép`),
+  and for block rules the extra `Tuỳ chọn`: `Cấp ưu tiên cao hơn cho quy tắc`
+  and `Chỉ áp dụng cho <package>` (checked). Confirm button `Thêm quy tắc`.
 
 ## 4. AdFree gaps observed
 
@@ -342,7 +378,9 @@ Reached from Settings → Đang lọc → `Bộ lọc`.
 | Per-app controls | routing, content filtering, HTTPS filtering, proxy, firewall, stats in one screen | Apps tab sheet with filtering/HTTPS/firewall toggles, no routing/proxy/stat row grouping |
 | Allowlist | dedicated `Danh sách cho phép của trang web` screen (search + add) | allowlist lives in custom rules and HTTPS website rules; no dedicated screen |
 | Statistics | dedicated tab: data-type filter, four time-range presets, all-apps list sortable by ads/trackers/requests, per-app stats with service/company breakdown | summary cards on Home |
-| Log | `Hoạt động gần đây`, newest 10k requests, search | Log tab with whole-log counts, cursor paging, filters (10k in-memory cap) |
+| Log | `Hoạt động gần đây`, newest 10k requests, search, red blocked rows, per-request detail with copyable fields, applied-rule display and block/allow rule creation from the request | Log tab with whole-log counts, cursor paging, filters (10k in-memory cap); no entry detail or rule creation |
+| Notification controls | `Thông báo ứng dụng` deep-links to the OS channel settings | no such shortcut; channels are app-defined |
+| Add dialogs | allowlist site, user rule (with syntax link), DNS filter URL/browse, custom filter URL/browse | none captured in AdFree; compare add flows when implementing |
 | Routing | local VPN / automatic proxy / manual proxy (root) | local VPN plus SOCKS5 proxy support |
 | Extensions | userstyles/userscripts manager | Extensions screen exists |
 | Filter catalog | eight categories with `X/Y` counts, inactive-module warning, per-filter version, rule count, source and features, custom and language filters | filter store with similar groups but no counts, no inactive warning, no per-filter rule count/source |
@@ -432,12 +470,20 @@ Existing AdFree code references for the follow-up:
 | `63-filter-social.png` | Social filter category |
 | `64-filter-annoyances.png` | Annoyances filter category |
 | `65-filter-annoyances-scrolled.png` | Annoyances list scrolled to the disabled filters |
+| `66-dialog-add-custom-filter.png` | Add custom filter sheet |
+| `67-dialog-add-allowlist-site.png` | Add website to allowlist sheet |
+| `68-dialog-new-user-rule.png` | New user rule sheet |
+| `69-dialog-add-dns-filter.png` | Add DNS filter sheet |
+| `70-app-notifications.png` | OS notification settings (deep-linked) |
+| `71-app-notification-channels.png` | Notification permission toggles and channels |
+| `72-app-notification-channels-bottom.png` | Channel list bottom (`Sự bảo vệ` last) |
+| `73-log-entry-detail.png` | Request detail for an allowed HTTPS request |
+| `74-log-entry-detail-bottom.png` | Request detail scrolled to `Thêm quy tắc chặn` |
+| `75-dialog-rule-from-log.png` | Block rule pre-filled from a log request |
+| `77-log-overflow.png` | Log overflow (customize, export, clear) |
+| `78-log-entry-blocked.png` | Request detail for a blocked DNS request |
+| `79-dialog-allow-rule-from-log.png` | Allow rule pre-filled from a blocked request |
 
 Still not captured (relevant only if we implement the matching screen):
 
-- Log entry detail and the "create rule from this request" flow.
-- Settings → General → `Thông báo ứng dụng` (per-channel notification
-  settings).
-- Add dialogs: allowlist `Thêm trang`, user rule `Quy tắc người dùng mới`,
-  DNS `Thêm bộ lọc DNS`, custom filter `Thêm bộ lọc tuỳ chỉnh`.
 - YouTube how-to page and the private-browser external link (navigation only).
