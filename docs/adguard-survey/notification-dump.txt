@@ -1,0 +1,57 @@
+    NotificationRecord(0x05fcdbed: pkg=com.adguard.android user=UserHandle{0} id=2305 tag=null importance=3 key=0|com.adguard.android|2305|null|10388 bbbc=0: Notification(channel=Protection shortcut=null contentView=null vibrate=null sound=null defaults=0 flags=ONGOING_EVENT|NO_CLEAR|FOREGROUND_SERVICE|SILENT color=0x00000000 actions=2 vis=PRIVATE focusType=null))
+      uid=10388 userId=0
+      opPkg=com.adguard.android
+      icon=Icon(typ=RESOURCE pkg=com.adguard.android id=0x7f0700eb)
+      flags=ONGOING_EVENT|NO_CLEAR|FOREGROUND_SERVICE|SILENT
+      originalFlags=ONGOING_EVENT|FOREGROUND_SERVICE|SILENT
+      pri=0
+      key=0|com.adguard.android|2305|null|10388
+      seen=false
+      groupKey=0|com.adguard.android|2305|null|10388
+      notification=
+            fullscreenIntent=null
+            contentIntent=PendingIntent{dfa0a22: PendingIntentRecord{1160ff1 com.adguard.android startActivity (allowlist: 180469d:+30s0ms/0/NOTIFICATION_SERVICE/NotificationManagerService)}}
+            deleteIntent=PendingIntent{ad8dcb3: PendingIntentRecord{46ade38 com.adguard.android broadcastIntent (allowlist: 180469d:+30s0ms/0/NOTIFICATION_SERVICE/NotificationManagerService)}}
+            number=0
+            groupAlertBehavior=1
+            when=1793331517811/1793331517811
+            tickerText=null
+            vis=0
+            contentView=null
+            bigContentView=null
+            headsUpContentView=null
+            color=0x00000000
+            timeout=PT72H
+            actions={
+                [0] "Vô hiệu" -> PendingIntent{706b270: PendingIntentRecord{df72b98 com.adguard.android startService (allowlist: 180469d:+30s0ms/0/NOTIFICATION_SERVICE/NotificationManagerService)}}
+                [1] "Trợ lý" -> PendingIntent{ad849e9: PendingIntentRecord{4a667d6 com.adguard.android startActivity (allowlist: 180469d:+30s0ms/0/NOTIFICATION_SERVICE/NotificationManagerService)}}
+              }
+            extras={
+                android.title=String (Đang chặn quảng cáo và công cụ theo dõi)
+                android.reduced.images=Boolean (true)
+                android.subText=null
+                android.template=String (android.app.Notification$BigTextStyle)
+                android.showChronometer=Boolean (false)
+                android.text=SpannableString (Bị chặn: 31
+Dữ liệu đã lưu: 3 MB)
+                android.progress=Integer (0)
+                androidx.core.app.extra.COMPAT_TEMPLATE=String (androidx.core.app.NotificationCompat$BigTextStyle)
+                android.progressMax=Integer (0)
+                android.appInfo=ApplicationInfo (ApplicationInfo{7d2a66e com.adguard.android})
+                android.showWhen=Boolean (true)
+                android.largeIcon=null
+                android.bigText=null
+                android.infoText=null
+                android.progressIndeterminate=Boolean (false)
+                android.remoteInputHistory=null
+            }
+      publicNotification=
+            None
+      stats=SingleNotificationStats{posttimeElapsedMs=1204549748, posttimeToFirstClickMs=-1, posttimeToDismissMs=-1, airtimeCount=0, airtimeMs=0, currentAirtimeStartElapsedMs=-1, airtimeExpandedMs=0, posttimeToFirstVisibleExpansionMs=-1, currentAirtimeExpandedStartElapsedMs=-1, requestedImportance=3, naturalImportance=3, isNoisy=false}
+      mContactAffinity=0.0
+      mRecentlyIntrusive=false
+      mPackagePriority=0
+      mPackageVisibility=-1000
+      mSystemImportance=UNSPECIFIED
+      mAsstImportance=UNSPECIFIED
+      mImportance=DEFAULT

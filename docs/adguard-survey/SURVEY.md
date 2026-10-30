@@ -1,0 +1,227 @@
+# AdGuard survey — notification and Protection tab
+
+Captured on 2026-10-30 from the reference client, to guide AdFree parity work.
+
+- Device: Redmi Pad SE 8.7 (`flare`), Android 16, MIUI V816, no root.
+- AdGuard nightly `4.14.68` (`com.adguard.android`, launcher `SplashActivity`).
+- AdGuard VPN `com.adguard.vpn` also installed; only one VPN slot exists, so
+  AdGuard and AdFree cannot protect at the same time.
+- Raw notification record: `notification-dump.txt`
+  (`adb shell dumpsys notification --noredact`).
+
+## 1. Persistent notification
+
+AdGuard posts one ongoing notification, channel `Protection`
+(importance DEFAULT), id 2305, flags
+`ONGOING_EVENT | NO_CLEAR | FOREGROUND_SERVICE | SILENT`, timeout 72 h,
+`BigTextStyle`, `contentIntent` opens the app.
+
+### While protecting
+
+- Title: `Đang chặn quảng cáo và công cụ theo dõi`
+- Text: two lines
+  - `Bị chặn: 31`
+  - `Dữ liệu đã lưu: 3 MB`
+- Two actions, both plain text buttons without icons, left aligned under the
+  text:
+  - `Vô hiệu` → `startService` (turns protection off)
+  - `Trợ lý` → `startActivity` (`AssistantActivity`, modal bottom sheet)
+- Collapsed form already shows title plus both stats lines.
+
+### After "Vô hiệu"
+
+The notification becomes a tap-to-enable reminder (no actions):
+
+- Title: `Bảo vệ bị vô hiệu hóa`
+- Text: `Quảng cáo và trình theo dõi không bị chặn. Nhấn để bật`
+- Tapping the content re-enables protection.
+
+The VPN slot is released when protection is disabled; AdFree was able to
+start again immediately afterwards.
+
+### Assistant (Trợ lý)
+
+Bottom sheet opened over whatever app is in front (it appeared over AdFree):
+
+- Title `Trợ lý AdGuard`
+- Subtitle `Nhanh chóng thay đổi cài đặt lọc cho ứng dụng hoặc trang web gần đây`
+- Tabs `Ứng dụng` / `Trang Web`
+- Apps tab: recently used apps, newest first, each with a relative timestamp
+  (`Được sử dụng 7 phút trước`).
+- Tapping an app opens a second sheet with shortcuts:
+  - `Hoạt động gần đây`
+  - `Thống kê ứng dụng`
+  - `Quản lý ứng dụng`
+  - `Cài đặt tường lửa` (per-app firewall rule screen)
+  - `Back`
+- Web tab: list of recent websites; empty state `Chưa có hoạt động nào`.
+
+Screenshots: `17-notification-shade.png`, `18-notification-expanded.png`,
+`19-assistant.png`, `20-assistant-app.png`, `21-assistant-web.png`,
+`23-disable-action.png`.
+
+## 2. Protection tab
+
+Landing list (screenshot `03-protection.png`), each row a module switch plus a
+detail screen:
+
+1. Chặn quảng cáo và popup
+2. Bảo vệ chống theo dõi
+3. Chặn làm phiền
+4. Bảo vệ hệ thống (DNS-level)
+5. Tường lửa
+6. Bảo vệ Duyệt web
+7. AdGuard VPN (navigation row)
+8. Cách chặn quảng cáo trên YouTube (navigation row)
+9. Trình duyệt riêng tư (external link)
+
+### Chặn quảng cáo và popup (`11-ad-blocking.png`)
+
+- Master switch
+- `Bảo vệ cơ bản` (basic protection)
+- `Chặn quảng cáo theo ngôn ngữ cụ thể`
+- `Danh sách cho phép của trang web` (shows count, here 0 sites)
+- `Bộ lọc của Người dùng` (manual rules plus rules created from recent activity)
+
+### Bảo vệ chống theo dõi (`12`–`14`)
+
+- Master switch
+- Privacy levels, radio list:
+  - `Tiêu chuẩn` — blocks trackers and analytics systems
+  - `High` — strips tracking parameters from URLs, limits third-party cookie
+    lifetime (warning about re-login)
+  - `Cực` — also limits first-party cookie lifetime, blocks browser APIs
+    (worse warning)
+  - `Tuỳ chọn` — manual settings
+- `General`: `Chặn trình theo dõi`, `Xóa tham số theo dõi khỏi URL`, ...
+- `Cách theo dõi`:
+  - `Xóa cookie của bên thứ ba` (current lifetime 180 min)
+  - `Xóa cookie của bên thứ nhất (không khuyến khích)` (4320 min)
+  - `Chặn tiêu đề ETag và If-None-Match`
+  - `Chặn tiêu đề ủy quyền của bên thứ ba`
+- `API Trình duyệt`: `Chặn WebRTC`, `Chặn API Push của trình duyệt`,
+  `Chặn API định vị của trình duyệt`
+- `Khác`: `Ẩn người giới thiệu khối bên thứ ba` (Referer default),
+  `Ẩn Đại lý người dùng` (user agent default), `Địa chỉ IP mặt nạ`,
+  `Xóa tiêu đề về dữ liệu của khách hàng` (on),
+  `Bảo vệ chống lại DPI`
+
+### Chặn làm phiền (`15-annoyances.png`)
+
+Master plus: social media buttons, cookie notices, popups, mobile app banners,
+widgets, other annoyances (each a switch).
+
+### Bảo vệ hệ thống / DNS (`16-dns-protection.png`)
+
+- Master switch
+- `Máy chủ` → DNS server picker (`Hiện tại: DNS tự động`)
+- `Các bộ lọc` → DNS filters and user rules at hostname level
+
+### Bảo vệ Duyệt web (`10-browsing-security.png`)
+
+- Master switch only, plus explanation:
+  - Checks each visited page against a live-updated malicious/phishing domain
+    database; warns on dangerous pages.
+  - "The app checks a hash prefix, not the URL, so it does not know which page
+    you visit" (privacy note).
+- `Tìm hiểu thêm` link.
+
+## 3. Firewall (the deepest difference)
+
+### Firewall screen (`04-firewall.png`)
+
+- Master switch `Tường lửa`
+- `Quy tắc tường lửa toàn cầu` — `Tất cả các kết nối được phép`, with five
+  network icons (Wi-Fi, Wi-Fi screen-off, mobile, mobile screen-off, roaming)
+- `Quy tắc tường lửa tùy chỉnh` — per-app rules that override global rules
+- `Hành động nhanh` — quick actions from recent Internet activity
+- `Thông báo` — notify when a selected app tries to use the Internet
+
+### Global rules (`05-firewall-global.png`)
+
+Master plus five switches:
+
+1. `Sử dụng Wi-Fi`
+2. `Sử dụng Wi-Fi khi tắt màn hình`
+3. `Sử dụng dữ liệu di động`
+4. `Sử dụng dữ liệu di động khi tắt màn hình`
+5. `Sử dụng dữ liệu chuyển vùng`
+
+### Custom rules (`06-firewall-custom.png`, `07`, `08`)
+
+- Master switch
+- `Ứng dụng có quy tắc tùy chỉnh` + `Thêm ứng dụng`
+- App picker is a bottom sheet with search; system apps are grouped with
+  expand arrows; each row opens the per-app rule screen.
+- Per-app screen: app icon/name, the same five network icons
+  (`Quyền tường lửa cho ứng dụng này dựa trên quy tắc toàn cầu và tùy chỉnh`),
+  `Đã áp dụng quy tắc tùy chỉnh`, and `Quy tắc tùy chỉnh có sẵn` with one `+`
+  row per network type (adding an override; global rules stay the default).
+
+### Quick actions (`09-firewall-quick-actions.png`)
+
+- Search field
+- Cards per recent app: age (`3 phút trước`), icon/name, network icon with
+  `Có quyền truy cập Wi-Fi`, `Được phép bởi quy tắc tường lửa toàn cầu`, and a
+  large orange `Chặn truy cập` button; per-card overflow menu.
+
+## 4. AdFree gaps observed
+
+| Area | AdGuard | AdFree today |
+| --- | --- | --- |
+| Notification | title + blocked/saved stats + `Vô hiệu` + `Trợ lý` | title + status text + `Tạm dừng`/`Tiếp tục` + `Dừng`, no stats, no assistant |
+| Disabled state | notification stays as tap-to-enable (`Bảo vệ bị vô hiệu hóa`) | `Dừng` removes the notification and the service |
+| Protection rows | 6 modules + 3 navigation rows | 6 modules (ads, tracking, DNS, HTTPS, firewall, eco); no browsing security, no annoyances row, no assistant |
+| Tracking options | privacy levels + cookie/header/API/DPI options | filter-list based tracking module |
+| Annoyances | own module | annoyances live inside the ad-blocking module gate |
+| Firewall | global 5-rule grid, per-app overrides, quick actions, notifications | master switch + per-app sheet (cellular/Wi-Fi/screen-off), no roaming, no quick actions, no notifications |
+| Browsing security | phishing/malware warning module | security filter group exists in the catalog (URLhaus, phishing, anti-malware) but no module/UI |
+
+Existing AdFree code references for the follow-up:
+
+- Notification: `app/src/main/kotlin/git/shin/adfree/vpn/AdGuardVpnService.kt`
+  (`buildStatusNotification` ~444–510, `createNotificationChannel` ~429–442,
+  `setPaused` ~513).
+- Notification strings: `app/src/main/res/values{,-vi}/strings.xml`
+  (`vpn_notification_*`).
+- Protection routes/landing/firewall detail:
+  `app/src/main/kotlin/git/shin/adfree/ui/screens/ProtectionScreen.kt`
+  (routes 91–104, landing 210–334, firewall detail 581–621).
+- Filter groups/gates and security lists:
+  `app/src/main/kotlin/git/shin/adfree/data/FilterCatalog.kt` (groups 27–65,
+  malware/phishing entries ~240–266).
+- Firewall model: `app/src/main/kotlin/git/shin/adfree/model/Models.kt`
+  (`AppFirewallRule` ~329–338, `isFirewallEnabled` ~465) and
+  `AdGuardRepository.updateAppFirewall` ~1630.
+- Engine module flags: `rust/src/engine.rs` (`ad_blocking` ~237,
+  `set_module_flags` ~848–858 and ~1021–1034).
+
+## 5. Screenshot index
+
+| File | Content |
+| --- | --- |
+| `01-launch.png` | Home "Kích hoạt bảo vệ..." plus AdGuard VPN upsell sheet |
+| `02-home-activating.png` | Home while activation was blocked by AdFree's VPN |
+| `02-home-active.png` | Home, protection active (module icon row, check toggle) |
+| `03-protection.png` | Protection landing list |
+| `04-firewall.png` | Firewall screen |
+| `05-firewall-global.png` | Global firewall rules |
+| `06-firewall-custom.png` | Custom firewall rules landing |
+| `07-firewall-add-app.png` | App picker sheet (grouped system apps) |
+| `08-firewall-app-rule.png` | Per-app firewall rule screen |
+| `09-firewall-quick-actions.png` | Quick actions |
+| `10-browsing-security.png` | Browsing security detail |
+| `11-ad-blocking.png` | Ad blocking detail |
+| `12`–`14-tracking-protection*.png` | Tracking protection detail, scrolled |
+| `15-annoyances.png` | Annoyances detail |
+| `16-dns-protection.png` | DNS protection detail |
+| `17-notification-shade.png` | Notification shade, collapsed |
+| `18-notification-expanded.png` | Notification expanded with both actions |
+| `19-assistant.png` | Assistant sheet, Apps tab |
+| `20-assistant-app.png` | Assistant shortcuts for one app |
+| `21-assistant-web.png` | Assistant Web tab (empty state) |
+| `23-disable-action.png` | Tap-to-enable state after "Vô hiệu" |
+
+Not captured: AdGuard's HTTPS filtering detail, filter-list screens, the
+YouTube how-to page, and the private browser link (all either already covered
+by AdFree equivalents or out of scope).
