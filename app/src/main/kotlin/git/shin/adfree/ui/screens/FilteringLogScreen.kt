@@ -36,6 +36,7 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FilterChipDefaults
@@ -71,6 +72,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import git.shin.adfree.R
+import git.shin.adfree.data.AdGuardRepository
 import git.shin.adfree.model.FilterStatus
 import git.shin.adfree.model.NetworkRequestLog
 import git.shin.adfree.model.ProtocolType
@@ -104,6 +106,9 @@ import java.util.Locale
 private fun appLabelFor(appNames: Map<String, String>, packageName: String?): String? =
     packageName?.let { pkg -> appNames[pkg] ?: pkg }
 
+/** One screen of filtered cards; past that the scroll trigger takes over. */
+private const val MIN_FILTERED_ROWS = 15
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun FilteringLogScreen(
@@ -123,6 +128,32 @@ fun FilteringLogScreen(
             .collect { viewModel.onIntent(AdGuardIntent.SetLogTailing(it)) }
     }
 
+    // Infinite scroll: when the last rows come into view, ask for one more
+    // page. Keyed on the loaded size so a page that still cannot fill the
+    // viewport asks again instead of stalling.
+    LaunchedEffect(listState, state.logs.size) {
+        snapshotFlow {
+            val info = listState.layoutInfo
+            val last = info.visibleItemsInfo.lastOrNull()?.index ?: -1
+            last >= info.totalItemsCount - 4
+        }
+            .distinctUntilChanged()
+            .collect { nearEnd -> if (nearEnd) viewModel.onIntent(AdGuardIntent.LoadMoreLogs) }
+    }
+
+    // Status and search filtering run over the mirrored window, so a query
+    // whose matches are rarer than a page would leave too few rows to scroll
+    // (or none at all). Pull older pages until the matches fill a few screens.
+    val filterActive = state.statusFilter != null ||
+        state.selectedAppFilter != null || state.searchQuery.isNotBlank()
+    LaunchedEffect(filterActive, state.filteredLogs.size, state.logs.size, state.logTotal) {
+        if (filterActive && state.filteredLogs.size < MIN_FILTERED_ROWS &&
+            state.logs.size < state.logTotal
+        ) {
+            viewModel.onIntent(AdGuardIntent.LoadMoreLogs)
+        }
+    }
+
     if (showClearConfirm) {
         AlertDialog(
             onDismissRequest = { showClearConfirm = false },
@@ -132,7 +163,7 @@ fun FilteringLogScreen(
             title = { Text(stringResource(R.string.log_clear_title)) },
             text = {
                 Text(
-                    stringResource(R.string.log_clear_body, state.logs.size),
+                    stringResource(R.string.log_clear_body, state.logTotal),
                     fontSize = 13.sp,
                 )
             },
@@ -234,7 +265,7 @@ fun FilteringLogScreen(
             FilterChip(
                 selected = state.statusFilter == null,
                 onClick = { viewModel.onIntent(AdGuardIntent.FilterStatusChanged(null)) },
-                label = { Text(stringResource(R.string.log_filter_all, state.logs.size), fontSize = 12.sp) },
+                label = { Text(stringResource(R.string.log_filter_all, state.logTotal), fontSize = 12.sp) },
                 colors = FilterChipDefaults.filterChipColors(
                     selectedContainerColor = AdGuardGreenPrimary,
                     selectedLabelColor = AdGuardOnAccent,
@@ -246,7 +277,7 @@ fun FilteringLogScreen(
             FilterChip(
                 selected = state.statusFilter == FilterStatus.BLOCKED,
                 onClick = { viewModel.onIntent(AdGuardIntent.FilterStatusChanged(FilterStatus.BLOCKED)) },
-                label = { Text(stringResource(R.string.log_filter_blocked, state.logs.count { it.status == FilterStatus.BLOCKED }), fontSize = 12.sp) },
+                label = { Text(stringResource(R.string.log_filter_blocked, state.logBlockedTotal), fontSize = 12.sp) },
                 colors = FilterChipDefaults.filterChipColors(
                     selectedContainerColor = AdGuardRedBlocked,
                     selectedLabelColor = Color.White,
@@ -258,7 +289,7 @@ fun FilteringLogScreen(
             FilterChip(
                 selected = state.statusFilter == FilterStatus.ALLOWED,
                 onClick = { viewModel.onIntent(AdGuardIntent.FilterStatusChanged(FilterStatus.ALLOWED)) },
-                label = { Text(stringResource(R.string.log_filter_allowed, state.logs.count { it.status == FilterStatus.ALLOWED }), fontSize = 12.sp) },
+                label = { Text(stringResource(R.string.log_filter_allowed, state.logAllowedTotal), fontSize = 12.sp) },
                 colors = FilterChipDefaults.filterChipColors(
                     selectedContainerColor = AdGuardGreenLight,
                     selectedLabelColor = AdGuardOnAccent,
@@ -345,14 +376,22 @@ fun FilteringLogScreen(
                         modifier = Modifier.size(48.dp)
                     )
                     Spacer(modifier = Modifier.height(12.dp))
+                    // "No traffic yet" is wrong when rows exist but the query
+                    // filters them all out; say which case this is.
                     Text(
-                        text = stringResource(R.string.log_empty_title),
+                        text = stringResource(
+                            if (filterActive) R.string.log_empty_filtered_title
+                            else R.string.log_empty_title
+                        ),
                         fontSize = 15.sp,
                         fontWeight = FontWeight.SemiBold,
                         color = AdGuardTextSecondary
                     )
                     Text(
-                        text = stringResource(R.string.log_empty_body),
+                        text = stringResource(
+                            if (filterActive) R.string.log_empty_filtered_body
+                            else R.string.log_empty_body
+                        ),
                         fontSize = 12.sp,
                         color = AdGuardTextMuted
                     )
@@ -372,34 +411,33 @@ fun FilteringLogScreen(
                     )
                 }
 
-                // The screen mirrors a window of the database log; this tail
-                // grows it one page at a time so the list stays cheap to build.
+                // The screen mirrors a window of the database log; the scroll
+                // trigger above grows it, so the tail is a quiet hint. Once
+                // the in-RAM cap is hit, say so instead of spinning forever.
                 if (state.logs.size < state.logTotal) {
-                    item(key = "log_load_more") {
+                    item(key = "log_infinite_footer") {
                         Column(
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .padding(vertical = 8.dp)
-                                .testTag("log_load_more_footer"),
+                                .padding(vertical = 10.dp)
+                                .testTag("log_infinite_footer"),
                             horizontalAlignment = Alignment.CenterHorizontally
                         ) {
-                            Text(
-                                text = stringResource(R.string.log_showing, state.logs.size, state.logTotal),
-                                fontSize = 11.sp,
-                                color = AdGuardTextMuted
-                            )
-                            Spacer(modifier = Modifier.height(6.dp))
-                            OutlinedButton(
-                                onClick = { viewModel.onIntent(AdGuardIntent.LoadMoreLogs) },
-                                modifier = Modifier.testTag("load_more_logs_button"),
-                                shape = RoundedCornerShape(10.dp),
-                                border = androidx.compose.foundation.BorderStroke(1.dp, AdGuardGreenPrimary)
-                            ) {
+                            if (state.logs.size >= AdGuardRepository.LOG_ROW_CAP) {
                                 Text(
-                                    text = stringResource(R.string.log_load_more),
+                                    text = stringResource(
+                                        R.string.log_window_capped,
+                                        state.logs.size,
+                                        state.logTotal,
+                                    ),
+                                    fontSize = 11.sp,
+                                    color = AdGuardTextMuted
+                                )
+                            } else {
+                                CircularProgressIndicator(
+                                    modifier = Modifier.size(18.dp),
                                     color = AdGuardGreenPrimary,
-                                    fontSize = 12.sp,
-                                    fontWeight = FontWeight.Bold
+                                    strokeWidth = 2.dp
                                 )
                             }
                         }

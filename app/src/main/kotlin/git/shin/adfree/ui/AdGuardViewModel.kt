@@ -123,11 +123,16 @@ class AdGuardViewModel(
                 repository.stats,
             ) { tab, settings, stats -> Triple(tab, settings, stats) },
             repository.logs,
-            repository.logTotal,
+            combine(
+                repository.logTotal,
+                repository.logBlockedTotal,
+                repository.logAllowedTotal,
+            ) { total, blocked, allowed -> Triple(total, blocked, allowed) },
             _searchQuery,
-        ) { head, logs, total, query ->
+        ) { head, logs, totals, query ->
             val (tab, settings, stats) = head
-            UiPartA(tab, settings, stats, logs, total, query)
+            val (total, blocked, allowed) = totals
+            UiPartA(tab, settings, stats, logs, total, blocked, allowed, query)
         },
         combine(
             _statusFilter,
@@ -236,6 +241,8 @@ class AdGuardViewModel(
             logs = a.logs,
             filteredLogs = logs,
             logTotal = a.logTotal,
+            logBlockedTotal = a.logBlockedTotal,
+            logAllowedTotal = a.logAllowedTotal,
             filterLists = b.filters,
             appFirewallRules = apps,
             // The log pane names a row's owner even when the Apps tab is
@@ -822,6 +829,8 @@ class AdGuardViewModel(
         val stats: ProtectionStats,
         val logs: List<NetworkRequestLog>,
         val logTotal: Long,
+        val logBlockedTotal: Long,
+        val logAllowedTotal: Long,
         val query: String,
     )
 

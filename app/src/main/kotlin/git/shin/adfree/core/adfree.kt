@@ -779,6 +779,10 @@ internal object IntegrityCheckingUniffiLib {
     ): Int
     external fun uniffi_adfree_core_checksum_func_core_log_page(
     ): Int
+    external fun uniffi_adfree_core_checksum_func_core_log_page_before(
+    ): Int
+    external fun uniffi_adfree_core_checksum_func_core_log_status_counts(
+    ): Int
     external fun uniffi_adfree_core_checksum_func_core_mitm_status(
     ): Int
     external fun uniffi_adfree_core_checksum_func_core_probe_dns(
@@ -956,6 +960,10 @@ internal object UniffiLib {
     external fun uniffi_adfree_core_fn_func_core_log_count(uniffi_out_err: UniffiRustCallStatus, 
     ): Long
     external fun uniffi_adfree_core_fn_func_core_log_page(`offset`: Int,`limit`: Int,uniffi_out_err: UniffiRustCallStatus, 
+    ): RustBuffer.ByValue
+    external fun uniffi_adfree_core_fn_func_core_log_page_before(`beforeId`: Long,`limit`: Int,uniffi_out_err: UniffiRustCallStatus, 
+    ): RustBuffer.ByValue
+    external fun uniffi_adfree_core_fn_func_core_log_status_counts(uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
     external fun uniffi_adfree_core_fn_func_core_mitm_status(uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
@@ -1240,6 +1248,12 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if ((lib.uniffi_adfree_core_checksum_func_core_log_page() and 0xFFFF) != 45424) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if ((lib.uniffi_adfree_core_checksum_func_core_log_page_before() and 0xFFFF) != 19714) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if ((lib.uniffi_adfree_core_checksum_func_core_log_status_counts() and 0xFFFF) != 4650) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if ((lib.uniffi_adfree_core_checksum_func_core_mitm_status() and 0xFFFF) != 1875) {
@@ -3586,6 +3600,48 @@ public object FfiConverterTypeLogEvent: FfiConverterRustBuffer<LogEvent> {
 
 
 /**
+ * Whole-log totals by decision, so the filter chips count the log and not
+ * the page currently loaded.
+ */
+data class LogStatusCounts (
+    var `blocked`: kotlin.Long
+    , 
+    var `allowed`: kotlin.Long
+    
+){
+    
+
+    
+
+    
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeLogStatusCounts: FfiConverterRustBuffer<LogStatusCounts> {
+    override fun read(buf: ByteBuffer): LogStatusCounts {
+        return LogStatusCounts(
+            FfiConverterLong.read(buf),
+            FfiConverterLong.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: LogStatusCounts) = (
+            FfiConverterLong.allocationSize(value.`blocked`) +
+            FfiConverterLong.allocationSize(value.`allowed`)
+    )
+
+    override fun write(value: LogStatusCounts, buf: ByteBuffer) {
+            FfiConverterLong.write(value.`blocked`, buf)
+            FfiConverterLong.write(value.`allowed`, buf)
+    }
+}
+
+
+
+/**
  * MITM state for the UI.
  */
 data class MitmStatus (
@@ -5890,6 +5946,35 @@ public object FfiConverterSequenceTypeUidApps: FfiConverterRustBuffer<List<UidAp
         
         FfiConverterUInt.lower(`offset`),
         FfiConverterUInt.lower(`limit`),_status)
+}
+    )
+    }
+    
+
+        /**
+         * One page older than `before_id`, newest first. Cursor paging: rows arriving
+         * at the top never shift the page the UI is about to append.
+         */ fun `coreLogPageBefore`(`beforeId`: kotlin.Long, `limit`: kotlin.UInt): List<LogEvent> {
+            return FfiConverterSequenceTypeLogEvent.lift(
+    uniffiRustCall() { _status ->
+    UniffiLib.uniffi_adfree_core_fn_func_core_log_page_before(
+    
+        
+        FfiConverterLong.lower(`beforeId`),
+        FfiConverterUInt.lower(`limit`),_status)
+}
+    )
+    }
+    
+
+        /**
+         * `(blocked, allowed)` over the whole persisted log.
+         */ fun `coreLogStatusCounts`(): LogStatusCounts {
+            return FfiConverterTypeLogStatusCounts.lift(
+    uniffiRustCall() { _status ->
+    UniffiLib.uniffi_adfree_core_fn_func_core_log_status_counts(
+    
+        _status)
 }
     )
     }

@@ -663,6 +663,16 @@ class CoreEngine {
     /** Total rows in the persisted log (0 while the store is not open). */
     fun logCount(): Long = runCatching { git.shin.adfree.core.coreLogCount() }.getOrDefault(0L)
 
+    /** One page of rows older than [beforeId], newest first (cursor paging). */
+    fun logPageBefore(beforeId: Long, limit: Int): List<LogEvent> =
+        runCatching { git.shin.adfree.core.coreLogPageBefore(beforeId, limit.toUInt()) }
+            .getOrDefault(emptyList())
+
+    /** Whole-log blocked/allowed totals, independent of the loaded window. */
+    fun logStatusCounts(): git.shin.adfree.core.LogStatusCounts =
+        runCatching { git.shin.adfree.core.coreLogStatusCounts() }
+            .getOrDefault(git.shin.adfree.core.LogStatusCounts(0L, 0L))
+
     /** Blocked counts and bytes saved per package since [sinceMs]. */
     fun appUsageSince(sinceMs: Long): List<git.shin.adfree.core.AppUsage> =
         runCatching { git.shin.adfree.core.coreAppUsageSince(sinceMs) }

@@ -132,12 +132,36 @@ impl Store {
         }
     }
 
+    /// One page older than `before_id`, newest first (cursor paging, so live
+    /// inserts at the top cannot shift the rows under the user's finger).
+    pub fn log_page_before(&self, before_id: i64, limit: u32) -> Vec<LogRow> {
+        let limit = limit.min(500);
+        match log::page_before(&self.db, before_id, limit) {
+            Ok(rows) => rows,
+            Err(e) => {
+                crate::logbuf::push(&format!("store: read log page before {before_id}: {e}"));
+                Vec::new()
+            }
+        }
+    }
+
     pub fn log_count(&self) -> u64 {
         match log::count(&self.db) {
             Ok(n) => n.max(0) as u64,
             Err(e) => {
                 crate::logbuf::push(&format!("store: count log: {e}"));
                 0
+            }
+        }
+    }
+
+    /// `(blocked, allowed)` across the whole log, not just the loaded window.
+    pub fn log_status_counts(&self) -> (u64, u64) {
+        match log::status_counts(&self.db) {
+            Ok((blocked, allowed)) => (blocked.max(0) as u64, allowed.max(0) as u64),
+            Err(e) => {
+                crate::logbuf::push(&format!("store: log status counts: {e}"));
+                (0, 0)
             }
         }
     }
@@ -385,6 +409,17 @@ fn migrate(conn: &Connection) -> Result<(), String> {
         )
         .map_err(|e| format!("migrate schema to v4: {e}"))?;
     }
+    if version < 5 {
+        // v5: the chips count the whole log by decision; grouping over the
+        // indexed action column keeps that an index scan.
+        conn.execute_batch(
+            "BEGIN;
+             CREATE INDEX IF NOT EXISTS log_events_action ON log_events(action);
+             PRAGMA user_version = 5;
+             COMMIT;",
+        )
+        .map_err(|e| format!("migrate schema to v5: {e}"))?;
+    }
     Ok(())
 }
 
@@ -581,6 +616,62 @@ mod tests {
             vec![("com.example.browser".to_string(), 2, 150)],
             "window and attribution both apply"
         );
+    }
+
+    #[test]
+    fn status_counts_cover_the_whole_log_not_a_page() {
+        let (store, _) = temp_store("status");
+        for i in 0..3u64 {
+            store.log_enqueue(&allow_event(&format!("ok{i}.test"), "", i as u32));
+        }
+        for i in 0..2u64 {
+            let mut ev = block_event(
+                ACTION_BLOCK,
+                &format!("ads{i}.test"),
+                "",
+                "||ads^",
+                "Ads",
+                0,
+                10,
+                1,
+                false,
+            );
+            ev.ts_ms = 3_000 + i;
+            store.log_enqueue(&ev);
+        }
+        store.log_flush();
+        // The page is capped well below the table, the counts are not.
+        assert_eq!(store.log_page(0, 2).len(), 2);
+        assert_eq!(store.log_status_counts(), (2, 3));
+    }
+
+    #[test]
+    fn cursor_paging_walks_older_rows_without_offset_drift() {
+        let (store, _) = temp_store("cursor");
+        for i in 0..5u64 {
+            store.log_enqueue(&allow_event(&format!("h{i}.test"), "", i as u32));
+        }
+        store.log_flush();
+
+        let newest = store.log_page(0, 2);
+        assert_eq!(newest[0].domain, "h4.test");
+        assert_eq!(newest[1].domain, "h3.test");
+        // The cursor is the last row the UI holds, not a row number.
+        let older = store.log_page_before(newest[1].id, 2);
+        assert_eq!(older[0].domain, "h2.test");
+        assert_eq!(older[1].domain, "h1.test");
+        let last = store.log_page_before(older[1].id, 2);
+        assert_eq!(last.len(), 1);
+        assert_eq!(last[0].domain, "h0.test");
+        assert!(store.log_page_before(last[0].id, 2).is_empty());
+
+        // A row arriving at the top moves nothing: the next cursor page still
+        // starts right below the rows already on screen.
+        store.log_enqueue(&allow_event("h5.test", "", 9));
+        store.log_flush();
+        let older = store.log_page_before(newest[1].id, 2);
+        assert_eq!(older[0].domain, "h2.test");
+        assert_eq!(store.log_page(0, 1)[0].domain, "h5.test");
     }
 
     #[test]

@@ -629,12 +629,49 @@ pub fn core_log_page(offset: u32, limit: u32) -> Vec<LogEvent> {
     })
 }
 
+/// One page older than `before_id`, newest first. Cursor paging: rows arriving
+/// at the top never shift the page the UI is about to append.
+#[uniffi::export]
+pub fn core_log_page_before(before_id: i64, limit: u32) -> Vec<LogEvent> {
+    guard(Vec::new(), || match crate::core().store() {
+        Some(store) => store
+            .log_page_before(before_id, limit)
+            .iter()
+            .map(LogEvent::from)
+            .collect(),
+        None => Vec::new(),
+    })
+}
+
 /// Total rows in the persisted request log (0 while the store is not open).
 #[uniffi::export]
 pub fn core_log_count() -> i64 {
     guard(0, || match crate::core().store() {
         Some(store) => store.log_count() as i64,
         None => 0,
+    })
+}
+
+/// Whole-log totals by decision, so the filter chips count the log and not
+/// the page currently loaded.
+#[derive(uniffi::Record, Clone, Debug, Default, PartialEq, Eq)]
+pub struct LogStatusCounts {
+    pub blocked: i64,
+    pub allowed: i64,
+}
+
+/// `(blocked, allowed)` over the whole persisted log.
+#[uniffi::export]
+pub fn core_log_status_counts() -> LogStatusCounts {
+    guard(LogStatusCounts::default(), || match crate::core().store() {
+        Some(store) => {
+            let (blocked, allowed) = store.log_status_counts();
+            LogStatusCounts {
+                blocked: blocked as i64,
+                allowed: allowed as i64,
+            }
+        }
+        None => LogStatusCounts::default(),
     })
 }
 

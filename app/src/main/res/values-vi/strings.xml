@@ -375,19 +375,18 @@
 
     <!-- Security lab -->
     <string name="lab_title">Kiểm tra an toàn</string>
-    <string name="lab_subtitle">Quét một tên miền để xem nó bị chặn vì sao</string>
-    <string name="lab_on_device_title">Quét ngay trên thiết bị, không gửi đi đâu</string>
-    <string name="lab_on_device_body">Chấm điểm từ cấu trúc tên miền và các quy tắc đang tải. Không cần mạng.</string>
+    <string name="lab_subtitle">Xem vì sao một tên miền bị chặn</string>
+    <string name="lab_on_device_title">Quét ngay trên thiết bị</string>
+    <string name="lab_on_device_body">Chấm điểm dựa trên cấu trúc tên miền và bộ lọc đang bật.</string>
     <string name="lab_input_label">Tên miền, URL hoặc thông số mạng</string>
     <string name="lab_input_hint">Ví dụ: tracking.app.com</string>
     <string name="lab_scan">Quét tên miền</string>
     <string name="lab_analyzing">Đang phân tích…</string>
     <string name="lab_how_title">Cách hoạt động</string>
-    <string name="lab_how_body">• Đối chiếu tên miền với bộ lọc quảng cáo và tracker đang tải, đánh giá theo cấu trúc tên miền.\n\n• Kiểm tra xem quy tắc khớp đến từ danh sách nào, và ước lượng dữ liệu tiết kiệm được nếu chặn.</string>
+    <string name="lab_how_body">• Đối chiếu tên miền với các bộ lọc đang bật.\n\n• Hiển thị quy tắc khớp, danh sách nguồn và dung lượng tiết kiệm ước tính.</string>
     <string name="lab_assessment">Đánh giá</string>
     <string name="lab_suggested_rules">Quy tắc gợi ý</string>
     <string name="lab_add">Thêm</string>
-    <string name="lab_offline">Phân tích chạy hoàn toàn trên thiết bị, không cần mạng.</string>
     <string name="lab_risk_unknown">Không xác định</string>
     <string name="lab_risk_safe">An toàn</string>
     <string name="lab_risk_low">Thấp</string>
@@ -651,7 +650,7 @@
 
     <!-- Activity log -->
     <string name="log_title">Nhật ký</string>
-    <string name="log_subtitle">Các truy vấn mạng gần đây của thiết bị</string>
+    <string name="log_subtitle">Truy vấn mạng gần đây</string>
     <string name="log_clear_action">Xóa nhật ký</string>
     <string name="log_clear_title">Xoá nhật ký?</string>
     <string name="log_clear_body">Toàn bộ %1$d bản ghi sẽ bị xoá và không thể hoàn tác.</string>
@@ -662,10 +661,11 @@
     <string name="log_filter_allowed">Cho phép (%1$d)</string>
     <string name="log_filter_by_app">Đang lọc theo ứng dụng: %1$s</string>
     <string name="log_filter_by_app_clear">Bỏ lọc theo ứng dụng</string>
-    <string name="log_empty_title">Chưa có lưu lượng mạng được ghi nhận</string>
-    <string name="log_empty_body">Bật công tắc bảo vệ ở tab Bảo vệ để bắt đầu lọc</string>
-    <string name="log_showing">Đang hiển thị %1$d/%2$d dòng</string>
-    <string name="log_load_more">Tải thêm</string>
+    <string name="log_empty_title">Chưa ghi nhận lưu lượng mạng</string>
+    <string name="log_empty_body">Bật công tắc bảo vệ để bắt đầu lọc</string>
+    <string name="log_empty_filtered_title">Không có dòng nào khớp</string>
+    <string name="log_empty_filtered_body">Đổi từ khoá hoặc bỏ bộ lọc</string>
+    <string name="log_window_capped">Chỉ tải %1$d dòng gần nhất trong tổng %2$d dòng</string>
     <string name="log_status_blocked">Đã chặn</string>
     <string name="log_status_allowed">Cho phép</string>
     <string name="log_status_whitelisted">Trắng</string>

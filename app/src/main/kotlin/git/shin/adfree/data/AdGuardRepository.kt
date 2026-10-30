@@ -128,9 +128,17 @@ class AdGuardRepository(
     private val _logTotal = MutableStateFlow(0L)
     val logTotal: StateFlow<Long> = _logTotal.asStateFlow()
 
-    /** How many of the newest rows the UI mirrors; grows one page per tap. */
+    /** Blocked/allowed over the whole log, not just the mirrored window. */
+    private val _logBlockedTotal = MutableStateFlow(0L)
+    val logBlockedTotal: StateFlow<Long> = _logBlockedTotal.asStateFlow()
+    private val _logAllowedTotal = MutableStateFlow(0L)
+    val logAllowedTotal: StateFlow<Long> = _logAllowedTotal.asStateFlow()
+
+    /** How many newest rows a tail reload mirrors; scroll paging appends past it. */
     private var logWindow = LOG_PAGE_SIZE
     private var lastLogCount = -1L
+    /** One cursor page is in flight; a scroll burst must not queue a dozen. */
+    private var logLoading = false
 
     /**
      * False while the log screen is scrolled into history: fresh rows would
@@ -329,6 +337,9 @@ class AdGuardRepository(
         if (total == lastLogCount) return false
         lastLogCount = total
         _logTotal.value = total
+        val counts = engine.logStatusCounts()
+        _logBlockedTotal.value = counts.blocked
+        _logAllowedTotal.value = counts.allowed
         if (!logTailing) return true
         reloadLogWindow()
         return true
@@ -353,11 +364,31 @@ class AdGuardRepository(
         _logs.value = rows
     }
 
-    /** Shows one more page of older rows under the ones already on screen. */
+    /**
+     * Appends one page of older rows under the ones already on screen. Paging
+     * is cursor-based, so a row arriving at the top cannot shift or duplicate
+     * the page the user is about to see.
+     */
     fun loadMoreLogs() {
-        if (_logs.value.size >= _logTotal.value || logWindow >= MAX_LOG_ROWS) return
-        logWindow += LOG_PAGE_SIZE
-        reloadLogWindow()
+        val loaded = _logs.value
+        if (logLoading || loaded.isEmpty()) return
+        if (loaded.size >= _logTotal.value || loaded.size >= LOG_ROW_CAP) return
+        logLoading = true
+        val cursor = loaded.last().id
+        scope.launch {
+            try {
+                val page = engine.logPageBefore(cursor, LOG_PAGE_SIZE)
+                    .map(NetworkRequestLog::from)
+                val current = _logs.value
+                // A tail reload (or a clear) may have replaced the window while
+                // the query ran; appending then would leave a hole.
+                if (page.isNotEmpty() && current.lastOrNull()?.id == cursor) {
+                    _logs.value = current + page
+                }
+            } finally {
+                logLoading = false
+            }
+        }
     }
 
     private fun StatsSnapshot.toUiStats(building: Boolean): ProtectionStats {
@@ -1419,6 +1450,8 @@ class AdGuardRepository(
         logWindow = LOG_PAGE_SIZE
         lastLogCount = 0
         _logTotal.value = 0
+        _logBlockedTotal.value = 0
+        _logAllowedTotal.value = 0
         _logs.value = emptyList()
         // DELETE may touch 200k rows; keep it off the caller's thread.
         scope.launch { engine.logClear() }
@@ -2161,12 +2194,12 @@ class AdGuardRepository(
         _loadingMessage.value = null
     }
 
-    private companion object {
-        /** Rows fetched per page; the log screen loads more on demand. */
+    companion object {
+        /** Rows fetched per page; infinite scroll asks for the next one. */
         private const val LOG_PAGE_SIZE = 200
 
         /** Ceiling for the in-RAM window so paging cannot grow without bound. */
-        private const val MAX_LOG_ROWS = 2_000
+        const val LOG_ROW_CAP = 10_000
         private const val MAX_APPS_SHOWN = 250
         private const val BUILTIN_CUSTOM = "builtin_custom"
 

@@ -375,19 +375,18 @@
 
     <!-- Security lab -->
     <string name="lab_title">Security check</string>
-    <string name="lab_subtitle">Scan a domain to see why it is blocked</string>
-    <string name="lab_on_device_title">Scanned on this device, never sent anywhere</string>
-    <string name="lab_on_device_body">Scores come from the domain structure and the loaded rules. No network needed.</string>
+    <string name="lab_subtitle">See why a domain is blocked</string>
+    <string name="lab_on_device_title">Scans on this device</string>
+    <string name="lab_on_device_body">Scores use the domain structure and the enabled filters.</string>
     <string name="lab_input_label">Domain, URL or network parameter</string>
     <string name="lab_input_hint">For example: tracking.app.com</string>
     <string name="lab_scan">Scan domain</string>
     <string name="lab_analyzing">Analyzing…</string>
     <string name="lab_how_title">How it works</string>
-    <string name="lab_how_body">• Checks the domain against the loaded ad and tracker lists, then scores it by domain structure.\n\n• Shows which list supplied the matching rule and estimates the data saved by blocking it.</string>
+    <string name="lab_how_body">• Matches the domain against the active lists.\n\n• Shows the matching rule, its list, and the estimated data saved.</string>
     <string name="lab_assessment">Assessment</string>
     <string name="lab_suggested_rules">Suggested rules</string>
     <string name="lab_add">Add</string>
-    <string name="lab_offline">Analysis runs entirely on this device; no network needed.</string>
     <string name="lab_risk_unknown">Unknown</string>
     <string name="lab_risk_safe">Safe</string>
     <string name="lab_risk_low">Low</string>
@@ -651,7 +650,7 @@
 
     <!-- Activity log -->
     <string name="log_title">Log</string>
-    <string name="log_subtitle">Recent network queries from this device</string>
+    <string name="log_subtitle">Recent network queries</string>
     <string name="log_clear_action">Clear log</string>
     <string name="log_clear_title">Clear the log?</string>
     <string name="log_clear_body">All %1$d entries will be deleted. This cannot be undone.</string>
@@ -663,9 +662,10 @@
     <string name="log_filter_by_app">Filtering by app: %1$s</string>
     <string name="log_filter_by_app_clear">Clear app filter</string>
     <string name="log_empty_title">No network traffic recorded yet</string>
-    <string name="log_empty_body">Turn protection on in the Protection tab to start filtering</string>
-    <string name="log_showing">Showing %1$d/%2$d rows</string>
-    <string name="log_load_more">Load more</string>
+    <string name="log_empty_body">Turn protection on to start filtering</string>
+    <string name="log_empty_filtered_title">No matching entries</string>
+    <string name="log_empty_filtered_body">Change the search or clear the filters</string>
+    <string name="log_window_capped">Showing the newest %1$d of %2$d rows</string>
     <string name="log_status_blocked">Blocked</string>
     <string name="log_status_allowed">Allowed</string>
     <string name="log_status_whitelisted">Allowlisted</string>

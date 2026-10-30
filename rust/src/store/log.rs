@@ -240,6 +240,53 @@ pub(super) fn count(db: &Db) -> rusqlite::Result<i64> {
         .query_row("SELECT COUNT(*) FROM log_events", [], |r| r.get(0))
 }
 
+/// Rows older than `before_id`, newest first. The UI walks the log with this
+/// cursor instead of OFFSET: rows arriving at the top never shift a page.
+pub(super) fn page_before(db: &Db, before_id: i64, limit: u32) -> rusqlite::Result<Vec<LogRow>> {
+    let conn = db.lock();
+    let sql = format!(
+        "SELECT {COLUMNS} FROM log_events WHERE id < ?1 ORDER BY id DESC LIMIT ?2"
+    );
+    let mut stmt = conn.prepare_cached(&sql)?;
+    let rows = stmt.query_map([before_id, limit as i64], |r| {
+        Ok(LogRow {
+            id: r.get(0)?,
+            ts_ms: r.get(1)?,
+            action: r.get(2)?,
+            category: r.get(3)?,
+            domain: r.get(4)?,
+            ip: r.get(5)?,
+            rule: r.get(6)?,
+            list_name: r.get(7)?,
+            latency_ns: r.get(8)?,
+            bytes_saved: r.get(9)?,
+            ipv6: r.get(10)?,
+            app: r.get(11)?,
+        })
+    })?;
+    rows.collect()
+}
+
+/// `(blocked, allowed)` over the whole table, independent of what the UI has
+/// paged in. Anything but an allow decision counts as blocked. Grouping by the
+/// indexed `action` keeps this an index scan, not a table scan.
+pub(super) fn status_counts(db: &Db) -> rusqlite::Result<(i64, i64)> {
+    let conn = db.lock();
+    let mut stmt = conn.prepare_cached("SELECT action, COUNT(*) FROM log_events GROUP BY action")?;
+    let mut rows = stmt.query([])?;
+    let (mut blocked, mut allowed) = (0i64, 0i64);
+    while let Some(r) = rows.next()? {
+        let action: i64 = r.get(0)?;
+        let n: i64 = r.get(1)?;
+        if action == 0 {
+            allowed += n;
+        } else {
+            blocked += n;
+        }
+    }
+    Ok((blocked, allowed))
+}
+
 /// Blocked rows grouped by owning package since `since_ms`, plus the bytes they
 /// claim to have saved. Anything but an allow decision counts as blocked.
 pub(super) fn usage_by_app(db: &Db, since_ms: i64) -> rusqlite::Result<Vec<(String, i64, i64)>> {

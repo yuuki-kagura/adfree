@@ -27,6 +27,9 @@ data class AdGuardUiState(
     val logs: List<NetworkRequestLog> = emptyList(),
     val filteredLogs: List<NetworkRequestLog> = emptyList(),
     val logTotal: Long = 0L,
+    /** Whole-log totals per decision; the chips count the log, not the window. */
+    val logBlockedTotal: Long = 0L,
+    val logAllowedTotal: Long = 0L,
     val filterLists: List<FilterList> = emptyList(),
     val appFirewallRules: List<AppFirewallRule> = emptyList(),
     /** package -> display name for every installed app, regardless of the Apps tab filter. */

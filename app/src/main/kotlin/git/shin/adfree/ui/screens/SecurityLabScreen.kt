@@ -382,10 +382,11 @@ private fun threatSummary(result: ThreatAnalysisResult): String {
                 else R.string.lab_summary_not_blocked,
             ),
         )
-        result.matchedRule?.let { add(stringResource(R.string.lab_summary_rule, it)) }
-        result.matchedList?.let { add(stringResource(R.string.lab_summary_list, it)) }
+        // Details read as a short list, not one long semicolon sentence.
+        result.matchedRule?.let { add("• " + stringResource(R.string.lab_summary_rule, it)) }
+        result.matchedList?.let { add("• " + stringResource(R.string.lab_summary_list, it)) }
         add(
-            stringResource(
+            "• " + stringResource(
                 when (result.riskLevel) {
                     ThreatRiskLevel.HIGH -> R.string.lab_trait_high
                     ThreatRiskLevel.MEDIUM -> R.string.lab_trait_medium
@@ -395,7 +396,7 @@ private fun threatSummary(result: ThreatAnalysisResult): String {
             ),
         )
     }
-    return parts.joinToString(separator = "; ")
+    return parts.joinToString(separator = "\n")
 }
 
 @Composable
@@ -531,12 +532,6 @@ fun ThreatResultCard(
                 }
             }
 
-            // Suggested rules are produced offline, so the data-source block is gone; just state that analysis runs on device.
-            Text(
-                text = stringResource(R.string.lab_offline),
-                fontSize = 11.sp,
-                color = AdGuardTextMuted,
-            )
         }
     }
 }
