@@ -173,6 +173,20 @@ Phase 3 instead of a second sheet.
 - Allowlist: give the website allowlist a dedicated screen (search + add) or
   document that HTTPS website rules cover it. AdGuard keeps it separate from
   user rules.
+- Statistics (`52`–`59`): AdFree can build most of this from `log_events`:
+  - data-type filter (all / mobile / Wi-Fi) and four time-range presets
+    (24 h / 7 d / 30 d / all time);
+  - all-apps list with ads/trackers/total counts, search and sort by
+    ads/trackers/requests;
+  - per-app screen with request/data counts, `Hoạt động gần đây` and an
+    `App management` shortcut.
+  The `Các dịch vụ` company breakdown has no direct AdFree equivalent: it
+  needs a domain→company mapping that AdFree does not ship. Either skip that
+  section or derive a minimal "top domains contacted" list until a company
+  database is added (out of scope for now).
+- `log_events` stores per-app attribution, so these aggregates are a new
+  `GROUP BY app` query; add the matching index if the planner does not reuse
+  `log_events_action`.
 - Statistics/log wording: AdGuard advertises "newest 10k requests stored";
   AdFree already shows `log_window_capped` at 10k in RAM, but the SQLite store
   keeps 200k rows for 7 days. Keep the UI honest about the difference.
@@ -184,8 +198,7 @@ matching feature:
 
 | Screen | Status | Use for |
 | --- | --- | --- |
-| Per-app statistics behind `0/0/0` (`25`) | not captured | decide whether AdFree shows per-app totals from `log_events` |
-| Statistics → `Xem tất cả ứng dụng` and time-range picker | not captured | statistics parity (Phase 5) |
+| Per-app statistics and `Xem tất cả ứng dụng` | captured (`55`–`59`) | implement from `log_events` as described above |
 | Log entry detail + "create rule from request" | not captured | user-rule creation from the log |
 | Settings → General → `Thông báo ứng dụng` | not captured | notification channel controls (Phase 1) |
 | `Thêm trang` (allowlist), `Quy tắc người dùng mới`, `Thêm bộ lọc DNS`, `Thêm bộ lọc tuỳ chỉnh` dialogs | not captured | add-flow parity |

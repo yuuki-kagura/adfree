@@ -271,11 +271,28 @@ Reached from Settings → Đang lọc → `Bộ lọc`.
 - Routing mode (`40`): `VPN cục bộ`, `Proxy tự động` (root),
   `Proxy thủ công` (root, port 8080).
 
-### Statistics and log (`41`, `42`)
+### Statistics and log (`41`, `42`, `52`–`59`)
 
-- Statistics: requests split into ads / trackers / total with a share bar,
-  data saved / uploaded / downloaded, per-app top list, `Xem tất cả ứng
+- Statistics landing: requests split into ads / trackers / total with a share
+  bar, data saved / uploaded / downloaded, per-app top list, `Xem tất cả ứng
   dụng`.
+- Data-type filter (`52`), opened from `Tất cả dữ liệu` next to `Yêu cầu`:
+  `Tất cả dữ liệu`, `Chỉ dữ liệu di động`, `Chỉ Wi-Fi`.
+- Time range (`53`), opened from the calendar icon in the top bar:
+  `24 tiếng`, `7 ngày`, `30 ngày`, `Mọi lúc` (currently selected). Each row
+  shows a calendar glyph; tapping the glyph does not open a custom date
+  picker — the four presets are the whole control.
+- All apps (`56`, `58`): search, sort menu (`57`: sort by `Quảng cáo`,
+  `Trình theo dõi` or `Yêu cầu`), same `Mọi lúc` time range, rows with app
+  icon, name and `ads / trackers / total` (e.g. `2,2K / 0 / 2,6K`). Some rows
+  show tracker counts (e.g. Google Play Services `2 / 87 / 517`).
+- Per-app statistics (`55`, Chrome variant): header with the app icon, name
+  and its own `Mọi lúc` range, request counts, data counts, `Hoạt động gần
+  đây` row, then `Các dịch vụ` — companies the app talked to (Facebook
+  Audience Network `0/0/5`, Amazon Advertising `3/0/3`, Google `0/0/3`),
+  `Xem tất cả các công ty` (`59`: Media.net, AdGuard, adguardcdn.com,
+  Bugsnag, CloudFlare, Google, googleanalytics.com, Google APIs, ...), and an
+  `App management` section with the five firewall network icons.
 - Log: `Hoạt động gần đây` with the subtitle
   `Từ 10 nghìn yêu cầu được lưu trữ gần đây nhất`, search, rows showing app
   icon, host or IP:port, protocol scheme (`udp://`, `tcp://`, `https://`,
@@ -295,7 +312,7 @@ Reached from Settings → Đang lọc → `Bộ lọc`.
 | HTTPS filtering | Settings → Đang lọc → Mạng | own Protection row |
 | Per-app controls | routing, content filtering, HTTPS filtering, proxy, firewall, stats in one screen | Apps tab sheet with filtering/HTTPS/firewall toggles, no routing/proxy/stat row grouping |
 | Allowlist | dedicated `Danh sách cho phép của trang web` screen (search + add) | allowlist lives in custom rules and HTTPS website rules; no dedicated screen |
-| Statistics | dedicated tab with request/data breakdown and top apps | summary cards on Home |
+| Statistics | dedicated tab: data-type filter, four time-range presets, all-apps list sortable by ads/trackers/requests, per-app stats with service/company breakdown | summary cards on Home |
 | Log | `Hoạt động gần đây`, newest 10k requests, search | Log tab with whole-log counts, cursor paging, filters (10k in-memory cap) |
 | Routing | local VPN / automatic proxy / manual proxy (root) | local VPN plus SOCKS5 proxy support |
 | Extensions | userstyles/userscripts manager | Extensions screen exists |
@@ -373,11 +390,16 @@ Existing AdFree code references for the follow-up:
 | `49-protection-filters.png` | Protection (malware/phishing) filter category |
 | `50-custom-filters.png` | Custom filters empty state |
 | `51-filter-languages.png` | Language filters (ABPVN enabled) |
+| `52-stats-data-type.png` | Statistics data-type filter (all / mobile / Wi-Fi) |
+| `53-stats-time-range.png` | Statistics time range (24 h / 7 d / 30 d / all time) |
+| `55-per-app-stats.png` | Per-app statistics (Parallel Space) |
+| `56-stats-all-apps.png` | All apps list with per-app counts |
+| `57-stats-sort.png` | All apps sort menu |
+| `58-stats-all-apps-scrolled.png` | All apps list, scrolled to tracker-heavy apps |
+| `59-stats-all-companies.png` | All services/companies list |
 
 Still not captured (relevant only if we implement the matching screen):
 
-- Per-app statistics detail behind the `0/0/0` row in `25-app-detail.png`.
-- Statistics `Xem tất cả ứng dụng` list and the time-range picker.
 - Log entry detail and the "create rule from this request" flow.
 - Settings → General → `Thông báo ứng dụng` (per-channel notification
   settings).
