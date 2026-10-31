@@ -234,8 +234,12 @@ pub struct Config {
     pub block_quic: bool,
     pub block_doh: bool,
     pub block_dot: bool,
-    /// Ad blocking module (ad + annoyance categories).
+    /// Ad blocking module (ad category).
     pub ad_blocking: bool,
+    /// Annoyances module (cookie notices, popups, widgets).
+    pub annoyances: bool,
+    /// Browsing security module (malware and phishing lists).
+    pub browsing_security: bool,
     /// Tracking protection (privacy, analytics and social categories).
     pub tracking_protection: bool,
     /// DNS protection; off means host lookups are forwarded unfiltered.
@@ -283,6 +287,8 @@ impl Default for Config {
             block_doh: false,
             block_dot: true,
             ad_blocking: true,
+            annoyances: true,
+            browsing_security: true,
             tracking_protection: true,
             dns_protection: true,
             smart_filtering: true,
@@ -840,24 +846,29 @@ impl Core {
     // ---------------------------------------------------------------- config
 
     pub fn set_config(&self, cfg: Config) {
-        // Cosmetics and scriptlets have no per-rule category, so an ads or
-        // tracking switch changes which lists belong in the build as well as
-        // the live category gate below.
+        // Cosmetics and scriptlets have no per-rule category, so an ads,
+        // annoyances, tracking or browsing-security switch changes which lists
+        // belong in the build as well as the live category gate below.
         let lists_changed = {
             let old = self.cfg.read().unwrap();
-            old.ad_blocking != cfg.ad_blocking || old.tracking_protection != cfg.tracking_protection
+            old.ad_blocking != cfg.ad_blocking
+                || old.annoyances != cfg.annoyances
+                || old.browsing_security != cfg.browsing_security
+                || old.tracking_protection != cfg.tracking_protection
         };
         // The filter engine owns the hot-path copy so a module switch takes
         // effect on the next packet without recompiling the lists. A transient
         // pause wins over the persisted switches: `set_paused` restores them
         // from this config when the user resumes.
         if self.is_paused() {
-            self.filter.set_module_flags(false, false, false);
+            self.filter.set_module_flags(false, false, false, false, false);
         } else {
             self.filter.set_module_flags(
                 cfg.ad_blocking,
                 cfg.tracking_protection,
                 cfg.dns_protection,
+                cfg.annoyances,
+                cfg.browsing_security,
             );
         }
         self.smart.lock().unwrap().set_enabled(cfg.smart_filtering);
@@ -1023,15 +1034,22 @@ impl Core {
     /// next lookup is answered unfiltered instead of paying for a rebuild.
     pub fn set_paused(&self, paused: bool) {
         self.paused.store(paused, Ordering::Relaxed);
-        let (ads, tracking, dns) = {
+        let (ads, tracking, dns, annoyances, security) = {
             let cfg = self.cfg.read().unwrap();
             if paused {
-                (false, false, false)
+                (false, false, false, false, false)
             } else {
-                (cfg.ad_blocking, cfg.tracking_protection, cfg.dns_protection)
+                (
+                    cfg.ad_blocking,
+                    cfg.tracking_protection,
+                    cfg.dns_protection,
+                    cfg.annoyances,
+                    cfg.browsing_security,
+                )
             }
         };
-        self.filter.set_module_flags(ads, tracking, dns);
+        self.filter
+            .set_module_flags(ads, tracking, dns, annoyances, security);
         if paused {
             // A paused tunnel forwards QUIC verbatim, so the terminated flows
             // are closed: keeping them would leave the client on a filtered
@@ -5311,7 +5329,13 @@ mod tests {
         core.handle_packet(&udp_packet(50001, [142, 250, 185, 194], 443));
         assert_eq!(core.stats().quic_dropped.load(Ordering::Relaxed), 1);
         let cfg = core.config();
-        assert!(cfg.ad_blocking && cfg.tracking_protection && cfg.dns_protection);
+        assert!(
+            cfg.ad_blocking
+                && cfg.annoyances
+                && cfg.browsing_security
+                && cfg.tracking_protection
+                && cfg.dns_protection
+        );
 
         core.set_paused(false);
         assert!(!core.is_paused());

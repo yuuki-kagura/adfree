@@ -468,6 +468,12 @@ class AdGuardRepository(
     fun toggleAdBlocking(enabled: Boolean) =
         updateSettings { it.copy(isAdBlockingEnabled = enabled) }
 
+    fun toggleAnnoyances(enabled: Boolean) =
+        updateSettings { it.copy(isAnnoyancesEnabled = enabled) }
+
+    fun toggleBrowsingSecurity(enabled: Boolean) =
+        updateSettings { it.copy(isBrowsingSecurityEnabled = enabled) }
+
     fun toggleTrackingProtection(enabled: Boolean) =
         updateSettings { it.copy(isTrackingProtectionEnabled = enabled) }
 

@@ -107,6 +107,8 @@ impl Default for ProxyState {
 pub struct ProtectionState {
     pub is_protection_active: bool,
     pub is_ad_blocking_enabled: bool,
+    pub is_annoyances_enabled: bool,
+    pub is_browsing_security_enabled: bool,
     pub is_tracking_protection_enabled: bool,
     pub is_dns_protection_enabled: bool,
     pub is_smart_filtering_enabled: bool,
@@ -152,6 +154,8 @@ impl Default for ProtectionState {
         ProtectionState {
             is_protection_active: false,
             is_ad_blocking_enabled: true,
+            is_annoyances_enabled: true,
+            is_browsing_security_enabled: true,
             is_tracking_protection_enabled: true,
             is_dns_protection_enabled: true,
             is_smart_filtering_enabled: true,

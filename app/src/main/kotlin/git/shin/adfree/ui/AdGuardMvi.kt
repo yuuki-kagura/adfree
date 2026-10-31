@@ -66,7 +66,7 @@ data class AdGuardUiState(
 
 /** A Protection-tab detail page another screen can navigate to directly. */
 enum class ProtectionSection {
-    AD_BLOCKING, TRACKING, DNS, HTTPS, FIREWALL, ECO, FILTERS, EXTENSIONS
+    AD_BLOCKING, ANNOYANCES, TRACKING, DNS, HTTPS, FIREWALL, BROWSING_SECURITY, ECO, FILTERS, EXTENSIONS
 }
 
 /** MVI intents. */
@@ -77,6 +77,8 @@ sealed interface AdGuardIntent {
     data class OpenProtectionSection(val section: ProtectionSection) : AdGuardIntent
     data object ToggleProtection : AdGuardIntent
     data object ToggleAdBlocking : AdGuardIntent
+    data object ToggleAnnoyances : AdGuardIntent
+    data object ToggleBrowsingSecurity : AdGuardIntent
     data object ToggleTracking : AdGuardIntent
     data object ToggleDns : AdGuardIntent
     data object ToggleHttps : AdGuardIntent

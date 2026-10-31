@@ -36,6 +36,8 @@ import androidx.compose.material.icons.filled.Dns
 import androidx.compose.material.icons.filled.Extension
 import androidx.compose.material.icons.filled.Layers
 import androidx.compose.material.icons.filled.Lock
+import androidx.compose.material.icons.filled.NotificationsOff
+import androidx.compose.material.icons.filled.Security
 import androidx.compose.material.icons.filled.Shield
 import androidx.compose.material.icons.filled.TrackChanges
 import androidx.compose.material.icons.filled.VisibilityOff
@@ -89,15 +91,18 @@ import git.shin.adfree.ui.theme.AdGuardOnAccent
  * else is one module's options, the way the reference client nests them.
  */
 private enum class ProtectionRoute {
-    LIST, AD_BLOCKING, TRACKING, DNS, HTTPS, FIREWALL, ECO, FILTERS, EXTENSIONS
+    LIST, AD_BLOCKING, ANNOYANCES, TRACKING, DNS, HTTPS, FIREWALL, BROWSING_SECURITY, ECO, FILTERS,
+    EXTENSIONS
 }
 
 private fun ProtectionSection.route(): ProtectionRoute = when (this) {
     ProtectionSection.AD_BLOCKING -> ProtectionRoute.AD_BLOCKING
+    ProtectionSection.ANNOYANCES -> ProtectionRoute.ANNOYANCES
     ProtectionSection.TRACKING -> ProtectionRoute.TRACKING
     ProtectionSection.DNS -> ProtectionRoute.DNS
     ProtectionSection.HTTPS -> ProtectionRoute.HTTPS
     ProtectionSection.FIREWALL -> ProtectionRoute.FIREWALL
+    ProtectionSection.BROWSING_SECURITY -> ProtectionRoute.BROWSING_SECURITY
     ProtectionSection.ECO -> ProtectionRoute.ECO
     ProtectionSection.FILTERS -> ProtectionRoute.FILTERS
     ProtectionSection.EXTENSIONS -> ProtectionRoute.EXTENSIONS
@@ -166,6 +171,12 @@ fun ProtectionScreen(
                 onExtensions = { navigate(ProtectionRoute.EXTENSIONS) },
                 modifier = modifier,
             )
+            ProtectionRoute.ANNOYANCES -> AnnoyancesDetail(
+                viewModel = viewModel,
+                onBack = ::back,
+                onFilters = { navigate(ProtectionRoute.FILTERS) },
+                modifier = modifier,
+            )
             ProtectionRoute.TRACKING -> TrackingDetail(
                 viewModel = viewModel,
                 onBack = ::back,
@@ -183,6 +194,11 @@ fun ProtectionScreen(
                 modifier = modifier,
             )
             ProtectionRoute.FIREWALL -> FirewallDetail(
+                viewModel = viewModel,
+                onBack = ::back,
+                modifier = modifier,
+            )
+            ProtectionRoute.BROWSING_SECURITY -> BrowsingSecurityDetail(
                 viewModel = viewModel,
                 onBack = ::back,
                 modifier = modifier,
@@ -275,6 +291,16 @@ private fun ProtectionLanding(
             )
 
             ModuleRow(
+                icon = Icons.Default.NotificationsOff,
+                accent = AdGuardOrangeWarning,
+                title = stringResource(R.string.home_module_annoyances_title),
+                subtitle = stringResource(R.string.home_module_annoyances_subtitle),
+                checked = settings.isAnnoyancesEnabled,
+                onCheckedChange = { viewModel.onIntent(AdGuardIntent.ToggleAnnoyances) },
+                onClick = { onOpen(ProtectionRoute.ANNOYANCES) },
+            )
+
+            ModuleRow(
                 icon = Icons.Default.TrackChanges,
                 accent = AdGuardOrangeWarning,
                 title = stringResource(R.string.home_module_tracking_title),
@@ -316,6 +342,16 @@ private fun ProtectionLanding(
                 checked = settings.isFirewallEnabled,
                 onCheckedChange = { viewModel.onIntent(AdGuardIntent.ToggleFirewall) },
                 onClick = { onOpen(ProtectionRoute.FIREWALL) },
+            )
+
+            ModuleRow(
+                icon = Icons.Default.Security,
+                accent = AdGuardBlueDns,
+                title = stringResource(R.string.home_module_browsing_security_title),
+                subtitle = stringResource(R.string.home_module_browsing_security_subtitle),
+                checked = settings.isBrowsingSecurityEnabled,
+                onCheckedChange = { viewModel.onIntent(AdGuardIntent.ToggleBrowsingSecurity) },
+                onClick = { onOpen(ProtectionRoute.BROWSING_SECURITY) },
             )
 
             ModuleRow(
@@ -553,6 +589,98 @@ private fun TrackingDetail(
 }
 
 @Composable
+private fun AnnoyancesDetail(
+    viewModel: AdGuardViewModel,
+    onBack: () -> Unit,
+    onFilters: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val state by viewModel.uiState.collectAsState()
+    val settings = state.settings
+    val lists = state.filterLists.filter { it.groupId == "annoyances" && !it.isCustom }
+    val active = lists.count { it.isEnabled }
+
+    DetailScaffold(onBack = onBack, modifier = modifier) {
+        ModuleDetailHero(
+            icon = Icons.Default.NotificationsOff,
+            tint = AdGuardOrangeWarning,
+            title = stringResource(R.string.home_module_annoyances_title),
+            subtitle = stringResource(R.string.home_module_annoyances_subtitle),
+        )
+
+        SettingsSwitch(
+            icon = Icons.Default.NotificationsOff,
+            title = stringResource(R.string.home_module_annoyances_title),
+            subtitle = stringResource(R.string.home_module_annoyances_subtitle),
+            checked = settings.isAnnoyancesEnabled,
+            onCheckedChange = { viewModel.onIntent(AdGuardIntent.ToggleAnnoyances) },
+        )
+
+        Spacer(modifier = Modifier.height(18.dp))
+
+        Text(
+            text = stringResource(R.string.protection_annoyances_lists_title),
+            fontSize = 12.sp,
+            fontWeight = FontWeight.Bold,
+            color = AdGuardTextSecondary,
+        )
+        Text(
+            text = stringResource(R.string.protection_annoyances_lists_body),
+            fontSize = 11.sp,
+            color = AdGuardTextMuted,
+            modifier = Modifier.padding(top = 2.dp, bottom = 8.dp),
+        )
+
+        if (lists.isEmpty()) {
+            Text(
+                text = stringResource(R.string.protection_annoyances_empty),
+                fontSize = 12.sp,
+                color = AdGuardTextMuted,
+            )
+        } else {
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(12.dp),
+                colors = CardDefaults.cardColors(containerColor = AdGuardDarkSurface),
+            ) {
+                Column(modifier = Modifier.padding(14.dp)) {
+                    lists.forEachIndexed { index, list ->
+                        if (index > 0) Spacer(modifier = Modifier.height(12.dp))
+                        StealthToggleRow(
+                            title = if (list.nameRes != 0) {
+                                stringResource(list.nameRes)
+                            } else {
+                                list.name
+                            },
+                            subtitle = if (list.descriptionRes != 0) {
+                                stringResource(list.descriptionRes)
+                            } else {
+                                list.description
+                            },
+                            isChecked = list.isEnabled,
+                            enabled = settings.isAnnoyancesEnabled,
+                            onCheckedChange = {
+                                viewModel.onIntent(AdGuardIntent.ToggleFilterList(list.id, it))
+                            },
+                        )
+                    }
+                }
+            }
+        }
+
+        Spacer(modifier = Modifier.height(10.dp))
+
+        NavigationRow(
+            icon = Icons.Default.Layers,
+            accent = AdGuardOrangeWarning,
+            title = stringResource(R.string.protection_filters_row),
+            subtitle = stringResource(R.string.protection_annoyances_summary, active),
+            onClick = onFilters,
+        )
+    }
+}
+
+@Composable
 private fun HttpsDetail(
     viewModel: AdGuardViewModel,
     onBack: () -> Unit,
@@ -617,6 +745,47 @@ private fun FirewallDetail(
             },
             onClick = { viewModel.onIntent(AdGuardIntent.SelectTab(AdGuardTab.APPS)) },
         )
+    }
+}
+
+@Composable
+private fun BrowsingSecurityDetail(
+    viewModel: AdGuardViewModel,
+    onBack: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val state by viewModel.uiState.collectAsState()
+
+    DetailScaffold(onBack = onBack, modifier = modifier) {
+        ModuleDetailHero(
+            icon = Icons.Default.Security,
+            tint = AdGuardBlueDns,
+            title = stringResource(R.string.home_module_browsing_security_title),
+            subtitle = stringResource(R.string.home_module_browsing_security_subtitle),
+        )
+
+        SettingsSwitch(
+            icon = Icons.Default.Security,
+            title = stringResource(R.string.home_module_browsing_security_title),
+            subtitle = stringResource(R.string.home_module_browsing_security_subtitle),
+            checked = state.settings.isBrowsingSecurityEnabled,
+            onCheckedChange = { viewModel.onIntent(AdGuardIntent.ToggleBrowsingSecurity) },
+        )
+
+        Spacer(modifier = Modifier.height(12.dp))
+
+        Card(
+            modifier = Modifier.fillMaxWidth(),
+            shape = RoundedCornerShape(12.dp),
+            colors = CardDefaults.cardColors(containerColor = AdGuardDarkSurface),
+        ) {
+            Text(
+                text = stringResource(R.string.protection_browsing_security_body),
+                fontSize = 12.sp,
+                color = AdGuardTextMuted,
+                modifier = Modifier.padding(14.dp),
+            )
+        }
     }
 }
 

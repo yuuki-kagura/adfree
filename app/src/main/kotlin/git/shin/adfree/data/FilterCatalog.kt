@@ -47,20 +47,25 @@ enum class FilterGroup(
 }
 
 /**
- * Which engine module flag gates a category group at request time:
- * the ads module covers the AD and ANNOYANCE categories, the tracking
- * module covers TRACKER, ANALYTICS and SOCIAL. Malware, custom rules and
- * the user rules (`null` gates) are never switched off by a module.
+ * Which engine module flag gates a category group at request time: the ads
+ * module covers the AD category, the annoyances module the ANNOYANCE
+ * category, the tracking module TRACKER/ANALYTICS/SOCIAL, and browsing
+ * security the malware/phishing lists. Custom rules and the user rules
+ * (`null` gates) are never switched off by a module.
  */
 enum class ModuleGate(@StringRes val titleRes: Int) {
     AD_BLOCKING(R.string.filter_gate_ad_blocking),
+    ANNOYANCES(R.string.filter_gate_annoyances),
     TRACKING(R.string.filter_gate_tracking),
+    BROWSING_SECURITY(R.string.filter_gate_browsing_security),
 }
 
 val FilterGroup.moduleGate: ModuleGate?
     get() = when (this) {
-        FilterGroup.ADS, FilterGroup.ANNOYANCES, FilterGroup.LANGUAGE -> ModuleGate.AD_BLOCKING
+        FilterGroup.ADS, FilterGroup.LANGUAGE -> ModuleGate.AD_BLOCKING
+        FilterGroup.ANNOYANCES -> ModuleGate.ANNOYANCES
         FilterGroup.PRIVACY, FilterGroup.SOCIAL -> ModuleGate.TRACKING
+        FilterGroup.SECURITY -> ModuleGate.BROWSING_SECURITY
         else -> null
     }
 

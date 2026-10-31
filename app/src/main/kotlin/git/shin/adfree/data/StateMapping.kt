@@ -37,6 +37,8 @@ import git.shin.adfree.model.ThemeMode
 internal fun ProtectionSettings.toCoreState(): CoreProtectionState = CoreProtectionState(
     isProtectionActive = isProtectionActive,
     isAdBlockingEnabled = isAdBlockingEnabled,
+    isAnnoyancesEnabled = isAnnoyancesEnabled,
+    isBrowsingSecurityEnabled = isBrowsingSecurityEnabled,
     isTrackingProtectionEnabled = isTrackingProtectionEnabled,
     isDnsProtectionEnabled = isDnsProtectionEnabled,
     isSmartFilteringEnabled = isSmartFilteringEnabled,
@@ -71,6 +73,8 @@ internal fun ProtectionSettings.toCoreState(): CoreProtectionState = CoreProtect
 internal fun CoreProtectionState.toModel(): ProtectionSettings = ProtectionSettings(
     isProtectionActive = isProtectionActive,
     isAdBlockingEnabled = isAdBlockingEnabled,
+    isAnnoyancesEnabled = isAnnoyancesEnabled,
+    isBrowsingSecurityEnabled = isBrowsingSecurityEnabled,
     isTrackingProtectionEnabled = isTrackingProtectionEnabled,
     isDnsProtectionEnabled = isDnsProtectionEnabled,
     isSmartFilteringEnabled = isSmartFilteringEnabled,

@@ -6,17 +6,22 @@ import org.junit.Test
 
 /**
  * The group banner ("Không hoạt động") must agree with what the core
- * actually gates: AD + ANNOYANCE fold under the ads module, and
- * TRACKER + ANALYTICS + SOCIAL under tracking. A wrong mapping would show
- * a banner on a group that is filtering fine, or the reverse.
+ * actually gates: AD + LANGUAGE fold under the ads module, ANNOYANCE under
+ * the annoyances module, TRACKER + ANALYTICS + SOCIAL under tracking, and
+ * MALWARE under browsing security. A wrong mapping would show a banner on a
+ * group that is filtering fine, or the reverse.
  */
 class FilterGroupGateTest {
 
     @Test
-    fun `ads annoyance and language follow the ads module`() {
+    fun `ads and language follow the ads module`() {
         assertEquals(ModuleGate.AD_BLOCKING, FilterGroup.ADS.moduleGate)
-        assertEquals(ModuleGate.AD_BLOCKING, FilterGroup.ANNOYANCES.moduleGate)
         assertEquals(ModuleGate.AD_BLOCKING, FilterGroup.LANGUAGE.moduleGate)
+    }
+
+    @Test
+    fun `annoyances follow their own module`() {
+        assertEquals(ModuleGate.ANNOYANCES, FilterGroup.ANNOYANCES.moduleGate)
     }
 
     @Test
@@ -26,8 +31,12 @@ class FilterGroupGateTest {
     }
 
     @Test
-    fun `security other custom and user rules are never gated`() {
-        assertNull(FilterGroup.SECURITY.moduleGate)
+    fun `security lists follow browsing security`() {
+        assertEquals(ModuleGate.BROWSING_SECURITY, FilterGroup.SECURITY.moduleGate)
+    }
+
+    @Test
+    fun `other lists are never gated`() {
         assertNull(FilterGroup.OTHER.moduleGate)
     }
 }

@@ -131,6 +131,8 @@ pub fn build(snapshot: &StateSnapshot, private_dns_strict: bool) -> Plan {
         // owns DoT; dropping it too would also kill the user's chosen server.
         block_dot: protection.block_dot && !private_dns_strict,
         ad_blocking: protection.is_ad_blocking_enabled,
+        annoyances: protection.is_annoyances_enabled,
+        browsing_security: protection.is_browsing_security_enabled,
         tracking_protection: protection.is_tracking_protection_enabled,
         dns_protection: protection.is_dns_protection_enabled,
         smart_filtering: protection.is_smart_filtering_enabled,

@@ -419,11 +419,16 @@ fun FiltersScreen(
                             moduleEnabled = when (gate) {
                                 null -> true
                                 ModuleGate.AD_BLOCKING -> state.settings.isAdBlockingEnabled
+                                ModuleGate.ANNOYANCES -> state.settings.isAnnoyancesEnabled
                                 ModuleGate.TRACKING -> state.settings.isTrackingProtectionEnabled
+                                ModuleGate.BROWSING_SECURITY -> state.settings.isBrowsingSecurityEnabled
                             },
                             onEnableModule = {
                                 when (gate) {
                                     ModuleGate.TRACKING -> viewModel.onIntent(AdGuardIntent.ToggleTracking)
+                                    ModuleGate.ANNOYANCES -> viewModel.onIntent(AdGuardIntent.ToggleAnnoyances)
+                                    ModuleGate.BROWSING_SECURITY ->
+                                        viewModel.onIntent(AdGuardIntent.ToggleBrowsingSecurity)
                                     null -> Unit
                                     ModuleGate.AD_BLOCKING -> viewModel.onIntent(AdGuardIntent.ToggleAdBlocking)
                                 }

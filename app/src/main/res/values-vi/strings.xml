@@ -175,7 +175,9 @@
     <string name="filter_group_language_title">Ngôn ngữ cụ thể</string>
     <string name="filter_group_language_subtitle">Bộ lọc theo khu vực và ngôn ngữ</string>
     <string name="filter_gate_ad_blocking">Chặn quảng cáo</string>
+    <string name="filter_gate_annoyances">Chặn làm phiền</string>
     <string name="filter_gate_tracking">Chặn trình theo dõi</string>
+    <string name="filter_gate_browsing_security">Bảo vệ Duyệt web</string>
     <string name="filter_desc_ag_base">Bộ lọc quảng cáo chính của AdGuard (EasyList + bộ lọc riêng).</string>
     <string name="filter_desc_ag_mobile_ads">Chặn quảng cáo hiển thị trong ứng dụng di động.</string>
     <string name="filter_desc_easylist">Danh sách quảng cáo quốc tế phổ biến nhất, chuẩn EasyList.</string>
@@ -295,10 +297,14 @@
     <string name="home_module_adblock_subtitle">Quảng cáo hiển thị, video và popup trong ứng dụng</string>
     <string name="home_module_tracking_title">Chống theo dõi</string>
     <string name="home_module_tracking_subtitle">Chặn analytics và telemetry giữa các ứng dụng</string>
+    <string name="home_module_annoyances_title">Chặn làm phiền</string>
+    <string name="home_module_annoyances_subtitle">Thông báo cookie, cửa sổ bật lên và tiện ích trên trang</string>
     <string name="home_module_dns_title">Bảo vệ DNS</string>
     <string name="home_module_dns_subtitle">Lọc DNS mức hệ thống, chặn DoH/DoT</string>
     <string name="home_module_firewall_title">Tường lửa</string>
     <string name="home_module_firewall_subtitle">Giới hạn Wi-Fi, dữ liệu di động và tắt màn hình theo ứng dụng</string>
+    <string name="home_module_browsing_security_title">Bảo vệ Duyệt web</string>
+    <string name="home_module_browsing_security_subtitle">Cảnh báo trang mã độc và lừa đảo</string>
     <string name="home_module_eco_title">Chế độ tiết kiệm</string>
     <string name="home_module_eco_subtitle">Giảm số lần đánh thức CPU để tăng thời lượng pin</string>
     <string name="home_status_filtering">Đang lọc</string>
@@ -341,6 +347,11 @@
     <string name="protection_firewall_apps_summary">%1$d ứng dụng bị giới hạn</string>
     <string name="protection_firewall_apps_none">Không có ứng dụng nào bị giới hạn</string>
     <string name="protection_eco_body">Giảm số lần đánh thức CPU và kiểm tra nền khi đường hầm đang chạy. Việc lọc không thay đổi.</string>
+    <string name="protection_annoyances_lists_title">Danh sách chặn làm phiền</string>
+    <string name="protection_annoyances_lists_body">Mỗi danh sách ứng với một kiểu làm phiền; tắt một danh sách để kiểu đó hiện lại.</string>
+    <string name="protection_annoyances_empty">Chưa có danh sách chặn làm phiền nào</string>
+    <string name="protection_annoyances_summary">%1$d danh sách đang bật</string>
+    <string name="protection_browsing_security_body">Mỗi tên miền được đối chiếu với danh sách mã độc và lừa đảo ngay trên thiết bị. Những trang bạn truy cập không bao giờ rời khỏi máy; danh sách chỉ cập nhật cùng danh mục bộ lọc.</string>
 
     <!-- Network destination -->
     <!-- DNS protection detail -->

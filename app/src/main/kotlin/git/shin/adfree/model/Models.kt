@@ -445,6 +445,12 @@ data class ProtectionSettings(
     // VPN's, not this flag's.
     val isProtectionActive: Boolean = false,
     val isAdBlockingEnabled: Boolean = true,
+    // Cookie notices, popups and in-page widgets; its own switch so turning
+    // ads off does not silence the annoyance lists (and vice versa).
+    val isAnnoyancesEnabled: Boolean = true,
+    // Malware and phishing lookups against the downloaded security lists,
+    // matched on-device. On by default like AdGuard's "Bảo vệ Duyệt web".
+    val isBrowsingSecurityEnabled: Boolean = true,
     val isTrackingProtectionEnabled: Boolean = true,
     val isDnsProtectionEnabled: Boolean = true,
     // On by default: an app that keeps retrying a blocked host otherwise

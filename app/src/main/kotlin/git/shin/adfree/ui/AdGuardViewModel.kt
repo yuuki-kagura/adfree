@@ -323,6 +323,12 @@ class AdGuardViewModel(
             is AdGuardIntent.ToggleAdBlocking ->
                 repository.toggleAdBlocking(!uiState.value.settings.isAdBlockingEnabled)
 
+            is AdGuardIntent.ToggleAnnoyances ->
+                repository.toggleAnnoyances(!uiState.value.settings.isAnnoyancesEnabled)
+
+            is AdGuardIntent.ToggleBrowsingSecurity ->
+                repository.toggleBrowsingSecurity(!uiState.value.settings.isBrowsingSecurityEnabled)
+
             is AdGuardIntent.ToggleTracking ->
                 repository.toggleTrackingProtection(!uiState.value.settings.isTrackingProtectionEnabled)
 

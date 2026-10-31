@@ -176,7 +176,9 @@
     <string name="filter_group_language_title">Language-specific</string>
     <string name="filter_group_language_subtitle">Filters for regions and languages</string>
     <string name="filter_gate_ad_blocking">Ad blocking</string>
+    <string name="filter_gate_annoyances">Annoyances</string>
     <string name="filter_gate_tracking">Tracker blocking</string>
+    <string name="filter_gate_browsing_security">Browsing security</string>
     <string name="filter_desc_ag_base">Main AdGuard ad filter (EasyList plus AdGuard rules).</string>
     <string name="filter_desc_ag_mobile_ads">Blocks ads shown inside mobile apps.</string>
     <string name="filter_desc_easylist">The most widely used international ad list, in EasyList format.</string>
@@ -296,10 +298,14 @@
     <string name="home_module_adblock_subtitle">Display, video and pop-up ads in apps</string>
     <string name="home_module_tracking_title">Anti-tracking</string>
     <string name="home_module_tracking_subtitle">Blocks analytics and cross-app telemetry</string>
+    <string name="home_module_annoyances_title">Annoyances</string>
+    <string name="home_module_annoyances_subtitle">Cookie notices, popups and in-page widgets</string>
     <string name="home_module_dns_title">DNS protection</string>
     <string name="home_module_dns_subtitle">System-level DNS filtering, blocks DoH/DoT</string>
     <string name="home_module_firewall_title">Firewall</string>
     <string name="home_module_firewall_subtitle">Per-app Wi-Fi, mobile data and screen-off limits</string>
+    <string name="home_module_browsing_security_title">Browsing security</string>
+    <string name="home_module_browsing_security_subtitle">Warns about malware and phishing sites</string>
     <string name="home_module_eco_title">Battery saving</string>
     <string name="home_module_eco_subtitle">Fewer CPU wake-ups for longer battery life</string>
     <string name="home_status_filtering">Filtering</string>
@@ -342,6 +348,11 @@
     <string name="protection_firewall_apps_summary">%1$d apps limited</string>
     <string name="protection_firewall_apps_none">No app is limited</string>
     <string name="protection_eco_body">Fewer CPU wake-ups and background checks while the tunnel runs. Filtering stays exactly the same.</string>
+    <string name="protection_annoyances_lists_title">Annoyance lists</string>
+    <string name="protection_annoyances_lists_body">Each list covers one kind of nuisance; switch one off to let that banner or popup through again.</string>
+    <string name="protection_annoyances_empty">No annoyance lists are added yet</string>
+    <string name="protection_annoyances_summary">%1$d lists on</string>
+    <string name="protection_browsing_security_body">Every page domain is checked against the malware and phishing lists on this device. Which sites you visit never leaves the phone; the lists only refresh with the filter catalogue.</string>
 
     <!-- DNS protection detail -->
     <string name="network_title">DNS protection</string>

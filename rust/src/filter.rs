@@ -709,21 +709,28 @@ pub const CAT_ANNOYANCE: u8 = 4;
 pub const CAT_MALWARE: u8 = 5;
 pub const CAT_CUSTOM: u8 = 6;
 
-/// Runtime module masks. The app has three independent protection switches;
-/// DNS protection gates hostname lookups, while ads/tracking split the filter
-/// categories so turning one module off does not silence the other.
+/// Runtime module masks. The app has five independent protection switches;
+/// DNS protection gates hostname lookups, while ads/annoyances/tracking split
+/// the filter categories so turning one module off does not silence another.
+/// Browsing security owns the malware/phishing lists; the user's own rules
+/// belong to no module and always pass.
 pub const MODULE_ADS: u8 = 1 << 0;
 pub const MODULE_TRACKING: u8 = 1 << 1;
 pub const MODULE_DNS: u8 = 1 << 2;
-pub const MODULES_ALL: u8 = MODULE_ADS | MODULE_TRACKING | MODULE_DNS;
+pub const MODULE_ANNOYANCES: u8 = 1 << 3;
+pub const MODULE_SECURITY: u8 = 1 << 4;
+pub const MODULES_ALL: u8 =
+    MODULE_ADS | MODULE_TRACKING | MODULE_DNS | MODULE_ANNOYANCES | MODULE_SECURITY;
 
-/// Whether a rule/list of `category` belongs to a module that is on. Malware
-/// and the user's own rules belong to neither module, and DNS has no
-/// categories of its own, so both always pass.
+/// Whether a rule/list of `category` belongs to a module that is on. Custom
+/// and other rules belong to no module, and DNS has no categories of its own,
+/// so those always pass.
 fn category_enabled_by(flags: u8, category: u8) -> bool {
     match category {
-        CAT_AD | CAT_ANNOYANCE => flags & MODULE_ADS != 0,
+        CAT_AD => flags & MODULE_ADS != 0,
+        CAT_ANNOYANCE => flags & MODULE_ANNOYANCES != 0,
         CAT_TRACKER | CAT_ANALYTICS | CAT_SOCIAL => flags & MODULE_TRACKING != 0,
+        CAT_MALWARE => flags & MODULE_SECURITY != 0,
         _ => true,
     }
 }
@@ -1018,7 +1025,10 @@ impl CacheKey {
         // Only the switches that decide which lists are compiled belong in
         // the key. DNS protection is a runtime gate over the same engine, so
         // flipping it must not throw a 35 MB cache away.
-        hash.write_u8(build_flags & (MODULE_ADS | MODULE_TRACKING));
+        hash.write_u8(
+            build_flags
+                & (MODULE_ADS | MODULE_TRACKING | MODULE_ANNOYANCES | MODULE_SECURITY),
+        );
         CacheKey { hash }
     }
 
@@ -1348,12 +1358,20 @@ impl FilterEngine {
         self.build_errors.lock().unwrap().clone()
     }
 
-    /// Applies the three protection switches. Network decisions need no
+    /// Applies the five protection switches. Network decisions need no
     /// rebuild: the flags are consulted after a rule matches, so the compiled
     /// index stays warm. Cosmetics and scriptlets have no per-rule category,
-    /// so the core recompiles its lists when ads or tracking flips; the next
-    /// build leaves out the lists belonging to the module that is off.
-    pub fn set_module_flags(&self, ads: bool, tracking: bool, dns: bool) {
+    /// so the core recompiles its lists when ads, annoyances, tracking or
+    /// browsing security flips; the next build leaves out the lists belonging
+    /// to the module that is off.
+    pub fn set_module_flags(
+        &self,
+        ads: bool,
+        tracking: bool,
+        dns: bool,
+        annoyances: bool,
+        security: bool,
+    ) {
         let mut flags = 0u8;
         if ads {
             flags |= MODULE_ADS;
@@ -1363,6 +1381,12 @@ impl FilterEngine {
         }
         if dns {
             flags |= MODULE_DNS;
+        }
+        if annoyances {
+            flags |= MODULE_ANNOYANCES;
+        }
+        if security {
+            flags |= MODULE_SECURITY;
         }
         self.module_flags.store(flags, Ordering::Relaxed);
     }
@@ -6843,21 +6867,32 @@ mod tests {
         assert!(fe.check_host_detailed("later.test").blocked);
 
         // Module switches decide which lists are compiled; flip one and back.
-        fe.set_module_flags(true, false, true);
+        fe.set_module_flags(true, false, true, true, true);
         fe.rebuild(&lists, &rules);
         assert!(!fe.last_build_cached());
-        fe.set_module_flags(true, true, true);
+        fe.set_module_flags(true, true, true, true, true);
         fe.rebuild(&lists, &rules);
         assert!(!fe.last_build_cached());
         fe.rebuild(&lists, &rules);
         assert!(fe.last_build_cached());
 
+        // Annoyances and browsing security also decide which lists compile.
+        fe.set_module_flags(true, true, true, false, true);
+        fe.rebuild(&lists, &rules);
+        assert!(!fe.last_build_cached());
+        fe.set_module_flags(true, true, true, true, false);
+        fe.rebuild(&lists, &rules);
+        assert!(!fe.last_build_cached());
+        fe.set_module_flags(true, true, true, true, true);
+        fe.rebuild(&lists, &rules);
+        assert!(!fe.last_build_cached());
+
         // DNS protection gates lookups, not compilation: flipping it must not
         // discard the engine.
-        fe.set_module_flags(true, true, false);
+        fe.set_module_flags(true, true, false, true, true);
         fe.rebuild(&lists, &rules);
         assert!(fe.last_build_cached());
-        fe.set_module_flags(true, true, true);
+        fe.set_module_flags(true, true, true, true, true);
         fe.rebuild(&lists, &rules);
         assert!(fe.last_build_cached());
         let _ = std::fs::remove_dir_all(&root);
@@ -7012,7 +7047,21 @@ mod tests {
             2,
         );
         tracking.category = CAT_TRACKER;
-        let fe = engine(vec![ads, tracking]);
+        let mut annoyances = temp_list(
+            "annoyances-module.txt",
+            "||annoyance.module.test^\n",
+            ListFormat::Standard,
+            3,
+        );
+        annoyances.category = CAT_ANNOYANCE;
+        let mut malware = temp_list(
+            "malware-module.txt",
+            "||malware.module.test^\n",
+            ListFormat::Standard,
+            4,
+        );
+        malware.category = CAT_MALWARE;
+        let fe = engine(vec![ads, tracking, annoyances, malware]);
 
         let request = |host: &str| {
             fe.check_url(
@@ -7027,26 +7076,34 @@ mod tests {
 
         assert!(fe.check_host("ads.module.test").blocked);
         assert!(fe.check_host("tracker.module.test").blocked);
+        assert!(fe.check_host("annoyance.module.test").blocked);
+        assert!(fe.check_host("malware.module.test").blocked);
         assert!(request("ads.module.test"));
         assert!(request("tracker.module.test"));
 
-        fe.set_module_flags(false, true, true);
+        // Ads and annoyances are separate switches: turning ads off leaves the
+        // annoyance rules live, and browsing security is independent of both.
+        fe.set_module_flags(false, true, true, false, true);
         assert!(!fe.check_host("ads.module.test").blocked);
         assert!(fe.check_host("tracker.module.test").blocked);
+        assert!(!fe.check_host("annoyance.module.test").blocked);
+        assert!(fe.check_host("malware.module.test").blocked);
         assert!(!request("ads.module.test"));
         assert!(request("tracker.module.test"));
 
-        fe.set_module_flags(true, false, true);
+        fe.set_module_flags(true, false, true, true, false);
         assert!(fe.check_host("ads.module.test").blocked);
         assert!(!fe.check_host("tracker.module.test").blocked);
+        assert!(fe.check_host("annoyance.module.test").blocked);
+        assert!(!fe.check_host("malware.module.test").blocked);
 
         // DNS protection only gates hostname lookups: HTTPS URL filtering can
         // still see the full request even when the DNS module is off.
-        fe.set_module_flags(true, true, false);
+        fe.set_module_flags(true, true, false, true, true);
         assert!(!fe.check_host("ads.module.test").blocked);
         assert!(request("ads.module.test"));
 
-        fe.set_module_flags(true, true, true);
+        fe.set_module_flags(true, true, true, true, true);
         assert!(fe.check_host("ads.module.test").blocked);
     }
 
@@ -7078,7 +7135,7 @@ mod tests {
         // Cosmetics carry no category of their own: a switched-off module's
         // lists must not enter the build at all.
         let fe = FilterEngine::new();
-        fe.set_module_flags(false, true, true);
+        fe.set_module_flags(false, true, true, true, true);
         fe.rebuild(&lists, &[]);
         let res = fe.cosmetic_resources("https://example.com/");
         assert!(
@@ -7091,7 +7148,7 @@ mod tests {
         assert!(res.scriptlets.is_empty(), "{:?}", res.scriptlets);
 
         // Switching it back on recompiles the same lists into the page again.
-        fe.set_module_flags(true, true, true);
+        fe.set_module_flags(true, true, true, true, true);
         fe.rebuild(&lists, &[]);
         let res = fe.cosmetic_resources("https://example.com/");
         assert!(res.hide_selectors.iter().any(|s| s == ".ad-hide"));

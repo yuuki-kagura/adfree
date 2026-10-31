@@ -3730,6 +3730,10 @@ data class ProtectionState (
     , 
     var `isAdBlockingEnabled`: kotlin.Boolean
     , 
+    var `isAnnoyancesEnabled`: kotlin.Boolean
+    , 
+    var `isBrowsingSecurityEnabled`: kotlin.Boolean
+    , 
     var `isTrackingProtectionEnabled`: kotlin.Boolean
     , 
     var `isDnsProtectionEnabled`: kotlin.Boolean
@@ -3838,6 +3842,8 @@ public object FfiConverterTypeProtectionState: FfiConverterRustBuffer<Protection
             FfiConverterBoolean.read(buf),
             FfiConverterBoolean.read(buf),
             FfiConverterBoolean.read(buf),
+            FfiConverterBoolean.read(buf),
+            FfiConverterBoolean.read(buf),
             FfiConverterUInt.read(buf),
             FfiConverterBoolean.read(buf),
             FfiConverterTypeDnsBlockMode.read(buf),
@@ -3861,6 +3867,8 @@ public object FfiConverterTypeProtectionState: FfiConverterRustBuffer<Protection
     override fun allocationSize(value: ProtectionState) = (
             FfiConverterBoolean.allocationSize(value.`isProtectionActive`) +
             FfiConverterBoolean.allocationSize(value.`isAdBlockingEnabled`) +
+            FfiConverterBoolean.allocationSize(value.`isAnnoyancesEnabled`) +
+            FfiConverterBoolean.allocationSize(value.`isBrowsingSecurityEnabled`) +
             FfiConverterBoolean.allocationSize(value.`isTrackingProtectionEnabled`) +
             FfiConverterBoolean.allocationSize(value.`isDnsProtectionEnabled`) +
             FfiConverterBoolean.allocationSize(value.`isSmartFilteringEnabled`) +
@@ -3895,6 +3903,8 @@ public object FfiConverterTypeProtectionState: FfiConverterRustBuffer<Protection
     override fun write(value: ProtectionState, buf: ByteBuffer) {
             FfiConverterBoolean.write(value.`isProtectionActive`, buf)
             FfiConverterBoolean.write(value.`isAdBlockingEnabled`, buf)
+            FfiConverterBoolean.write(value.`isAnnoyancesEnabled`, buf)
+            FfiConverterBoolean.write(value.`isBrowsingSecurityEnabled`, buf)
             FfiConverterBoolean.write(value.`isTrackingProtectionEnabled`, buf)
             FfiConverterBoolean.write(value.`isDnsProtectionEnabled`, buf)
             FfiConverterBoolean.write(value.`isSmartFilteringEnabled`, buf)
