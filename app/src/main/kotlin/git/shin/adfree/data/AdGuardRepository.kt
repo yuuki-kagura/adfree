@@ -231,11 +231,6 @@ class AdGuardRepository(
             .build()
     }
 
-    init {
-        startStatsPoller()
-        startFirewallNotifier()
-    }
-
     // -------------------------------------------------------------- hydration
 
     /**
@@ -2581,6 +2576,12 @@ class AdGuardRepository(
 
     fun dismissLoading() {
         _loadingMessage.value = null
+    }
+
+    // Last: the coroutines below run on another thread and read the flows above.
+    init {
+        startStatsPoller()
+        startFirewallNotifier()
     }
 
     companion object {
