@@ -40,10 +40,12 @@ import androidx.compose.material.icons.automirrored.outlined.ListAlt
 import androidx.compose.material.icons.filled.Apps
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.Lock
+import androidx.compose.material.icons.filled.PieChart
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Shield
 import androidx.compose.material.icons.outlined.Apps
 import androidx.compose.material.icons.outlined.Home
+import androidx.compose.material.icons.outlined.PieChart
 import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material.icons.outlined.Shield
 import androidx.compose.material3.Icon
@@ -90,6 +92,7 @@ import git.shin.adfree.ui.screens.HomeScreen
 import git.shin.adfree.ui.screens.ProtectionScreen
 import git.shin.adfree.ui.screens.SecurityLabScreen
 import git.shin.adfree.ui.screens.SettingsScreen
+import git.shin.adfree.ui.screens.StatisticsScreen
 import git.shin.adfree.ui.theme.AdGuardDarkBg
 import git.shin.adfree.ui.theme.AdGuardDarkSurface
 import git.shin.adfree.ui.theme.AdGuardGreenPrimary
@@ -278,6 +281,7 @@ class MainActivity : AppCompatActivity() {
                                 AdGuardTab.PROTECTION -> ProtectionScreen(viewModel = viewModel)
                                 AdGuardTab.ACTIVITY -> FilteringLogScreen(viewModel = viewModel)
                                 AdGuardTab.APPS -> AppsManagementScreen(viewModel = viewModel)
+                                AdGuardTab.STATISTICS -> StatisticsScreen(viewModel = viewModel)
                                 AdGuardTab.SETTINGS -> SettingsScreen(viewModel = viewModel)
                                 // Reached from Settings instead of the tab bar: it is
                                 // a diagnostic tool, not something used daily.
@@ -399,6 +403,7 @@ fun AdGuardBottomBar(
         NavItem(AdGuardTab.PROTECTION, UiText.Resource(R.string.nav_protection), Icons.Filled.Shield, Icons.Outlined.Shield, "nav_protection"),
         NavItem(AdGuardTab.APPS, UiText.Resource(R.string.nav_apps), Icons.Filled.Apps, Icons.Outlined.Apps, "nav_apps"),
         NavItem(AdGuardTab.ACTIVITY, UiText.Resource(R.string.nav_activity), Icons.AutoMirrored.Filled.ListAlt, Icons.AutoMirrored.Outlined.ListAlt, "nav_activity"),
+        NavItem(AdGuardTab.STATISTICS, UiText.Resource(R.string.nav_statistics), Icons.Filled.PieChart, Icons.Outlined.PieChart, "nav_statistics"),
         NavItem(AdGuardTab.SETTINGS, UiText.Resource(R.string.nav_settings), Icons.Filled.Settings, Icons.Outlined.Settings, "nav_settings")
     )
 

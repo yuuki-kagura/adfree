@@ -12,6 +12,7 @@ import git.shin.adfree.model.DnsRewriteRule
 import git.shin.adfree.model.FilterList
 import git.shin.adfree.model.FilterStatus
 import git.shin.adfree.model.FirewallAccess
+import git.shin.adfree.model.LogWindowTotals
 import git.shin.adfree.model.NetworkRequestLog
 import git.shin.adfree.model.ProtectionSettings
 import git.shin.adfree.model.ProtectionStats
@@ -28,6 +29,8 @@ data class AdGuardUiState(
     val currentTab: AdGuardTab = AdGuardTab.HOME,
     val settings: ProtectionSettings = ProtectionSettings(),
     val stats: ProtectionStats = ProtectionStats(),
+    /** Totals for the Statistics tab's selected window and network. */
+    val windowTotals: LogWindowTotals = LogWindowTotals(),
     val logs: List<NetworkRequestLog> = emptyList(),
     val filteredLogs: List<NetworkRequestLog> = emptyList(),
     val logTotal: Long = 0L,

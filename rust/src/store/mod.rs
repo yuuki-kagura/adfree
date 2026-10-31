@@ -19,7 +19,7 @@
 
 mod log;
 
-pub use log::{LogRow, UsageRow};
+pub use log::{LogRow, UsageRow, WindowTotalsRow};
 
 use rusqlite::Connection;
 use std::path::{Path, PathBuf};
@@ -166,9 +166,10 @@ impl Store {
         }
     }
 
-    /// `(package, blocked, bytes_saved, ads, trackers)` since `since_ms`,
-    /// biggest first, restricted to one transport when `transport >= 0`. The
-    /// UI passes its local midnight, so "today" means the user's day.
+    /// `(package, blocked, bytes_saved, ads, trackers, requests)` since
+    /// `since_ms`, biggest blocked count first, restricted to one transport
+    /// when `transport >= 0`. The UI passes its local midnight, so "today"
+    /// means the user's day.
     pub fn log_usage_by_app(&self, since_ms: i64, transport: i64) -> Vec<UsageRow> {
         match log::usage_by_app(&self.db, since_ms, transport) {
             Ok(mut rows) => {
@@ -177,12 +178,24 @@ impl Store {
                     row.bytes_saved = row.bytes_saved.max(0);
                     row.ads = row.ads.max(0);
                     row.trackers = row.trackers.max(0);
+                    row.requests = row.requests.max(0);
                 }
                 rows
             }
             Err(e) => {
                 crate::logbuf::push(&format!("store: app usage: {e}"));
                 Vec::new()
+            }
+        }
+    }
+
+    /// Whole-window totals, including rows the core could not attribute.
+    pub fn log_window_totals(&self, since_ms: i64, transport: i64) -> WindowTotalsRow {
+        match log::window_totals(&self.db, since_ms, transport) {
+            Ok(row) => row,
+            Err(e) => {
+                crate::logbuf::push(&format!("store: window totals: {e}"));
+                WindowTotalsRow::default()
             }
         }
     }
@@ -734,11 +747,20 @@ mod tests {
                 bytes_saved: 150,
                 ads: 1,
                 trackers: 1,
+                requests: 3,
             }],
             "window and attribution both apply"
         );
         // The transport filter excludes rows stamped as unknown.
         assert!(store.log_usage_by_app(1_000, 1).is_empty());
+
+        // The header totals include the unattributed row and older windows.
+        let totals = store.log_window_totals(1_000, -1);
+        assert_eq!(totals.ads, 2, "two ad rows, ignored before the window");
+        assert_eq!(totals.trackers, 1);
+        assert_eq!(totals.requests, 4, "two blocks, an allow and the orphan");
+        assert_eq!(totals.bytes_saved, 157);
+        assert_eq!(store.log_window_totals(1_000, 1), WindowTotalsRow::default());
     }
 
     #[test]

@@ -166,7 +166,7 @@ fun HomeScreen(
 
             StatsGrid(
                 stats = state.stats,
-                onCardClick = { viewModel.onIntent(AdGuardIntent.SelectTab(AdGuardTab.ACTIVITY)) }
+                onCardClick = { viewModel.onIntent(AdGuardIntent.SelectTab(AdGuardTab.STATISTICS)) }
             )
 
             Spacer(modifier = Modifier.height(16.dp))

@@ -41,6 +41,7 @@ import git.shin.adfree.model.UserScriptStoreItem
 import git.shin.adfree.model.UserScriptStoreSort
 import git.shin.adfree.model.UserScriptStoreState
 import git.shin.adfree.model.NetworkRequestLog
+import git.shin.adfree.model.LogWindowTotals
 import git.shin.adfree.model.ProtectionStats
 import git.shin.adfree.model.ProtectionSettings
 import git.shin.adfree.model.ProxySettings
@@ -161,6 +162,10 @@ class AdGuardRepository(
 
     private val _appFirewallRules = MutableStateFlow<List<AppFirewallRule>>(emptyList())
     val appFirewallRules: StateFlow<List<AppFirewallRule>> = _appFirewallRules.asStateFlow()
+
+    /** Header totals for the Statistics tab; same window as the app rows. */
+    private val _windowTotals = MutableStateFlow(LogWindowTotals())
+    val windowTotals: StateFlow<LogWindowTotals> = _windowTotals.asStateFlow()
 
     private val _dnsProviders = MutableStateFlow<List<DnsProvider>>(emptyList())
     val dnsProviders: StateFlow<List<DnsProvider>> = _dnsProviders.asStateFlow()
@@ -1791,8 +1796,10 @@ class AdGuardRepository(
     fun refreshAppUsage() {
         scope.launch {
             val since = usageSinceMs(appUsageRange.get())
-            val usage = engine.appUsageSince(since, appUsageTransport.get().code)
+            val transport = appUsageTransport.get().code
+            val usage = engine.appUsageSince(since, transport)
                 .associateBy { it.app }
+            val totals = engine.logWindowTotalsSince(since, transport)
             _appFirewallRules.update { apps ->
                 apps.map { app ->
                     val row = usage[app.packageName]
@@ -1801,9 +1808,18 @@ class AdGuardRepository(
                         dataTransferredBytes = row?.bytesSaved?.toLong() ?: 0L,
                         blockedAdsToday = row?.ads?.toInt() ?: 0,
                         blockedTrackersToday = row?.trackers?.toInt() ?: 0,
+                        requestsToday = row?.requests?.toInt() ?: 0,
                     )
                 }
             }
+            _windowTotals.value = LogWindowTotals(
+                ads = totals.ads.toLong(),
+                trackers = totals.trackers.toLong(),
+                requests = totals.requests.toLong(),
+                bytesSaved = totals.bytesSaved.toLong(),
+                bytesSent = totals.bytesSent.toLong(),
+                bytesReceived = totals.bytesRecv.toLong(),
+            )
         }
     }
 

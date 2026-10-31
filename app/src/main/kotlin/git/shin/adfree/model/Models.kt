@@ -418,6 +418,8 @@ data class AppFirewallRule(
     val blockedAdsToday: Int = 0,
     /** Blocked requests from tracker, analytics and social lists. */
     val blockedTrackersToday: Int = 0,
+    /** Every request in the selected window, allowed and blocked. */
+    val requestsToday: Int = 0,
 ) {
     val hasNetworkRules: Boolean
         get() = wifiAccess != FirewallAccess.INHERIT ||
@@ -488,6 +490,19 @@ fun DnsProvider.probeAddress(): String = when (type) {
         if (address.contains(':')) "[$address]:$port" else "$address:$port"
     else -> address
 }
+
+/**
+ * Whole-window counters for the Statistics header. Unattributed rows are
+ * included, unlike the per-app list.
+ */
+data class LogWindowTotals(
+    val ads: Long = 0L,
+    val trackers: Long = 0L,
+    val requests: Long = 0L,
+    val bytesSaved: Long = 0L,
+    val bytesSent: Long = 0L,
+    val bytesReceived: Long = 0L,
+)
 
 /**
  * All figures come from the Rust engine.

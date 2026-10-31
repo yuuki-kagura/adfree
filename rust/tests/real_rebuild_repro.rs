@@ -34,6 +34,7 @@ fn lists(dir: &str) -> Vec<FilterListInfo> {
             trusted: true,
             rule_count: 0,
             last_error: None,
+            dns_only: false,
         })
         .collect()
 }

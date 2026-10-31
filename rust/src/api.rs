@@ -725,6 +725,20 @@ pub struct AppUsage {
     pub ads: u32,
     /// Blocked requests from the tracker, analytics and social categories.
     pub trackers: u32,
+    /// Every request in the window, allowed and blocked.
+    pub requests: u32,
+}
+
+/// Whole-window totals for the Statistics header. Unlike [`AppUsage`] this
+/// includes rows the core could not attribute to a package.
+#[derive(uniffi::Record, Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct WindowTotals {
+    pub ads: u64,
+    pub trackers: u64,
+    pub requests: u64,
+    pub bytes_saved: u64,
+    pub bytes_sent: u64,
+    pub bytes_recv: u64,
 }
 
 /// Per-package totals since `since_ms` (the UI passes local midnight), biggest
@@ -748,9 +762,30 @@ pub fn core_app_usage_since_transport(since_ms: i64, transport: i32) -> Vec<AppU
                 bytes_saved: row.bytes_saved as u64,
                 ads: row.ads.min(u32::MAX as i64) as u32,
                 trackers: row.trackers.min(u32::MAX as i64) as u32,
+                requests: row.requests.min(u32::MAX as i64) as u32,
             })
             .collect(),
         None => Vec::new(),
+    })
+}
+
+/// Whole-window totals since `since_ms`, restricted to one transport when
+/// `transport >= 0` (`-1` all, `0` unknown, `1` Wi-Fi, `2` cellular).
+#[uniffi::export]
+pub fn core_log_window_totals_since(since_ms: i64, transport: i32) -> WindowTotals {
+    guard(WindowTotals::default(), || match crate::core().store() {
+        Some(store) => {
+            let row = store.log_window_totals(since_ms, transport as i64);
+            WindowTotals {
+                ads: row.ads.max(0) as u64,
+                trackers: row.trackers.max(0) as u64,
+                requests: row.requests.max(0) as u64,
+                bytes_saved: row.bytes_saved.max(0) as u64,
+                bytes_sent: row.bytes_sent.max(0) as u64,
+                bytes_recv: row.bytes_recv.max(0) as u64,
+            }
+        }
+        None => WindowTotals::default(),
     })
 }
 

@@ -139,11 +139,11 @@ class VpnController(
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             manager.createNotificationChannel(
                 NotificationChannel(
-                    AdGuardVpnService.NOTIFICATION_CHANNEL_ID,
-                    ui.getString(R.string.vpn_channel_name),
+                    CONFLICT_CHANNEL_ID,
+                    ui.getString(R.string.vpn_conflict_channel_name),
                     NotificationManager.IMPORTANCE_DEFAULT,
                 ).apply {
-                    description = ui.getString(R.string.vpn_channel_description)
+                    description = ui.getString(R.string.vpn_conflict_channel_description)
                 },
             )
         }
@@ -160,7 +160,7 @@ class VpnController(
         )
         val notification = NotificationCompat.Builder(
             context,
-            AdGuardVpnService.NOTIFICATION_CHANNEL_ID,
+            CONFLICT_CHANNEL_ID,
         )
             .setContentTitle(ui.getString(R.string.vpn_start_blocked_title))
             .setContentText(ui.getString(R.string.vpn_start_blocked_text))
@@ -230,5 +230,8 @@ class VpnController(
         const val RESTART_DELAY_MS = 1_500L
         const val TAG = "VpnController"
         const val START_REFUSED_ID = 1002
+
+        /** AdGuard's "conflicting apps" channel; start refusals land here. */
+        const val CONFLICT_CHANNEL_ID = "adfree_conflicts"
     }
 }

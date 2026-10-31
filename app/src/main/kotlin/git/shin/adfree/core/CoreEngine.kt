@@ -679,10 +679,18 @@ class CoreEngine {
         runCatching { git.shin.adfree.core.coreLogStatusCounts() }
             .getOrDefault(git.shin.adfree.core.LogStatusCounts(0L, 0L))
 
-    /** Blocked counts and bytes saved per package since [sinceMs]. */
+    /** Blocked counts, requests and bytes saved per package since [sinceMs]. */
     fun appUsageSince(sinceMs: Long, transport: Int = -1): List<git.shin.adfree.core.AppUsage> =
         runCatching { git.shin.adfree.core.coreAppUsageSinceTransport(sinceMs, transport) }
             .getOrDefault(emptyList())
+
+    /** Whole-window totals for the Statistics header. */
+    fun logWindowTotalsSince(
+        sinceMs: Long,
+        transport: Int = -1,
+    ): git.shin.adfree.core.WindowTotals =
+        runCatching { git.shin.adfree.core.coreLogWindowTotalsSince(sinceMs, transport) }
+            .getOrDefault(git.shin.adfree.core.WindowTotals(0uL, 0uL, 0uL, 0uL, 0uL, 0uL))
 
     /** Empties the persisted log, queued rows included. */
     fun logClear() = runCatching { git.shin.adfree.core.coreLogClear() }

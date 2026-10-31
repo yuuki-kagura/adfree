@@ -245,6 +245,8 @@
     <string name="vpn_session_name">Bảo vệ AdFree</string>
     <string name="vpn_channel_name">Trạng thái bảo vệ AdFree</string>
     <string name="vpn_channel_description">Chỉ báo AdFree đang lọc lưu lượng mạng</string>
+    <string name="vpn_conflict_channel_name">Ứng dụng xung đột</string>
+    <string name="vpn_conflict_channel_description">Thông báo về các ứng dụng có thể xung đột với AdFree</string>
     <string name="vpn_notification_title">Đang chặn quảng cáo và công cụ theo dõi</string>
     <string name="vpn_notification_blocked">Bị chặn: %1$d</string>
     <string name="vpn_notification_saved">Dữ liệu đã lưu: %1$d MB</string>
@@ -302,6 +304,7 @@
     <string name="nav_activity">Nhật ký</string>
     <string name="nav_filters">Bộ lọc</string>
     <string name="nav_apps">Ứng dụng</string>
+    <string name="nav_statistics">Thống kê</string>
     <string name="nav_settings">Cài đặt</string>
 
     <!-- Protection tab -->
@@ -722,10 +725,28 @@
     <string name="apps_transport_all">Mọi mạng</string>
     <string name="apps_transport_cellular">Dữ liệu di động</string>
     <string name="apps_transport_wifi">Wi-Fi</string>
-    <string name="apps_card_breakdown">%1$d quảng cáo • %2$d trình theo dõi</string>
+    <string name="apps_card_breakdown">%1$d quảng cáo • %2$d trình theo dõi • %3$d yêu cầu</string>
     <string name="apps_sort_name">Tên</string>
     <string name="apps_sort_blocked">Đã chặn</string>
     <string name="apps_sort_saved">Tiết kiệm</string>
+    <string name="apps_sort_ads">Quảng cáo</string>
+    <string name="apps_sort_trackers">Trình theo dõi</string>
+    <string name="apps_sort_requests">Yêu cầu</string>
+
+    <!-- Statistics tab -->
+    <string name="stats_requests_title">Yêu cầu</string>
+    <string name="stats_ads">quảng cáo</string>
+    <string name="stats_trackers">trình theo dõi</string>
+    <string name="stats_requests">yêu cầu</string>
+    <string name="stats_recent_activity">Hoạt động gần đây</string>
+    <string name="stats_data_title">Dữ liệu sử dụng</string>
+    <string name="stats_data_saved">đã lưu</string>
+    <string name="stats_data_uploaded">đã tải lên</string>
+    <string name="stats_data_downloaded">đã tải xuống</string>
+    <string name="stats_apps_title">Ứng dụng</string>
+    <string name="stats_view_all_apps">Xem tất cả ứng dụng</string>
+    <string name="stats_no_activity">Chưa có hoạt động nào</string>
+    <string name="stats_app_counts">%1$s / %2$s / %3$s</string>
     <string name="apps_cat_browser">Trình duyệt</string>
     <string name="apps_cat_social">Mạng xã hội</string>
     <string name="apps_cat_media">Đa phương tiện</string>

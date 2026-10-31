@@ -785,6 +785,8 @@ internal object IntegrityCheckingUniffiLib {
     ): Int
     external fun uniffi_adfree_core_checksum_func_core_log_status_counts(
     ): Int
+    external fun uniffi_adfree_core_checksum_func_core_log_window_totals_since(
+    ): Int
     external fun uniffi_adfree_core_checksum_func_core_mitm_status(
     ): Int
     external fun uniffi_adfree_core_checksum_func_core_probe_dns(
@@ -970,6 +972,8 @@ internal object UniffiLib {
     external fun uniffi_adfree_core_fn_func_core_log_page_before(`beforeId`: Long,`limit`: Int,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
     external fun uniffi_adfree_core_fn_func_core_log_status_counts(uniffi_out_err: UniffiRustCallStatus, 
+    ): RustBuffer.ByValue
+    external fun uniffi_adfree_core_fn_func_core_log_window_totals_since(`sinceMs`: Long,`transport`: Int,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
     external fun uniffi_adfree_core_fn_func_core_mitm_status(uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
@@ -1265,6 +1269,9 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if ((lib.uniffi_adfree_core_checksum_func_core_log_status_counts() and 0xFFFF) != 4650) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if ((lib.uniffi_adfree_core_checksum_func_core_log_window_totals_since() and 0xFFFF) != 7123) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if ((lib.uniffi_adfree_core_checksum_func_core_mitm_status() and 0xFFFF) != 1875) {
@@ -2577,6 +2584,11 @@ data class AppUsage (
      * Blocked requests from the tracker, analytics and social categories.
      */
     var `trackers`: kotlin.UInt
+    , 
+    /**
+     * Every request in the window, allowed and blocked.
+     */
+    var `requests`: kotlin.UInt
     
 ){
     
@@ -2598,6 +2610,7 @@ public object FfiConverterTypeAppUsage: FfiConverterRustBuffer<AppUsage> {
             FfiConverterULong.read(buf),
             FfiConverterUInt.read(buf),
             FfiConverterUInt.read(buf),
+            FfiConverterUInt.read(buf),
         )
     }
 
@@ -2606,7 +2619,8 @@ public object FfiConverterTypeAppUsage: FfiConverterRustBuffer<AppUsage> {
             FfiConverterUInt.allocationSize(value.`blocked`) +
             FfiConverterULong.allocationSize(value.`bytesSaved`) +
             FfiConverterUInt.allocationSize(value.`ads`) +
-            FfiConverterUInt.allocationSize(value.`trackers`)
+            FfiConverterUInt.allocationSize(value.`trackers`) +
+            FfiConverterUInt.allocationSize(value.`requests`)
     )
 
     override fun write(value: AppUsage, buf: ByteBuffer) {
@@ -2615,6 +2629,7 @@ public object FfiConverterTypeAppUsage: FfiConverterRustBuffer<AppUsage> {
             FfiConverterULong.write(value.`bytesSaved`, buf)
             FfiConverterUInt.write(value.`ads`, buf)
             FfiConverterUInt.write(value.`trackers`, buf)
+            FfiConverterUInt.write(value.`requests`, buf)
     }
 }
 
@@ -4762,6 +4777,68 @@ public object FfiConverterTypeUidApps: FfiConverterRustBuffer<UidApps> {
 
 
 
+/**
+ * Whole-window totals for the Statistics header. Unlike [`AppUsage`] this
+ * includes rows the core could not attribute to a package.
+ */
+data class WindowTotals (
+    var `ads`: kotlin.ULong
+    , 
+    var `trackers`: kotlin.ULong
+    , 
+    var `requests`: kotlin.ULong
+    , 
+    var `bytesSaved`: kotlin.ULong
+    , 
+    var `bytesSent`: kotlin.ULong
+    , 
+    var `bytesRecv`: kotlin.ULong
+    
+){
+    
+
+    
+
+    
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeWindowTotals: FfiConverterRustBuffer<WindowTotals> {
+    override fun read(buf: ByteBuffer): WindowTotals {
+        return WindowTotals(
+            FfiConverterULong.read(buf),
+            FfiConverterULong.read(buf),
+            FfiConverterULong.read(buf),
+            FfiConverterULong.read(buf),
+            FfiConverterULong.read(buf),
+            FfiConverterULong.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: WindowTotals) = (
+            FfiConverterULong.allocationSize(value.`ads`) +
+            FfiConverterULong.allocationSize(value.`trackers`) +
+            FfiConverterULong.allocationSize(value.`requests`) +
+            FfiConverterULong.allocationSize(value.`bytesSaved`) +
+            FfiConverterULong.allocationSize(value.`bytesSent`) +
+            FfiConverterULong.allocationSize(value.`bytesRecv`)
+    )
+
+    override fun write(value: WindowTotals, buf: ByteBuffer) {
+            FfiConverterULong.write(value.`ads`, buf)
+            FfiConverterULong.write(value.`trackers`, buf)
+            FfiConverterULong.write(value.`requests`, buf)
+            FfiConverterULong.write(value.`bytesSaved`, buf)
+            FfiConverterULong.write(value.`bytesSent`, buf)
+            FfiConverterULong.write(value.`bytesRecv`, buf)
+    }
+}
+
+
+
 
 enum class AppLanguage {
     
@@ -6265,6 +6342,22 @@ public object FfiConverterSequenceTypeUidApps: FfiConverterRustBuffer<List<UidAp
     UniffiLib.uniffi_adfree_core_fn_func_core_log_status_counts(
     
         _status)
+}
+    )
+    }
+    
+
+        /**
+         * Whole-window totals since `since_ms`, restricted to one transport when
+         * `transport >= 0` (`-1` all, `0` unknown, `1` Wi-Fi, `2` cellular).
+         */ fun `coreLogWindowTotalsSince`(`sinceMs`: kotlin.Long, `transport`: kotlin.Int): WindowTotals {
+            return FfiConverterTypeWindowTotals.lift(
+    uniffiRustCall() { _status ->
+    UniffiLib.uniffi_adfree_core_fn_func_core_log_window_totals_since(
+    
+        
+        FfiConverterLong.lower(`sinceMs`),
+        FfiConverterInt.lower(`transport`),_status)
 }
     )
     }

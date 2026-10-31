@@ -100,7 +100,7 @@ import git.shin.adfree.ui.theme.AdGuardOnAccent
 import git.shin.adfree.ui.theme.AdGuardTextSecondary
 
 /** Order of the app list; totals come from the selected usage range. */
-private enum class AppSort { NAME, BLOCKED, SAVED }
+private enum class AppSort { NAME, BLOCKED, SAVED, ADS, TRACKERS, REQUESTS }
 
 /** Chip code (null = all) paired with its label. */
 private val appCategoryChips: List<Pair<String?, Int>> = listOf(
@@ -132,6 +132,9 @@ fun AppsManagementScreen(
             AppSort.NAME -> state.appFirewallRules
             AppSort.BLOCKED -> state.appFirewallRules.sortedByDescending { it.blockedRequestsToday }
             AppSort.SAVED -> state.appFirewallRules.sortedByDescending { it.dataTransferredBytes }
+            AppSort.ADS -> state.appFirewallRules.sortedByDescending { it.blockedAdsToday }
+            AppSort.TRACKERS -> state.appFirewallRules.sortedByDescending { it.blockedTrackersToday }
+            AppSort.REQUESTS -> state.appFirewallRules.sortedByDescending { it.requestsToday }
         }
     }
 
@@ -301,6 +304,9 @@ fun AppsManagementScreen(
                 AppSort.NAME to R.string.apps_sort_name,
                 AppSort.BLOCKED to R.string.apps_sort_blocked,
                 AppSort.SAVED to R.string.apps_sort_saved,
+                AppSort.ADS to R.string.apps_sort_ads,
+                AppSort.TRACKERS to R.string.apps_sort_trackers,
+                AppSort.REQUESTS to R.string.apps_sort_requests,
             ).forEach { (sort, labelRes) ->
                 FilterChip(
                     selected = appSort == sort,
@@ -531,13 +537,14 @@ fun AppFirewallCard(
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis
                     )
-                    if (app.blockedRequestsToday > 0) {
+                    if (app.requestsToday > 0) {
                         Spacer(modifier = Modifier.height(2.dp))
                         Text(
                             text = stringResource(
                                 R.string.apps_card_breakdown,
                                 app.blockedAdsToday,
                                 app.blockedTrackersToday,
+                                app.requestsToday,
                             ),
                             fontSize = 10.sp,
                             color = AdGuardTextMuted,

@@ -308,10 +308,11 @@ pub(super) fn status_counts(db: &Db) -> rusqlite::Result<(i64, i64)> {
     Ok((blocked, allowed))
 }
 
-/// Blocked rows grouped by owning package since `since_ms`, plus the bytes they
-/// claim to have saved and how much of the block count was ads vs trackers.
-/// Anything but an allow decision counts as blocked; `transport` selects one
-/// network (0 unknown, 1 Wi-Fi, 2 cellular) or `-1` for all.
+/// Rows grouped by owning package since `since_ms`, plus the bytes they claim
+/// to have saved, how much of the block count was ads vs trackers, and the
+/// total request count (allowed and blocked). Anything but an allow decision
+/// counts as blocked; `transport` selects one network (0 unknown, 1 Wi-Fi,
+/// 2 cellular) or `-1` for all.
 pub(super) fn usage_by_app(
     db: &Db,
     since_ms: i64,
@@ -323,7 +324,8 @@ pub(super) fn usage_by_app(
                 SUM(CASE WHEN action != 0 THEN 1 ELSE 0 END), \
                 SUM(bytes_saved), \
                 SUM(CASE WHEN action != 0 AND category = 0 THEN 1 ELSE 0 END), \
-                SUM(CASE WHEN action != 0 AND category IN (1, 2, 3) THEN 1 ELSE 0 END) \
+                SUM(CASE WHEN action != 0 AND category IN (1, 2, 3) THEN 1 ELSE 0 END), \
+                COUNT(*) \
          FROM log_events \
          WHERE app != '' AND ts_ms >= ?1 AND (?2 < 0 OR transport = ?2) \
          GROUP BY app \
@@ -336,6 +338,7 @@ pub(super) fn usage_by_app(
             bytes_saved: r.get(2)?,
             ads: r.get(3)?,
             trackers: r.get(4)?,
+            requests: r.get(5)?,
         })
     })?;
     rows.collect()
@@ -349,6 +352,49 @@ pub struct UsageRow {
     pub bytes_saved: i64,
     pub ads: i64,
     pub trackers: i64,
+    pub requests: i64,
+}
+
+/// Whole-log totals over a window, unattributed rows included. The statistics
+/// header shows these; per-app rows are a narrower view of the same data.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct WindowTotalsRow {
+    pub ads: i64,
+    pub trackers: i64,
+    pub requests: i64,
+    pub bytes_saved: i64,
+    pub bytes_sent: i64,
+    pub bytes_recv: i64,
+}
+
+pub(super) fn window_totals(
+    db: &Db,
+    since_ms: i64,
+    transport: i64,
+) -> rusqlite::Result<WindowTotalsRow> {
+    let conn = db.lock();
+    conn.query_row(
+        "SELECT \
+                COALESCE(SUM(CASE WHEN action != 0 AND category = 0 THEN 1 ELSE 0 END), 0), \
+                COALESCE(SUM(CASE WHEN action != 0 AND category IN (1, 2, 3) THEN 1 ELSE 0 END), 0), \
+                COUNT(*), \
+                COALESCE(SUM(bytes_saved), 0), \
+                COALESCE(SUM(bytes_sent), 0), \
+                COALESCE(SUM(bytes_recv), 0) \
+         FROM log_events \
+         WHERE ts_ms >= ?1 AND (?2 < 0 OR transport = ?2)",
+        [since_ms, transport],
+        |r| {
+            Ok(WindowTotalsRow {
+                ads: r.get(0)?,
+                trackers: r.get(1)?,
+                requests: r.get(2)?,
+                bytes_saved: r.get(3)?,
+                bytes_sent: r.get(4)?,
+                bytes_recv: r.get(5)?,
+            })
+        },
+    )
 }
 
 pub(super) fn clear(db: &Db) -> rusqlite::Result<()> {

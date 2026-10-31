@@ -246,6 +246,8 @@
     <string name="vpn_session_name">AdFree protection</string>
     <string name="vpn_channel_name">AdFree protection status</string>
     <string name="vpn_channel_description">Shows when AdFree is filtering your traffic</string>
+    <string name="vpn_conflict_channel_name">Conflicting apps</string>
+    <string name="vpn_conflict_channel_description">Notifications about apps that may conflict with AdFree</string>
     <string name="vpn_notification_title">Blocking ads and trackers</string>
     <string name="vpn_notification_blocked">Blocked: %1$d</string>
     <string name="vpn_notification_saved">Data saved: %1$d MB</string>
@@ -303,6 +305,7 @@
     <string name="nav_activity">Activity</string>
     <string name="nav_filters">Filters</string>
     <string name="nav_apps">Apps</string>
+    <string name="nav_statistics">Statistics</string>
     <string name="nav_settings">Settings</string>
 
     <!-- Protection tab -->
@@ -722,10 +725,28 @@
     <string name="apps_transport_all">All networks</string>
     <string name="apps_transport_cellular">Mobile data</string>
     <string name="apps_transport_wifi">Wi-Fi</string>
-    <string name="apps_card_breakdown">%1$d ads • %2$d trackers</string>
+    <string name="apps_card_breakdown">%1$d ads • %2$d trackers • %3$d requests</string>
     <string name="apps_sort_name">Name</string>
     <string name="apps_sort_blocked">Blocked</string>
     <string name="apps_sort_saved">Saved</string>
+    <string name="apps_sort_ads">Ads</string>
+    <string name="apps_sort_trackers">Trackers</string>
+    <string name="apps_sort_requests">Requests</string>
+
+    <!-- Statistics tab -->
+    <string name="stats_requests_title">Requests</string>
+    <string name="stats_ads">ads</string>
+    <string name="stats_trackers">trackers</string>
+    <string name="stats_requests">requests</string>
+    <string name="stats_recent_activity">Recent activity</string>
+    <string name="stats_data_title">Data usage</string>
+    <string name="stats_data_saved">saved</string>
+    <string name="stats_data_uploaded">uploaded</string>
+    <string name="stats_data_downloaded">downloaded</string>
+    <string name="stats_apps_title">Apps</string>
+    <string name="stats_view_all_apps">View all apps</string>
+    <string name="stats_no_activity">No activity yet</string>
+    <string name="stats_app_counts">%1$s / %2$s / %3$s</string>
     <string name="apps_cat_browser">Browsers</string>
     <string name="apps_cat_social">Social</string>
     <string name="apps_cat_media">Media</string>

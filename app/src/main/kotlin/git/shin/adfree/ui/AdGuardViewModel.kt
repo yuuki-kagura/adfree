@@ -18,6 +18,7 @@ import git.shin.adfree.model.DnsBlockMode
 import git.shin.adfree.model.FilterStatus
 import git.shin.adfree.model.FirewallAccess
 import git.shin.adfree.model.FirewallAppChoice
+import git.shin.adfree.model.LogWindowTotals
 import git.shin.adfree.model.NetworkRequestLog
 import git.shin.adfree.model.ProtectionSettings
 import git.shin.adfree.model.ProtectionStats
@@ -40,7 +41,7 @@ import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 
-enum class AdGuardTab { HOME, PROTECTION, ACTIVITY, APPS, AI_LAB, SETTINGS }
+enum class AdGuardTab { HOME, PROTECTION, ACTIVITY, APPS, STATISTICS, AI_LAB, SETTINGS }
 
 sealed interface AiLabUiState {
     data object Idle : AiLabUiState
@@ -137,12 +138,22 @@ class AdGuardViewModel(
                 repository.logTotal,
                 repository.logBlockedTotal,
                 repository.logAllowedTotal,
-            ) { total, blocked, allowed -> Triple(total, blocked, allowed) },
+                repository.windowTotals,
+            ) { total, blocked, allowed, window -> LogTotals(total, blocked, allowed, window) },
             _searchQuery,
         ) { head, logs, totals, query ->
             val (tab, settings, stats) = head
-            val (total, blocked, allowed) = totals
-            UiPartA(tab, settings, stats, logs, total, blocked, allowed, query)
+            UiPartA(
+                tab,
+                settings,
+                stats,
+                logs,
+                totals.total,
+                totals.blocked,
+                totals.allowed,
+                totals.window,
+                query,
+            )
         },
         combine(
             _statusFilter,
@@ -253,6 +264,7 @@ class AdGuardViewModel(
             currentTab = a.tab,
             settings = a.settings,
             stats = a.stats,
+            windowTotals = a.windowTotals,
             logs = a.logs,
             filteredLogs = logs,
             logTotal = a.logTotal,
@@ -327,10 +339,12 @@ class AdGuardViewModel(
         when (intent) {
             is AdGuardIntent.SelectTab -> {
                 _currentTab.value = intent.tab
-                // The Apps tab shows today's per-app totals, which only the
-                // persisted log can answer; load them as it comes into view
-                // and keep them fresh while it stays there.
-                repository.setAppUsageVisible(intent.tab == AdGuardTab.APPS)
+                // Both tabs show windowed per-app totals from the persisted
+                // log; load them as the tab comes into view and keep them
+                // fresh while it stays there.
+                repository.setAppUsageVisible(
+                    intent.tab == AdGuardTab.APPS || intent.tab == AdGuardTab.STATISTICS,
+                )
             }
             is AdGuardIntent.OpenProtectionSection -> {
                 _currentTab.value = AdGuardTab.PROTECTION
@@ -932,7 +946,16 @@ class AdGuardViewModel(
         val logTotal: Long,
         val logBlockedTotal: Long,
         val logAllowedTotal: Long,
+        val windowTotals: LogWindowTotals,
         val query: String,
+    )
+
+    /** The log-wide and windowed counters travel together. */
+    private data class LogTotals(
+        val total: Long,
+        val blocked: Long,
+        val allowed: Long,
+        val window: LogWindowTotals,
     )
 
     private data class UiPartB(
