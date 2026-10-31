@@ -229,6 +229,141 @@ matching feature:
 | Social and annoyances filter categories | captured (`63`–`65`) | same row template; annoyances has 11 filters, social 2 |
 | YouTube how-to page, private browser link | out of scope | navigation only |
 
+## Phase 6 — data-model gaps from Phase 5
+
+Goal: close everything Phase 5 could not build because the log, firewall or
+filter stores do not carry the fields. Every step starts with the GitNexus
+impact check required by `AGENTS.md`; the Rust schema change lands with its
+migration test in the same commit.
+
+Order matters: 6.1 unblocks 6.2 and 6.3, so do it first.
+
+### 6.1 Log storage: transport, flow id, URL, DNS answer, sizes
+
+Screens `52`–`59` and `73`–`79` need fields the log does not store today.
+
+- Schema v6 (`rust/src/store/mod.rs`, `migrate()` after the v5 index at
+  ~412): add `transport INTEGER NOT NULL DEFAULT 0`, `flow_id INTEGER NOT
+  NULL DEFAULT 0`, `url TEXT NOT NULL DEFAULT ''`, `dns_answer TEXT NOT NULL
+  DEFAULT ''`, `bytes_sent INTEGER NOT NULL DEFAULT 0`, `bytes_recv INTEGER
+  NOT NULL DEFAULT 0`; index `log_events_transport_action ON
+  log_events(transport, action)` for the statistics tabs. Keep the
+  `INSERT INTO log_events` column list at ~513 and every test fixture in sync.
+- `rust/src/events.rs` `Event` (~48): transport (unknown/wifi/cellular) and
+  roaming ride in spare `flags` bits next to `ipv6`; add a `flow_id` field.
+  `MAX_URL` needs a byte budget decision: 256 B × 10k ring events is ~2.5 MB
+  on top of the current ring, so cap at 128 B and store only the path when
+  MITM knows it. Builders at ~245 (`with_app`, `allow_event`, `block_event`)
+  and the ring/persist path take the new fields.
+- Fill transport from the existing `Core.network_type` / `roaming` atomics
+  (`rust/src/engine.rs` ~705–707, setter ~1027) at event construction; the
+  packet loop already reads these for firewall decisions, so this is a
+  snapshot, not new connectivity plumbing.
+- URL: `mitm::proxy::MitmBlock` (`rust/src/mitm/proxy.rs` ~141) gains
+  `url: &str` (or path) filled by the decryptor; `log_mitm_block`
+  (`rust/src/engine.rs` ~729) writes it. Non-MITM events keep `url` empty.
+- DNS answer: when the packet path answers a query from upstream, attach the
+  first A/AAAA answers to the event; otherwise leave empty.
+- Sizes: events are logged at decision time, so add `Store::finish_flow(id,
+  sent, recv)` called when a relay closes; blocked flows that moved no bytes
+  stay zero. Batch the update with the next insert if a write per close
+  shows up in benchmarks.
+- uniffi: extend `LogEvent` (`rust/src/api.rs` ~189) and both `From` impls;
+  regenerate bindings (`app/src/main/kotlin/git/shin/adfree/core/adfree.kt`,
+  `CoreEngine.kt`) with `./gradlew :app:verifyBindings`.
+- Kotlin: `NetworkRequestLog` (`model/Models.kt` ~40) gains transport,
+  flowId, url, dnsAnswer, bytesSent, bytesRecv; `from(event)` maps them; the
+  log detail rows in `FilteringLogScreen.kt` render URL, DNS answer,
+  connection id and sizes; `AdGuardRepository.exportLogs` adds the columns to
+  the CSV header.
+
+### 6.2 Statistics parity (`52`–`59`)
+
+- Data-type filter (all / mobile / Wi-Fi) chips on the statistics header,
+  backed by `transport`; this is the piece missing from Phase 5.
+- Ads vs trackers: `RequestCategory` already separates ad and tracking
+  categories, so extend the per-app aggregate instead of inventing a field.
+  Either widen `AppUsage` (`rust/src/api.rs` ~687) with ads/trackers counts
+  or add `core_app_usage_detail_since`; the Kotlin list in
+  `AppsManagementScreen.kt` gains a two-number row and the sort enum a third
+  key if AdGuard's column is kept.
+- Keep the existing time ranges, search and sort; they already cover `53`,
+  `57`.
+- Company breakdown (`59`) stays out of scope: it needs a domain→company
+  database AdFree does not ship. If a fallback is wanted, show "top domains
+  contacted" from the same `GROUP BY domain` instead and label it as such.
+
+### 6.3 Per-app proxy routing
+
+Phase 5 shipped the per-app screen without this row because the flag does not
+exist; `isFilterRouted` only controls VPN inclusion.
+
+- Model: `AppFirewallRule` gains `proxyAccess` (INHERIT / THROUGH / DIRECT,
+  reusing the tri-state pattern from `FirewallAccess`); Rust mirror in
+  `AppFirewallRule` + wire struct (`rust/src/state/model.rs` ~309–395) and
+  `AppFirewallState` (`rust/src/engine.rs` ~327). State is JSON, so no SQL
+  migration — add a serde default so old profiles load.
+- Core: the TCP and UDP dial paths already resolve `cfg.proxy` (~2640) and
+  the firewall lookup already has the per-flow package list. Add one lookup
+  of `proxyAccess` there: THROUGH forces the SOCKS5 endpoint even when the
+  global proxy is off, DIRECT bypasses it. Keep it allocation-free and reuse
+  the firewall attribution map.
+- Kotlin: repository `updateAppFirewall(proxyAccess = …)`, MVI intent field,
+  `StateMapping` round-trip, a `Định tuyến proxy` row in the per-app sheet
+  (`AppsManagementScreen.kt`) disabled while no usable global proxy is
+  configured, plus strings in both locales.
+- Tests: override beats the global routing mode in both directions; a
+  DIRECT app is unaffected when the proxy is off.
+
+### 6.4 DNS filters (`69`)
+
+AdGuard keeps DNS-only lists apart from the website lists; AdFree applies
+every catalog list to DNS and has no separate store, which is why the add
+sheet was skipped.
+
+- Core: add a `dns_filters` collection to `FilterState`
+  (`rust/src/state/model.rs` ~602) and a second matcher consulted only in
+  the DNS path; keep the existing lists on the current path unchanged so
+  block counts do not shift.
+- UI: a `Bộ lọc DNS` section in `FiltersScreen`/`FiltersExtensions` with the
+  `Thêm bộ lọc DNS` sheet from `69` (URL or local file, reuse the custom
+  filter flow and error copy).
+- Alternative if the separate store is rejected: document in the UI that
+  regular lists already filter DNS and delete the screenshot's flow from the
+  plan. Decide before coding; the recommendation is the separate collection.
+
+### 6.5 Carry-over and verification
+
+- Phase 4 leftovers are navigation-only and may ride along: `Cách chặn quảng
+  cáo trên YouTube` help row and the private-browser link.
+- Allowlist (`67`): keep the current HTTPS website rules as the answer. If a
+  dedicated search + add screen is still wanted, reuse the user-rule list
+  path; it is cosmetic parity, not engine behavior.
+- Rust tests: v5→v6 migration keeps row counts and old rows read with
+  defaults; `flags` transport/roaming round-trip; `GROUP BY app, category`
+  counts; per-app routing override; DNS-only lists do not match HTTP rules.
+- Kotlin tests: `NetworkRequestLog` mapping, CSV columns, data-type filter.
+- Bindings: `./gradlew :app:verifyBindings` with `ADFREE_RUST_TARGET_DIR`
+  and `ANDROID_NDK_HOME`, rebuild the four ABIs with `cargo ndk`, then
+  `./gradlew :app:testDebugUnitTest :app:assembleRelease -PskipNative`.
+- Device (deferred from Phases 3–5): install on the Redmi, verify roaming
+  with Wi-Fi off/mobile on, screen-off per transport, log detail fields,
+  mobile/Wi-Fi statistics, per-app proxy routing and the DNS filter sheet;
+  capture screenshots at 800×1340 for `52`–`59`, `69`, `73`–`79`.
+- Benchmarks: the event enrichment sits on the packet hot path; run
+  `BENCHMARK.md` and confirm ring memory growth stays under ~3 MB and
+  per-flow cost is unchanged within noise.
+
+### Risks
+
+- The log table grows wider on disk; the retention window (200k rows / 7
+  days) may need to shrink or the URL column to stay empty outside MITM.
+- A write per closed relay doubles SQLite traffic if not batched.
+- Per-app proxy lookup adds a map probe on the dial path; reuse the firewall
+  map and measure before shipping.
+- Splitting DNS lists can change existing block counts; run the full filter
+  suite and compare against a real page set, like the Phase 2 risk note.
+
 ## Out of scope
 
 - AdGuard VPN and private browser (separate products).
