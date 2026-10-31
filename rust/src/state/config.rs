@@ -341,6 +341,17 @@ pub fn policy(snapshot: &StateSnapshot) -> PolicyPlan {
         !protection.firewall_global_rules || protection.firewall_allow_cellular_screen_off;
     network.allow_roaming = !protection.firewall_global_rules || protection.firewall_allow_roaming;
 
+    // Routing answers are a proxy feature, not a firewall dimension: they
+    // keep applying while the firewall switch (or its custom-rule gate) is
+    // off, so a user can pin one app to the proxy without enabling the rest.
+    network.proxy_rules = std::sync::Arc::new(        snapshot
+            .firewall
+            .iter()
+            .filter(|rule| rule.proxy != ProxyAccess::Inherit)
+            .map(|rule| (rule.package_name.clone(), rule.proxy))
+            .collect(),
+    );
+
     if !protection.is_firewall_enabled || !protection.firewall_custom_rules {
         return plan;
     }
@@ -569,6 +580,31 @@ mod tests {
         // Routing and HTTPS exclusion survive the firewall switch.
         assert_eq!(off.excluded, vec!["com.example"]);
         assert_eq!(off.https_skip_apps, vec!["com.example"]);
+    }
+
+    #[test]
+    fn proxy_routing_survives_the_firewall_switch() {
+        let mut s = snapshot();
+        s.firewall.push(AppFirewallRule {
+            package_name: "com.example".to_string(),
+            proxy: ProxyAccess::Through,
+            ..AppFirewallRule::default()
+        });
+        let on = policy(&s);
+        assert_eq!(
+            on.network.proxy_rules.get("com.example"),
+            Some(&ProxyAccess::Through)
+        );
+
+        // Routing is a proxy feature: turning the firewall off drops the
+        // network dimensions but keeps the per-app proxy answers.
+        s.protection.is_firewall_enabled = false;
+        let off = policy(&s);
+        assert!(off.network.rules.is_empty());
+        assert_eq!(
+            off.network.proxy_rules.get("com.example"),
+            Some(&ProxyAccess::Through)
+        );
     }
 
     #[test]

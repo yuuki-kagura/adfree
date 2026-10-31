@@ -844,6 +844,7 @@ fn setup_core_with_list(origin: &Origin, tag: &str, list: &str) -> (Arc<Core>, V
             trusted: true,
             rule_count: 0,
             last_error: None,
+            dns_only: false,
         }],
         Vec::new(),
     );

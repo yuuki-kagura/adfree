@@ -276,9 +276,9 @@ private fun ProtectionLanding(
     val state by viewModel.uiState.collectAsState()
     val settings = state.settings
 
-    val enabledFilters = state.filterLists.count { it.isEnabled && !it.isCustom }
+    val enabledFilters = state.filterLists.count { it.isEnabled && !it.isCustom && !it.isDnsOnly }
     val enabledRules = state.filterLists
-        .filter { it.isEnabled && !it.isCustom }
+        .filter { it.isEnabled && !it.isCustom && !it.isDnsOnly }
         .sumOf { it.ruleCount }
     val scriptsOn = state.userscripts.count { it.isEnabled }
     val dnsName = state.dnsProviders
@@ -422,9 +422,9 @@ private fun AdBlockingDetail(
 ) {
     val state by viewModel.uiState.collectAsState()
     val settings = state.settings
-    val enabledFilters = state.filterLists.count { it.isEnabled && !it.isCustom }
+    val enabledFilters = state.filterLists.count { it.isEnabled && !it.isCustom && !it.isDnsOnly }
     val enabledRules = state.filterLists
-        .filter { it.isEnabled && !it.isCustom }
+        .filter { it.isEnabled && !it.isCustom && !it.isDnsOnly }
         .sumOf { it.ruleCount }
     val scriptsOn = state.userscripts.count { it.isEnabled }
 

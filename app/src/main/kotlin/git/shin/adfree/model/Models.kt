@@ -33,6 +33,25 @@ enum class ProtocolType {
     UDP,
 }
 
+/** Network the request travelled on; unknown for rows from older builds. */
+enum class NetworkTransport(val code: Int) {
+    UNKNOWN(0),
+    WIFI(1),
+    CELLULAR(2);
+
+    companion object {
+        fun fromCode(code: Int): NetworkTransport =
+            entries.firstOrNull { it.code == code } ?: UNKNOWN
+    }
+}
+
+/** Network the statistics window is restricted to. */
+enum class AppUsageTransport(val code: Int) {
+    ALL(-1),
+    WIFI(1),
+    CELLULAR(2),
+}
+
 /**
  * One Activity log row. This is REAL data pushed up by the Rust core now,
  * not `Random.nextLong()` any more.
@@ -51,6 +70,17 @@ data class NetworkRequestLog(
     val appPackage: String?,
     val latencyMicros: Long,
     val dataSavedBytes: Long,
+    /** Network the decision was made on. */
+    val transport: NetworkTransport = NetworkTransport.UNKNOWN,
+    val roaming: Boolean = false,
+    /** Core-assigned decision id; shown as the connection id. */
+    val flowId: Long = 0L,
+    /** Request URL when TLS termination saw one. */
+    val url: String? = null,
+    /** Address(es) the engine answered a DNS query with. */
+    val dnsAnswer: String? = null,
+    val bytesSent: Long = 0L,
+    val bytesReceived: Long = 0L,
 ) {
     companion object {
         /** Convert a [git.shin.adfree.core.LogEvent] into a UI model. */
@@ -82,6 +112,13 @@ data class NetworkRequestLog(
                 appPackage = event.app.ifBlank { null },
                 latencyMicros = latencyMicros,
                 dataSavedBytes = event.bytesSaved.toLong(),
+                transport = NetworkTransport.fromCode(event.transport),
+                roaming = event.roaming,
+                flowId = event.flowId,
+                url = event.url.ifBlank { null },
+                dnsAnswer = event.dnsAnswer.ifBlank { null },
+                bytesSent = event.bytesSent,
+                bytesReceived = event.bytesRecv,
             )
         }
     }
@@ -160,6 +197,11 @@ data class FilterList(
      * so.
      */
     val trusted: Boolean = false,
+    /**
+     * A DNS filter: its rules are consulted on name lookups only, never on
+     * URLs or SNI. The core keeps them in a separate matcher.
+     */
+    val isDnsOnly: Boolean = false,
 )
 
 /**
@@ -338,6 +380,18 @@ enum class FirewallAccess {
     BLOCK,
 }
 
+/** One per-app answer for the SOCKS5 proxy. */
+enum class ProxyAccess {
+    /** Follow the global proxy switch. */
+    INHERIT,
+
+    /** Route this app's flows through the proxy even if it is not global. */
+    THROUGH,
+
+    /** Keep this app's flows off the proxy. */
+    DIRECT,
+}
+
 data class AppFirewallRule(
     val packageName: String,
     val appName: String,
@@ -355,9 +409,15 @@ data class AppFirewallRule(
     val isHttpsFiltered: Boolean = true,
     /** Whether a firewall block may raise a notification for this app. */
     val notifyBlocked: Boolean = true,
+    /** This app's routing answer for the global SOCKS5 proxy. */
+    val proxyAccess: ProxyAccess = ProxyAccess.INHERIT,
     val category: String = AppCategory.OTHER,
     val blockedRequestsToday: Int = 0,
     val dataTransferredBytes: Long = 0L,
+    /** Blocked requests from ad lists in the selected window. */
+    val blockedAdsToday: Int = 0,
+    /** Blocked requests from tracker, analytics and social lists. */
+    val blockedTrackersToday: Int = 0,
 ) {
     val hasNetworkRules: Boolean
         get() = wifiAccess != FirewallAccess.INHERIT ||

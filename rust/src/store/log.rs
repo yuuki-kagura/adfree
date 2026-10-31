@@ -101,6 +101,17 @@ pub struct LogRow {
     pub ipv6: bool,
     /// Package that owned the flow, empty when it could not be attributed.
     pub app: String,
+    /// 0 unknown, 1 Wi-Fi, 2 cellular.
+    pub transport: i64,
+    pub roaming: bool,
+    /// The decision id the core assigned; unique per row.
+    pub flow_id: i64,
+    /// Request URL, empty unless TLS termination saw one.
+    pub url: String,
+    /// Address(es) the engine answered a DNS query with, when it produced it.
+    pub dns_answer: String,
+    pub bytes_sent: i64,
+    pub bytes_recv: i64,
 }
 
 impl From<&Event> for LogRow {
@@ -119,6 +130,13 @@ impl From<&Event> for LogRow {
             bytes_saved: e.bytes_saved as i64,
             ipv6: e.flags & 0b01 != 0,
             app: e.app().to_string(),
+            transport: e.transport() as i64,
+            roaming: e.roaming(),
+            flow_id: e.flow_id as i64,
+            url: e.url().to_string(),
+            dns_answer: e.answer().to_string(),
+            bytes_sent: e.bytes_sent as i64,
+            bytes_recv: e.bytes_recv as i64,
         }
     }
 }
@@ -197,7 +215,14 @@ fn write_batch(db: &Db, rows: &[LogRow]) -> rusqlite::Result<()> {
                 r.latency_ns,
                 r.bytes_saved,
                 r.ipv6,
-                r.app
+                r.app,
+                r.transport,
+                r.roaming,
+                r.flow_id,
+                r.url,
+                r.dns_answer,
+                r.bytes_sent,
+                r.bytes_recv
             ])?;
         }
     }
@@ -205,33 +230,44 @@ fn write_batch(db: &Db, rows: &[LogRow]) -> rusqlite::Result<()> {
 }
 
 const COLUMNS: &str = "id, ts_ms, action, category, domain, ip, rule, list_name, \
-                       latency_ns, bytes_saved, ipv6, app";
+                       latency_ns, bytes_saved, ipv6, app, transport, roaming, flow_id, \
+                       url, dns_answer, bytes_sent, bytes_recv";
 
 const INSERT_SQL: &str = "INSERT INTO log_events \
-     (ts_ms, action, category, domain, ip, rule, list_name, latency_ns, bytes_saved, ipv6, app) \
-     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)";
+     (ts_ms, action, category, domain, ip, rule, list_name, latency_ns, bytes_saved, ipv6, app, \
+      transport, roaming, flow_id, url, dns_answer, bytes_sent, bytes_recv) \
+     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18)";
+
+fn row_from(r: &rusqlite::Row<'_>) -> rusqlite::Result<LogRow> {
+    Ok(LogRow {
+        id: r.get(0)?,
+        ts_ms: r.get(1)?,
+        action: r.get(2)?,
+        category: r.get(3)?,
+        domain: r.get(4)?,
+        ip: r.get(5)?,
+        rule: r.get(6)?,
+        list_name: r.get(7)?,
+        latency_ns: r.get(8)?,
+        bytes_saved: r.get(9)?,
+        ipv6: r.get(10)?,
+        app: r.get(11)?,
+        transport: r.get(12)?,
+        roaming: r.get(13)?,
+        flow_id: r.get(14)?,
+        url: r.get(15)?,
+        dns_answer: r.get(16)?,
+        bytes_sent: r.get(17)?,
+        bytes_recv: r.get(18)?,
+    })
+}
 
 /// Newest first: `offset` skips that many of the newest rows.
 pub(super) fn page(db: &Db, offset: u32, limit: u32) -> rusqlite::Result<Vec<LogRow>> {
     let conn = db.lock();
     let sql = format!("SELECT {COLUMNS} FROM log_events ORDER BY id DESC LIMIT ?1 OFFSET ?2");
     let mut stmt = conn.prepare_cached(&sql)?;
-    let rows = stmt.query_map([limit as i64, offset as i64], |r| {
-        Ok(LogRow {
-            id: r.get(0)?,
-            ts_ms: r.get(1)?,
-            action: r.get(2)?,
-            category: r.get(3)?,
-            domain: r.get(4)?,
-            ip: r.get(5)?,
-            rule: r.get(6)?,
-            list_name: r.get(7)?,
-            latency_ns: r.get(8)?,
-            bytes_saved: r.get(9)?,
-            ipv6: r.get(10)?,
-            app: r.get(11)?,
-        })
-    })?;
+    let rows = stmt.query_map([limit as i64, offset as i64], row_from)?;
     rows.collect()
 }
 
@@ -248,22 +284,7 @@ pub(super) fn page_before(db: &Db, before_id: i64, limit: u32) -> rusqlite::Resu
         "SELECT {COLUMNS} FROM log_events WHERE id < ?1 ORDER BY id DESC LIMIT ?2"
     );
     let mut stmt = conn.prepare_cached(&sql)?;
-    let rows = stmt.query_map([before_id, limit as i64], |r| {
-        Ok(LogRow {
-            id: r.get(0)?,
-            ts_ms: r.get(1)?,
-            action: r.get(2)?,
-            category: r.get(3)?,
-            domain: r.get(4)?,
-            ip: r.get(5)?,
-            rule: r.get(6)?,
-            list_name: r.get(7)?,
-            latency_ns: r.get(8)?,
-            bytes_saved: r.get(9)?,
-            ipv6: r.get(10)?,
-            app: r.get(11)?,
-        })
-    })?;
+    let rows = stmt.query_map([before_id, limit as i64], row_from)?;
     rows.collect()
 }
 
@@ -288,20 +309,46 @@ pub(super) fn status_counts(db: &Db) -> rusqlite::Result<(i64, i64)> {
 }
 
 /// Blocked rows grouped by owning package since `since_ms`, plus the bytes they
-/// claim to have saved. Anything but an allow decision counts as blocked.
-pub(super) fn usage_by_app(db: &Db, since_ms: i64) -> rusqlite::Result<Vec<(String, i64, i64)>> {
+/// claim to have saved and how much of the block count was ads vs trackers.
+/// Anything but an allow decision counts as blocked; `transport` selects one
+/// network (0 unknown, 1 Wi-Fi, 2 cellular) or `-1` for all.
+pub(super) fn usage_by_app(
+    db: &Db,
+    since_ms: i64,
+    transport: i64,
+) -> rusqlite::Result<Vec<UsageRow>> {
     let conn = db.lock();
     let mut stmt = conn.prepare_cached(
         "SELECT app, \
                 SUM(CASE WHEN action != 0 THEN 1 ELSE 0 END), \
-                SUM(bytes_saved) \
+                SUM(bytes_saved), \
+                SUM(CASE WHEN action != 0 AND category = 0 THEN 1 ELSE 0 END), \
+                SUM(CASE WHEN action != 0 AND category IN (1, 2, 3) THEN 1 ELSE 0 END) \
          FROM log_events \
-         WHERE app != '' AND ts_ms >= ?1 \
+         WHERE app != '' AND ts_ms >= ?1 AND (?2 < 0 OR transport = ?2) \
          GROUP BY app \
          ORDER BY 2 DESC",
     )?;
-    let rows = stmt.query_map([since_ms], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?;
+    let rows = stmt.query_map([since_ms, transport], |r| {
+        Ok(UsageRow {
+            app: r.get(0)?,
+            blocked: r.get(1)?,
+            bytes_saved: r.get(2)?,
+            ads: r.get(3)?,
+            trackers: r.get(4)?,
+        })
+    })?;
     rows.collect()
+}
+
+/// One package's totals over a window.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UsageRow {
+    pub app: String,
+    pub blocked: i64,
+    pub bytes_saved: i64,
+    pub ads: i64,
+    pub trackers: i64,
 }
 
 pub(super) fn clear(db: &Db) -> rusqlite::Result<()> {

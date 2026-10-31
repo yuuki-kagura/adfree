@@ -3,6 +3,7 @@ package git.shin.adfree.ui
 import git.shin.adfree.model.AppFirewallRule
 import git.shin.adfree.model.AppLanguage
 import git.shin.adfree.model.AppUsageRange
+import git.shin.adfree.model.AppUsageTransport
 import git.shin.adfree.model.DnsBackup
 import git.shin.adfree.model.DnsBackupMode
 import git.shin.adfree.model.DnsBlockMode
@@ -15,6 +16,7 @@ import git.shin.adfree.model.NetworkRequestLog
 import git.shin.adfree.model.ProtectionSettings
 import git.shin.adfree.model.ProtectionStats
 import git.shin.adfree.model.ProtocolType
+import git.shin.adfree.model.ProxyAccess
 import git.shin.adfree.model.ThreatAnalysisResult
 import git.shin.adfree.model.ThemeMode
 import git.shin.adfree.model.UserScriptInfo
@@ -60,6 +62,7 @@ data class AdGuardUiState(
     val filterSearchQuery: String = "",
     val inspectedFilterId: String? = null,
     val showAddFilterDialog: Boolean = false,
+    val showAddDnsFilterDialog: Boolean = false,
     val userscripts: List<UserScriptInfo> = emptyList(),
     val scriptsMasterEnabled: Boolean = false,
     val inspectedScriptId: String? = null,
@@ -146,6 +149,7 @@ sealed interface AdGuardIntent {
         val filtered: Boolean? = null,
         val httpsFiltered: Boolean? = null,
         val notifyBlocked: Boolean? = null,
+        val proxyAccess: ProxyAccess? = null,
     ) : AdGuardIntent
     /** Global defaults and the two rule-set gates. */
     data class UpdateFirewallSettings(
@@ -173,6 +177,7 @@ sealed interface AdGuardIntent {
     data class AppSearchQueryChanged(val query: String) : AdGuardIntent
     data class AppCategoryFilterChanged(val filter: String?) : AdGuardIntent
     data class SetAppUsageRange(val range: AppUsageRange) : AdGuardIntent
+    data class SetAppUsageTransport(val transport: AppUsageTransport) : AdGuardIntent
     data object ClearLogs : AdGuardIntent
     data object ResetStats : AdGuardIntent
     data object LoadMoreLogs : AdGuardIntent
@@ -185,8 +190,11 @@ sealed interface AdGuardIntent {
     data class ShowCustomRuleEditor(val show: Boolean) : AdGuardIntent
     data class FilterSearchQueryChanged(val query: String) : AdGuardIntent
     data class ShowAddFilterDialog(val show: Boolean) : AdGuardIntent
+    data class ShowAddDnsFilterDialog(val show: Boolean) : AdGuardIntent
     data class AddCustomFilter(val name: String, val url: String) : AdGuardIntent
-    data class ImportLocalFilter(val uri: String) : AdGuardIntent
+    /** Adds a subscription under "DNS filters" (name lookups only). */
+    data class AddDnsFilter(val name: String, val url: String) : AdGuardIntent
+    data class ImportLocalFilter(val uri: String, val dnsOnly: Boolean = false) : AdGuardIntent
     /** Write settings + filter choices to a JSON backup (SAF URI). */
     data class ExportBackup(val uri: String) : AdGuardIntent
     /** Restore settings + filter choices from a JSON backup (SAF URI). */

@@ -10,6 +10,7 @@ import git.shin.adfree.core.DnsProviderRecord as CoreDnsProvider
 import git.shin.adfree.core.DnsRewrite as CoreDnsRewrite
 import git.shin.adfree.core.FirewallAccess as CoreFirewallAccess
 import git.shin.adfree.core.ProtectionState as CoreProtectionState
+import git.shin.adfree.core.ProxyAccess as CoreProxyAccess
 import git.shin.adfree.core.ProxyState as CoreProxyState
 import git.shin.adfree.core.ThemeMode as CoreThemeMode
 import git.shin.adfree.model.AppFirewallRule
@@ -22,6 +23,7 @@ import git.shin.adfree.model.DnsRewriteRule
 import git.shin.adfree.model.FirewallAccess
 import git.shin.adfree.model.ProtectionSettings
 import git.shin.adfree.model.ProtocolType
+import git.shin.adfree.model.ProxyAccess
 import git.shin.adfree.model.ProxySettings
 import git.shin.adfree.model.ThemeMode
 
@@ -182,7 +184,11 @@ private fun CoreThemeMode.toModel(): ThemeMode = when (this) {
 
 /** True when the row must be persisted: any rule, routing or notification choice. */
 internal fun AppFirewallRule.hasOverrides(): Boolean =
-    hasNetworkRules || !isFilterRouted || !isHttpsFiltered || !notifyBlocked
+    hasNetworkRules ||
+        !isFilterRouted ||
+        !isHttpsFiltered ||
+        !notifyBlocked ||
+        proxyAccess != ProxyAccess.INHERIT
 
 internal fun FirewallAccess.toCore(): CoreFirewallAccess = when (this) {
     FirewallAccess.INHERIT -> CoreFirewallAccess.INHERIT
@@ -196,6 +202,18 @@ internal fun CoreFirewallAccess.toModel(): FirewallAccess = when (this) {
     CoreFirewallAccess.BLOCK -> FirewallAccess.BLOCK
 }
 
+internal fun ProxyAccess.toCore(): CoreProxyAccess = when (this) {
+    ProxyAccess.INHERIT -> CoreProxyAccess.INHERIT
+    ProxyAccess.THROUGH -> CoreProxyAccess.THROUGH
+    ProxyAccess.DIRECT -> CoreProxyAccess.DIRECT
+}
+
+internal fun CoreProxyAccess.toModel(): ProxyAccess = when (this) {
+    CoreProxyAccess.INHERIT -> ProxyAccess.INHERIT
+    CoreProxyAccess.THROUGH -> ProxyAccess.THROUGH
+    CoreProxyAccess.DIRECT -> ProxyAccess.DIRECT
+}
+
 internal fun AppFirewallRule.toCoreRule(): CoreFirewallRule = CoreFirewallRule(
     packageName = packageName,
     wifi = wifiAccess.toCore(),
@@ -206,6 +224,7 @@ internal fun AppFirewallRule.toCoreRule(): CoreFirewallRule = CoreFirewallRule(
     filtered = isFilterRouted,
     https = isHttpsFiltered,
     notify = notifyBlocked,
+    proxy = proxyAccess.toCore(),
 )
 
 internal fun CoreFirewallRule.toModel(appName: String, category: String): AppFirewallRule =
@@ -220,6 +239,7 @@ internal fun CoreFirewallRule.toModel(appName: String, category: String): AppFir
         isFilterRouted = filtered,
         isHttpsFiltered = https,
         notifyBlocked = notify,
+        proxyAccess = proxy.toModel(),
         category = category,
     )
 

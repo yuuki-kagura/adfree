@@ -303,6 +303,54 @@ impl<'de> Deserialize<'de> for FirewallAccess {
     }
 }
 
+/// One app's routing answer for the SOCKS5 proxy.
+///
+/// `Inherit` follows the global proxy switch, `Through` forces the app's
+/// flows through the proxy even when it is not the default for everything,
+/// and `Direct` keeps them off it.
+#[derive(uniffi::Enum, Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+pub enum ProxyAccess {
+    #[default]
+    Inherit,
+    Through,
+    Direct,
+}
+
+impl Serialize for ProxyAccess {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(match self {
+            ProxyAccess::Inherit => "inherit",
+            ProxyAccess::Through => "through",
+            ProxyAccess::Direct => "direct",
+        })
+    }
+}
+
+impl<'de> Deserialize<'de> for ProxyAccess {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        struct AccessVisitor;
+
+        impl serde::de::Visitor<'_> for AccessVisitor {
+            type Value = ProxyAccess;
+
+            fn expecting(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                f.write_str("a proxy access word (inherit/through/direct)")
+            }
+
+            fn visit_str<E: serde::de::Error>(self, value: &str) -> Result<Self::Value, E> {
+                match value.trim().to_ascii_lowercase().as_str() {
+                    "inherit" | "" => Ok(ProxyAccess::Inherit),
+                    "through" | "proxy" => Ok(ProxyAccess::Through),
+                    "direct" | "off" => Ok(ProxyAccess::Direct),
+                    _ => Err(E::custom(format!("unknown proxy access: {value}"))),
+                }
+            }
+        }
+
+        deserializer.deserialize_any(AccessVisitor)
+    }
+}
+
 /// One app's firewall overrides. The five network dimensions are independent;
 /// the global defaults apply wherever a dimension is `Inherit`.
 #[derive(uniffi::Record, Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -318,6 +366,8 @@ pub struct AppFirewallRule {
     pub https: bool,
     /// Whether a firewall block may raise a notification for this app.
     pub notify: bool,
+    /// This app's routing answer for the global SOCKS5 proxy.
+    pub proxy: ProxyAccess,
 }
 
 impl Default for AppFirewallRule {
@@ -332,6 +382,7 @@ impl Default for AppFirewallRule {
             filtered: true,
             https: true,
             notify: true,
+            proxy: ProxyAccess::Inherit,
         }
     }
 }
@@ -361,6 +412,8 @@ struct AppFirewallRuleWire {
     https: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     notify: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    proxy: Option<ProxyAccess>,
 }
 
 impl From<AppFirewallRuleWire> for AppFirewallRule {
@@ -380,6 +433,7 @@ impl From<AppFirewallRuleWire> for AppFirewallRule {
             filtered: wire.filtered.unwrap_or(true),
             https: wire.https.unwrap_or(true),
             notify: wire.notify.unwrap_or(true),
+            proxy: wire.proxy.unwrap_or_default(),
         }
     }
 }
@@ -397,6 +451,7 @@ impl From<AppFirewallRule> for AppFirewallRuleWire {
             filtered: Some(rule.filtered),
             https: Some(rule.https),
             notify: Some(rule.notify),
+            proxy: Some(rule.proxy),
         }
     }
 }
@@ -609,6 +664,9 @@ pub struct FilterState {
     /// False means the starter rules should be seeded on first use; an empty
     /// list that the user emptied must stay empty.
     pub user_rules_configured: bool,
+    /// Lists the user added under "DNS filters". They are consulted by name
+    /// lookups only, never by URL or SNI checks.
+    pub dns_filters: Vec<FilterChoice>,
 }
 
 #[derive(uniffi::Record, Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]

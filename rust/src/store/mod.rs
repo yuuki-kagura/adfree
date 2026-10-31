@@ -19,7 +19,7 @@
 
 mod log;
 
-pub use log::LogRow;
+pub use log::{LogRow, UsageRow};
 
 use rusqlite::Connection;
 use std::path::{Path, PathBuf};
@@ -166,14 +166,20 @@ impl Store {
         }
     }
 
-    /// `(package, blocked, bytes_saved)` since `since_ms`, biggest first. The
+    /// `(package, blocked, bytes_saved, ads, trackers)` since `since_ms`,
+    /// biggest first, restricted to one transport when `transport >= 0`. The
     /// UI passes its local midnight, so "today" means the user's day.
-    pub fn log_usage_by_app(&self, since_ms: i64) -> Vec<(String, u64, u64)> {
-        match log::usage_by_app(&self.db, since_ms) {
-            Ok(rows) => rows
-                .into_iter()
-                .map(|(app, blocked, bytes)| (app, blocked.max(0) as u64, bytes.max(0) as u64))
-                .collect(),
+    pub fn log_usage_by_app(&self, since_ms: i64, transport: i64) -> Vec<UsageRow> {
+        match log::usage_by_app(&self.db, since_ms, transport) {
+            Ok(mut rows) => {
+                for row in &mut rows {
+                    row.blocked = row.blocked.max(0);
+                    row.bytes_saved = row.bytes_saved.max(0);
+                    row.ads = row.ads.max(0);
+                    row.trackers = row.trackers.max(0);
+                }
+                rows
+            }
             Err(e) => {
                 crate::logbuf::push(&format!("store: app usage: {e}"));
                 Vec::new()
@@ -420,6 +426,27 @@ fn migrate(conn: &Connection) -> Result<(), String> {
         )
         .map_err(|e| format!("migrate schema to v5: {e}"))?;
     }
+    if version < 6 {
+        // v6: a row names the transport and roaming state it was decided on,
+        // the request URL when TLS termination saw one, the DNS answer when
+        // the engine produced it, and the bytes that crossed the flow when
+        // known. Old rows read as unknown/zero.
+        conn.execute_batch(
+            "BEGIN;
+             ALTER TABLE log_events ADD COLUMN transport INTEGER NOT NULL DEFAULT 0;
+             ALTER TABLE log_events ADD COLUMN roaming INTEGER NOT NULL DEFAULT 0;
+             ALTER TABLE log_events ADD COLUMN flow_id INTEGER NOT NULL DEFAULT 0;
+             ALTER TABLE log_events ADD COLUMN url TEXT NOT NULL DEFAULT '';
+             ALTER TABLE log_events ADD COLUMN dns_answer TEXT NOT NULL DEFAULT '';
+             ALTER TABLE log_events ADD COLUMN bytes_sent INTEGER NOT NULL DEFAULT 0;
+             ALTER TABLE log_events ADD COLUMN bytes_recv INTEGER NOT NULL DEFAULT 0;
+             CREATE INDEX IF NOT EXISTS log_events_transport_action
+                 ON log_events(transport, action);
+             PRAGMA user_version = 6;
+             COMMIT;",
+        )
+        .map_err(|e| format!("migrate schema to v6: {e}"))?;
+    }
     Ok(())
 }
 
@@ -534,9 +561,97 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// A v5 database predates the transport/URL/answer columns; opening it
+    /// must add them and leave the existing rows readable as unknown.
     #[test]
-    fn log_pages_and_counts() {
-        let (store, _) = temp_store("pages");
+    fn a_v5_log_gains_the_network_columns() {
+        let dir = std::env::temp_dir().join(format!("adfree-store-{}-v5", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        {
+            let conn = Connection::open(dir.join("adfree.db")).unwrap();
+            conn.execute_batch(
+                "CREATE TABLE settings (
+                     id         INTEGER PRIMARY KEY,
+                     json       TEXT NOT NULL,
+                     updated_ms INTEGER NOT NULL
+                 );
+                 CREATE TABLE state (
+                     key        TEXT PRIMARY KEY,
+                     json       TEXT NOT NULL,
+                     updated_ms INTEGER NOT NULL
+                 );
+                 CREATE TABLE state_meta (
+                     key   TEXT PRIMARY KEY,
+                     value TEXT NOT NULL
+                 );
+                 CREATE TABLE log_events (
+                     id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                     ts_ms       INTEGER NOT NULL,
+                     action      INTEGER NOT NULL,
+                     category    INTEGER NOT NULL,
+                     domain      TEXT NOT NULL,
+                     ip          TEXT NOT NULL,
+                     rule        TEXT NOT NULL,
+                     list_name   TEXT NOT NULL,
+                     latency_ns  INTEGER NOT NULL DEFAULT 0,
+                     bytes_saved INTEGER NOT NULL DEFAULT 0,
+                     ipv6        INTEGER NOT NULL DEFAULT 0,
+                     app         TEXT NOT NULL DEFAULT ''
+                 );
+                 CREATE INDEX log_events_ts ON log_events(ts_ms);
+                 CREATE INDEX log_events_action ON log_events(action);
+                 INSERT INTO log_events
+                     (ts_ms, action, category, domain, ip, rule, list_name, app)
+                     VALUES (1234, 1, 0, 'old.example', '10.0.0.1', '||old.example^', 'Old list', 'com.example.old');
+                 PRAGMA user_version = 5;",
+            )
+            .unwrap();
+        }
+
+        let store = Store::open(&dir).expect("v5 store opens");
+        let rows = store.log_page(0, 10);
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].domain, "old.example");
+        assert_eq!(rows[0].transport, 0, "old rows read as unknown");
+        assert!(!rows[0].roaming);
+        assert_eq!(rows[0].url, "");
+        assert_eq!(rows[0].dns_answer, "");
+        assert_eq!(rows[0].flow_id, 0);
+        assert_eq!(rows[0].bytes_sent, 0);
+        assert_eq!(rows[0].bytes_recv, 0);
+
+        let mut fresh = with_app(
+            crate::events::with_traffic(
+                crate::events::with_url(
+                    crate::events::with_answer(allow_event("new.example", "10.0.0.2", 1), "10.0.0.2"),
+                    "https://new.example/path",
+                ),
+                12,
+                34,
+            ),
+            "com.example.new",
+        );
+        fresh.set_network(1, true);
+        store.log_enqueue(&fresh);
+        store.log_flush();
+        let row = &store.log_page(0, 1)[0];
+        assert_eq!(row.transport, 1);
+        assert!(row.roaming);
+        assert_eq!(row.url, "https://new.example/path");
+        assert_eq!(row.dns_answer, "10.0.0.2");
+        assert_eq!(row.bytes_sent, 12);
+        assert_eq!(row.bytes_recv, 34);
+
+        // The transport filter now narrows by the migrated column.
+        assert_eq!(store.log_usage_by_app(0, 1).len(), 1);
+        assert!(store.log_usage_by_app(0, 2).is_empty());
+        drop(store);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn log_pages_and_counts() {        let (store, _) = temp_store("pages");
         for i in 0..700u64 {
             let mut ev = allow_event(&format!("h{i}.test"), "10.0.0.9", i as u32);
             ev.ts_ms = 2_000 + i;
@@ -610,12 +725,20 @@ mod tests {
         store.log_enqueue(&orphan);
         store.log_flush();
 
-        let usage = store.log_usage_by_app(1_000);
+        let usage = store.log_usage_by_app(1_000, -1);
         assert_eq!(
             usage,
-            vec![("com.example.browser".to_string(), 2, 150)],
+            vec![UsageRow {
+                app: "com.example.browser".to_string(),
+                blocked: 2,
+                bytes_saved: 150,
+                ads: 1,
+                trackers: 1,
+            }],
             "window and attribution both apply"
         );
+        // The transport filter excludes rows stamped as unknown.
+        assert!(store.log_usage_by_app(1_000, 1).is_empty());
     }
 
     #[test]

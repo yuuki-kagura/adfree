@@ -230,6 +230,7 @@ impl StateStore {
         value.enabled_catalog_ids = dedupe(value.enabled_catalog_ids);
         value.trusted_ids = dedupe(value.trusted_ids);
         value.custom.retain(|f| !f.id.trim().is_empty());
+        value.dns_filters.retain(|f| !f.id.trim().is_empty());
         if !write_row(&self.store, KEY_FILTERS, &value) {
             return false;
         }
@@ -528,6 +529,35 @@ mod tests {
         assert!(state.save_filters(filters));
         assert_eq!(state.snapshot().filters.enabled_catalog_ids, vec!["a"]);
         assert!(state.snapshot().filters.catalog_configured);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn dns_filters_persist_apart_from_the_custom_lists() {
+        let (store, dir) = temp("dns-filters");
+        let state = StateStore::open(store);
+        let mut filters = state.snapshot().filters;
+        filters.custom.push(FilterChoice {
+            id: "sub_1".to_string(),
+            ..FilterChoice::default()
+        });
+        filters.dns_filters.push(FilterChoice {
+            id: "dns_1".to_string(),
+            name: "Hosts".to_string(),
+            url: "https://example.test/hosts".to_string(),
+            format: "hosts".to_string(),
+            enabled: true,
+            trusted: false,
+            ..FilterChoice::default()
+        });
+        filters.dns_filters.push(FilterChoice::default());
+        assert!(state.save_filters(filters));
+
+        let saved = state.snapshot().filters;
+        assert_eq!(saved.custom.len(), 1, "a DNS filter is not a custom web list");
+        assert_eq!(saved.dns_filters.len(), 1, "a blank id never persists");
+        assert_eq!(saved.dns_filters[0].name, "Hosts");
+        assert_eq!(saved.dns_filters[0].format, "hosts");
         let _ = std::fs::remove_dir_all(&dir);
     }
 

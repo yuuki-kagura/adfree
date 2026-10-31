@@ -721,6 +721,8 @@ internal object IntegrityCheckingUniffiLib {
     internal fun ensureInitialized() = Unit
     external fun uniffi_adfree_core_checksum_func_core_app_usage_since(
     ): Int
+    external fun uniffi_adfree_core_checksum_func_core_app_usage_since_transport(
+    ): Int
     external fun uniffi_adfree_core_checksum_func_core_apply_config(
     ): Int
     external fun uniffi_adfree_core_checksum_func_core_backup_export(
@@ -904,6 +906,8 @@ internal object UniffiLib {
     external fun uniffi_adfree_core_fn_method_socketprotector_protect(`ptr`: Long,`fd`: Int,uniffi_out_err: UniffiRustCallStatus, 
     ): Byte
     external fun uniffi_adfree_core_fn_func_core_app_usage_since(`sinceMs`: Long,uniffi_out_err: UniffiRustCallStatus, 
+    ): RustBuffer.ByValue
+    external fun uniffi_adfree_core_fn_func_core_app_usage_since_transport(`sinceMs`: Long,`transport`: Int,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
     external fun uniffi_adfree_core_fn_func_core_apply_config(`privateDnsStrict`: Byte,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
@@ -1165,6 +1169,9 @@ private fun uniffiCheckContractApiVersion(lib: IntegrityCheckingUniffiLib) {
 @Suppress("UNUSED_PARAMETER")
 private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
     if ((lib.uniffi_adfree_core_checksum_func_core_app_usage_since() and 0xFFFF) != 35767) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if ((lib.uniffi_adfree_core_checksum_func_core_app_usage_since_transport() and 0xFFFF) != 47360) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if ((lib.uniffi_adfree_core_checksum_func_core_apply_config() and 0xFFFF) != 14598) {
@@ -2485,6 +2492,11 @@ data class AppFirewallRule (
      * Whether a firewall block may raise a notification for this app.
      */
     var `notify`: kotlin.Boolean
+    , 
+    /**
+     * This app's routing answer for the global SOCKS5 proxy.
+     */
+    var `proxy`: ProxyAccess
     
 ){
     
@@ -2510,6 +2522,7 @@ public object FfiConverterTypeAppFirewallRule: FfiConverterRustBuffer<AppFirewal
             FfiConverterBoolean.read(buf),
             FfiConverterBoolean.read(buf),
             FfiConverterBoolean.read(buf),
+            FfiConverterTypeProxyAccess.read(buf),
         )
     }
 
@@ -2522,7 +2535,8 @@ public object FfiConverterTypeAppFirewallRule: FfiConverterRustBuffer<AppFirewal
             FfiConverterTypeFirewallAccess.allocationSize(value.`roaming`) +
             FfiConverterBoolean.allocationSize(value.`filtered`) +
             FfiConverterBoolean.allocationSize(value.`https`) +
-            FfiConverterBoolean.allocationSize(value.`notify`)
+            FfiConverterBoolean.allocationSize(value.`notify`) +
+            FfiConverterTypeProxyAccess.allocationSize(value.`proxy`)
     )
 
     override fun write(value: AppFirewallRule, buf: ByteBuffer) {
@@ -2535,6 +2549,7 @@ public object FfiConverterTypeAppFirewallRule: FfiConverterRustBuffer<AppFirewal
             FfiConverterBoolean.write(value.`filtered`, buf)
             FfiConverterBoolean.write(value.`https`, buf)
             FfiConverterBoolean.write(value.`notify`, buf)
+            FfiConverterTypeProxyAccess.write(value.`proxy`, buf)
     }
 }
 
@@ -2552,6 +2567,16 @@ data class AppUsage (
     var `blocked`: kotlin.UInt
     , 
     var `bytesSaved`: kotlin.ULong
+    , 
+    /**
+     * Blocked requests from the ad category.
+     */
+    var `ads`: kotlin.UInt
+    , 
+    /**
+     * Blocked requests from the tracker, analytics and social categories.
+     */
+    var `trackers`: kotlin.UInt
     
 ){
     
@@ -2571,19 +2596,25 @@ public object FfiConverterTypeAppUsage: FfiConverterRustBuffer<AppUsage> {
             FfiConverterString.read(buf),
             FfiConverterUInt.read(buf),
             FfiConverterULong.read(buf),
+            FfiConverterUInt.read(buf),
+            FfiConverterUInt.read(buf),
         )
     }
 
     override fun allocationSize(value: AppUsage) = (
             FfiConverterString.allocationSize(value.`app`) +
             FfiConverterUInt.allocationSize(value.`blocked`) +
-            FfiConverterULong.allocationSize(value.`bytesSaved`)
+            FfiConverterULong.allocationSize(value.`bytesSaved`) +
+            FfiConverterUInt.allocationSize(value.`ads`) +
+            FfiConverterUInt.allocationSize(value.`trackers`)
     )
 
     override fun write(value: AppUsage, buf: ByteBuffer) {
             FfiConverterString.write(value.`app`, buf)
             FfiConverterUInt.write(value.`blocked`, buf)
             FfiConverterULong.write(value.`bytesSaved`, buf)
+            FfiConverterUInt.write(value.`ads`, buf)
+            FfiConverterUInt.write(value.`trackers`, buf)
     }
 }
 
@@ -3350,6 +3381,12 @@ data class FilterListBinding (
     var `ruleCount`: kotlin.Long
     , 
     var `lastError`: kotlin.String
+    , 
+    /**
+     * Host-only list: its rules decide DNS lookups but never URL or
+     * cosmetic ones (AdGuard's "DNS filters").
+     */
+    var `dnsOnly`: kotlin.Boolean
     
 ){
     
@@ -3376,6 +3413,7 @@ public object FfiConverterTypeFilterListBinding: FfiConverterRustBuffer<FilterLi
             FfiConverterBoolean.read(buf),
             FfiConverterLong.read(buf),
             FfiConverterString.read(buf),
+            FfiConverterBoolean.read(buf),
         )
     }
 
@@ -3389,7 +3427,8 @@ public object FfiConverterTypeFilterListBinding: FfiConverterRustBuffer<FilterLi
             FfiConverterInt.allocationSize(value.`category`) +
             FfiConverterBoolean.allocationSize(value.`trusted`) +
             FfiConverterLong.allocationSize(value.`ruleCount`) +
-            FfiConverterString.allocationSize(value.`lastError`)
+            FfiConverterString.allocationSize(value.`lastError`) +
+            FfiConverterBoolean.allocationSize(value.`dnsOnly`)
     )
 
     override fun write(value: FilterListBinding, buf: ByteBuffer) {
@@ -3403,6 +3442,7 @@ public object FfiConverterTypeFilterListBinding: FfiConverterRustBuffer<FilterLi
             FfiConverterBoolean.write(value.`trusted`, buf)
             FfiConverterLong.write(value.`ruleCount`, buf)
             FfiConverterString.write(value.`lastError`, buf)
+            FfiConverterBoolean.write(value.`dnsOnly`, buf)
     }
 }
 
@@ -3430,6 +3470,12 @@ data class FilterState (
      * list that the user emptied must stay empty.
      */
     var `userRulesConfigured`: kotlin.Boolean
+    , 
+    /**
+     * Lists the user added under "DNS filters". They are consulted by name
+     * lookups only, never by URL or SNI checks.
+     */
+    var `dnsFilters`: List<FilterChoice>
     
 ){
     
@@ -3452,6 +3498,7 @@ public object FfiConverterTypeFilterState: FfiConverterRustBuffer<FilterState> {
             FfiConverterSequenceTypeFilterChoice.read(buf),
             FfiConverterSequenceString.read(buf),
             FfiConverterBoolean.read(buf),
+            FfiConverterSequenceTypeFilterChoice.read(buf),
         )
     }
 
@@ -3461,7 +3508,8 @@ public object FfiConverterTypeFilterState: FfiConverterRustBuffer<FilterState> {
             FfiConverterSequenceString.allocationSize(value.`trustedIds`) +
             FfiConverterSequenceTypeFilterChoice.allocationSize(value.`custom`) +
             FfiConverterSequenceString.allocationSize(value.`userRules`) +
-            FfiConverterBoolean.allocationSize(value.`userRulesConfigured`)
+            FfiConverterBoolean.allocationSize(value.`userRulesConfigured`) +
+            FfiConverterSequenceTypeFilterChoice.allocationSize(value.`dnsFilters`)
     )
 
     override fun write(value: FilterState, buf: ByteBuffer) {
@@ -3471,6 +3519,7 @@ public object FfiConverterTypeFilterState: FfiConverterRustBuffer<FilterState> {
             FfiConverterSequenceTypeFilterChoice.write(value.`custom`, buf)
             FfiConverterSequenceString.write(value.`userRules`, buf)
             FfiConverterBoolean.write(value.`userRulesConfigured`, buf)
+            FfiConverterSequenceTypeFilterChoice.write(value.`dnsFilters`, buf)
     }
 }
 
@@ -3564,6 +3613,36 @@ data class LogEvent (
      * Package of the app that owned the flow; empty when unattributed.
      */
     var `app`: kotlin.String
+    , 
+    /**
+     * 0 unknown, 1 Wi-Fi, 2 cellular.
+     */
+    var `transport`: kotlin.Int
+    , 
+    /**
+     * Whether that network was roaming.
+     */
+    var `roaming`: kotlin.Boolean
+    , 
+    /**
+     * Monotonic decision id assigned by the core.
+     */
+    var `flowId`: kotlin.Long
+    , 
+    /**
+     * Request URL when TLS termination saw one; empty otherwise.
+     */
+    var `url`: kotlin.String
+    , 
+    /**
+     * Address(es) the engine answered a DNS query with, when it produced the
+     * reply itself.
+     */
+    var `dnsAnswer`: kotlin.String
+    , 
+    var `bytesSent`: kotlin.Long
+    , 
+    var `bytesRecv`: kotlin.Long
     
 ){
     
@@ -3592,6 +3671,13 @@ public object FfiConverterTypeLogEvent: FfiConverterRustBuffer<LogEvent> {
             FfiConverterInt.read(buf),
             FfiConverterBoolean.read(buf),
             FfiConverterString.read(buf),
+            FfiConverterInt.read(buf),
+            FfiConverterBoolean.read(buf),
+            FfiConverterLong.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterLong.read(buf),
+            FfiConverterLong.read(buf),
         )
     }
 
@@ -3607,7 +3693,14 @@ public object FfiConverterTypeLogEvent: FfiConverterRustBuffer<LogEvent> {
             FfiConverterInt.allocationSize(value.`latencyNs`) +
             FfiConverterInt.allocationSize(value.`bytesSaved`) +
             FfiConverterBoolean.allocationSize(value.`ipv6`) +
-            FfiConverterString.allocationSize(value.`app`)
+            FfiConverterString.allocationSize(value.`app`) +
+            FfiConverterInt.allocationSize(value.`transport`) +
+            FfiConverterBoolean.allocationSize(value.`roaming`) +
+            FfiConverterLong.allocationSize(value.`flowId`) +
+            FfiConverterString.allocationSize(value.`url`) +
+            FfiConverterString.allocationSize(value.`dnsAnswer`) +
+            FfiConverterLong.allocationSize(value.`bytesSent`) +
+            FfiConverterLong.allocationSize(value.`bytesRecv`)
     )
 
     override fun write(value: LogEvent, buf: ByteBuffer) {
@@ -3623,6 +3716,13 @@ public object FfiConverterTypeLogEvent: FfiConverterRustBuffer<LogEvent> {
             FfiConverterInt.write(value.`bytesSaved`, buf)
             FfiConverterBoolean.write(value.`ipv6`, buf)
             FfiConverterString.write(value.`app`, buf)
+            FfiConverterInt.write(value.`transport`, buf)
+            FfiConverterBoolean.write(value.`roaming`, buf)
+            FfiConverterLong.write(value.`flowId`, buf)
+            FfiConverterString.write(value.`url`, buf)
+            FfiConverterString.write(value.`dnsAnswer`, buf)
+            FfiConverterLong.write(value.`bytesSent`, buf)
+            FfiConverterLong.write(value.`bytesRecv`, buf)
     }
 }
 
@@ -5100,6 +5200,48 @@ public object FfiConverterTypeFirewallAccess: FfiConverterRustBuffer<FirewallAcc
 
 
 
+/**
+ * One app's routing answer for the SOCKS5 proxy.
+ *
+ * `Inherit` follows the global proxy switch, `Through` forces the app's
+ * flows through the proxy even when it is not the default for everything,
+ * and `Direct` keeps them off it.
+ */
+
+enum class ProxyAccess {
+    
+    INHERIT,
+    THROUGH,
+    DIRECT;
+
+    
+
+
+    companion object
+}
+
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeProxyAccess: FfiConverterRustBuffer<ProxyAccess> {
+    override fun read(buf: ByteBuffer) = try {
+        ProxyAccess.values()[buf.getInt() - 1]
+    } catch (e: IndexOutOfBoundsException) {
+        throw RuntimeException("invalid enum value, something is very wrong!!", e)
+    }
+
+    override fun allocationSize(value: ProxyAccess) = 4UL
+
+    override fun write(value: ProxyAccess, buf: ByteBuffer) {
+        buf.putInt(value.ordinal + 1)
+    }
+}
+
+
+
+
+
 
 enum class ThemeMode {
     
@@ -5695,6 +5837,22 @@ public object FfiConverterSequenceTypeUidApps: FfiConverterRustBuffer<List<UidAp
     
         
         FfiConverterLong.lower(`sinceMs`),_status)
+}
+    )
+    }
+    
+
+        /**
+         * Same as [`core_app_usage_since`] but restricted to one transport: `-1` all,
+         * `0` unknown, `1` Wi-Fi, `2` cellular.
+         */ fun `coreAppUsageSinceTransport`(`sinceMs`: kotlin.Long, `transport`: kotlin.Int): List<AppUsage> {
+            return FfiConverterSequenceTypeAppUsage.lift(
+    uniffiRustCall() { _status ->
+    UniffiLib.uniffi_adfree_core_fn_func_core_app_usage_since_transport(
+    
+        
+        FfiConverterLong.lower(`sinceMs`),
+        FfiConverterInt.lower(`transport`),_status)
 }
     )
     }

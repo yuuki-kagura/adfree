@@ -78,6 +78,7 @@ fn engine_with(tag: &str, rules: &str) -> Arc<crate::filter::FilterEngine> {
             trusted: true,
             rule_count: 0,
             last_error: None,
+            dns_only: false,
         }],
         &[],
     );

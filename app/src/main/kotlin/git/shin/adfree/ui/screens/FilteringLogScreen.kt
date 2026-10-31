@@ -78,6 +78,8 @@ import git.shin.adfree.R
 import git.shin.adfree.data.AdGuardRepository
 import git.shin.adfree.model.FilterStatus
 import git.shin.adfree.model.NetworkRequestLog
+import git.shin.adfree.model.NetworkTransport
+import git.shin.adfree.model.assetSizeLabel
 import git.shin.adfree.model.ProtocolType
 import git.shin.adfree.model.RequestCategory
 import git.shin.adfree.ui.AdGuardIntent
@@ -774,6 +776,21 @@ fun PacketInspectionSheetContent(
                 value = logActionLabel(log.status)
             )
             DetailRow(label = stringResource(R.string.log_detail_category), value = requestCategoryLabel(log.category))
+            val transportLabel = when (log.transport) {
+                NetworkTransport.WIFI -> stringResource(R.string.log_transport_wifi)
+                NetworkTransport.CELLULAR -> stringResource(R.string.log_transport_cellular)
+                NetworkTransport.UNKNOWN -> null
+            }
+            if (transportLabel != null) {
+                DetailRow(
+                    label = stringResource(R.string.log_detail_transport),
+                    value = if (log.roaming) {
+                        stringResource(R.string.log_transport_roaming, transportLabel)
+                    } else {
+                        transportLabel
+                    },
+                )
+            }
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
@@ -808,6 +825,28 @@ fun PacketInspectionSheetContent(
             }
             if (log.filterListName != null) {
                 DetailRow(label = stringResource(R.string.log_detail_list), value = log.filterListName)
+            }
+            if (log.url != null) {
+                DetailRow(label = stringResource(R.string.log_detail_url), value = log.url)
+            }
+            if (log.dnsAnswer != null) {
+                DetailRow(label = stringResource(R.string.log_detail_dns_answer), value = log.dnsAnswer)
+            }
+            if (log.flowId > 0) {
+                DetailRow(
+                    label = stringResource(R.string.log_detail_connection),
+                    value = "#${log.flowId}",
+                )
+            }
+            if (log.bytesSent > 0 || log.bytesReceived > 0) {
+                DetailRow(
+                    label = stringResource(R.string.log_detail_transfer),
+                    value = stringResource(
+                        R.string.log_transfer_value,
+                        assetSizeLabel(log.bytesSent),
+                        assetSizeLabel(log.bytesReceived),
+                    ),
+                )
             }
             if (log.dataSavedBytes > 0) {
                 DetailRow(

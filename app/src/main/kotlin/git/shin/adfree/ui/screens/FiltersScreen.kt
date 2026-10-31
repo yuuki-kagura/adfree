@@ -147,7 +147,8 @@ fun FiltersScreen(
 
     // Local files are imported through the system picker; the URI is read once
     // and copied into the app's own directory (SAF permissions are not trusted
-    // to survive).
+    // to survive). The same picker serves both add sheets.
+    var pickFileForDns by remember { mutableStateOf(false) }
     val filePicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         if (uri != null) {
             runCatching {
@@ -156,8 +157,11 @@ fun FiltersScreen(
                     Intent.FLAG_GRANT_READ_URI_PERMISSION,
                 )
             }
-            viewModel.onIntent(AdGuardIntent.ImportLocalFilter(uri.toString()))
+            viewModel.onIntent(
+                AdGuardIntent.ImportLocalFilter(uri.toString(), dnsOnly = pickFileForDns),
+            )
         }
+        pickFileForDns = false
     }
     val query = state.filterSearchQuery
     // Catalogue text is localized at render time; search has to see the same
@@ -173,14 +177,19 @@ fun FiltersScreen(
         )
     }
     val catalogLists = state.filterLists.filter { !it.isCustom && !it.isUserAdded }
-    val customLists = state.filterLists.filter { it.isUserAdded }
+    // DNS filters block name lookups only and live in their own card, so the
+    // web-filter counters above must not count their rules.
+    val customLists = state.filterLists.filter { it.isUserAdded && !it.isDnsOnly }
+    val dnsLists = state.filterLists.filter { it.isDnsOnly }
     val visibleCatalog = catalogLists.filter(matchesQuery)
     val visibleCustom = customLists.filter(matchesQuery)
+    val visibleDns = dnsLists.filter(matchesQuery)
     val userRules = state.filterLists.firstOrNull { it.isCustom }?.customRules.orEmpty()
     val userRulesCount = userRules.size
     val allowCount = userRules.count { it.startsWith("@@") }
-    val enabledCount = state.filterLists.count { it.isEnabled && !it.isCustom }
-    val totalRules = state.filterLists.filter { it.isEnabled && !it.isCustom }.sumOf { it.ruleCount }
+    val webLists = state.filterLists.filter { !it.isCustom && !it.isDnsOnly }
+    val enabledCount = webLists.count { it.isEnabled }
+    val totalRules = webLists.filter { it.isEnabled }.sumOf { it.ruleCount }
 
     Box(
         modifier = modifier
@@ -447,7 +456,7 @@ fun FiltersScreen(
                     }
                 }
 
-                if (query.isNotBlank() && visibleCatalog.isEmpty() && visibleCustom.isEmpty()) {
+                if (query.isNotBlank() && visibleCatalog.isEmpty() && visibleCustom.isEmpty() && visibleDns.isEmpty()) {
                     // The screen used to end at the last group card with no
                     // word about the query, which reads like a loading glitch.
                     item(key = "no_results") {
@@ -463,6 +472,20 @@ fun FiltersScreen(
                             onAdd = { viewModel.onIntent(AdGuardIntent.ShowAddFilterDialog(true)) },
                             onToggleList = { viewModel.onIntent(AdGuardIntent.ToggleFilterList(it.id, !it.isEnabled)) },
                             onOpenList = { viewModel.onIntent(AdGuardIntent.InspectFilter(it.id)) },
+                        )
+                    }
+
+                    item(key = "dns_filters") {
+                        CustomFiltersCard(
+                            lists = visibleDns,
+                            onAdd = { viewModel.onIntent(AdGuardIntent.ShowAddDnsFilterDialog(true)) },
+                            onToggleList = { viewModel.onIntent(AdGuardIntent.ToggleFilterList(it.id, !it.isEnabled)) },
+                            onOpenList = { viewModel.onIntent(AdGuardIntent.InspectFilter(it.id)) },
+                            titleRes = R.string.filters_dns_title,
+                            subtitleRes = R.string.filters_dns_subtitle,
+                            emptyRes = R.string.filters_dns_empty,
+                            icon = Icons.Default.Language,
+                            tag = "dns_filters_section",
                         )
                     }
                 }
@@ -488,6 +511,18 @@ fun FiltersScreen(
             onAdd = { name, url -> viewModel.onIntent(AdGuardIntent.AddCustomFilter(name, url)) },
             onPickFile = {
                 viewModel.onIntent(AdGuardIntent.ShowAddFilterDialog(false))
+                filePicker.launch(arrayOf("text/plain", "text/*", "*/*"))
+            },
+        )
+    }
+
+    if (state.showAddDnsFilterDialog) {
+        AddDnsFilterDialog(
+            onDismiss = { viewModel.onIntent(AdGuardIntent.ShowAddDnsFilterDialog(false)) },
+            onAdd = { name, url -> viewModel.onIntent(AdGuardIntent.AddDnsFilter(name, url)) },
+            onPickFile = {
+                pickFileForDns = true
+                viewModel.onIntent(AdGuardIntent.ShowAddDnsFilterDialog(false))
                 filePicker.launch(arrayOf("text/plain", "text/*", "*/*"))
             },
         )
@@ -918,11 +953,16 @@ private fun CustomFiltersCard(
     onAdd: () -> Unit,
     onToggleList: (FilterList) -> Unit,
     onOpenList: (FilterList) -> Unit,
+    titleRes: Int = R.string.filters_custom_title,
+    subtitleRes: Int = R.string.filters_custom_subtitle,
+    emptyRes: Int = R.string.filters_custom_empty,
+    icon: ImageVector = Icons.Default.Public,
+    tag: String = "custom_filters_section",
 ) {
     Card(
         modifier = Modifier
             .fillMaxWidth()
-            .testTag("custom_filters_section"),
+            .testTag(tag),
         shape = RoundedCornerShape(14.dp),
         colors = CardDefaults.cardColors(containerColor = AdGuardDarkSurface),
         border = BorderStroke(1.dp, AdGuardDarkOutline),
@@ -941,18 +981,18 @@ private fun CustomFiltersCard(
                         .background(AdGuardBlueDns.copy(alpha = 0.12f)),
                     contentAlignment = Alignment.Center,
                 ) {
-                    Icon(Icons.Default.Public, contentDescription = null, tint = AdGuardBlueDns, modifier = Modifier.size(20.dp))
+                    Icon(icon, contentDescription = null, tint = AdGuardBlueDns, modifier = Modifier.size(20.dp))
                 }
                 Spacer(modifier = Modifier.width(12.dp))
                 Column(modifier = Modifier.weight(1f)) {
                     Text(
-                        stringResource(R.string.filters_custom_title),
+                        stringResource(titleRes),
                         fontSize = 13.sp,
                         fontWeight = FontWeight.Bold,
                         color = AdGuardTextPrimary,
                     )
                     Text(
-                        stringResource(R.string.filters_custom_subtitle),
+                        stringResource(subtitleRes),
                         fontSize = 11.sp,
                         color = AdGuardTextMuted,
                     )
@@ -961,7 +1001,7 @@ private fun CustomFiltersCard(
 
             if (lists.isEmpty()) {
                 Text(
-                    text = stringResource(R.string.filters_custom_empty),
+                    text = stringResource(emptyRes),
                     fontSize = 11.sp,
                     color = AdGuardTextMuted,
                     modifier = Modifier.padding(horizontal = 14.dp),
@@ -1136,6 +1176,122 @@ private fun AddFilterDialog(
 
                 // Inline validation like AdGuard's "Enter a valid URL or file
                 // path": reported at the field, not only after pressing Add.
+                filterUrlError(url)?.let { error ->
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Text(
+                        CoreText.filterUrlError(error).asString(),
+                        fontSize = 11.sp,
+                        color = AdGuardRedBlocked,
+                    )
+                }
+
+                Spacer(modifier = Modifier.height(4.dp))
+
+                TextButton(onClick = onPickFile) {
+                    Icon(Icons.Default.UploadFile, contentDescription = null, tint = AdGuardGreenLight, modifier = Modifier.size(16.dp))
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text(
+                        stringResource(R.string.filters_pick_file),
+                        fontSize = 12.sp,
+                        color = AdGuardGreenLight,
+                    )
+                }
+            }
+        },
+        confirmButton = {
+            Button(
+                onClick = { if (filterUrlError(url) == null) onAdd(name, url) },
+                enabled = filterUrlError(url) == null,
+                colors = ButtonDefaults.buttonColors(containerColor = AdGuardBlueDns),
+                shape = RoundedCornerShape(8.dp),
+            ) {
+                Text(
+                    stringResource(R.string.common_add),
+                    color = AdGuardOnAccent,
+                    fontWeight = FontWeight.Bold,
+                )
+            }
+        },
+        dismissButton = {
+            OutlinedButton(onClick = onDismiss, shape = RoundedCornerShape(8.dp)) {
+                Text(stringResource(R.string.common_cancel), color = AdGuardTextSecondary)
+            }
+        },
+    )
+}
+
+/**
+ * Adds a DNS filter subscription: a name and a source URL. Its rules are
+ * matched against resolved names only, so nothing else about it mirrors the
+ * web-filter dialog (no file import, no syntax examples).
+ */
+@Composable
+private fun AddDnsFilterDialog(
+    onDismiss: () -> Unit,
+    onAdd: (String, String) -> Unit,
+    onPickFile: () -> Unit,
+) {
+    var name by remember { mutableStateOf("") }
+    var url by remember { mutableStateOf("") }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(Icons.Default.Language, contentDescription = null, tint = AdGuardBlueDns, modifier = Modifier.size(22.dp))
+                Spacer(modifier = Modifier.width(8.dp))
+                Text(
+                    stringResource(R.string.filters_dns_add_title),
+                    fontSize = 17.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = AdGuardTextPrimary,
+                )
+            }
+        },
+        text = {
+            Column {
+                Text(
+                    text = stringResource(R.string.filters_dns_add_body),
+                    fontSize = 12.sp,
+                    color = AdGuardTextSecondary,
+                )
+
+                Spacer(modifier = Modifier.height(12.dp))
+
+                OutlinedTextField(
+                    value = name,
+                    onValueChange = { name = it },
+                    label = { Text(stringResource(R.string.ext_name_optional), fontSize = 12.sp) },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(10.dp),
+                    colors = OutlinedTextFieldDefaults.colors(
+                        focusedBorderColor = AdGuardGreenPrimary,
+                        unfocusedBorderColor = AdGuardDarkOutline,
+                        focusedTextColor = AdGuardTextPrimary,
+                        unfocusedTextColor = AdGuardTextPrimary,
+                    ),
+                )
+
+                Spacer(modifier = Modifier.height(8.dp))
+
+                OutlinedTextField(
+                    value = url,
+                    onValueChange = { url = it },
+                    label = { Text(stringResource(R.string.filters_url_label), fontSize = 12.sp) },
+                    placeholder = { Text("https://…", fontSize = 12.sp, color = AdGuardTextMuted) },
+                    singleLine = true,
+                    isError = url.isNotBlank() && filterUrlError(url) != null,
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(10.dp),
+                    colors = OutlinedTextFieldDefaults.colors(
+                        focusedBorderColor = AdGuardGreenPrimary,
+                        unfocusedBorderColor = AdGuardDarkOutline,
+                        focusedTextColor = AdGuardTextPrimary,
+                        unfocusedTextColor = AdGuardTextPrimary,
+                    ),
+                )
+
                 filterUrlError(url)?.let { error ->
                     Spacer(modifier = Modifier.height(4.dp))
                     Text(

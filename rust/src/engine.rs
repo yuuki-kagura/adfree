@@ -39,7 +39,7 @@ use crate::mitm::quic::socket::{Datagram, TunUdpSocket};
 use crate::packet::{self, IpKey, Packet, PROTO_TCP, PROTO_UDP};
 use crate::socks5::Socks5Handshake;
 use crate::stats::{self, Stats};
-use crate::state::model::FirewallAccess;
+use crate::state::model::{FirewallAccess, ProxyAccess};
 use crate::udpnat::{UdpFlow, UdpKey, UdpNat, UDP_MAX_FLOWS, UDP_MAX_PROXIED_FLOWS};
 use crate::uidmap::UidMap;
 use crate::upstream::Upstream;
@@ -48,7 +48,7 @@ use std::collections::HashSet;
 use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
 use std::os::unix::io::RawFd;
 use std::sync::atomic::{
-    AtomicBool, AtomicI32, AtomicU16, AtomicU64, AtomicU8, AtomicUsize, Ordering,
+    AtomicBool, AtomicI32, AtomicU16, AtomicU32, AtomicU64, AtomicU8, AtomicUsize, Ordering,
 };
 use std::sync::{Arc, Mutex, OnceLock, RwLock};
 
@@ -341,6 +341,9 @@ pub struct AppNetworkPolicy {
     pub allow_cellular_screen_off: bool,
     pub allow_roaming: bool,
     pub rules: Arc<FxHashMap<String, AppFirewallState>>,
+    /// Per-app answers for the global SOCKS5 proxy. Separate from `rules`:
+    /// routing is a proxy feature and keeps working when the firewall is off.
+    pub proxy_rules: Arc<FxHashMap<String, ProxyAccess>>,
 }
 
 impl Default for AppNetworkPolicy {
@@ -353,19 +356,40 @@ impl Default for AppNetworkPolicy {
             allow_cellular_screen_off: true,
             allow_roaming: true,
             rules: Arc::new(FxHashMap::default()),
+            proxy_rules: Arc::new(FxHashMap::default()),
         }
     }
 }
 
 impl AppNetworkPolicy {
     pub fn is_empty(&self) -> bool {
-        !self.active
+        let no_network = !self.active
             || (self.rules.is_empty()
                 && self.allow_wifi
                 && self.allow_wifi_screen_off
                 && self.allow_cellular
                 && self.allow_cellular_screen_off
-                && self.allow_roaming)
+                && self.allow_roaming);
+        no_network && self.proxy_rules.is_empty()
+    }
+
+    /// Whether a flow owned by `packages` should take the SOCKS5 proxy, given
+    /// that `global` says whether the proxy is configured for everything.
+    ///
+    /// Any explicit `Direct` wins over `Through` when apps share a flow: the
+    /// strictest answer keeps a flow the user pinned to the direct path off
+    /// the proxy. Unattributed flows, and packages with no opinion, follow
+    /// the global switch.
+    pub fn proxy_through(&self, packages: &[String], global: bool) -> bool {
+        let mut through = global;
+        for package in packages {
+            match self.proxy_rules.get(package) {
+                Some(ProxyAccess::Direct) => return false,
+                Some(ProxyAccess::Through) => through = true,
+                Some(ProxyAccess::Inherit) | None => {}
+            }
+        }
+        through
     }
 
     /// Whether every package sharing the flow may use this dimension. With no
@@ -647,6 +671,9 @@ pub struct Core {
     running: AtomicBool,
     tun_fd: AtomicI32,
     tx_counter: AtomicU64,
+    /// Monotonic id attached to every logged decision; the UI shows it as the
+    /// connection id and the store keeps it stable across ring and database.
+    next_flow_id: AtomicU32,
     started_at: u64,
     resolver: RwLock<SocketAddr>,
     last_tick_ns: AtomicU64,
@@ -743,6 +770,10 @@ pub(crate) fn log_mitm_block(block: &crate::mitm::proxy::MitmBlock<'_>) {
         ),
         first_app(block.apps),
     );
+    let event = match block.url {
+        Some(url) if !url.is_empty() => events::with_url(event, url),
+        _ => event,
+    };
     core.log_event(event);
     core.stats.add(&core.stats.bytes_saved, u64::from(saved));
 }
@@ -813,6 +844,7 @@ impl Core {
             running: AtomicBool::new(false),
             tun_fd: AtomicI32::new(-1),
             tx_counter: AtomicU64::new(0),
+            next_flow_id: AtomicU32::new(0),
             started_at: now_ms(),
             resolver: RwLock::new(resolver),
             last_tick_ns: AtomicU64::new(0),
@@ -1759,18 +1791,8 @@ impl Core {
             server,
             server_port: pkt.dst_port,
         };
-        // The same rule the TCP relay uses: in proxy mode every flow goes out
-        // through the SOCKS5 endpoint, and automatic routing keeps LAN and
-        // other non-internet destinations direct (a remote proxy cannot reach
-        // them anyway). DNS never gets here; it has its own forwarder.
-        let proxy = self
-            .cfg
-            .read()
-            .unwrap()
-            .proxy
-            .clone()
-            .filter(|p| !p.automatic || !crate::socks5::bypasses_automatic(server));
-        let proxied = proxy.is_some();
+        // The mapping is reused as-is: its proxy choice was made when the
+        // first datagram opened it, and the app cannot change mid-flow.
         let payload = pkt.l4_payload();
         let mut nat = self.udp_nat.lock().unwrap();
         if let Some(flow) = nat.get_mut(&key) {
@@ -1790,20 +1812,14 @@ impl Core {
             self.stats.inc(&self.stats.udp_relayed);
             return;
         }
-        if nat.len() >= UDP_MAX_FLOWS || (proxied && nat.proxied_len() >= UDP_MAX_PROXIED_FLOWS) {
-            // One app spraying destination ports must not drain the descriptor
-            // budget; the flow simply loses its packets, like a full NAT box.
-            drop(nat);
-            self.stats.inc(&self.stats.udp_dropped);
-            return;
-        }
         // A new mapping. The lock is dropped first because `open_peer_socket`
         // makes a `protect()` binder round-trip; only the tun thread inserts,
         // and the socket is not in the table yet, so nothing can touch it
         // while it is built. The cap cannot fill up meanwhile: the table only
         // shrinks while unlocked.
         drop(nat);
-        let app_packages = if self.app_network_policy.read().unwrap().is_empty() {
+        let policy = Arc::clone(&*self.app_network_policy.read().unwrap());
+        let app_packages = if policy.is_empty() {
             Vec::new()
         } else {
             let packages = self.apps_for_udp(pkt);
@@ -1813,6 +1829,28 @@ impl Core {
             }
             packages
         };
+        // The same rule the TCP relay uses: the global proxy takes every flow
+        // unless automatic routing keeps LAN and other non-internet
+        // destinations direct, and a per-app DIRECT/THROUGH answer overrides
+        // the global switch.
+        let global_proxy = self.cfg.read().unwrap().proxy.clone();
+        let through = policy.proxy_through(&app_packages, global_proxy.is_some());
+        let proxy = if through {
+            global_proxy
+                .filter(|p| !p.automatic || !crate::socks5::bypasses_automatic(server))
+        } else {
+            None
+        };
+        let proxied = proxy.is_some();
+        let nat = self.udp_nat.lock().unwrap();
+        if nat.len() >= UDP_MAX_FLOWS || (proxied && nat.proxied_len() >= UDP_MAX_PROXIED_FLOWS) {
+            // One app spraying destination ports must not drain the descriptor
+            // budget; the flow simply loses its packets, like a full NAT box.
+            drop(nat);
+            self.stats.inc(&self.stats.udp_dropped);
+            return;
+        }
+        drop(nat);
         let fd = match proxy {
             Some(endpoint) => self.open_proxied_udp(server, pkt.dst_port, endpoint),
             None => {
@@ -2641,13 +2679,17 @@ impl Core {
         // moves into the CONNECT request instead of the socket address. The
         // local injection origin never leaves the device, so it stays direct.
         // Automatic routing also keeps LAN and other non-internet addresses
-        // off the proxy: a remote endpoint cannot reach them anyway.
-        let proxy = if local {
-            None
-        } else {
+        // off the proxy: a remote endpoint cannot reach them anyway. A per-app
+        // DIRECT rule overrides all of that; a THROUGH rule pins the app to
+        // the proxy even when it is not the global default.
+        let policy = Arc::clone(&*self.app_network_policy.read().unwrap());
+        let through = !local && policy.proxy_through(&app_packages, cfg.proxy.is_some());
+        let proxy = if through {
             cfg.proxy
                 .clone()
                 .filter(|p| !p.automatic || !crate::socks5::bypasses_automatic(dst))
+        } else {
+            None
         };
         let handshake = match &proxy {
             Some(p) => match Socks5Handshake::new(dst, pkt.dst_port, p.credentials()) {
@@ -3356,12 +3398,20 @@ impl Core {
                 if let Some(reply) = dns::synthesize_answer(pkt, &query, &[address], 60) {
                     crate::logbuf::push(&format!("dns: rewrite {host} -> {address}"));
                     self.stats.inc(&self.stats.dns_allowed);
+                    let reply_len = reply.len().min(u32::MAX as usize) as u32;
                     out.push(reply);
                     if cfg.log_allowed && self.logging_live() {
                         let packages = app_packages.unwrap_or_else(|| self.apps_for_udp(pkt));
-                        let event = events::with_app(
-                            events::allow_event(host, &self.dns_server_text(), 0),
-                            first_app(&packages),
+                        let event = events::with_traffic(
+                            events::with_answer(
+                                events::with_app(
+                                    events::allow_event(host, &self.dns_server_text(), 0),
+                                    first_app(&packages),
+                                ),
+                                &address.to_string(),
+                            ),
+                            0,
+                            reply_len,
                         );
                         self.log_event(event);
                     }
@@ -3427,6 +3477,9 @@ impl Core {
             // a cold one forwards the filtered host and answers the client
             // when that reply lands.
             let mut forwarded = false;
+            // The answer and its size are only known when the engine produced
+            // the reply itself; a forwarded query's reply lands later.
+            let mut served: Option<(String, u32)> = None;
             if cfg.safe_search
                 && !self.is_paused()
                 && matches!(query.qtype, dns::TYPE_A | dns::TYPE_AAAA)
@@ -3435,6 +3488,13 @@ impl Core {
                     let addresses = self.cached_safe_search(safe_host, now_ms());
                     if let Some(addresses) = addresses {
                         if let Some(reply) = dns::synthesize_answer(pkt, &query, &addresses, 60) {
+                            let answer = addresses
+                                .iter()
+                                .take(4)
+                                .map(ToString::to_string)
+                                .collect::<Vec<_>>()
+                                .join(", ");
+                            served = Some((answer, reply.len().min(u32::MAX as usize) as u32));
                             out.push(reply);
                             forwarded = true;
                             crate::logbuf::push(&format!(
@@ -3449,17 +3509,24 @@ impl Core {
                 }
             }
             if !forwarded {
-                forwarded = self.serve_cached_answer(pkt, &query);
+                served = self.serve_cached_answer(pkt, &query);
+                forwarded = served.is_some();
             }
             if !forwarded {
                 self.forward_query(pkt, Some(&query), None);
             }
             if cfg.log_allowed && self.logging_live() {
                 let packages = app_packages.unwrap_or_else(|| self.apps_for_udp(pkt));
-                let event = events::with_app(
+                let mut event = events::with_app(
                     events::allow_event(host, &self.dns_server_text(), latency_ns),
                     first_app(&packages),
                 );
+                if let Some((answer, reply_len)) = &served {
+                    if !answer.is_empty() {
+                        event = events::with_answer(event, answer);
+                    }
+                    event = events::with_traffic(event, 0, *reply_len);
+                }
                 self.log_event(event);
             }
         }
@@ -3472,8 +3539,9 @@ impl Core {
     /// the connection learning all apply to it unchanged. It runs after the
     /// filter and the SafeSearch rewrite, so only a query that would have been
     /// forwarded can ever be served from here. Returns whether the client was
-    /// answered; a miss leaves the query to the forwarder.
-    fn serve_cached_answer(&self, pkt: &Packet<'_>, query: &dns::Query<'_>) -> bool {
+    /// answered; a miss leaves the query to the forwarder. The hit also
+    /// returns the addresses and the reply size, for the log row.
+    fn serve_cached_answer(&self, pkt: &Packet<'_>, query: &dns::Query<'_>) -> Option<(String, u32)> {
         let now = now_ms();
         let hit = self.dns_cache.lock().unwrap().get(
             query.qname.as_str(),
@@ -3482,12 +3550,19 @@ impl Core {
             now,
         );
         let Some((mut message, age_secs)) = hit else {
-            return false;
+            return None;
         };
         if !dns::adopt_question(&mut message, query) {
-            return false;
+            return None;
         }
         dns::age_ttls(&mut message, age_secs);
+        let answer = dns::answer_addresses(&message)
+            .into_iter()
+            .take(4)
+            .map(|(address, _)| address.to_string())
+            .collect::<Vec<_>>()
+            .join(", ");
+        let reply_len = message.len().min(u32::MAX as usize) as u32;
         let reply = crate::upstream::Reply {
             pending: crate::upstream::Pending {
                 client_txid: query.id,
@@ -3503,7 +3578,7 @@ impl Core {
             message,
         };
         self.handle_reply(&reply);
-        true
+        Some((answer, reply_len))
     }
 
     /// Sends the query upstream through a protected socket.
@@ -4049,6 +4124,14 @@ impl Core {
         if self.is_screen_off() && self.cfg.read().unwrap().eco_mode {
             return;
         }
+        let mut event = event;
+        // One place stamps what every row shares: the decision id and the
+        // network it was made on. Call sites only build the decision itself.
+        event.flow_id = self.next_flow_id.fetch_add(1, Ordering::Relaxed).wrapping_add(1);
+        event.set_network(
+            self.network_type.load(Ordering::Relaxed) & 0b11,
+            self.roaming.load(Ordering::Relaxed),
+        );
         // Durable copy first: the ring is only the live tail the UI polls, so
         // the record survives even while a UI reader holds the ring lock.
         if let Some(store) = self.store.get() {
@@ -5326,6 +5409,7 @@ mod tests {
                     .map(|(package, state)| ((*package).to_string(), *state))
                     .collect(),
             ),
+            proxy_rules: Arc::new(FxHashMap::default()),
         }
     }
 
@@ -5348,6 +5432,45 @@ mod tests {
                 ..AppFirewallState::default()
             },
         )])
+    }
+
+    #[test]
+    fn proxy_routing_prefers_the_strictest_per_app_answer() {
+        let mut policy = AppNetworkPolicy::default();
+        policy.proxy_rules = Arc::new(
+            [
+                ("com.example.direct".to_string(), ProxyAccess::Direct),
+                ("com.example.through".to_string(), ProxyAccess::Through),
+                ("com.example.inherit".to_string(), ProxyAccess::Inherit),
+            ]
+            .into_iter()
+            .collect(),
+        );
+        let names = |pkg: &str| vec![pkg.to_string()];
+        // The global switch is the fallback for packages with no opinion.
+        assert!(policy.proxy_through(&names("com.example.inherit"), true));
+        assert!(!policy.proxy_through(&names("com.example.inherit"), false));
+        // Unattributed flows have no opinion and follow the global switch.
+        assert!(policy.proxy_through(&[], true));
+        assert!(!policy.proxy_through(&[], false));
+        // An explicit answer overrides the global switch both ways.
+        assert!(!policy.proxy_through(&names("com.example.direct"), true));
+        assert!(policy.proxy_through(&names("com.example.through"), false));
+        // A shared flow with one DIRECT owner stays off the proxy.
+        let shared = vec![
+            "com.example.through".to_string(),
+            "com.example.direct".to_string(),
+        ];
+        assert!(!policy.proxy_through(&shared, true));
+    }
+
+    #[test]
+    fn proxy_rules_keep_the_policy_live_without_a_firewall() {
+        let mut policy = AppNetworkPolicy::default();
+        assert!(policy.is_empty());
+        policy.proxy_rules =
+            Arc::new([("com.example".to_string(), ProxyAccess::Through)].into_iter().collect());
+        assert!(!policy.is_empty(), "attribution is needed to honor routing");
     }
 
     #[test]
@@ -6042,6 +6165,7 @@ mod tests {
             trusted: true,
             rule_count: 0,
             last_error: None,
+            dns_only: false,
         }];
 
         /// The sinkhole the default block mode asks for.
@@ -6098,6 +6222,7 @@ mod tests {
             trusted: true,
             rule_count: 0,
             last_error: None,
+            dns_only: false,
         }];
         const NXDOMAIN: u8 = 3;
         const SERVFAIL: u8 = 2;
@@ -6144,6 +6269,7 @@ mod tests {
             trusted: true,
             rule_count: 0,
             last_error: None,
+            dns_only: false,
         }];
         const NXDOMAIN: u8 = 3;
 
@@ -6180,6 +6306,7 @@ mod tests {
             trusted: true,
             rule_count: 0,
             last_error: None,
+            dns_only: false,
         }];
         const NXDOMAIN: u8 = 3;
         const NOERROR: u8 = 0;
@@ -6420,6 +6547,7 @@ mod tests {
                 trusted: true,
                 rule_count: 0,
                 last_error: None,
+                dns_only: false,
             }],
             Vec::new(),
         );
@@ -6912,6 +7040,7 @@ mod tests {
             trusted: true,
             rule_count: 0,
             last_error: None,
+            dns_only: false,
         }];
 
         let core = Core::new();
@@ -7233,6 +7362,7 @@ mod tests {
             trusted: true,
             rule_count: 0,
             last_error: None,
+            dns_only: false,
         };
         let core = Core::new();
         core.set_lists(
@@ -7323,6 +7453,7 @@ mod tests {
             trusted: true,
             rule_count: 0,
             last_error: None,
+            dns_only: false,
         }];
 
         let first = Core::new();

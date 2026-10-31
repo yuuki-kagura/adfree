@@ -273,6 +273,7 @@ fn settings_from(blob: LegacySettings) -> LegacySettingsPart {
                 roaming: FirewallAccess::Inherit,
                 https: f.https.unwrap_or(true),
                 notify: true,
+                proxy: crate::state::model::ProxyAccess::Inherit,
             })
         })
         .collect();
@@ -363,6 +364,7 @@ fn filters_from(blob: LegacyFilters) -> LegacyFiltersPart {
             custom,
             user_rules_configured: blob.user_rules.is_some(),
             user_rules: blob.user_rules.unwrap_or_default(),
+            dns_filters: Vec::new(),
         },
         scripts: ScriptState {
             master: blob.userscripts_master.unwrap_or(true),

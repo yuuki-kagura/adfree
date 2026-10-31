@@ -680,8 +680,8 @@ class CoreEngine {
             .getOrDefault(git.shin.adfree.core.LogStatusCounts(0L, 0L))
 
     /** Blocked counts and bytes saved per package since [sinceMs]. */
-    fun appUsageSince(sinceMs: Long): List<git.shin.adfree.core.AppUsage> =
-        runCatching { git.shin.adfree.core.coreAppUsageSince(sinceMs) }
+    fun appUsageSince(sinceMs: Long, transport: Int = -1): List<git.shin.adfree.core.AppUsage> =
+        runCatching { git.shin.adfree.core.coreAppUsageSinceTransport(sinceMs, transport) }
             .getOrDefault(emptyList())
 
     /** Empties the persisted log, queued rows included. */

@@ -293,6 +293,7 @@ async fn handle_request(
         if let Some(sink) = config.sink {
             sink(&MitmBlock {
                 host: &config.server_name,
+                url: None,
                 rule: answer.rule.as_deref(),
                 list_name: answer.list_name.as_deref(),
                 category: answer.category,
@@ -822,6 +823,7 @@ mod tests {
                 trusted: true,
                 rule_count: 0,
                 last_error: None,
+                dns_only: false,
             }],
             &[],
         );

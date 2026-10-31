@@ -19,6 +19,7 @@ import git.shin.adfree.core.StatsSnapshot
 import git.shin.adfree.model.AppCategory
 import git.shin.adfree.model.AppFirewallRule
 import git.shin.adfree.model.FirewallAccess
+import git.shin.adfree.model.ProxyAccess
 import git.shin.adfree.model.FirewallAppChoice
 import git.shin.adfree.model.DnsBackup
 import git.shin.adfree.model.DnsBackupMode
@@ -854,6 +855,26 @@ class AdGuardRepository(
                     trusted = stored.trusted,
                 )
             }
+            for (stored in saved.dnsFilters) {
+                lists += FilterList(
+                    id = stored.id,
+                    name = stored.name,
+                    description = context.getString(R.string.filter_dns_description),
+                    ruleCount = 0,
+                    isEnabled = stored.enabled,
+                    category = "custom",
+                    version = "",
+                    isOnlineSubscription = stored.url.isNotBlank(),
+                    subscriptionUrl = stored.url.ifBlank { null },
+                    lastUpdatedText = context.getString(R.string.filter_not_loaded),
+                    groupId = "dns",
+                    format = stored.format.ifBlank { "standard" },
+                    homepage = stored.homepage.ifBlank { null },
+                    isUserAdded = true,
+                    trusted = stored.trusted,
+                    isDnsOnly = true,
+                )
+            }
             val rules = if (saved.userRulesConfigured) saved.userRules else starterRules
             lists += FilterList(
                 id = BUILTIN_CUSTOM,
@@ -1170,8 +1191,13 @@ class AdGuardRepository(
         }
     }
 
-    /** Adds a filter list from a URL the user pasted. */
-    fun addCustomFilter(name: String, url: String) {
+    /**
+     * Adds a filter list from a URL the user pasted.
+     *
+     * A DNS filter ([dnsOnly]) lands in the DNS section and is only consulted
+     * for name lookups; its rules never see URLs or SNI.
+     */
+    fun addCustomFilter(name: String, url: String, dnsOnly: Boolean = false) {
         scope.launch {
             val trimmedUrl = url.trim()
             // Validate like the core would: syntax, scheme, host. A bad URL
@@ -1189,17 +1215,20 @@ class AdGuardRepository(
                 return@launch
             }
             val list = FilterList(
-                id = "sub_${System.currentTimeMillis()}",
+                id = "${if (dnsOnly) "dns" else "sub"}_${System.currentTimeMillis()}",
                 name = name.ifBlank { trimmedUrl.substringAfter("//").take(40) },
-                description = context.getString(R.string.filter_custom_description),
+                description = context.getString(
+                    if (dnsOnly) R.string.filter_dns_description else R.string.filter_custom_description
+                ),
                 ruleCount = 0,
                 isEnabled = false,
                 category = "custom",
                 version = "",
                 isOnlineSubscription = true,
                 subscriptionUrl = trimmedUrl,
-                groupId = "custom",
+                groupId = if (dnsOnly) "dns" else "custom",
                 isUserAdded = true,
+                isDnsOnly = dnsOnly,
             )
             _filterLists.update { it + list }
             _loadingMessage.value = UiText.Formatted(R.string.filter_downloading, list.name)
@@ -1221,7 +1250,7 @@ class AdGuardRepository(
     }
 
     /** Adds a `.txt` the user picked through the system file chooser. */
-    fun importLocalFilter(uriText: String) {
+    fun importLocalFilter(uriText: String, dnsOnly: Boolean = false) {
         scope.launch {
             val uri = android.net.Uri.parse(uriText)
             val resolver = context.contentResolver
@@ -1245,16 +1274,19 @@ class AdGuardRepository(
                 }.getOrNull()
             }
             val list = FilterList(
-                id = "local_${System.currentTimeMillis()}",
+                id = "${if (dnsOnly) "dns_local" else "local"}_${System.currentTimeMillis()}",
                 name = displayName?.take(60)?.takeIf { it.isNotBlank() }
                     ?: context.getString(R.string.filter_from_file_name),
-                description = context.getString(R.string.filter_from_file_description),
+                description = context.getString(
+                    if (dnsOnly) R.string.filter_dns_description else R.string.filter_from_file_description
+                ),
                 ruleCount = 0,
                 isEnabled = true,
                 category = "custom",
                 version = "standard",
-                groupId = "custom",
+                groupId = if (dnsOnly) "dns" else "custom",
                 isUserAdded = true,
+                isDnsOnly = dnsOnly,
             )
             val state = withContext(Dispatchers.IO) { engine.saveListText(list.id, text) }
             if (state == null) {
@@ -1443,7 +1475,7 @@ class AdGuardRepository(
                     .filter { it.catalogId != null && it.isEnabled }
                     .mapNotNull { it.catalogId },
                 trustedIds = lists.filter { it.isUserAdded && it.trusted }.map { it.id },
-                custom = lists.filter { it.isUserAdded }.map {
+                custom = lists.filter { it.isUserAdded && !it.isDnsOnly }.map {
                     FilterChoice(
                         id = it.id,
                         name = it.name,
@@ -1456,6 +1488,17 @@ class AdGuardRepository(
                 },
                 userRules = lists.firstOrNull { it.isCustom }?.customRules.orEmpty(),
                 userRulesConfigured = true,
+                dnsFilters = lists.filter { it.isUserAdded && it.isDnsOnly }.map {
+                    FilterChoice(
+                        id = it.id,
+                        name = it.name,
+                        url = it.subscriptionUrl.orEmpty(),
+                        format = it.format,
+                        homepage = it.homepage.orEmpty(),
+                        enabled = it.isEnabled,
+                        trusted = it.trusted,
+                    )
+                },
             )
         )
     }
@@ -1565,7 +1608,8 @@ class AdGuardRepository(
                     ?.bufferedWriter(Charsets.UTF_8)
                     ?.use { writer ->
                         writer.appendLine(
-                            "time,app,domain,ip,protocol,status,category,rule,list,latency_us,saved_bytes",
+                            "time,app,domain,ip,protocol,status,category,rule,list,latency_us,saved_bytes," +
+                                "transport,roaming,flow_id,url,dns_answer,bytes_sent,bytes_recv",
                         )
                         val time = java.text.SimpleDateFormat(
                             "yyyy-MM-dd'T'HH:mm:ssXXX",
@@ -1585,6 +1629,13 @@ class AdGuardRepository(
                                     log.filterListName.orEmpty(),
                                     log.latencyMicros.toString(),
                                     log.dataSavedBytes.toString(),
+                                    log.transport.name,
+                                    log.roaming.toString(),
+                                    log.flowId.toString(),
+                                    log.url.orEmpty(),
+                                    log.dnsAnswer.orEmpty(),
+                                    log.bytesSent.toString(),
+                                    log.bytesReceived.toString(),
                                 ).joinToString(",") { csvField(it) },
                             )
                         }
@@ -1630,6 +1681,7 @@ class AdGuardRepository(
                 // Catalogue entries are trusted by construction; a custom list
                 // only when the user said so.
                 trusted = list.trusted || list.catalogId != null,
+                dnsOnly = list.isDnsOnly,
             )
         }
         val userRules = lists.firstOrNull { it.isCustom }?.customRules.orEmpty()
@@ -1703,6 +1755,19 @@ class AdGuardRepository(
     /** The range the overlay currently reflects, so a fresh screen starts in sync. */
     fun currentAppUsageRange(): git.shin.adfree.model.AppUsageRange = appUsageRange.get()
 
+    private val appUsageTransport = java.util.concurrent.atomic.AtomicReference(
+        git.shin.adfree.model.AppUsageTransport.ALL,
+    )
+
+    /** Restricts the statistics window to one network; re-aggregates on change. */
+    fun setAppUsageTransport(transport: git.shin.adfree.model.AppUsageTransport) {
+        if (appUsageTransport.getAndSet(transport) == transport) return
+        if (appUsageVisible) refreshAppUsage()
+    }
+
+    fun currentAppUsageTransport(): git.shin.adfree.model.AppUsageTransport =
+        appUsageTransport.get()
+
     private fun usageSinceMs(range: git.shin.adfree.model.AppUsageRange): Long {
         val now = System.currentTimeMillis()
         return when (range) {
@@ -1726,13 +1791,16 @@ class AdGuardRepository(
     fun refreshAppUsage() {
         scope.launch {
             val since = usageSinceMs(appUsageRange.get())
-            val usage = engine.appUsageSince(since).associateBy { it.app }
+            val usage = engine.appUsageSince(since, appUsageTransport.get().code)
+                .associateBy { it.app }
             _appFirewallRules.update { apps ->
                 apps.map { app ->
                     val row = usage[app.packageName]
                     app.copy(
                         blockedRequestsToday = row?.blocked?.toInt() ?: 0,
                         dataTransferredBytes = row?.bytesSaved?.toLong() ?: 0L,
+                        blockedAdsToday = row?.ads?.toInt() ?: 0,
+                        blockedTrackersToday = row?.trackers?.toInt() ?: 0,
                     )
                 }
             }
@@ -1821,6 +1889,7 @@ class AdGuardRepository(
         isFilterRouted: Boolean? = null,
         isHttpsFiltered: Boolean? = null,
         notifyBlocked: Boolean? = null,
+        proxyAccess: ProxyAccess? = null,
     ) {
         _appFirewallRules.update { list ->
             var found = false
@@ -1837,6 +1906,7 @@ class AdGuardRepository(
                         isFilterRouted = isFilterRouted ?: app.isFilterRouted,
                         isHttpsFiltered = isHttpsFiltered ?: app.isHttpsFiltered,
                         notifyBlocked = notifyBlocked ?: app.notifyBlocked,
+                        proxyAccess = proxyAccess ?: app.proxyAccess,
                     )
                 } else app
             }
@@ -1856,6 +1926,7 @@ class AdGuardRepository(
                     isFilterRouted = isFilterRouted ?: true,
                     isHttpsFiltered = isHttpsFiltered ?: true,
                     notifyBlocked = notifyBlocked ?: true,
+                    proxyAccess = proxyAccess ?: ProxyAccess.INHERIT,
                 )
             }
         }

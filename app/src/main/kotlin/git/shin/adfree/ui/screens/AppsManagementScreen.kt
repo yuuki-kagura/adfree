@@ -78,7 +78,9 @@ import git.shin.adfree.model.AppCategory
 import git.shin.adfree.model.AppCategoryFilter
 import git.shin.adfree.model.AppFirewallRule
 import git.shin.adfree.model.AppUsageRange
+import git.shin.adfree.model.AppUsageTransport
 import git.shin.adfree.model.FirewallAccess
+import git.shin.adfree.model.ProxyAccess
 import git.shin.adfree.ui.AdGuardIntent
 import git.shin.adfree.ui.AdGuardViewModel
 import git.shin.adfree.ui.theme.AdGuardBlueDns
@@ -120,6 +122,9 @@ fun AppsManagementScreen(
     val state by viewModel.uiState.collectAsState()
     var usageRange by rememberSaveable {
         mutableStateOf(viewModel.currentAppUsageRange())
+    }
+    var usageTransport by rememberSaveable {
+        mutableStateOf(viewModel.currentAppUsageTransport())
     }
     var appSort by rememberSaveable { mutableStateOf(AppSort.NAME) }
     val sortedApps = remember(state.appFirewallRules, appSort) {
@@ -245,6 +250,37 @@ fun AppsManagementScreen(
                     label = { Text(stringResource(labelRes), fontSize = 11.sp) },
                     colors = FilterChipDefaults.filterChipColors(
                         selectedContainerColor = AdGuardBlueDns,
+                        selectedLabelColor = AdGuardOnAccent,
+                        containerColor = AdGuardDarkSurface,
+                        labelColor = AdGuardTextSecondary
+                    )
+                )
+            }
+        }
+
+        Spacer(modifier = Modifier.height(6.dp))
+
+        // AdGuard's statistics header splits the same window by network.
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .horizontalScroll(rememberScrollState()),
+            horizontalArrangement = Arrangement.spacedBy(6.dp)
+        ) {
+            listOf(
+                AppUsageTransport.ALL to R.string.apps_transport_all,
+                AppUsageTransport.CELLULAR to R.string.apps_transport_cellular,
+                AppUsageTransport.WIFI to R.string.apps_transport_wifi,
+            ).forEach { (transport, labelRes) ->
+                FilterChip(
+                    selected = usageTransport == transport,
+                    onClick = {
+                        usageTransport = transport
+                        viewModel.onIntent(AdGuardIntent.SetAppUsageTransport(transport))
+                    },
+                    label = { Text(stringResource(labelRes), fontSize = 11.sp) },
+                    colors = FilterChipDefaults.filterChipColors(
+                        selectedContainerColor = AdGuardGreenPrimary,
                         selectedLabelColor = AdGuardOnAccent,
                         containerColor = AdGuardDarkSurface,
                         labelColor = AdGuardTextSecondary
@@ -386,6 +422,7 @@ fun AppsManagementScreen(
                 logs = state.logs,
                 vpnActive = state.isVpnActive,
                 httpsFilteringEnabled = state.settings.isHttpsFilteringEnabled,
+                proxyEnabled = state.settings.proxy.enabled,
                 onViewLogs = { viewModel.onIntent(AdGuardIntent.ViewAppLogs(it)) },
                 onRestartVpn = { viewModel.onIntent(AdGuardIntent.RestartVpn) },
                 onUpdate = { update ->
@@ -399,6 +436,7 @@ fun AppsManagementScreen(
                             roaming = update.roaming,
                             filtered = update.filtered,
                             httpsFiltered = update.httpsFiltered,
+                            proxyAccess = update.proxyAccess,
                         )
                     )
                 },
@@ -493,6 +531,20 @@ fun AppFirewallCard(
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis
                     )
+                    if (app.blockedRequestsToday > 0) {
+                        Spacer(modifier = Modifier.height(2.dp))
+                        Text(
+                            text = stringResource(
+                                R.string.apps_card_breakdown,
+                                app.blockedAdsToday,
+                                app.blockedTrackersToday,
+                            ),
+                            fontSize = 10.sp,
+                            color = AdGuardTextMuted,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    }
                 }
 
                 Spacer(modifier = Modifier.width(8.dp))
@@ -610,6 +662,7 @@ internal data class FirewallSheetUpdate(
     val roaming: FirewallAccess? = null,
     val filtered: Boolean? = null,
     val httpsFiltered: Boolean? = null,
+    val proxyAccess: ProxyAccess? = null,
 )
 
 /**
@@ -621,6 +674,7 @@ private fun AppDetailsFirewallSheet(
     logs: List<NetworkRequestLog> = emptyList(),
     vpnActive: Boolean = false,
     httpsFilteringEnabled: Boolean = false,
+    proxyEnabled: Boolean = false,
     onViewLogs: (AppFirewallRule) -> Unit = {},
     onRestartVpn: () -> Unit = {},
     onUpdate: (FirewallSheetUpdate) -> Unit,
@@ -816,6 +870,36 @@ private fun AppDetailsFirewallSheet(
 
         Spacer(modifier = Modifier.height(16.dp))
 
+        // Section: SOCKS5 routing. Mirrors AdGuard's per-app proxy rule.
+        Text(
+            text = stringResource(R.string.apps_detail_proxy_header),
+            fontSize = 11.sp,
+            fontWeight = FontWeight.Bold,
+            color = AdGuardTextMuted,
+        )
+        Spacer(modifier = Modifier.height(8.dp))
+
+        Card(
+            modifier = Modifier.fillMaxWidth(),
+            shape = RoundedCornerShape(12.dp),
+            colors = CardDefaults.cardColors(containerColor = AdGuardDarkSurfaceVariant)
+        ) {
+            Column(modifier = Modifier.padding(14.dp)) {
+                ProxyAccessRow(
+                    subtitle = stringResource(
+                        if (proxyEnabled) R.string.apps_detail_proxy_on
+                        else R.string.apps_detail_proxy_off
+                    ),
+                    access = app.proxyAccess,
+                    onSelect = {
+                        onUpdate(FirewallSheetUpdate(app.packageName, proxyAccess = it))
+                    },
+                )
+            }
+        }
+
+        Spacer(modifier = Modifier.height(16.dp))
+
         // Section: Firewall Rules
         Text(
             text = stringResource(R.string.apps_detail_firewall_header),
@@ -932,6 +1016,17 @@ private fun AppDetailsFirewallSheet(
                     Text(stringResource(R.string.apps_detail_blocked_queries), fontSize = 11.sp, color = AdGuardTextSecondary)
                     Spacer(modifier = Modifier.height(2.dp))
                     Text("${app.blockedRequestsToday}", fontSize = 16.sp, fontWeight = FontWeight.Bold, color = AdGuardRedBlocked)
+                    if (app.blockedRequestsToday > 0) {
+                        Text(
+                            stringResource(
+                                R.string.apps_card_breakdown,
+                                app.blockedAdsToday,
+                                app.blockedTrackersToday,
+                            ),
+                            fontSize = 10.sp,
+                            color = AdGuardTextMuted,
+                        )
+                    }
                 }
             }
         }

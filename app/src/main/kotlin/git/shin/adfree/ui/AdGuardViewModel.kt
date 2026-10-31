@@ -11,6 +11,7 @@ import git.shin.adfree.model.AppCategory
 import git.shin.adfree.model.AppCategoryFilter
 import git.shin.adfree.model.AppFirewallRule
 import git.shin.adfree.model.AppUsageRange
+import git.shin.adfree.model.AppUsageTransport
 import git.shin.adfree.model.DnsBackup
 import git.shin.adfree.model.DnsBackupMode
 import git.shin.adfree.model.DnsBlockMode
@@ -20,6 +21,7 @@ import git.shin.adfree.model.FirewallAppChoice
 import git.shin.adfree.model.NetworkRequestLog
 import git.shin.adfree.model.ProtectionSettings
 import git.shin.adfree.model.ProtectionStats
+import git.shin.adfree.model.ProxyAccess
 import git.shin.adfree.model.ProxySettings
 import git.shin.adfree.model.ThreatAnalysisResult
 import git.shin.adfree.model.UserScriptInfo
@@ -77,6 +79,7 @@ class AdGuardViewModel(
     private val _filterSearchQuery = MutableStateFlow("")
     private val _inspectedFilter = MutableStateFlow<String?>(null)
     private val _showAddFilterDialog = MutableStateFlow(false)
+    private val _showAddDnsFilterDialog = MutableStateFlow(false)
     private val _inspectedScript = MutableStateFlow<String?>(null)
     private val _showAddScriptDialog = MutableStateFlow(false)
     private val _showScriptStore = MutableStateFlow(false)
@@ -192,7 +195,8 @@ class AdGuardViewModel(
                 _appCategoryFilter,
                 _selectedAppFilter,
                 _aiLabState,
-            ) { q, cat, app, lab -> UiPartD(q, cat, app, lab) },
+                _showAddDnsFilterDialog,
+            ) { q, cat, app, lab, addDns -> UiPartD(q, cat, app, lab, addDns) },
             combine(
                 _showVpnPermissionPrompt,
                 repository.loadingMessage,
@@ -285,6 +289,7 @@ class AdGuardViewModel(
             appCategoryFilter = d.appCategoryFilter,
             selectedAppFilter = d.selectedApp,
             aiLabState = d.aiLabState,
+            showAddDnsFilterDialog = d.showAddDnsFilter,
             showVpnPermissionPrompt = d.showVpnPermission,
             loadingMessage = d.loadingMessage,
         )
@@ -478,6 +483,7 @@ class AdGuardViewModel(
                     isFilterRouted = intent.filtered,
                     isHttpsFiltered = intent.httpsFiltered,
                     notifyBlocked = intent.notifyBlocked,
+                    proxyAccess = intent.proxyAccess,
                 )
                 // The sheet reads this snapshot, not the repository flow, so
                 // without the copy every switch would snap back to its old
@@ -497,6 +503,7 @@ class AdGuardViewModel(
                             isFilterRouted = intent.filtered ?: current.isFilterRouted,
                             isHttpsFiltered = intent.httpsFiltered ?: current.isHttpsFiltered,
                             notifyBlocked = intent.notifyBlocked ?: current.notifyBlocked,
+                            proxyAccess = intent.proxyAccess ?: current.proxyAccess,
                         )
                     }
                 }
@@ -543,6 +550,7 @@ class AdGuardViewModel(
             is AdGuardIntent.AppSearchQueryChanged -> _appSearchQuery.value = intent.query
             is AdGuardIntent.AppCategoryFilterChanged -> _appCategoryFilter.value = intent.filter
             is AdGuardIntent.SetAppUsageRange -> repository.setAppUsageRange(intent.range)
+            is AdGuardIntent.SetAppUsageTransport -> repository.setAppUsageTransport(intent.transport)
             is AdGuardIntent.ClearLogs -> repository.clearLogs()
             is AdGuardIntent.ResetStats -> repository.resetStats()
             is AdGuardIntent.LoadMoreLogs -> repository.loadMoreLogs()
@@ -555,15 +563,22 @@ class AdGuardViewModel(
             is AdGuardIntent.ShowCustomRuleEditor -> _showCustomRuleEditor.value = intent.show
             is AdGuardIntent.FilterSearchQueryChanged -> _filterSearchQuery.value = intent.query
             is AdGuardIntent.ShowAddFilterDialog -> _showAddFilterDialog.value = intent.show
+            is AdGuardIntent.ShowAddDnsFilterDialog -> _showAddDnsFilterDialog.value = intent.show
             is AdGuardIntent.AddCustomFilter -> {
                 repository.addCustomFilter(intent.name, intent.url)
                 _showAddFilterDialog.value = false
                 emit(AdGuardEffect.ShowSnackbar(UiText.Resource(R.string.filter_new_loading)))
             }
+            is AdGuardIntent.AddDnsFilter -> {
+                repository.addCustomFilter(intent.name, intent.url, dnsOnly = true)
+                _showAddDnsFilterDialog.value = false
+                emit(AdGuardEffect.ShowSnackbar(UiText.Resource(R.string.filter_new_loading)))
+            }
 
             is AdGuardIntent.ImportLocalFilter -> {
-                repository.importLocalFilter(intent.uri)
+                repository.importLocalFilter(intent.uri, intent.dnsOnly)
                 _showAddFilterDialog.value = false
+                _showAddDnsFilterDialog.value = false
             }
 
             is AdGuardIntent.ExportBackup -> viewModelScope.launch {
@@ -695,6 +710,8 @@ class AdGuardViewModel(
 
     /** Initial chip selection for a freshly composed Apps screen. */
     fun currentAppUsageRange(): AppUsageRange = repository.currentAppUsageRange()
+
+    fun currentAppUsageTransport(): AppUsageTransport = repository.currentAppUsageTransport()
 
     private fun toggleProtection() {
         // The switch follows the VPN itself, not a remembered flag: the flag
@@ -959,6 +976,7 @@ class AdGuardViewModel(
         val appCategoryFilter: String?,
         val selectedApp: String?,
         val aiLabState: AiLabUiState,
+        val showAddDnsFilter: Boolean,
     ) {
         var showVpnPermission: Boolean = false
         var loadingMessage: UiText? = null

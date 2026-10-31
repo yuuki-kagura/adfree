@@ -754,6 +754,9 @@ pub struct FilterListInfo {
     /// Filled in after a build attempt.
     pub rule_count: u64,
     pub last_error: Option<String>,
+    /// Host-only list: it decides DNS lookups but never URL or cosmetic
+    /// ones. See [`Compiled::dns_engine`].
+    pub dns_only: bool,
 }
 
 /// Result of a host lookup.
@@ -1108,10 +1111,16 @@ fn store_engine_cache(dir: &Path, key: u64, engine: &Engine) -> Result<usize, St
 
 struct Compiled {
     engine: Engine,
+    /// Host-only lists (`dns_only`), compiled apart so their rules can block
+    /// lookups without ever touching URL or cosmetic decisions.
+    dns_engine: Option<Engine>,
     generation: u64,
     /// Rule text the engine was built from; see [`FilterEngine::memory_bytes`].
     memory_bytes: usize,
     sources: Vec<SourceMapEntry>,
+    /// Source map for [`Compiled::dns_engine`], indexed by its own
+    /// `source_index` values.
+    dns_sources: Vec<SourceMapEntry>,
     rule_count: u64,
     /// Cosmetic switches from the loaded exceptions, by hostname (see
     /// [`scan_cosmetic_exceptions`]). Empty on a stock engine.
@@ -1312,9 +1321,11 @@ impl FilterEngine {
         FilterEngine {
             inner: RwLock::new(Arc::new(Compiled {
                 engine: Engine::default(),
+                dns_engine: None,
                 generation: 0,
                 memory_bytes: 0,
                 sources: Vec::new(),
+                dns_sources: Vec::new(),
                 rule_count: 0,
                 cosmetic_switches: HashMap::new(),
                 replace: None,
@@ -1420,7 +1431,10 @@ impl FilterEngine {
         let cache_dir = self.cache_dir.get().cloned();
         let mut cache_key = cache_dir.as_ref().map(|_| CacheKey::new(build_flags));
         let mut set = FilterSet::new(true);
+        // Host-only lists compile into their own engine (see `dns_engine`).
+        let mut dns_set: Option<FilterSet> = None;
         let mut sources: Vec<SourceMapEntry> = Vec::with_capacity(lists.len() + 1);
+        let mut dns_sources: Vec<SourceMapEntry> = Vec::new();
         let mut rule_count = 0u64;
         // What the engine was fed, in bytes. `Engine::serialize` would say how
         // much the compiled data weighs, but it materializes the whole engine a
@@ -1458,9 +1472,6 @@ impl FilterEngine {
             match std::fs::read(path) {
                 Ok(bytes) => match String::from_utf8(bytes) {
                     Ok(text) => {
-                        if let Some(key) = cache_key.as_mut() {
-                            key.add_list(list, &text);
-                        }
                         // Line numbers are what the engine reports for a
                         // match, and they count the lines of this file (the
                         // two passes below rewrite lines, never split or join
@@ -1471,6 +1482,48 @@ impl FilterEngine {
                             ListFormat::Hosts => FilterFormat::Hosts,
                             ListFormat::Standard => FilterFormat::Standard,
                         };
+                        if list.dns_only {
+                            // Host-only lists never reach the URL or cosmetic
+                            // engines: they answer DNS lookups and nothing
+                            // else, like AdGuard's "DNS filters".
+                            let text = match list.format {
+                                ListFormat::Standard => convert_dnsmasq_rules(text),
+                                ListFormat::Hosts => text,
+                            };
+                            let counted = count_rules(&text);
+                            text_bytes += text.len();
+                            rule_count += counted;
+                            let dns_set =
+                                dns_set.get_or_insert_with(|| FilterSet::new(true));
+                            let record = dns_set.add_filter_list(
+                                text,
+                                ParseOptions {
+                                    format,
+                                    rule_types: RuleTypes::NetworkOnly,
+                                    ..Default::default()
+                                },
+                            );
+                            let name = if list.name.trim().is_empty() {
+                                record
+                                    .metadata
+                                    .title
+                                    .clone()
+                                    .unwrap_or_else(|| "Untitled list".to_string())
+                            } else {
+                                list.name.trim().to_string()
+                            };
+                            dns_sources.push(SourceMapEntry {
+                                source_index: record.source_index as u32,
+                                list_id: list.id,
+                                name,
+                                category: list.category,
+                                rules,
+                            });
+                            continue;
+                        }
+                        if let Some(key) = cache_key.as_mut() {
+                            key.add_list(list, &text);
+                        }
                         let text = match list.format {
                             ListFormat::Standard => {
                                 let text = if list.trusted {
@@ -1730,11 +1783,14 @@ impl FilterEngine {
         // Publish this build's failures for the platform; the next successful
         // build replaces (and usually empties) the list.
         *self.build_errors.lock().unwrap() = errors;
+        let dns_engine = dns_set.map(Engine::new_with_filter_set);
         let compiled = Arc::new(Compiled {
             engine,
+            dns_engine,
             generation,
             memory_bytes,
             sources,
+            dns_sources,
             rule_count,
             cosmetic_switches: cosmetic_exceptions.resolve(),
             replace,
@@ -2223,8 +2279,13 @@ impl FilterEngine {
     /// count as delivered. A `$redirect` host is not a refusal: the MITM path
     /// answers it with the resource the rule names.
     pub fn connection_block(&self, host: &str) -> Option<HostVerdict> {
-        let verdict = self.check_host_detailed(host);
-        (verdict.blocked && !verdict.redirect).then_some(verdict)
+        let host = normalise_host(host);
+        if host.is_empty() || self.module_flags.load(Ordering::Relaxed) & MODULE_DNS == 0 {
+            return None;
+        }
+        let verdict = evaluate_main(&self.compiled(), &host);
+        (verdict.blocked && !verdict.redirect && self.category_enabled(verdict.category))
+            .then_some(verdict)
     }
 
     /// A full request URL, evaluated against every network rule.
@@ -6450,13 +6511,38 @@ fn count_rules(text: &str) -> u64 {
 /// would take down `github.com` — and would claim a request type and a
 /// third-party source the DNS stage does not have.
 fn evaluate(compiled: &Compiled, host: &str) -> HostVerdict {
+    let verdict = evaluate_main(compiled, host);
+    if verdict.blocked {
+        return verdict;
+    }
+    let Some(engine) = compiled.dns_engine.as_ref() else {
+        return verdict;
+    };
+    let request = Request::preparsed(host, host, "", "other", false, "");
+    let result = engine.check_network_request(&request);
+    if !result.should_block() {
+        return verdict;
+    }
+    let (rule_text, list_name, category) =
+        matched_details(&compiled.dns_sources, &result, host);
+    HostVerdict {
+        blocked: true,
+        rule_text,
+        list_name,
+        category,
+        redirect: result.redirect.is_some(),
+    }
+}
+
+/// The verdict with only the URL/cosmetic lists: the SNI path must not apply
+/// host-only (DNS filter) lists, which only ever speak at lookup time.
+fn evaluate_main(compiled: &Compiled, host: &str) -> HostVerdict {
     let request = Request::preparsed(host, host, "", "other", false, "");
     let result = compiled.engine.check_network_request(&request);
     if !result.should_block() {
         return HostVerdict::default();
     }
-
-    let (rule_text, list_name, category) = matched_details(compiled, &result, host);
+    let (rule_text, list_name, category) = matched_details(&compiled.sources, &result, host);
     HostVerdict {
         blocked: true,
         rule_text,
@@ -6475,7 +6561,7 @@ fn url_verdict(
     host: &str,
 ) -> UrlVerdict {
     let blocked = result.should_block();
-    let (rule_text, list_name, category) = matched_details(compiled, result, host);
+    let (rule_text, list_name, category) = matched_details(&compiled.sources, result, host);
     UrlVerdict {
         blocked,
         // A redirect only ever stands in for a block: `$redirect-rule`
@@ -6586,7 +6672,7 @@ fn app_merge(
     };
     let (rule_text, list_name, category) = match &from_shard {
         Some((shard, source)) => shard_details(compiled, app_rules, shard, *source, host),
-        None => matched_details(compiled, &main, host),
+        None => matched_details(&compiled.sources, &main, host),
     };
     UrlVerdict {
         blocked,
@@ -6635,7 +6721,7 @@ fn shard_details(
 
 /// The rule, list and category behind a match, for the log and the UI.
 fn matched_details(
-    compiled: &Compiled,
+    sources: &[SourceMapEntry],
     result: &adblock::blocker::BlockerResult,
     host: &str,
 ) -> (Option<String>, Option<String>, u8) {
@@ -6643,8 +6729,7 @@ fn matched_details(
         Some(info) => {
             let rule = info.raw_line.clone().or_else(|| {
                 let location = info.source_location.as_ref()?;
-                compiled
-                    .sources
+                sources
                     .iter()
                     .find(|s| s.source_index == location.source_index)?
                     .rule(location.line_number)
@@ -6657,7 +6742,7 @@ fn matched_details(
         None => (None, None),
     };
     let list = source
-        .and_then(|idx| compiled.sources.iter().find(|s| s.source_index == idx))
+        .and_then(|idx| sources.iter().find(|s| s.source_index == idx))
         .cloned();
 
     let category = list
@@ -6721,6 +6806,7 @@ mod tests {
             trusted: true,
             rule_count: 0,
             last_error: None,
+            dns_only: false,
         }
     }
 
@@ -6772,6 +6858,7 @@ mod tests {
             trusted: true,
             rule_count: 0,
             last_error: None,
+            dns_only: false,
         };
         let lists = vec![list(7, "Broken", unreadable), list(8, "Missing", missing)];
         let fe = FilterEngine::new();
@@ -6807,6 +6894,7 @@ mod tests {
             trusted: true,
             rule_count: 0,
             last_error: None,
+            dns_only: false,
         }
     }
 
@@ -7029,6 +7117,58 @@ mod tests {
         let v = fe.check_host_detailed("blocked.dns.test");
         assert_eq!(v.rule_text.as_deref(), Some("local=/blocked.dns.test/"));
         assert_eq!(v.list_name.as_deref(), Some("oisd.txt"));
+    }
+
+    #[test]
+    fn dns_filters_decide_lookups_only() {
+        let mut dns = temp_list(
+            "dns-filter.txt",
+            "||hostonly.dns.test^\n",
+            ListFormat::Standard,
+            2,
+        );
+        dns.dns_only = true;
+        dns.name = "Host-only list".to_string();
+        let fe = engine(vec![
+            temp_list(
+                "base.txt",
+                "||main.dns.test^\n",
+                ListFormat::Standard,
+                1,
+            ),
+            dns,
+        ]);
+
+        // The host-only list speaks at lookup time, with its own attribution.
+        let v = fe.check_host_detailed("hostonly.dns.test");
+        assert!(v.blocked);
+        assert_eq!(v.list_name.as_deref(), Some("Host-only list"));
+        assert!(fe.check_host("main.dns.test").blocked);
+
+        // It never reaches the URL or cosmetic engines...
+        assert!(
+            !fe.check_url(
+                "https://hostonly.dns.test/ad.js",
+                "https://page.test/",
+                "script",
+                "GET",
+                &[],
+            )
+            .blocked
+        );
+        assert!(
+            fe.check_url(
+                "https://main.dns.test/ad.js",
+                "https://page.test/",
+                "script",
+                "GET",
+                &[],
+            )
+            .blocked
+        );
+        // ...nor the SNI fallback, which is a transport decision.
+        assert!(fe.connection_block("hostonly.dns.test").is_none());
+        assert!(fe.connection_block("main.dns.test").is_some());
     }
 
     #[test]
@@ -8901,6 +9041,7 @@ mod tests {
             trusted: true,
             rule_count: 0,
             last_error: None,
+            dns_only: false,
         }];
         fe.rebuild(&lists, &[]);
         assert!(!fe.check_host("doubleclick.net").blocked);

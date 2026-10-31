@@ -19,6 +19,13 @@ class NetworkRequestLogTest {
         bytesSaved: Int = 48_000,
         id: Long = 1L,
         app: String = "",
+        transport: Int = 0,
+        roaming: Boolean = false,
+        flowId: Long = 0L,
+        url: String = "",
+        dnsAnswer: String = "",
+        bytesSent: Long = 0L,
+        bytesRecv: Long = 0L,
     ) = LogEvent(
         id = id,
         tsMs = 1_700_000_000_000L,
@@ -32,6 +39,13 @@ class NetworkRequestLogTest {
         bytesSaved = bytesSaved,
         ipv6 = false,
         app = app,
+        transport = transport,
+        roaming = roaming,
+        flowId = flowId,
+        url = url,
+        dnsAnswer = dnsAnswer,
+        bytesSent = bytesSent,
+        bytesRecv = bytesRecv,
     )
 
     @Test
@@ -94,5 +108,38 @@ class NetworkRequestLogTest {
         )
         assertEquals("com.example.browser", owned.appPackage)
         assertNull(NetworkRequestLog.from(event(CoreActions.BLOCKED.toInt())).appPackage)
+    }
+
+    @Test
+    fun `transport, url, dns answer and byte sizes survive the mapping`() {
+        val log = NetworkRequestLog.from(
+            event(
+                CoreActions.ALLOWED.toInt(),
+                transport = 2,
+                roaming = true,
+                flowId = 77L,
+                url = "https://example.com/path",
+                dnsAnswer = "10.0.0.2, 2001:db8::1",
+                bytesSent = 120L,
+                bytesRecv = 340L,
+            ),
+        )
+        assertEquals(NetworkTransport.CELLULAR, log.transport)
+        assertTrue(log.roaming)
+        assertEquals(77L, log.flowId)
+        assertEquals("https://example.com/path", log.url)
+        assertEquals("10.0.0.2, 2001:db8::1", log.dnsAnswer)
+        assertEquals(120L, log.bytesSent)
+        assertEquals(340L, log.bytesReceived)
+    }
+
+    @Test
+    fun `blank enrichment fields become null or unknown`() {
+        val log = NetworkRequestLog.from(event(CoreActions.ALLOWED.toInt()))
+        assertEquals(NetworkTransport.UNKNOWN, log.transport)
+        assertNull(log.url)
+        assertNull(log.dnsAnswer)
+        assertEquals(0L, log.bytesSent)
+        assertEquals(0L, log.bytesReceived)
     }
 }

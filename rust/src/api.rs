@@ -122,6 +122,9 @@ pub struct FilterListBinding {
     /// Number of rule lines in the list.
     pub rule_count: i64,
     pub last_error: String,
+    /// Host-only list: its rules decide DNS lookups but never URL or
+    /// cosmetic ones (AdGuard's "DNS filters").
+    pub dns_only: bool,
 }
 
 impl From<&FilterListInfo> for FilterListBinding {
@@ -141,6 +144,7 @@ impl From<&FilterListInfo> for FilterListBinding {
             trusted: l.trusted,
             rule_count: l.rule_count as i64,
             last_error: l.last_error.clone().unwrap_or_default(),
+            dns_only: l.dns_only,
         }
     }
 }
@@ -162,6 +166,7 @@ impl From<&FilterListBinding> for FilterListInfo {
             trusted: l.trusted,
             rule_count: l.rule_count.max(0) as u64,
             last_error: None,
+            dns_only: l.dns_only,
         }
     }
 }
@@ -203,6 +208,19 @@ pub struct LogEvent {
     pub ipv6: bool,
     /// Package of the app that owned the flow; empty when unattributed.
     pub app: String,
+    /// 0 unknown, 1 Wi-Fi, 2 cellular.
+    pub transport: i32,
+    /// Whether that network was roaming.
+    pub roaming: bool,
+    /// Monotonic decision id assigned by the core.
+    pub flow_id: i64,
+    /// Request URL when TLS termination saw one; empty otherwise.
+    pub url: String,
+    /// Address(es) the engine answered a DNS query with, when it produced the
+    /// reply itself.
+    pub dns_answer: String,
+    pub bytes_sent: i64,
+    pub bytes_recv: i64,
 }
 
 impl From<&events::Event> for LogEvent {
@@ -220,6 +238,13 @@ impl From<&events::Event> for LogEvent {
             bytes_saved: e.bytes_saved as i32,
             ipv6: e.flags & 0b01 != 0,
             app: e.app().to_string(),
+            transport: e.transport() as i32,
+            roaming: e.roaming(),
+            flow_id: e.flow_id as i64,
+            url: e.url().to_string(),
+            dns_answer: e.answer().to_string(),
+            bytes_sent: e.bytes_sent as i64,
+            bytes_recv: e.bytes_recv as i64,
         }
     }
 }
@@ -239,6 +264,13 @@ impl From<&crate::store::LogRow> for LogEvent {
             bytes_saved: r.bytes_saved as i32,
             ipv6: r.ipv6,
             app: r.app.clone(),
+            transport: r.transport as i32,
+            roaming: r.roaming,
+            flow_id: r.flow_id,
+            url: r.url.clone(),
+            dns_answer: r.dns_answer.clone(),
+            bytes_sent: r.bytes_sent,
+            bytes_recv: r.bytes_recv,
         }
     }
 }
@@ -689,20 +721,33 @@ pub struct AppUsage {
     /// Requests the engine answered without forwarding.
     pub blocked: u32,
     pub bytes_saved: u64,
+    /// Blocked requests from the ad category.
+    pub ads: u32,
+    /// Blocked requests from the tracker, analytics and social categories.
+    pub trackers: u32,
 }
 
 /// Per-package totals since `since_ms` (the UI passes local midnight), biggest
 /// blocked count first. Unattributed rows are left out.
 #[uniffi::export]
 pub fn core_app_usage_since(since_ms: i64) -> Vec<AppUsage> {
+    core_app_usage_since_transport(since_ms, -1)
+}
+
+/// Same as [`core_app_usage_since`] but restricted to one transport: `-1` all,
+/// `0` unknown, `1` Wi-Fi, `2` cellular.
+#[uniffi::export]
+pub fn core_app_usage_since_transport(since_ms: i64, transport: i32) -> Vec<AppUsage> {
     guard(Vec::new(), || match crate::core().store() {
         Some(store) => store
-            .log_usage_by_app(since_ms)
+            .log_usage_by_app(since_ms, transport as i64)
             .into_iter()
-            .map(|(app, blocked, bytes_saved)| AppUsage {
-                app,
-                blocked: blocked.min(u32::MAX as u64) as u32,
-                bytes_saved,
+            .map(|row| AppUsage {
+                app: row.app,
+                blocked: row.blocked.min(u32::MAX as i64) as u32,
+                bytes_saved: row.bytes_saved as u64,
+                ads: row.ads.min(u32::MAX as i64) as u32,
+                trackers: row.trackers.min(u32::MAX as i64) as u32,
             })
             .collect(),
         None => Vec::new(),
@@ -1349,6 +1394,7 @@ mod tests {
             trusted: true,
             rule_count: 12_345,
             last_error: String::new(),
+            dns_only: false,
         };
         let native: FilterListInfo = FilterListInfo::from(&binding);
         assert_eq!(native.id, 3);

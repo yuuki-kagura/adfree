@@ -141,6 +141,8 @@ impl Outcome {
 pub struct MitmBlock<'a> {
     /// The host the request was for.
     pub host: &'a str,
+    /// The full request URL when the decision had one (URL-level rules).
+    pub url: Option<&'a str>,
     /// The rule that matched, when the engine reported one.
     pub rule: Option<&'a str>,
     pub list_name: Option<&'a str>,
@@ -913,6 +915,7 @@ impl ProxySession {
                 if let Some(sink) = self.sink {
                     sink(&MitmBlock {
                         host: name,
+                        url: None,
                         rule: verdict.rule_text.as_deref(),
                         list_name: verdict.list_name.as_deref(),
                         category: verdict.category,
@@ -1457,6 +1460,7 @@ impl ProxySession {
             if let Some(sink) = sink {
                 sink(&MitmBlock {
                     host: &host,
+                    url: Some(&url),
                     rule: answer.rule.as_deref(),
                     list_name: answer.list_name.as_deref(),
                     category: answer.category,
@@ -2999,6 +3003,7 @@ mod tests {
                 trusted: true,
                 rule_count: 0,
                 last_error: None,
+                dns_only: false,
             }],
             &[],
         );
@@ -3028,6 +3033,7 @@ mod tests {
                 trusted: true,
                 rule_count: 0,
                 last_error: None,
+                dns_only: false,
             }],
             &[],
         );
@@ -3100,6 +3106,7 @@ mod tests {
                 trusted: true,
                 rule_count: 0,
                 last_error: None,
+                dns_only: false,
             }],
             &[],
         );
