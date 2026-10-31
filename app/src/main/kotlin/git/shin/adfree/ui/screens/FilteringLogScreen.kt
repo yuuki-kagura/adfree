@@ -4,6 +4,8 @@ import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -27,6 +29,7 @@ import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Clear
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.DeleteSweep
+import androidx.compose.material.icons.filled.FileDownload
 import androidx.compose.material.icons.filled.FilterList
 import androidx.compose.material.icons.filled.Public
 import androidx.compose.material.icons.filled.Search
@@ -118,6 +121,11 @@ fun FilteringLogScreen(
     val state by viewModel.uiState.collectAsState()
     val listState = rememberLazyListState()
     var showClearConfirm by remember { mutableStateOf(false) }
+    val exportLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.CreateDocument("text/csv"),
+    ) { uri ->
+        uri?.let { viewModel.onIntent(AdGuardIntent.ExportLogs(it.toString())) }
+    }
 
     // While the list sits at its top it follows incoming rows; scrolling into
     // history tells the repository to freeze the window instead, or fresh rows
@@ -206,6 +214,17 @@ fun FilteringLogScreen(
                     text = stringResource(R.string.log_subtitle),
                     fontSize = 12.sp,
                     color = AdGuardTextMuted
+                )
+            }
+
+            IconButton(
+                onClick = { exportLauncher.launch("adfree-activity.csv") },
+                modifier = Modifier.testTag("export_logs_button")
+            ) {
+                Icon(
+                    imageVector = Icons.Default.FileDownload,
+                    contentDescription = stringResource(R.string.log_export_action),
+                    tint = AdGuardTextSecondary
                 )
             }
 
@@ -460,8 +479,8 @@ fun FilteringLogScreen(
             PacketInspectionSheetContent(
                 log = inspected,
                 appLabel = appLabelFor(state.appNames, inspected.appPackage),
-                onAddToWhitelist = { viewModel.onIntent(AdGuardIntent.AddToWhitelist(it)) },
-                onAddToBlacklist = { viewModel.onIntent(AdGuardIntent.AddToBlacklist(it)) },
+                onAddToWhitelist = { viewModel.onIntent(AdGuardIntent.AddToWhitelist(it, inspected.appPackage)) },
+                onAddToBlacklist = { viewModel.onIntent(AdGuardIntent.AddToBlacklist(it, inspected.appPackage)) },
                 onAnalyzeWithAi = { domain ->
                     viewModel.onIntent(AdGuardIntent.InspectLog(null))
                     viewModel.onIntent(AdGuardIntent.SelectTab(AdGuardTab.AI_LAB))
@@ -737,6 +756,19 @@ fun PacketInspectionSheetContent(
         // Detailed Metadata Grid
         Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
             DetailRow(label = stringResource(R.string.log_detail_domain), value = log.domain)
+            DetailRow(
+                label = stringResource(R.string.log_detail_time),
+                value = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault())
+                    .format(Date(log.timestampMs)),
+            )
+            DetailRow(
+                label = stringResource(R.string.log_detail_latency),
+                value = if (log.latencyMicros >= 1_000) {
+                    "%.1f ms".format(log.latencyMicros / 1_000.0)
+                } else {
+                    "${log.latencyMicros} µs"
+                },
+            )
             DetailRow(
                 label = stringResource(R.string.log_detail_action),
                 value = logActionLabel(log.status)

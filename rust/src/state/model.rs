@@ -121,6 +121,18 @@ pub struct ProtectionState {
     /// connection is spliced and left unfiltered instead of failing.
     pub is_ech_blocking_enabled: bool,
     pub is_firewall_enabled: bool,
+    /// Global rules and per-app overrides each have their own gate. Both
+    /// default on; a disabled set contributes no restriction.
+    pub firewall_global_rules: bool,
+    pub firewall_custom_rules: bool,
+    /// Notification master for firewall blocks.
+    pub firewall_notifications: bool,
+    /// Default access for any app that inherits a dimension. `true` allows.
+    pub firewall_allow_wifi: bool,
+    pub firewall_allow_wifi_screen_off: bool,
+    pub firewall_allow_cellular: bool,
+    pub firewall_allow_cellular_screen_off: bool,
+    pub firewall_allow_roaming: bool,
     pub is_eco_battery_mode_enabled: bool,
     pub is_stealth_mode_enabled: bool,
     pub block_quic: bool,
@@ -167,6 +179,15 @@ impl Default for ProtectionState {
             // spliced rather than stripped, so nothing breaks.
             is_ech_blocking_enabled: false,
             is_firewall_enabled: true,
+            firewall_global_rules: true,
+            firewall_custom_rules: true,
+            firewall_notifications: true,
+            // AdGuard's global defaults let every app use every network.
+            firewall_allow_wifi: true,
+            firewall_allow_wifi_screen_off: true,
+            firewall_allow_cellular: true,
+            firewall_allow_cellular_screen_off: true,
+            firewall_allow_roaming: true,
             is_eco_battery_mode_enabled: true,
             // Stealth now has real side effects (WebRTC, cookies, UA), so it
             // is opt-in. It used to be a checkbox with no implementation.
@@ -225,25 +246,157 @@ fn normalize_hosts(hosts: Vec<String>) -> Vec<String> {
         .collect()
 }
 
+/// One per-app answer for a firewall dimension.
+///
+/// `Inherit` follows the global default, `Allow`/`Block` are explicit
+/// overrides. The serialized bool form is the one older builds wrote: `true`
+/// meant "allowed by the rule" and becomes `Inherit` (the global defaults were
+/// not configurable then), `false` becomes `Block`.
+#[derive(uniffi::Enum, Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+pub enum FirewallAccess {
+    #[default]
+    Inherit,
+    Allow,
+    Block,
+}
+
+impl Serialize for FirewallAccess {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(match self {
+            FirewallAccess::Inherit => "inherit",
+            FirewallAccess::Allow => "allow",
+            FirewallAccess::Block => "block",
+        })
+    }
+}
+
+impl<'de> Deserialize<'de> for FirewallAccess {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        struct AccessVisitor;
+
+        impl serde::de::Visitor<'_> for AccessVisitor {
+            type Value = FirewallAccess;
+
+            fn expecting(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                f.write_str("an access word (inherit/allow/block) or the legacy boolean")
+            }
+
+            fn visit_bool<E: serde::de::Error>(self, value: bool) -> Result<Self::Value, E> {
+                Ok(if value {
+                    FirewallAccess::Inherit
+                } else {
+                    FirewallAccess::Block
+                })
+            }
+
+            fn visit_str<E: serde::de::Error>(self, value: &str) -> Result<Self::Value, E> {
+                match value.trim().to_ascii_lowercase().as_str() {
+                    "inherit" => Ok(FirewallAccess::Inherit),
+                    "allow" | "allowed" => Ok(FirewallAccess::Allow),
+                    "block" | "blocked" => Ok(FirewallAccess::Block),
+                    _ => Err(E::custom(format!("unknown firewall access: {value}"))),
+                }
+            }
+        }
+
+        deserializer.deserialize_any(AccessVisitor)
+    }
+}
+
+/// One app's firewall overrides. The five network dimensions are independent;
+/// the global defaults apply wherever a dimension is `Inherit`.
 #[derive(uniffi::Record, Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(from = "AppFirewallRuleWire", into = "AppFirewallRuleWire")]
 pub struct AppFirewallRule {
     pub package_name: String,
-    pub cellular: bool,
-    pub wifi: bool,
+    pub wifi: FirewallAccess,
+    pub wifi_screen_off: FirewallAccess,
+    pub cellular: FirewallAccess,
+    pub cellular_screen_off: FirewallAccess,
+    pub roaming: FirewallAccess,
     pub filtered: bool,
-    pub screen_off: bool,
     pub https: bool,
+    /// Whether a firewall block may raise a notification for this app.
+    pub notify: bool,
 }
 
 impl Default for AppFirewallRule {
     fn default() -> Self {
         AppFirewallRule {
             package_name: String::new(),
-            cellular: true,
-            wifi: true,
+            wifi: FirewallAccess::Inherit,
+            wifi_screen_off: FirewallAccess::Inherit,
+            cellular: FirewallAccess::Inherit,
+            cellular_screen_off: FirewallAccess::Inherit,
+            roaming: FirewallAccess::Inherit,
             filtered: true,
-            screen_off: false,
             https: true,
+            notify: true,
+        }
+    }
+}
+
+/// Wire form: optional fields so a row written before the tri-state model
+/// still loads. `screen_off` was the transport-agnostic switch and maps onto
+/// both screen-off dimensions.
+#[derive(Serialize, Deserialize, Default)]
+#[serde(default)]
+struct AppFirewallRuleWire {
+    package_name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    wifi: Option<FirewallAccess>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    wifi_screen_off: Option<FirewallAccess>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    cellular: Option<FirewallAccess>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    cellular_screen_off: Option<FirewallAccess>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    roaming: Option<FirewallAccess>,
+    #[serde(skip_serializing)]
+    screen_off: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    filtered: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    https: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    notify: Option<bool>,
+}
+
+impl From<AppFirewallRuleWire> for AppFirewallRule {
+    fn from(wire: AppFirewallRuleWire) -> Self {
+        let legacy_screen_off = if wire.screen_off == Some(true) {
+            FirewallAccess::Block
+        } else {
+            FirewallAccess::Inherit
+        };
+        AppFirewallRule {
+            package_name: wire.package_name,
+            wifi: wire.wifi.unwrap_or_default(),
+            wifi_screen_off: wire.wifi_screen_off.unwrap_or(legacy_screen_off),
+            cellular: wire.cellular.unwrap_or_default(),
+            cellular_screen_off: wire.cellular_screen_off.unwrap_or(legacy_screen_off),
+            roaming: wire.roaming.unwrap_or_default(),
+            filtered: wire.filtered.unwrap_or(true),
+            https: wire.https.unwrap_or(true),
+            notify: wire.notify.unwrap_or(true),
+        }
+    }
+}
+
+impl From<AppFirewallRule> for AppFirewallRuleWire {
+    fn from(rule: AppFirewallRule) -> Self {
+        AppFirewallRuleWire {
+            package_name: rule.package_name,
+            wifi: Some(rule.wifi),
+            wifi_screen_off: Some(rule.wifi_screen_off),
+            cellular: Some(rule.cellular),
+            cellular_screen_off: Some(rule.cellular_screen_off),
+            roaming: Some(rule.roaming),
+            screen_off: None,
+            filtered: Some(rule.filtered),
+            https: Some(rule.https),
+            notify: Some(rule.notify),
         }
     }
 }

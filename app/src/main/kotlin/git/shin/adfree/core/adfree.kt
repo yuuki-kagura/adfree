@@ -829,6 +829,8 @@ internal object IntegrityCheckingUniffiLib {
     ): Int
     external fun uniffi_adfree_core_checksum_func_core_set_protection_paused(
     ): Int
+    external fun uniffi_adfree_core_checksum_func_core_set_roaming(
+    ): Int
     external fun uniffi_adfree_core_checksum_func_core_set_screen_off(
     ): Int
     external fun uniffi_adfree_core_checksum_func_core_set_scripts(
@@ -1011,6 +1013,8 @@ internal object UniffiLib {
     ): Unit
     external fun uniffi_adfree_core_fn_func_core_set_protection_paused(`paused`: Byte,uniffi_out_err: UniffiRustCallStatus, 
     ): Byte
+    external fun uniffi_adfree_core_fn_func_core_set_roaming(`roaming`: Byte,uniffi_out_err: UniffiRustCallStatus, 
+    ): Unit
     external fun uniffi_adfree_core_fn_func_core_set_screen_off(`screenOff`: Byte,uniffi_out_err: UniffiRustCallStatus, 
     ): Unit
     external fun uniffi_adfree_core_fn_func_core_set_scripts(`scripts`: RustBuffer.ByValue,`enabled`: Byte,uniffi_out_err: UniffiRustCallStatus, 
@@ -1323,6 +1327,9 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if ((lib.uniffi_adfree_core_checksum_func_core_set_protection_paused() and 0xFFFF) != 43855) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if ((lib.uniffi_adfree_core_checksum_func_core_set_roaming() and 0xFFFF) != 14485) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if ((lib.uniffi_adfree_core_checksum_func_core_set_screen_off() and 0xFFFF) != 60122) {
@@ -2453,18 +2460,31 @@ public object FfiConverterTypeSocketProtector: FfiConverter<SocketProtector, Lon
 
 
 
+/**
+ * One app's firewall overrides. The five network dimensions are independent;
+ * the global defaults apply wherever a dimension is `Inherit`.
+ */
 data class AppFirewallRule (
     var `packageName`: kotlin.String
     , 
-    var `cellular`: kotlin.Boolean
+    var `wifi`: FirewallAccess
     , 
-    var `wifi`: kotlin.Boolean
+    var `wifiScreenOff`: FirewallAccess
+    , 
+    var `cellular`: FirewallAccess
+    , 
+    var `cellularScreenOff`: FirewallAccess
+    , 
+    var `roaming`: FirewallAccess
     , 
     var `filtered`: kotlin.Boolean
     , 
-    var `screenOff`: kotlin.Boolean
-    , 
     var `https`: kotlin.Boolean
+    , 
+    /**
+     * Whether a firewall block may raise a notification for this app.
+     */
+    var `notify`: kotlin.Boolean
     
 ){
     
@@ -2482,8 +2502,11 @@ public object FfiConverterTypeAppFirewallRule: FfiConverterRustBuffer<AppFirewal
     override fun read(buf: ByteBuffer): AppFirewallRule {
         return AppFirewallRule(
             FfiConverterString.read(buf),
-            FfiConverterBoolean.read(buf),
-            FfiConverterBoolean.read(buf),
+            FfiConverterTypeFirewallAccess.read(buf),
+            FfiConverterTypeFirewallAccess.read(buf),
+            FfiConverterTypeFirewallAccess.read(buf),
+            FfiConverterTypeFirewallAccess.read(buf),
+            FfiConverterTypeFirewallAccess.read(buf),
             FfiConverterBoolean.read(buf),
             FfiConverterBoolean.read(buf),
             FfiConverterBoolean.read(buf),
@@ -2492,20 +2515,26 @@ public object FfiConverterTypeAppFirewallRule: FfiConverterRustBuffer<AppFirewal
 
     override fun allocationSize(value: AppFirewallRule) = (
             FfiConverterString.allocationSize(value.`packageName`) +
-            FfiConverterBoolean.allocationSize(value.`cellular`) +
-            FfiConverterBoolean.allocationSize(value.`wifi`) +
+            FfiConverterTypeFirewallAccess.allocationSize(value.`wifi`) +
+            FfiConverterTypeFirewallAccess.allocationSize(value.`wifiScreenOff`) +
+            FfiConverterTypeFirewallAccess.allocationSize(value.`cellular`) +
+            FfiConverterTypeFirewallAccess.allocationSize(value.`cellularScreenOff`) +
+            FfiConverterTypeFirewallAccess.allocationSize(value.`roaming`) +
             FfiConverterBoolean.allocationSize(value.`filtered`) +
-            FfiConverterBoolean.allocationSize(value.`screenOff`) +
-            FfiConverterBoolean.allocationSize(value.`https`)
+            FfiConverterBoolean.allocationSize(value.`https`) +
+            FfiConverterBoolean.allocationSize(value.`notify`)
     )
 
     override fun write(value: AppFirewallRule, buf: ByteBuffer) {
             FfiConverterString.write(value.`packageName`, buf)
-            FfiConverterBoolean.write(value.`cellular`, buf)
-            FfiConverterBoolean.write(value.`wifi`, buf)
+            FfiConverterTypeFirewallAccess.write(value.`wifi`, buf)
+            FfiConverterTypeFirewallAccess.write(value.`wifiScreenOff`, buf)
+            FfiConverterTypeFirewallAccess.write(value.`cellular`, buf)
+            FfiConverterTypeFirewallAccess.write(value.`cellularScreenOff`, buf)
+            FfiConverterTypeFirewallAccess.write(value.`roaming`, buf)
             FfiConverterBoolean.write(value.`filtered`, buf)
-            FfiConverterBoolean.write(value.`screenOff`, buf)
             FfiConverterBoolean.write(value.`https`, buf)
+            FfiConverterBoolean.write(value.`notify`, buf)
     }
 }
 
@@ -3757,6 +3786,32 @@ data class ProtectionState (
     , 
     var `isFirewallEnabled`: kotlin.Boolean
     , 
+    /**
+     * Global rules and per-app overrides each have their own gate. Both
+     * default on; a disabled set contributes no restriction.
+     */
+    var `firewallGlobalRules`: kotlin.Boolean
+    , 
+    var `firewallCustomRules`: kotlin.Boolean
+    , 
+    /**
+     * Notification master for firewall blocks.
+     */
+    var `firewallNotifications`: kotlin.Boolean
+    , 
+    /**
+     * Default access for any app that inherits a dimension. `true` allows.
+     */
+    var `firewallAllowWifi`: kotlin.Boolean
+    , 
+    var `firewallAllowWifiScreenOff`: kotlin.Boolean
+    , 
+    var `firewallAllowCellular`: kotlin.Boolean
+    , 
+    var `firewallAllowCellularScreenOff`: kotlin.Boolean
+    , 
+    var `firewallAllowRoaming`: kotlin.Boolean
+    , 
     var `isEcoBatteryModeEnabled`: kotlin.Boolean
     , 
     var `isStealthModeEnabled`: kotlin.Boolean
@@ -3844,6 +3899,14 @@ public object FfiConverterTypeProtectionState: FfiConverterRustBuffer<Protection
             FfiConverterBoolean.read(buf),
             FfiConverterBoolean.read(buf),
             FfiConverterBoolean.read(buf),
+            FfiConverterBoolean.read(buf),
+            FfiConverterBoolean.read(buf),
+            FfiConverterBoolean.read(buf),
+            FfiConverterBoolean.read(buf),
+            FfiConverterBoolean.read(buf),
+            FfiConverterBoolean.read(buf),
+            FfiConverterBoolean.read(buf),
+            FfiConverterBoolean.read(buf),
             FfiConverterUInt.read(buf),
             FfiConverterBoolean.read(buf),
             FfiConverterTypeDnsBlockMode.read(buf),
@@ -3876,6 +3939,14 @@ public object FfiConverterTypeProtectionState: FfiConverterRustBuffer<Protection
             FfiConverterBoolean.allocationSize(value.`filterHttp3`) +
             FfiConverterBoolean.allocationSize(value.`isEchBlockingEnabled`) +
             FfiConverterBoolean.allocationSize(value.`isFirewallEnabled`) +
+            FfiConverterBoolean.allocationSize(value.`firewallGlobalRules`) +
+            FfiConverterBoolean.allocationSize(value.`firewallCustomRules`) +
+            FfiConverterBoolean.allocationSize(value.`firewallNotifications`) +
+            FfiConverterBoolean.allocationSize(value.`firewallAllowWifi`) +
+            FfiConverterBoolean.allocationSize(value.`firewallAllowWifiScreenOff`) +
+            FfiConverterBoolean.allocationSize(value.`firewallAllowCellular`) +
+            FfiConverterBoolean.allocationSize(value.`firewallAllowCellularScreenOff`) +
+            FfiConverterBoolean.allocationSize(value.`firewallAllowRoaming`) +
             FfiConverterBoolean.allocationSize(value.`isEcoBatteryModeEnabled`) +
             FfiConverterBoolean.allocationSize(value.`isStealthModeEnabled`) +
             FfiConverterBoolean.allocationSize(value.`blockQuic`) +
@@ -3912,6 +3983,14 @@ public object FfiConverterTypeProtectionState: FfiConverterRustBuffer<Protection
             FfiConverterBoolean.write(value.`filterHttp3`, buf)
             FfiConverterBoolean.write(value.`isEchBlockingEnabled`, buf)
             FfiConverterBoolean.write(value.`isFirewallEnabled`, buf)
+            FfiConverterBoolean.write(value.`firewallGlobalRules`, buf)
+            FfiConverterBoolean.write(value.`firewallCustomRules`, buf)
+            FfiConverterBoolean.write(value.`firewallNotifications`, buf)
+            FfiConverterBoolean.write(value.`firewallAllowWifi`, buf)
+            FfiConverterBoolean.write(value.`firewallAllowWifiScreenOff`, buf)
+            FfiConverterBoolean.write(value.`firewallAllowCellular`, buf)
+            FfiConverterBoolean.write(value.`firewallAllowCellularScreenOff`, buf)
+            FfiConverterBoolean.write(value.`firewallAllowRoaming`, buf)
             FfiConverterBoolean.write(value.`isEcoBatteryModeEnabled`, buf)
             FfiConverterBoolean.write(value.`isStealthModeEnabled`, buf)
             FfiConverterBoolean.write(value.`blockQuic`, buf)
@@ -4970,6 +5049,49 @@ public object FfiConverterTypeDownloadError: FfiConverterRustBuffer<DownloadErro
     override fun allocationSize(value: DownloadError) = 4UL
 
     override fun write(value: DownloadError, buf: ByteBuffer) {
+        buf.putInt(value.ordinal + 1)
+    }
+}
+
+
+
+
+
+/**
+ * One per-app answer for a firewall dimension.
+ *
+ * `Inherit` follows the global default, `Allow`/`Block` are explicit
+ * overrides. The serialized bool form is the one older builds wrote: `true`
+ * meant "allowed by the rule" and becomes `Inherit` (the global defaults were
+ * not configurable then), `false` becomes `Block`.
+ */
+
+enum class FirewallAccess {
+    
+    INHERIT,
+    ALLOW,
+    BLOCK;
+
+    
+
+
+    companion object
+}
+
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeFirewallAccess: FfiConverterRustBuffer<FirewallAccess> {
+    override fun read(buf: ByteBuffer) = try {
+        FirewallAccess.values()[buf.getInt() - 1]
+    } catch (e: IndexOutOfBoundsException) {
+        throw RuntimeException("invalid enum value, something is very wrong!!", e)
+    }
+
+    override fun allocationSize(value: FirewallAccess) = 4UL
+
+    override fun write(value: FirewallAccess, buf: ByteBuffer) {
         buf.putInt(value.ordinal + 1)
     }
 }
@@ -6312,6 +6434,20 @@ public object FfiConverterSequenceTypeUidApps: FfiConverterRustBuffer<List<UidAp
 }
     )
     }
+    
+
+        /**
+         * Whether the active cellular network is roaming (`NET_CAPABILITY_NOT_ROAMING`
+         * absent). The platform is the only side that can answer.
+         */ fun `coreSetRoaming`(`roaming`: kotlin.Boolean)
+        = 
+    uniffiRustCall() { _status ->
+    UniffiLib.uniffi_adfree_core_fn_func_core_set_roaming(
+    
+        
+        FfiConverterBoolean.lower(`roaming`),_status)
+}
+    
     
  fun `coreSetScreenOff`(`screenOff`: kotlin.Boolean)
         = 

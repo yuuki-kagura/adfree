@@ -246,6 +246,12 @@ class CoreEngine {
         }.onFailure { Log.w(tag, "setNetworkType failed", it) }
     }
 
+    /** Whether the active cellular network is roaming, as the callback sees it. */
+    fun setRoaming(roaming: Boolean) {
+        runCatching { git.shin.adfree.core.coreSetRoaming(roaming) }
+            .onFailure { Log.w(tag, "setRoaming failed", it) }
+    }
+
     // --------------------------------------------------------------- filters
 
     /**

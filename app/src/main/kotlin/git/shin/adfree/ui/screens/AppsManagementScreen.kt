@@ -58,6 +58,9 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -74,6 +77,8 @@ import git.shin.adfree.R
 import git.shin.adfree.model.AppCategory
 import git.shin.adfree.model.AppCategoryFilter
 import git.shin.adfree.model.AppFirewallRule
+import git.shin.adfree.model.AppUsageRange
+import git.shin.adfree.model.FirewallAccess
 import git.shin.adfree.ui.AdGuardIntent
 import git.shin.adfree.ui.AdGuardViewModel
 import git.shin.adfree.ui.theme.AdGuardBlueDns
@@ -91,6 +96,9 @@ import git.shin.adfree.ui.theme.AdGuardTextMuted
 import git.shin.adfree.ui.theme.AdGuardTextPrimary
 import git.shin.adfree.ui.theme.AdGuardOnAccent
 import git.shin.adfree.ui.theme.AdGuardTextSecondary
+
+/** Order of the app list; totals come from the selected usage range. */
+private enum class AppSort { NAME, BLOCKED, SAVED }
 
 /** Chip code (null = all) paired with its label. */
 private val appCategoryChips: List<Pair<String?, Int>> = listOf(
@@ -110,6 +118,17 @@ fun AppsManagementScreen(
     modifier: Modifier = Modifier
 ) {
     val state by viewModel.uiState.collectAsState()
+    var usageRange by rememberSaveable {
+        mutableStateOf(viewModel.currentAppUsageRange())
+    }
+    var appSort by rememberSaveable { mutableStateOf(AppSort.NAME) }
+    val sortedApps = remember(state.appFirewallRules, appSort) {
+        when (appSort) {
+            AppSort.NAME -> state.appFirewallRules
+            AppSort.BLOCKED -> state.appFirewallRules.sortedByDescending { it.blockedRequestsToday }
+            AppSort.SAVED -> state.appFirewallRules.sortedByDescending { it.dataTransferredBytes }
+        }
+    }
 
     Column(
         modifier = modifier
@@ -201,6 +220,66 @@ fun AppsManagementScreen(
             }
         }
 
+        Spacer(modifier = Modifier.height(6.dp))
+
+        // Statistics window for the per-card blocked/saved totals. The core
+        // aggregates the persisted log, so 7/30 days survive a restart.
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .horizontalScroll(rememberScrollState()),
+            horizontalArrangement = Arrangement.spacedBy(6.dp)
+        ) {
+            listOf(
+                AppUsageRange.TODAY to R.string.apps_range_today,
+                AppUsageRange.WEEK to R.string.apps_range_week,
+                AppUsageRange.MONTH to R.string.apps_range_month,
+                AppUsageRange.ALL to R.string.apps_range_all,
+            ).forEach { (range, labelRes) ->
+                FilterChip(
+                    selected = usageRange == range,
+                    onClick = {
+                        usageRange = range
+                        viewModel.onIntent(AdGuardIntent.SetAppUsageRange(range))
+                    },
+                    label = { Text(stringResource(labelRes), fontSize = 11.sp) },
+                    colors = FilterChipDefaults.filterChipColors(
+                        selectedContainerColor = AdGuardBlueDns,
+                        selectedLabelColor = AdGuardOnAccent,
+                        containerColor = AdGuardDarkSurface,
+                        labelColor = AdGuardTextSecondary
+                    )
+                )
+            }
+        }
+
+        Spacer(modifier = Modifier.height(6.dp))
+
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .horizontalScroll(rememberScrollState()),
+            horizontalArrangement = Arrangement.spacedBy(6.dp)
+        ) {
+            listOf(
+                AppSort.NAME to R.string.apps_sort_name,
+                AppSort.BLOCKED to R.string.apps_sort_blocked,
+                AppSort.SAVED to R.string.apps_sort_saved,
+            ).forEach { (sort, labelRes) ->
+                FilterChip(
+                    selected = appSort == sort,
+                    onClick = { appSort = sort },
+                    label = { Text(stringResource(labelRes), fontSize = 11.sp) },
+                    colors = FilterChipDefaults.filterChipColors(
+                        selectedContainerColor = AdGuardPurpleAI,
+                        selectedLabelColor = AdGuardOnAccent,
+                        containerColor = AdGuardDarkSurface,
+                        labelColor = AdGuardTextSecondary
+                    )
+                )
+            }
+        }
+
         Spacer(modifier = Modifier.height(10.dp))
 
         // Legend Summary Bar
@@ -254,19 +333,33 @@ fun AppsManagementScreen(
             modifier = Modifier.fillMaxSize(),
             verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
-            items(state.appFirewallRules, key = { it.packageName }) { app ->
+            items(sortedApps, key = { it.packageName }) { app ->
                 AppFirewallCard(
                     app = app,
                     onClick = { viewModel.onIntent(AdGuardIntent.InspectAppDetails(app)) },
                     onViewLogs = { viewModel.onIntent(AdGuardIntent.ViewAppLogs(app)) },
                     onToggleCellular = {
                         viewModel.onIntent(
-                            AdGuardIntent.UpdateAppFirewall(app.packageName, cellular = !app.isCellularAllowed)
+                            AdGuardIntent.UpdateAppFirewall(
+                                app.packageName,
+                                cellular = if (app.cellularAccess == FirewallAccess.BLOCK) {
+                                    FirewallAccess.INHERIT
+                                } else {
+                                    FirewallAccess.BLOCK
+                                },
+                            )
                         )
                     },
                     onToggleWifi = {
                         viewModel.onIntent(
-                            AdGuardIntent.UpdateAppFirewall(app.packageName, wifi = !app.isWifiAllowed)
+                            AdGuardIntent.UpdateAppFirewall(
+                                app.packageName,
+                                wifi = if (app.wifiAccess == FirewallAccess.BLOCK) {
+                                    FirewallAccess.INHERIT
+                                } else {
+                                    FirewallAccess.BLOCK
+                                },
+                            )
                         )
                     },
                     onToggleFiltered = {
@@ -295,9 +388,18 @@ fun AppsManagementScreen(
                 httpsFilteringEnabled = state.settings.isHttpsFilteringEnabled,
                 onViewLogs = { viewModel.onIntent(AdGuardIntent.ViewAppLogs(it)) },
                 onRestartVpn = { viewModel.onIntent(AdGuardIntent.RestartVpn) },
-                onUpdate = { pkg, cell, wifi, filtered, screenOff, https ->
+                onUpdate = { update ->
                     viewModel.onIntent(
-                        AdGuardIntent.UpdateAppFirewall(pkg, cell, wifi, filtered, screenOff, https)
+                        AdGuardIntent.UpdateAppFirewall(
+                            packageName = update.packageName,
+                            wifi = update.wifi,
+                            wifiScreenOff = update.wifiScreenOff,
+                            cellular = update.cellular,
+                            cellularScreenOff = update.cellularScreenOff,
+                            roaming = update.roaming,
+                            filtered = update.filtered,
+                            httpsFiltered = update.httpsFiltered,
+                        )
                     )
                 },
                 onClose = { viewModel.onIntent(AdGuardIntent.InspectAppDetails(null)) }
@@ -433,8 +535,8 @@ fun AppFirewallCard(
                 AppQuickAction(
                     icon = Icons.Default.CellTower,
                     description = stringResource(R.string.apps_action_cellular),
-                    tint = if (app.isCellularAllowed) AdGuardGreenLight else AdGuardRedBlocked,
-                    background = if (app.isCellularAllowed) Color(0x2200D06C) else Color(0x22FF435A),
+                    tint = if (app.cellularAccess != FirewallAccess.BLOCK) AdGuardGreenLight else AdGuardRedBlocked,
+                    background = if (app.cellularAccess != FirewallAccess.BLOCK) Color(0x2200D06C) else Color(0x22FF435A),
                     onClick = onToggleCellular,
                     modifier = Modifier
                         .weight(1f)
@@ -444,8 +546,8 @@ fun AppFirewallCard(
                 AppQuickAction(
                     icon = Icons.Default.Wifi,
                     description = stringResource(R.string.apps_action_wifi),
-                    tint = if (app.isWifiAllowed) AdGuardGreenLight else AdGuardRedBlocked,
-                    background = if (app.isWifiAllowed) Color(0x2200D06C) else Color(0x22FF435A),
+                    tint = if (app.wifiAccess != FirewallAccess.BLOCK) AdGuardGreenLight else AdGuardRedBlocked,
+                    background = if (app.wifiAccess != FirewallAccess.BLOCK) Color(0x2200D06C) else Color(0x22FF435A),
                     onClick = onToggleWifi,
                     modifier = Modifier
                         .weight(1f)
@@ -498,25 +600,30 @@ private fun AppQuickAction(
     }
 }
 
+/** One edit from the per-app sheet; every field except the package is optional. */
+internal data class FirewallSheetUpdate(
+    val packageName: String,
+    val wifi: FirewallAccess? = null,
+    val wifiScreenOff: FirewallAccess? = null,
+    val cellular: FirewallAccess? = null,
+    val cellularScreenOff: FirewallAccess? = null,
+    val roaming: FirewallAccess? = null,
+    val filtered: Boolean? = null,
+    val httpsFiltered: Boolean? = null,
+)
+
 /**
  * Detailed App Firewall Modal Sheet (AdGuard v4 Style).
  */
 @Composable
-fun AppDetailsFirewallSheet(
+private fun AppDetailsFirewallSheet(
     app: AppFirewallRule,
     logs: List<NetworkRequestLog> = emptyList(),
     vpnActive: Boolean = false,
     httpsFilteringEnabled: Boolean = false,
     onViewLogs: (AppFirewallRule) -> Unit = {},
     onRestartVpn: () -> Unit = {},
-    onUpdate: (
-        packageName: String,
-        cellular: Boolean?,
-        wifi: Boolean?,
-        filtered: Boolean?,
-        screenOff: Boolean?,
-        httpsFiltered: Boolean?,
-    ) -> Unit,
+    onUpdate: (FirewallSheetUpdate) -> Unit,
     onClose: () -> Unit
 ) {
     Column(
@@ -601,7 +708,7 @@ fun AppDetailsFirewallSheet(
 
                 Switch(
                     checked = app.isFilterRouted,
-                    onCheckedChange = { onUpdate(app.packageName, null, null, it, null, null) },
+                    onCheckedChange = { onUpdate(FirewallSheetUpdate(app.packageName, filtered = it)) },
                     colors = SwitchDefaults.colors(
                         checkedThumbColor = Color.White,
                         checkedTrackColor = AdGuardGreenPrimary,
@@ -694,7 +801,7 @@ fun AppDetailsFirewallSheet(
                 Switch(
                     checked = app.isHttpsFiltered,
                     onCheckedChange = {
-                        onUpdate(app.packageName, null, null, null, null, it)
+                        onUpdate(FirewallSheetUpdate(app.packageName, httpsFiltered = it))
                     },
                     modifier = Modifier.testTag("switch_app_https_${app.packageName}"),
                     colors = SwitchDefaults.colors(
@@ -730,81 +837,56 @@ fun AppDetailsFirewallSheet(
             colors = CardDefaults.cardColors(containerColor = AdGuardDarkSurfaceVariant)
         ) {
             Column(modifier = Modifier.padding(14.dp)) {
-                // Cellular toggle
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Column(modifier = Modifier.weight(1f)) {
-                        Text(stringResource(R.string.apps_detail_cellular_title), fontSize = 13.sp, fontWeight = FontWeight.SemiBold, color = AdGuardTextPrimary)
-                        Text(stringResource(R.string.apps_detail_cellular_body), fontSize = 11.sp, color = AdGuardTextSecondary)
-                    }
-                    Switch(
-                        checked = app.isCellularAllowed,
-                        onCheckedChange = { onUpdate(app.packageName, it, null, null, null, null) },
-                        colors = SwitchDefaults.colors(
-                            checkedThumbColor = Color.White,
-                            checkedTrackColor = AdGuardGreenPrimary,
-                            uncheckedThumbColor = AdGuardTextMuted,
-                            uncheckedTrackColor = AdGuardDarkSurface
-                        )
-                    )
-                }
+                FirewallAccessRow(
+                    title = stringResource(R.string.firewall_rule_wifi),
+                    subtitle = stringResource(R.string.firewall_rule_wifi_body),
+                    access = app.wifiAccess,
+                    onSelect = { onUpdate(FirewallSheetUpdate(app.packageName, wifi = it)) },
+                )
 
-                Spacer(modifier = Modifier.height(12.dp))
+                Spacer(modifier = Modifier.height(14.dp))
 
-                // Wi-Fi toggle
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Column(modifier = Modifier.weight(1f)) {
-                        Text(stringResource(R.string.apps_detail_wifi_title), fontSize = 13.sp, fontWeight = FontWeight.SemiBold, color = AdGuardTextPrimary)
-                        Text(stringResource(R.string.apps_detail_wifi_body), fontSize = 11.sp, color = AdGuardTextSecondary)
-                    }
-                    Switch(
-                        checked = app.isWifiAllowed,
-                        onCheckedChange = { onUpdate(app.packageName, null, it, null, null, null) },
-                        colors = SwitchDefaults.colors(
-                            checkedThumbColor = Color.White,
-                            checkedTrackColor = AdGuardGreenPrimary,
-                            uncheckedThumbColor = AdGuardTextMuted,
-                            uncheckedTrackColor = AdGuardDarkSurface
-                        )
-                    )
-                }
+                FirewallAccessRow(
+                    title = stringResource(R.string.firewall_rule_wifi_screen_off),
+                    subtitle = stringResource(R.string.firewall_rule_screen_off_body),
+                    access = app.wifiScreenOffAccess,
+                    onSelect = {
+                        onUpdate(FirewallSheetUpdate(app.packageName, wifiScreenOff = it))
+                    },
+                )
 
-                Spacer(modifier = Modifier.height(12.dp))
+                Spacer(modifier = Modifier.height(14.dp))
 
-                // Block when screen off (Background power saving)
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Column(modifier = Modifier.weight(1f)) {
-                        Text(stringResource(R.string.apps_detail_screen_off_title), fontSize = 13.sp, fontWeight = FontWeight.SemiBold, color = AdGuardTextPrimary)
-                        Text(stringResource(R.string.apps_detail_screen_off_body), fontSize = 11.sp, color = AdGuardTextSecondary)
-                    }
-                    Switch(
-                        checked = app.blockWhenScreenOff,
-                        onCheckedChange = { onUpdate(app.packageName, null, null, null, it, null) },
-                        colors = SwitchDefaults.colors(
-                            checkedThumbColor = Color.White,
-                            checkedTrackColor = AdGuardGreenPrimary,
-                            uncheckedThumbColor = AdGuardTextMuted,
-                            uncheckedTrackColor = AdGuardDarkSurface
-                        )
-                    )
-                }
+                FirewallAccessRow(
+                    title = stringResource(R.string.firewall_rule_cellular),
+                    subtitle = stringResource(R.string.firewall_rule_cellular_body),
+                    access = app.cellularAccess,
+                    onSelect = { onUpdate(FirewallSheetUpdate(app.packageName, cellular = it)) },
+                )
+
+                Spacer(modifier = Modifier.height(14.dp))
+
+                FirewallAccessRow(
+                    title = stringResource(R.string.firewall_rule_cellular_screen_off),
+                    subtitle = stringResource(R.string.firewall_rule_screen_off_body),
+                    access = app.cellularScreenOffAccess,
+                    onSelect = {
+                        onUpdate(FirewallSheetUpdate(app.packageName, cellularScreenOff = it))
+                    },
+                )
+
+                Spacer(modifier = Modifier.height(14.dp))
+
+                FirewallAccessRow(
+                    title = stringResource(R.string.firewall_rule_roaming),
+                    subtitle = stringResource(R.string.firewall_rule_roaming_body),
+                    access = app.roamingAccess,
+                    onSelect = { onUpdate(FirewallSheetUpdate(app.packageName, roaming = it)) },
+                )
             }
         }
 
-        if (!app.isFilterRouted &&
-            (!app.isCellularAllowed || !app.isWifiAllowed || app.blockWhenScreenOff)
-        ) {
+        if (!app.isFilterRouted && app.hasNetworkRules) {
             Spacer(modifier = Modifier.height(10.dp))
             Text(
                 text = stringResource(R.string.apps_detail_bypass_warning),
@@ -957,7 +1039,19 @@ fun AppDetailsFirewallSheet(
             horizontalArrangement = Arrangement.spacedBy(10.dp)
         ) {
             OutlinedButton(
-                onClick = { onUpdate(app.packageName, true, true, false, false, false) },
+                onClick = {
+                    onUpdate(
+                        FirewallSheetUpdate(
+                            packageName = app.packageName,
+                            wifi = FirewallAccess.ALLOW,
+                            wifiScreenOff = FirewallAccess.ALLOW,
+                            cellular = FirewallAccess.ALLOW,
+                            cellularScreenOff = FirewallAccess.ALLOW,
+                            roaming = FirewallAccess.ALLOW,
+                            filtered = false,
+                        ),
+                    )
+                },
                 modifier = Modifier.weight(1f),
                 shape = RoundedCornerShape(8.dp)
             ) {
@@ -965,7 +1059,15 @@ fun AppDetailsFirewallSheet(
             }
 
             Button(
-                onClick = { onUpdate(app.packageName, true, true, true, false, true) },
+                onClick = {
+                    onUpdate(
+                        FirewallSheetUpdate(
+                            packageName = app.packageName,
+                            filtered = true,
+                            httpsFiltered = true,
+                        ),
+                    )
+                },
                 modifier = Modifier.weight(1f),
                 colors = ButtonDefaults.buttonColors(containerColor = AdGuardDarkSurfaceVariant),
                 shape = RoundedCornerShape(8.dp)

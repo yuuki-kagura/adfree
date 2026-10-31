@@ -361,6 +361,13 @@ pub fn core_set_network_type(kind: u8) {
     guard((), || crate::core().set_network_type(kind))
 }
 
+/// Whether the active cellular network is roaming (`NET_CAPABILITY_NOT_ROAMING`
+/// absent). The platform is the only side that can answer.
+#[uniffi::export]
+pub fn core_set_roaming(roaming: bool) {
+    guard((), || crate::core().set_roaming(roaming))
+}
+
 #[uniffi::export]
 pub fn core_check_host(host: String) -> HostVerdictBinding {
     guard(HostVerdictBinding::default(), || {

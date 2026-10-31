@@ -2,6 +2,7 @@ package git.shin.adfree.ui
 
 import git.shin.adfree.model.AppFirewallRule
 import git.shin.adfree.model.AppLanguage
+import git.shin.adfree.model.AppUsageRange
 import git.shin.adfree.model.DnsBackup
 import git.shin.adfree.model.DnsBackupMode
 import git.shin.adfree.model.DnsBlockMode
@@ -9,6 +10,7 @@ import git.shin.adfree.model.DnsProvider
 import git.shin.adfree.model.DnsRewriteRule
 import git.shin.adfree.model.FilterList
 import git.shin.adfree.model.FilterStatus
+import git.shin.adfree.model.FirewallAccess
 import git.shin.adfree.model.NetworkRequestLog
 import git.shin.adfree.model.ProtectionSettings
 import git.shin.adfree.model.ProtectionStats
@@ -32,6 +34,8 @@ data class AdGuardUiState(
     val logAllowedTotal: Long = 0L,
     val filterLists: List<FilterList> = emptyList(),
     val appFirewallRules: List<AppFirewallRule> = emptyList(),
+    /** Every installed app, before the Apps-tab search and chip filters. */
+    val allAppFirewallRules: List<AppFirewallRule> = emptyList(),
     /** package -> display name for every installed app, regardless of the Apps tab filter. */
     val appNames: Map<String, String> = emptyMap(),
     val dnsProviders: List<DnsProvider> = emptyList(),
@@ -108,8 +112,14 @@ sealed interface AdGuardIntent {
     data class AddCustomRule(val rule: String) : AdGuardIntent
     data class RemoveCustomRule(val rule: String) : AdGuardIntent
     data class UpdateAllCustomRules(val rules: List<String>) : AdGuardIntent
-    data class AddToWhitelist(val domain: String) : AdGuardIntent
-    data class AddToBlacklist(val domain: String) : AdGuardIntent
+    data class AddToWhitelist(
+        val domain: String,
+        val appPackage: String? = null,
+    ) : AdGuardIntent
+    data class AddToBlacklist(
+        val domain: String,
+        val appPackage: String? = null,
+    ) : AdGuardIntent
     data class SelectDnsProvider(val id: String) : AdGuardIntent
     data class AddCustomDnsProvider(
         val name: String,
@@ -126,12 +136,34 @@ sealed interface AdGuardIntent {
     data class RemoveDnsRewrite(val host: String) : AdGuardIntent
     data class UpdateAppFirewall(
         val packageName: String,
-        val cellular: Boolean? = null,
-        val wifi: Boolean? = null,
+        /** Display name used when the package has no row yet. */
+        val appName: String? = null,
+        val wifi: FirewallAccess? = null,
+        val wifiScreenOff: FirewallAccess? = null,
+        val cellular: FirewallAccess? = null,
+        val cellularScreenOff: FirewallAccess? = null,
+        val roaming: FirewallAccess? = null,
         val filtered: Boolean? = null,
-        val blockWhenScreenOff: Boolean? = null,
         val httpsFiltered: Boolean? = null,
+        val notifyBlocked: Boolean? = null,
     ) : AdGuardIntent
+    /** Global defaults and the two rule-set gates. */
+    data class UpdateFirewallSettings(
+        val globalRules: Boolean? = null,
+        val customRules: Boolean? = null,
+        val notifications: Boolean? = null,
+        val allowWifi: Boolean? = null,
+        val allowWifiScreenOff: Boolean? = null,
+        val allowCellular: Boolean? = null,
+        val allowCellularScreenOff: Boolean? = null,
+        val allowRoaming: Boolean? = null,
+    ) : AdGuardIntent
+    /** Resets only the firewall section: defaults, overrides and mutes. */
+    data object ResetFirewall : AdGuardIntent
+    /** Creates the row for an app picked from the firewall app sheet. */
+    data class EnsureFirewallApp(val packageName: String, val appName: String) : AdGuardIntent
+    /** Opens the Apps-tab detail sheet for one package (quick-action menus). */
+    data class OpenAppManagement(val app: AppFirewallRule) : AdGuardIntent
     /** Rebuild the running tunnel so the latest app exclusions apply. */
     data object RestartVpn : AdGuardIntent
 
@@ -140,9 +172,12 @@ sealed interface AdGuardIntent {
     data class FilterLogsByApp(val appPackageOrName: String?) : AdGuardIntent
     data class AppSearchQueryChanged(val query: String) : AdGuardIntent
     data class AppCategoryFilterChanged(val filter: String?) : AdGuardIntent
+    data class SetAppUsageRange(val range: AppUsageRange) : AdGuardIntent
     data object ClearLogs : AdGuardIntent
     data object ResetStats : AdGuardIntent
     data object LoadMoreLogs : AdGuardIntent
+    /** Write the loaded activity window to a CSV document (SAF URI). */
+    data class ExportLogs(val uri: String) : AdGuardIntent
 
     /** Sent by the log screen as it is scrolled to its top (or away from it). */
     data class SetLogTailing(val tailing: Boolean) : AdGuardIntent

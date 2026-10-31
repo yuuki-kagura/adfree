@@ -39,6 +39,7 @@ use crate::mitm::quic::socket::{Datagram, TunUdpSocket};
 use crate::packet::{self, IpKey, Packet, PROTO_TCP, PROTO_UDP};
 use crate::socks5::Socks5Handshake;
 use crate::stats::{self, Stats};
+use crate::state::model::FirewallAccess;
 use crate::udpnat::{UdpFlow, UdpKey, UdpNat, UDP_MAX_FLOWS, UDP_MAX_PROXIED_FLOWS};
 use crate::uidmap::UidMap;
 use crate::upstream::Upstream;
@@ -314,24 +315,83 @@ pub const NETWORK_WIFI: u8 = 1;
 pub const NETWORK_CELLULAR: u8 = 2;
 pub const NETWORK_OTHER: u8 = 3;
 
-/// Per-app firewall rules: packages that must not use the current network, or
-/// must not reach the network at all while the screen is off.
+/// Per-app firewall rules: overrides on top of the global defaults for the
+/// current network, screen state and roaming flag.
 ///
-/// The sets are pushed by the platform (only it knows package names), and a
-/// flow is evaluated against them when it opens and again whenever the network
-/// or screen state changes.
-#[derive(Clone, Default)]
+/// The map is pushed by the platform (only it knows package names). A flow is
+/// evaluated against it when it opens and again whenever the network, screen
+/// or roaming state changes. The hot path only does one map lookup per
+/// dimension, so no allocation happens per packet.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct AppFirewallState {
+    pub wifi: FirewallAccess,
+    pub wifi_screen_off: FirewallAccess,
+    pub cellular: FirewallAccess,
+    pub cellular_screen_off: FirewallAccess,
+    pub roaming: FirewallAccess,
+}
+
+#[derive(Clone, Debug)]
 pub struct AppNetworkPolicy {
-    cellular_blocked: Arc<HashSet<String>>,
-    wifi_blocked: Arc<HashSet<String>>,
-    screen_off_blocked: Arc<HashSet<String>>,
+    /// The master firewall switch. Off means no dimension applies at all.
+    pub active: bool,
+    pub allow_wifi: bool,
+    pub allow_wifi_screen_off: bool,
+    pub allow_cellular: bool,
+    pub allow_cellular_screen_off: bool,
+    pub allow_roaming: bool,
+    pub rules: Arc<FxHashMap<String, AppFirewallState>>,
+}
+
+impl Default for AppNetworkPolicy {
+    fn default() -> Self {
+        AppNetworkPolicy {
+            active: false,
+            allow_wifi: true,
+            allow_wifi_screen_off: true,
+            allow_cellular: true,
+            allow_cellular_screen_off: true,
+            allow_roaming: true,
+            rules: Arc::new(FxHashMap::default()),
+        }
+    }
 }
 
 impl AppNetworkPolicy {
     pub fn is_empty(&self) -> bool {
-        self.cellular_blocked.is_empty()
-            && self.wifi_blocked.is_empty()
-            && self.screen_off_blocked.is_empty()
+        !self.active
+            || (self.rules.is_empty()
+                && self.allow_wifi
+                && self.allow_wifi_screen_off
+                && self.allow_cellular
+                && self.allow_cellular_screen_off
+                && self.allow_roaming)
+    }
+
+    /// Whether every package sharing the flow may use this dimension. With no
+    /// attribution the global default alone decides, so a globally blocked
+    /// network still cuts an unattributed flow.
+    fn allowed(
+        &self,
+        packages: &[String],
+        access: impl Fn(&AppFirewallState) -> FirewallAccess,
+        fallback: bool,
+    ) -> bool {
+        if packages.is_empty() {
+            return fallback;
+        }
+        packages.iter().all(|package| {
+            let access = self
+                .rules
+                .get(package)
+                .map(&access)
+                .unwrap_or(FirewallAccess::Inherit);
+            match access {
+                FirewallAccess::Allow => true,
+                FirewallAccess::Block => false,
+                FirewallAccess::Inherit => fallback,
+            }
+        })
     }
 
     fn blocked_reason(
@@ -339,19 +399,52 @@ impl AppNetworkPolicy {
         packages: &[String],
         network: u8,
         screen_off: bool,
+        roaming: bool,
     ) -> Option<&'static str> {
-        if packages.is_empty() {
+        if !self.active {
             return None;
         }
-        if screen_off && packages.iter().any(|p| self.screen_off_blocked.contains(p)) {
-            return Some("app blocked while the screen is off");
+        // Roaming is an additional restriction on cellular, independent of
+        // the screen: an app barred from roaming stays offline on a visited
+        // network even while the screen is on.
+        if network == NETWORK_CELLULAR
+            && roaming
+            && !self.allowed(packages, |r| r.roaming, self.allow_roaming)
+        {
+            return Some("app not allowed while roaming");
         }
         match network {
-            NETWORK_WIFI if packages.iter().any(|p| self.wifi_blocked.contains(p)) => {
-                Some("app not allowed on Wi-Fi")
+            NETWORK_WIFI if screen_off => {
+                if self.allowed(packages, |r| r.wifi_screen_off, self.allow_wifi_screen_off) {
+                    None
+                } else {
+                    Some("app not allowed on Wi-Fi while the screen is off")
+                }
             }
-            NETWORK_CELLULAR if packages.iter().any(|p| self.cellular_blocked.contains(p)) => {
-                Some("app not allowed on cellular data")
+            NETWORK_WIFI => {
+                if self.allowed(packages, |r| r.wifi, self.allow_wifi) {
+                    None
+                } else {
+                    Some("app not allowed on Wi-Fi")
+                }
+            }
+            NETWORK_CELLULAR if screen_off => {
+                if self.allowed(
+                    packages,
+                    |r| r.cellular_screen_off,
+                    self.allow_cellular_screen_off,
+                ) {
+                    None
+                } else {
+                    Some("app not allowed on cellular data while the screen is off")
+                }
+            }
+            NETWORK_CELLULAR => {
+                if self.allowed(packages, |r| r.cellular, self.allow_cellular) {
+                    None
+                } else {
+                    Some("app not allowed on cellular data")
+                }
             }
             _ => None,
         }
@@ -610,6 +703,8 @@ pub struct Core {
     app_network_policy: RwLock<Arc<AppNetworkPolicy>>,
     /// The active default network, classified by the platform.
     network_type: AtomicU8,
+    /// Whether that cellular network is roaming (`NET_CAPABILITY_NOT_ROAMING`).
+    roaming: AtomicBool,
     /// Packets produced for the tun, collected only in tests: the end-to-end
     /// tests drive the packet loop without a device, and this is where
     /// client-bound segments would land.
@@ -741,6 +836,7 @@ impl Core {
             ca_rejecting_apps: RwLock::new(HashSet::new()),
             app_network_policy: RwLock::new(Arc::new(AppNetworkPolicy::default())),
             network_type: AtomicU8::new(NETWORK_UNKNOWN),
+            roaming: AtomicBool::new(false),
             #[cfg(test)]
             outbox: Mutex::new(Vec::new()),
         }
@@ -921,17 +1017,8 @@ impl Core {
 
     /// Replaces the per-app network firewall. Open flows belonging to a newly
     /// restricted app are cut immediately.
-    pub fn set_app_network_policy(
-        &self,
-        cellular_blocked: Vec<String>,
-        wifi_blocked: Vec<String>,
-        screen_off_blocked: Vec<String>,
-    ) {
-        *self.app_network_policy.write().unwrap() = Arc::new(AppNetworkPolicy {
-            cellular_blocked: Arc::new(cellular_blocked.into_iter().collect()),
-            wifi_blocked: Arc::new(wifi_blocked.into_iter().collect()),
-            screen_off_blocked: Arc::new(screen_off_blocked.into_iter().collect()),
-        });
+    pub fn set_app_network_policy(&self, policy: AppNetworkPolicy) {
+        *self.app_network_policy.write().unwrap() = Arc::new(policy);
         self.drop_restricted_flows();
     }
 
@@ -948,11 +1035,28 @@ impl Core {
         self.network_type.load(Ordering::Relaxed)
     }
 
+    /// Records whether the active cellular network is roaming.
+    pub fn set_roaming(&self, roaming: bool) {
+        if self.roaming.swap(roaming, Ordering::Relaxed) == roaming {
+            return;
+        }
+        self.drop_restricted_flows();
+    }
+
+    pub fn is_roaming(&self) -> bool {
+        self.roaming.load(Ordering::Relaxed)
+    }
+
     /// The reason this collection of packages may not use the network right
     /// now, or `None` when it is allowed.
     fn app_blocked_reason(&self, packages: &[String]) -> Option<&'static str> {
         let policy = Arc::clone(&*self.app_network_policy.read().unwrap());
-        policy.blocked_reason(packages, self.network_type(), self.is_screen_off())
+        policy.blocked_reason(
+            packages,
+            self.network_type(),
+            self.is_screen_off(),
+            self.is_roaming(),
+        )
     }
 
     /// Cuts every TCP relay and retires every UDP mapping whose app is now
@@ -964,6 +1068,7 @@ impl Core {
     fn drop_restricted_flows(&self) {
         let network = self.network_type();
         let screen_off = self.is_screen_off();
+        let roaming = self.is_roaming();
         let policy = Arc::clone(&*self.app_network_policy.read().unwrap());
         if policy.is_empty() {
             return;
@@ -974,7 +1079,7 @@ impl Core {
             for (_, relay) in guard.iter_mut() {
                 if relay.closed
                     || policy
-                        .blocked_reason(&relay.app_packages, network, screen_off)
+                        .blocked_reason(&relay.app_packages, network, screen_off, roaming)
                         .is_none()
                 {
                     continue;
@@ -992,7 +1097,7 @@ impl Core {
             let mut nat = self.udp_nat.lock().unwrap();
             nat.retire_matching(|flow| {
                 policy
-                    .blocked_reason(&flow.app_packages, network, screen_off)
+                    .blocked_reason(&flow.app_packages, network, screen_off, roaming)
                     .is_some()
             });
         }
@@ -1002,7 +1107,7 @@ impl Core {
                 .iter()
                 .filter(|(_, flow)| {
                     policy
-                        .blocked_reason(&flow.apps, network, screen_off)
+                        .blocked_reason(&flow.apps, network, screen_off, roaming)
                         .is_some()
                 })
                 .map(|(key, _)| *key)
@@ -5206,6 +5311,45 @@ mod tests {
     use super::*;
     use crate::dnsrewrite::DnsRewriteRule;
 
+    /// A policy with every global default allowed and only the given overrides.
+    fn app_policy(rules: &[(&str, AppFirewallState)]) -> AppNetworkPolicy {
+        AppNetworkPolicy {
+            active: true,
+            allow_wifi: true,
+            allow_wifi_screen_off: true,
+            allow_cellular: true,
+            allow_cellular_screen_off: true,
+            allow_roaming: true,
+            rules: Arc::new(
+                rules
+                    .iter()
+                    .map(|(package, state)| ((*package).to_string(), *state))
+                    .collect(),
+            ),
+        }
+    }
+
+    fn blocked_cellular(package: &str) -> AppNetworkPolicy {
+        app_policy(&[(
+            package,
+            AppFirewallState {
+                cellular: FirewallAccess::Block,
+                ..AppFirewallState::default()
+            },
+        )])
+    }
+
+    fn blocked_screen_off(package: &str) -> AppNetworkPolicy {
+        app_policy(&[(
+            package,
+            AppFirewallState {
+                wifi_screen_off: FirewallAccess::Block,
+                cellular_screen_off: FirewallAccess::Block,
+                ..AppFirewallState::default()
+            },
+        )])
+    }
+
     #[test]
     fn config_defaults_are_battery_friendly() {
         let cfg = Config::default();
@@ -6536,7 +6680,7 @@ mod tests {
         core.set_socket_protector(Arc::new(AllowAll));
         core.set_uid_apps(vec![(10_123, vec!["com.example.news".to_string()])]);
         core.pin_uid_for_port(40000, 10_123);
-        core.set_app_network_policy(vec!["com.example.news".to_string()], Vec::new(), Vec::new());
+        core.set_app_network_policy(blocked_cellular("com.example.news"));
 
         core.set_network_type(NETWORK_WIFI);
         core.handle_packet(&tcp_syn(40000, [93, 184, 216, 34], 80));
@@ -6547,7 +6691,7 @@ mod tests {
         other.set_socket_protector(Arc::new(AllowAll));
         other.set_uid_apps(vec![(10_123, vec!["com.example.news".to_string()])]);
         other.pin_uid_for_port(40000, 10_123);
-        other.set_app_network_policy(vec!["com.example.news".to_string()], Vec::new(), Vec::new());
+        other.set_app_network_policy(blocked_cellular("com.example.news"));
         other.set_network_type(NETWORK_CELLULAR);
         other.handle_packet(&tcp_syn(40000, [93, 184, 216, 34], 80));
         other.run_setup_jobs();
@@ -6568,6 +6712,101 @@ mod tests {
         assert_eq!(reset[0][33] & 0x04, 0x04, "and it is a RST");
     }
 
+    /// Global defaults apply to an app with no rule of its own: blocking
+    /// Wi-Fi globally resets the flow without any per-app entry.
+    #[test]
+    fn a_global_default_blocks_an_unlisted_app() {
+        let core = Core::new();
+        core.set_socket_protector(Arc::new(AllowAll));
+        core.set_uid_apps(vec![(10_123, vec!["com.example.news".to_string()])]);
+        core.pin_uid_for_port(40000, 10_123);
+        let mut policy = app_policy(&[]);
+        policy.allow_wifi = false;
+        core.set_app_network_policy(policy);
+        core.set_network_type(NETWORK_WIFI);
+
+        core.handle_packet(&tcp_syn(40000, [93, 184, 216, 34], 80));
+        core.run_setup_jobs();
+        assert!(
+            core.relays
+                .lock()
+                .unwrap()
+                .get(40000)
+                .is_some_and(|r| r.closed && r.peer_fd < 0),
+            "the inherited default must cut the flow"
+        );
+    }
+
+    /// An explicit per-app allow wins over a blocked global default.
+    #[test]
+    fn an_explicit_allow_overrides_a_global_block() {
+        let core = Core::new();
+        core.set_socket_protector(Arc::new(AllowAll));
+        core.set_uid_apps(vec![(10_123, vec!["com.example.news".to_string()])]);
+        core.pin_uid_for_port(40000, 10_123);
+        let mut policy = app_policy(&[(
+            "com.example.news",
+            AppFirewallState {
+                wifi: FirewallAccess::Allow,
+                ..AppFirewallState::default()
+            },
+        )]);
+        policy.allow_wifi = false;
+        core.set_app_network_policy(policy);
+        core.set_network_type(NETWORK_WIFI);
+
+        core.handle_packet(&tcp_syn(40000, [93, 184, 216, 34], 80));
+        core.run_setup_jobs();
+        assert_eq!(core.relay_count(), 1, "the app's own rule wins");
+    }
+
+    /// Roaming is a separate cellular dimension: the same flow is relayed on a
+    /// home network and reset on a visited one.
+    #[test]
+    fn a_roaming_rule_only_applies_while_roaming() {
+        let home = Core::new();
+        home.set_socket_protector(Arc::new(AllowAll));
+        home.set_uid_apps(vec![(10_123, vec!["com.example.news".to_string()])]);
+        home.pin_uid_for_port(40000, 10_123);
+        home.set_app_network_policy(app_policy(&[(
+            "com.example.news",
+            AppFirewallState {
+                roaming: FirewallAccess::Block,
+                ..AppFirewallState::default()
+            },
+        )]));
+        home.set_network_type(NETWORK_CELLULAR);
+        home.set_roaming(false);
+        home.handle_packet(&tcp_syn(40000, [93, 184, 216, 34], 80));
+        home.run_setup_jobs();
+        assert_eq!(home.relay_count(), 1, "home cellular is allowed");
+
+        let visited = Core::new();
+        visited.set_socket_protector(Arc::new(AllowAll));
+        visited.set_uid_apps(vec![(10_123, vec!["com.example.news".to_string()])]);
+        visited.pin_uid_for_port(40000, 10_123);
+        visited.set_app_network_policy(app_policy(&[(
+            "com.example.news",
+            AppFirewallState {
+                roaming: FirewallAccess::Block,
+                ..AppFirewallState::default()
+            },
+        )]));
+        visited.set_network_type(NETWORK_CELLULAR);
+        visited.set_roaming(true);
+        visited.handle_packet(&tcp_syn(40000, [93, 184, 216, 34], 80));
+        visited.run_setup_jobs();
+        assert!(
+            visited
+                .relays
+                .lock()
+                .unwrap()
+                .get(40000)
+                .is_some_and(|r| r.closed && r.peer_fd < 0),
+            "roaming must cut the flow"
+        );
+    }
+
     /// A flow that is refused after its SYN-ACK has gone out is reset with our
     /// own sequence: the client's stack is ESTABLISHED there, and a reset
     /// built from its SYN again (seq 0) would be dropped as out of window.
@@ -6585,7 +6824,7 @@ mod tests {
         core.set_tun_fd_for_test(tun);
         core.set_uid_apps(vec![(10_123, vec!["com.example.news".to_string()])]);
         core.pin_uid_for_port(40000, 10_123);
-        core.set_app_network_policy(vec!["com.example.news".to_string()], Vec::new(), Vec::new());
+        core.set_app_network_policy(blocked_cellular("com.example.news"));
         core.set_network_type(NETWORK_CELLULAR);
 
         core.handle_packet(&tcp_syn(40000, [93, 184, 216, 34], 80));
@@ -6610,7 +6849,7 @@ mod tests {
         core.set_socket_protector(Arc::new(AllowAll));
         core.set_uid_apps(vec![(10_123, vec!["com.example.news".to_string()])]);
         core.pin_uid_for_port(40000, 10_123);
-        core.set_app_network_policy(Vec::new(), Vec::new(), vec!["com.example.news".to_string()]);
+        core.set_app_network_policy(blocked_screen_off("com.example.news"));
         core.set_network_type(NETWORK_WIFI);
         core.handle_packet(&tcp_syn(40000, [93, 184, 216, 34], 80));
         // The flow only carries its app once the setup worker attributed it.
@@ -6637,7 +6876,7 @@ mod tests {
         core.set_uid_lookup(Arc::new(FixedUid(10_123)));
         core.set_uid_apps(vec![(10_123, vec!["com.example.news".to_string()])]);
         core.set_network_type(NETWORK_CELLULAR);
-        core.set_app_network_policy(vec!["com.example.news".to_string()], Vec::new(), Vec::new());
+        core.set_app_network_policy(blocked_cellular("com.example.news"));
 
         assert_eq!(dns_reply_rcode(&core, "example.test"), Some(3));
         assert_eq!(
@@ -6646,7 +6885,7 @@ mod tests {
             "the blocked query never reaches the upstream resolver"
         );
 
-        core.set_app_network_policy(Vec::new(), Vec::new(), Vec::new());
+        core.set_app_network_policy(AppNetworkPolicy::default());
         assert_ne!(
             dns_reply_rcode(&core, "example.test"),
             Some(3),
@@ -6729,7 +6968,7 @@ mod tests {
         core.set_uid_lookup(Arc::new(FixedUid(10_123)));
         core.set_uid_apps(vec![(10_123, vec!["com.example.news".to_string()])]);
         core.set_network_type(NETWORK_CELLULAR);
-        core.set_app_network_policy(vec!["com.example.news".to_string()], Vec::new(), Vec::new());
+        core.set_app_network_policy(blocked_cellular("com.example.news"));
 
         core.handle_packet(&tcp_syn(40000, [93, 184, 216, 34], 80));
         core.run_setup_jobs();

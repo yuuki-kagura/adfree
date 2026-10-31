@@ -8,6 +8,7 @@ import git.shin.adfree.core.DnsBlockMode as CoreDnsBlockMode
 import git.shin.adfree.core.DnsProtocol as CoreDnsProtocol
 import git.shin.adfree.core.DnsProviderRecord as CoreDnsProvider
 import git.shin.adfree.core.DnsRewrite as CoreDnsRewrite
+import git.shin.adfree.core.FirewallAccess as CoreFirewallAccess
 import git.shin.adfree.core.ProtectionState as CoreProtectionState
 import git.shin.adfree.core.ProxyState as CoreProxyState
 import git.shin.adfree.core.ThemeMode as CoreThemeMode
@@ -18,6 +19,7 @@ import git.shin.adfree.model.DnsBackupMode
 import git.shin.adfree.model.DnsBlockMode
 import git.shin.adfree.model.DnsProvider
 import git.shin.adfree.model.DnsRewriteRule
+import git.shin.adfree.model.FirewallAccess
 import git.shin.adfree.model.ProtectionSettings
 import git.shin.adfree.model.ProtocolType
 import git.shin.adfree.model.ProxySettings
@@ -46,6 +48,14 @@ internal fun ProtectionSettings.toCoreState(): CoreProtectionState = CoreProtect
     filterHttp3 = filterHttp3,
     isEchBlockingEnabled = isEchBlockingEnabled,
     isFirewallEnabled = isFirewallEnabled,
+    firewallGlobalRules = firewallGlobalRules,
+    firewallCustomRules = firewallCustomRules,
+    firewallNotifications = firewallNotifications,
+    firewallAllowWifi = firewallAllowWifi,
+    firewallAllowWifiScreenOff = firewallAllowWifiScreenOff,
+    firewallAllowCellular = firewallAllowCellular,
+    firewallAllowCellularScreenOff = firewallAllowCellularScreenOff,
+    firewallAllowRoaming = firewallAllowRoaming,
     isEcoBatteryModeEnabled = isEcoBatteryModeEnabled,
     isStealthModeEnabled = isStealthModeEnabled,
     blockQuic = blockQuic,
@@ -82,6 +92,14 @@ internal fun CoreProtectionState.toModel(): ProtectionSettings = ProtectionSetti
     filterHttp3 = filterHttp3,
     isEchBlockingEnabled = isEchBlockingEnabled,
     isFirewallEnabled = isFirewallEnabled,
+    firewallGlobalRules = firewallGlobalRules,
+    firewallCustomRules = firewallCustomRules,
+    firewallNotifications = firewallNotifications,
+    firewallAllowWifi = firewallAllowWifi,
+    firewallAllowWifiScreenOff = firewallAllowWifiScreenOff,
+    firewallAllowCellular = firewallAllowCellular,
+    firewallAllowCellularScreenOff = firewallAllowCellularScreenOff,
+    firewallAllowRoaming = firewallAllowRoaming,
     isEcoBatteryModeEnabled = isEcoBatteryModeEnabled,
     isStealthModeEnabled = isStealthModeEnabled,
     blockQuic = blockQuic,
@@ -162,29 +180,46 @@ private fun CoreThemeMode.toModel(): ThemeMode = when (this) {
 
 // ------------------------------------------------------------------ firewall
 
-/** True when at least one switch differs from the all-allowed default. */
+/** True when the row must be persisted: any rule, routing or notification choice. */
 internal fun AppFirewallRule.hasOverrides(): Boolean =
-    !isCellularAllowed || !isWifiAllowed || !isFilterRouted ||
-        !isHttpsFiltered || blockWhenScreenOff
+    hasNetworkRules || !isFilterRouted || !isHttpsFiltered || !notifyBlocked
+
+internal fun FirewallAccess.toCore(): CoreFirewallAccess = when (this) {
+    FirewallAccess.INHERIT -> CoreFirewallAccess.INHERIT
+    FirewallAccess.ALLOW -> CoreFirewallAccess.ALLOW
+    FirewallAccess.BLOCK -> CoreFirewallAccess.BLOCK
+}
+
+internal fun CoreFirewallAccess.toModel(): FirewallAccess = when (this) {
+    CoreFirewallAccess.INHERIT -> FirewallAccess.INHERIT
+    CoreFirewallAccess.ALLOW -> FirewallAccess.ALLOW
+    CoreFirewallAccess.BLOCK -> FirewallAccess.BLOCK
+}
 
 internal fun AppFirewallRule.toCoreRule(): CoreFirewallRule = CoreFirewallRule(
     packageName = packageName,
-    cellular = isCellularAllowed,
-    wifi = isWifiAllowed,
+    wifi = wifiAccess.toCore(),
+    wifiScreenOff = wifiScreenOffAccess.toCore(),
+    cellular = cellularAccess.toCore(),
+    cellularScreenOff = cellularScreenOffAccess.toCore(),
+    roaming = roamingAccess.toCore(),
     filtered = isFilterRouted,
-    screenOff = blockWhenScreenOff,
     https = isHttpsFiltered,
+    notify = notifyBlocked,
 )
 
 internal fun CoreFirewallRule.toModel(appName: String, category: String): AppFirewallRule =
     AppFirewallRule(
         packageName = packageName,
         appName = appName,
-        isCellularAllowed = cellular,
-        isWifiAllowed = wifi,
+        wifiAccess = wifi.toModel(),
+        wifiScreenOffAccess = wifiScreenOff.toModel(),
+        cellularAccess = cellular.toModel(),
+        cellularScreenOffAccess = cellularScreenOff.toModel(),
+        roamingAccess = roaming.toModel(),
         isFilterRouted = filtered,
         isHttpsFiltered = https,
-        blockWhenScreenOff = screenOff,
+        notifyBlocked = notify,
         category = category,
     )
 

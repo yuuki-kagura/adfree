@@ -30,6 +30,11 @@ pub const KEY_FILTERS: &str = "filters";
 pub const KEY_SCRIPTS: &str = "scripts";
 
 const META_LEGACY_IMPORTED: &str = "legacy_imported";
+/// Schema of the `firewall` row. Version 2 replaced the transport booleans
+/// with tri-state dimensions and the per-transport screen-off split; the
+/// deserializer reads both, so the migration is a one-time rewrite.
+const META_FIREWALL_SCHEMA: &str = "firewall_schema";
+const FIREWALL_SCHEMA_VERSION: &str = "2";
 
 /// The state database plus the in-memory copy the engine reads.
 pub struct StateStore {
@@ -98,7 +103,24 @@ impl StateStore {
                 ],
             );
         }
+        self.migrate_firewall(&snapshot.firewall);
         snapshot
+    }
+
+    /// Rewrites a pre-v2 firewall row in the tri-state shape once. The
+    /// in-memory rules are already mapped by the deserializer, so this only
+    /// makes the stored form match; a failed write leaves the marker unset and
+    /// is retried on the next launch.
+    fn migrate_firewall(&self, firewall: &[AppFirewallRule]) {
+        if self.store.meta_get(META_FIREWALL_SCHEMA).as_deref() == Some(FIREWALL_SCHEMA_VERSION) {
+            return;
+        }
+        if !firewall.is_empty() && !write_row(&self.store, KEY_FIREWALL, &firewall) {
+            return;
+        }
+        if let Err(e) = self.store.meta_set(META_FIREWALL_SCHEMA, FIREWALL_SCHEMA_VERSION) {
+            crate::logbuf::push(&format!("state: firewall schema marker not written: {e}"));
+        }
     }
 
     /// Folds the pre-v4 blobs into the typed state once. A collection that
@@ -416,7 +438,7 @@ mod tests {
         // Built-ins still come from code.
         assert!(snapshot.dns.provider("cloudflare").is_some());
         assert_eq!(snapshot.firewall.len(), 1);
-        assert!(!snapshot.firewall[0].cellular);
+        assert_eq!(snapshot.firewall[0].cellular, FirewallAccess::Block);
         assert!(snapshot.filters.catalog_configured);
         assert_eq!(snapshot.filters.enabled_catalog_ids, vec!["ag-base"]);
         assert_eq!(snapshot.filters.user_rules, vec!["||ads.test^"]);
@@ -436,8 +458,58 @@ mod tests {
     }
 
     #[test]
-    fn saving_a_collection_only_touches_that_row() {
-        let (store, dir) = temp("save-one");
+    fn a_v1_firewall_row_is_migrated_to_tri_state_once() {
+        let (store, dir) = temp("firewall-schema");
+        // Mark the legacy import done so only the firewall migration runs.
+        store.meta_set(META_LEGACY_IMPORTED, "1").unwrap();
+        store
+            .state_set(
+                KEY_FIREWALL,
+                r#"[
+                    {"package_name":"com.example","cellular":false,"wifi":true,
+                     "filtered":true,"screen_off":true,"https":true},
+                    {"package_name":"com.other","cellular":true,"wifi":true,
+                     "filtered":true,"screen_off":false,"https":false}
+                ]"#,
+            )
+            .unwrap();
+
+        let state = StateStore::open(Arc::clone(&store));
+        let snapshot = state.snapshot();
+        let example = &snapshot.firewall[0];
+        assert_eq!(example.cellular, FirewallAccess::Block);
+        assert_eq!(example.wifi, FirewallAccess::Inherit);
+        assert_eq!(example.wifi_screen_off, FirewallAccess::Block);
+        assert_eq!(example.cellular_screen_off, FirewallAccess::Block);
+        assert_eq!(example.roaming, FirewallAccess::Inherit);
+        assert!(example.notify);
+        let other = &snapshot.firewall[1];
+        assert_eq!(other.wifi_screen_off, FirewallAccess::Inherit);
+        assert!(!other.https);
+
+        // The stored row now uses the schema-2 shape, under the same key, so
+        // an older build would still find its rows (with the tri-state words).
+        assert_eq!(
+            store.meta_get(META_FIREWALL_SCHEMA).as_deref(),
+            Some(FIREWALL_SCHEMA_VERSION)
+        );
+        let raw = store.state_get(KEY_FIREWALL).expect("row kept");
+        assert!(raw.contains("\"wifi_screen_off\""), "new dimensions written");
+        assert!(raw.contains("\"block\""));
+        assert!(!raw.contains("\"screen_off\""), "legacy key retired");
+
+        // Reopening is a no-op: the marker prevents a second rewrite.
+        drop(state);
+        let reopened = StateStore::open(store);
+        assert_eq!(
+            reopened.snapshot().firewall[0].wifi_screen_off,
+            FirewallAccess::Block
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn saving_a_collection_only_touches_that_row() {        let (store, dir) = temp("save-one");
         let state = StateStore::open(store);
         let mut protection = state.snapshot().protection;
         protection.theme_mode = ThemeMode::Light;

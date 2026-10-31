@@ -1,5 +1,9 @@
 package git.shin.adfree.ui.screens
 
+import android.content.Intent
+import android.net.Uri
+import android.os.Build
+import android.provider.Settings as AndroidSettings
 import android.widget.Toast
 import androidx.compose.ui.res.stringResource
 import git.shin.adfree.R
@@ -29,7 +33,9 @@ import androidx.compose.material.icons.filled.Bolt
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Lock
+import androidx.compose.material.icons.filled.NotificationsActive
 import androidx.compose.material.icons.filled.PowerSettingsNew
+import androidx.compose.material.icons.filled.Route
 import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material.icons.automirrored.filled.HelpOutline
 import androidx.compose.material.icons.filled.Dns
@@ -121,6 +127,7 @@ fun SettingsScreen(
     val state by viewModel.uiState.collectAsState()
     val scrollState = rememberScrollState()
     val uriHandler = LocalUriHandler.current
+    val context = LocalContext.current
     var pendingRestoreUri by remember { mutableStateOf<String?>(null) }
 
     val exportLauncher = rememberLauncherForActivityResult(
@@ -186,6 +193,54 @@ fun SettingsScreen(
                 subtitle = stringResource(R.string.settings_autostart_subtitle),
                 checked = state.settings.autoStart,
                 onCheckedChange = { viewModel.onIntent(AdGuardIntent.ToggleAutoStart(it)) },
+            )
+
+            Spacer(modifier = Modifier.height(20.dp))
+
+            SettingsGroupHeader(stringResource(R.string.settings_group_network))
+
+            val proxy = state.settings.proxy
+            val proxyActive = proxy.enabled && proxy.isUsable
+            SettingsValueRow(
+                icon = Icons.Default.Route,
+                title = stringResource(R.string.settings_routing_mode_title),
+                subtitle = stringResource(
+                    if (proxyActive) R.string.settings_routing_socks5
+                    else R.string.settings_routing_local_vpn,
+                ),
+                value = if (proxyActive) "${proxy.host}:${proxy.port}" else null,
+            )
+
+            Spacer(modifier = Modifier.height(10.dp))
+
+            SettingsLink(
+                icon = Icons.Default.NotificationsActive,
+                title = stringResource(R.string.settings_notifications_title),
+                subtitle = stringResource(R.string.settings_notifications_subtitle),
+                onClick = {
+                    // Per-channel switches live in the OS, one per feature
+                    // (protection, firewall, updates, HTTPS reminder).
+                    val opened = Build.VERSION.SDK_INT >= Build.VERSION_CODES.O &&
+                        runCatching {
+                            context.startActivity(
+                                Intent(AndroidSettings.ACTION_APP_NOTIFICATION_SETTINGS)
+                                    .putExtra(
+                                        AndroidSettings.EXTRA_APP_PACKAGE,
+                                        context.packageName,
+                                    ),
+                            )
+                        }.isSuccess
+                    if (!opened) {
+                        runCatching {
+                            context.startActivity(
+                                Intent(
+                                    AndroidSettings.ACTION_APPLICATION_DETAILS_SETTINGS,
+                                    Uri.fromParts("package", context.packageName, null),
+                                ),
+                            )
+                        }
+                    }
+                },
             )
 
             Spacer(modifier = Modifier.height(20.dp))
@@ -472,6 +527,74 @@ private fun SettingsLink(
                 tint = AdGuardTextMuted,
                 modifier = Modifier.size(20.dp)
             )
+        }
+    }
+}
+
+/**
+ * A read-only settings row: it reports a state the engine owns rather than
+ * navigating or toggling, so it deliberately has no chevron and no click.
+ */
+@Composable
+private fun SettingsValueRow(
+    icon: ImageVector,
+    title: String,
+    subtitle: String,
+    value: String? = null,
+) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(14.dp),
+        colors = CardDefaults.cardColors(containerColor = AdGuardDarkSurface),
+        border = CardDefaults.outlinedCardBorder().copy(
+            brush = androidx.compose.ui.graphics.Brush.linearGradient(
+                listOf(AdGuardDarkOutline, AdGuardBlueDns.copy(alpha = 0.2f))
+            )
+        )
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 14.dp, vertical = 14.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Box(
+                modifier = Modifier
+                    .size(36.dp)
+                    .clip(RoundedCornerShape(10.dp))
+                    .background(AdGuardBlueDns.copy(alpha = 0.15f)),
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(
+                    imageVector = icon,
+                    contentDescription = null,
+                    tint = AdGuardBlueDns,
+                    modifier = Modifier.size(20.dp)
+                )
+            }
+            Spacer(modifier = Modifier.width(12.dp))
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = title,
+                    fontSize = 14.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    color = AdGuardTextPrimary
+                )
+                Text(
+                    text = subtitle,
+                    fontSize = 11.sp,
+                    color = AdGuardTextSecondary
+                )
+            }
+            if (value != null) {
+                Text(
+                    text = value,
+                    fontSize = 12.sp,
+                    fontFamily = FontFamily.Monospace,
+                    color = AdGuardTextMuted,
+                    maxLines = 1,
+                )
+            }
         }
     }
 }

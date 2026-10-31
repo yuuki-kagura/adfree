@@ -130,7 +130,7 @@ mod tests {
             .firewall
             .push(crate::state::model::AppFirewallRule {
                 package_name: "com.example".to_string(),
-                cellular: false,
+                cellular: crate::state::model::FirewallAccess::Block,
                 ..crate::state::model::AppFirewallRule::default()
             });
         snapshot.filters.enabled_catalog_ids = vec!["ag-base".to_string()];

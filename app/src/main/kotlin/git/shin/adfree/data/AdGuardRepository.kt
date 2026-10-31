@@ -18,6 +18,8 @@ import git.shin.adfree.core.ScriptState
 import git.shin.adfree.core.StatsSnapshot
 import git.shin.adfree.model.AppCategory
 import git.shin.adfree.model.AppFirewallRule
+import git.shin.adfree.model.FirewallAccess
+import git.shin.adfree.model.FirewallAppChoice
 import git.shin.adfree.model.DnsBackup
 import git.shin.adfree.model.DnsBackupMode
 import git.shin.adfree.model.DnsBlockMode
@@ -47,6 +49,7 @@ import git.shin.adfree.ui.Localization
 import git.shin.adfree.ui.UiText
 import git.shin.adfree.vpn.HttpsReminder
 import git.shin.adfree.work.FilterUpdateScheduler
+import git.shin.adfree.work.FirewallNotifier
 import java.io.IOException
 import java.net.URLEncoder
 import java.util.Calendar
@@ -85,6 +88,11 @@ private const val AUTO_UPDATE_RESUME_MIN_INTERVAL_MS = 30 * 60 * 1000L
 
 /** A backup is settings plus rules, not a media file; keep the read bounded. */
 private const val MAX_BACKUP_BYTES = 4 * 1024 * 1024
+
+/** Firewall block notifications: poll cadence, page size and per-app window. */
+private const val FIREWALL_NOTICE_POLL_MS = 5_000L
+private const val FIREWALL_NOTICE_PAGE = 32
+private const val FIREWALL_NOTICE_WINDOW_MS = 60 * 60 * 1000L
 
 /**
  * Single source of truth.
@@ -219,6 +227,7 @@ class AdGuardRepository(
 
     init {
         startStatsPoller()
+        startFirewallNotifier()
     }
 
     // -------------------------------------------------------------- hydration
@@ -322,6 +331,59 @@ class AdGuardRepository(
                 // aggregation while that tab is actually on screen.
                 if (logGrew && appUsageVisible) refreshAppUsage()
                 delay(if (engine.isScreenOff()) 2_000 else 500)
+            }
+        }
+    }
+
+    /**
+     * Raises one notification per app per window when the firewall cuts a
+     * flow. The log table is the only place the decision is recorded, so this
+     * watches its newest page; the first scan only records a baseline so a
+     * restart does not replay yesterday's blocks. The poller runs regardless
+     * of the UI because the VPN keeps the process alive in the background.
+     */
+    private fun startFirewallNotifier() {
+        scope.launch {
+            while (true) {
+                delay(FIREWALL_NOTICE_POLL_MS)
+                val settings = _settings.value
+                if (!settings.isProtectionActive ||
+                    !settings.isFirewallEnabled ||
+                    !settings.firewallNotifications
+                ) {
+                    lastFirewallLogId = null
+                    continue
+                }
+                val rows = withContext(Dispatchers.IO) {
+                    runCatching {
+                        engine.logPage(0, FIREWALL_NOTICE_PAGE).map(NetworkRequestLog::from)
+                    }.getOrDefault(emptyList())
+                }
+                if (rows.isEmpty()) continue
+                val newest = rows.maxOf { it.id }
+                val baseline = lastFirewallLogId
+                lastFirewallLogId = newest
+                if (baseline == null) continue
+                val now = System.currentTimeMillis()
+                for (row in rows.asReversed()) {
+                    if (row.id <= baseline) continue
+                    if (row.status != FilterStatus.BLOCKED) continue
+                    if (row.matchedRule != "App firewall") continue
+                    val packageName = row.appPackage ?: continue
+                    val rule = _appFirewallRules.value.firstOrNull {
+                        it.packageName == packageName
+                    }
+                    if (rule?.notifyBlocked == false) continue
+                    val last = firewallNoticeAt[packageName] ?: 0L
+                    if (now - last < FIREWALL_NOTICE_WINDOW_MS) continue
+                    firewallNoticeAt[packageName] = now
+                    FirewallNotifier.notify(
+                        context,
+                        settings.appLanguage,
+                        packageName,
+                        rule?.appName ?: packageName,
+                    )
+                }
             }
         }
     }
@@ -1444,16 +1506,26 @@ class AdGuardRepository(
         }
     }
 
-    fun addDomainToWhitelist(domain: String) {
+    fun addDomainToWhitelist(domain: String, appPackage: String? = null) {
         val host = domain.trim().trimEnd('.')
         if (host.isBlank()) return
-        addCustomRule("@@||$host^")
+        addCustomRule("@@||$host^${appScope(appPackage)}")
     }
 
-    fun addDomainToBlacklist(domain: String) {
+    fun addDomainToBlacklist(domain: String, appPackage: String? = null) {
         val host = domain.trim().trimEnd('.')
         if (host.isBlank()) return
-        addCustomRule("||$host^")
+        addCustomRule("||$host^${appScope(appPackage)}")
+    }
+
+    /** `$app=` modifier for a rule created from one package's log row. */
+    private fun appScope(appPackage: String?): String {
+        val pkg = appPackage?.trim().orEmpty()
+        return if (pkg.isNotEmpty() && !pkg.any { it.isWhitespace() || it == ',' }) {
+            "\$app=$pkg"
+        } else {
+            ""
+        }
     }
 
     fun checkHost(host: String): Triple<Boolean, String, String> {
@@ -1476,6 +1548,63 @@ class AdGuardRepository(
         engine.resetStats()
         clearLogs()
     }
+
+    /**
+     * Writes the currently loaded log window as CSV to a SAF document.
+     *
+     * Only the rows already paged into memory are exported: the store keeps
+     * far more than the UI ever holds, and silently walking it here would make
+     * "export" look like it covered everything.
+     */
+    suspend fun exportLogs(uriText: String): BackupResult {
+        val rows = _logs.value
+        val ok = withContext(Dispatchers.IO) {
+            runCatching {
+                val uri = android.net.Uri.parse(uriText)
+                context.contentResolver.openOutputStream(uri)
+                    ?.bufferedWriter(Charsets.UTF_8)
+                    ?.use { writer ->
+                        writer.appendLine(
+                            "time,app,domain,ip,protocol,status,category,rule,list,latency_us,saved_bytes",
+                        )
+                        val time = java.text.SimpleDateFormat(
+                            "yyyy-MM-dd'T'HH:mm:ssXXX",
+                            java.util.Locale.US,
+                        )
+                        rows.forEach { log ->
+                            writer.appendLine(
+                                listOf(
+                                    time.format(java.util.Date(log.timestampMs)),
+                                    log.appPackage.orEmpty(),
+                                    log.domain,
+                                    log.ipAddress,
+                                    log.protocol.name,
+                                    log.status.name,
+                                    log.category.name,
+                                    log.matchedRule.orEmpty(),
+                                    log.filterListName.orEmpty(),
+                                    log.latencyMicros.toString(),
+                                    log.dataSavedBytes.toString(),
+                                ).joinToString(",") { csvField(it) },
+                            )
+                        }
+                    }
+                    ?: error("no output stream")
+            }.isSuccess
+        }
+        return if (ok) {
+            BackupResult(true, UiText.Resource(R.string.log_export_done))
+        } else {
+            BackupResult(false, UiText.Resource(R.string.log_export_failed))
+        }
+    }
+
+    private fun csvField(raw: String): String =
+        if (raw.any { it == ',' || it == '"' || it == '\n' || it == '\r' }) {
+            "\"${raw.replace("\"", "\"\"")}\""
+        } else {
+            raw
+        }
 
     /**
      * Pushes the whole filter state (enabled lists + user rules) to the core in
@@ -1549,10 +1678,44 @@ class AdGuardRepository(
     @Volatile
     private var appUsageVisible = false
 
+    /** Newest log row already considered by the firewall notification poller. */
+    private var lastFirewallLogId: Long? = null
+
+    /** Per-app timestamp of the last firewall notification (one per window). */
+    private val firewallNoticeAt = HashMap<String, Long>()
+
     /** The Apps screen reports its visibility so the poller can keep it live. */
     fun setAppUsageVisible(visible: Boolean) {
         appUsageVisible = visible
         if (visible) refreshAppUsage()
+    }
+
+    private val appUsageRange = java.util.concurrent.atomic.AtomicReference(
+        git.shin.adfree.model.AppUsageRange.TODAY,
+    )
+
+    /** Selected statistics window; changing it re-aggregates immediately. */
+    fun setAppUsageRange(range: git.shin.adfree.model.AppUsageRange) {
+        if (appUsageRange.getAndSet(range) == range) return
+        if (appUsageVisible) refreshAppUsage()
+    }
+
+    /** The range the overlay currently reflects, so a fresh screen starts in sync. */
+    fun currentAppUsageRange(): git.shin.adfree.model.AppUsageRange = appUsageRange.get()
+
+    private fun usageSinceMs(range: git.shin.adfree.model.AppUsageRange): Long {
+        val now = System.currentTimeMillis()
+        return when (range) {
+            git.shin.adfree.model.AppUsageRange.TODAY -> Calendar.getInstance().apply {
+                set(Calendar.HOUR_OF_DAY, 0)
+                set(Calendar.MINUTE, 0)
+                set(Calendar.SECOND, 0)
+                set(Calendar.MILLISECOND, 0)
+            }.timeInMillis
+            git.shin.adfree.model.AppUsageRange.WEEK -> now - 7L * 24 * 60 * 60 * 1000
+            git.shin.adfree.model.AppUsageRange.MONTH -> now - 30L * 24 * 60 * 60 * 1000
+            git.shin.adfree.model.AppUsageRange.ALL -> 0L
+        }
     }
 
     /**
@@ -1562,13 +1725,8 @@ class AdGuardRepository(
      */
     fun refreshAppUsage() {
         scope.launch {
-            val startOfDay = Calendar.getInstance().apply {
-                set(Calendar.HOUR_OF_DAY, 0)
-                set(Calendar.MINUTE, 0)
-                set(Calendar.SECOND, 0)
-                set(Calendar.MILLISECOND, 0)
-            }.timeInMillis
-            val usage = engine.appUsageSince(startOfDay).associateBy { it.app }
+            val since = usageSinceMs(appUsageRange.get())
+            val usage = engine.appUsageSince(since).associateBy { it.app }
             _appFirewallRules.update { apps ->
                 apps.map { app ->
                     val row = usage[app.packageName]
@@ -1593,9 +1751,15 @@ class AdGuardRepository(
             @Suppress("DEPRECATION")
             pm.getInstalledApplications(0)
         }
-        return installed
+        val rows = installed
             .asSequence()
-            .filter { (it.flags and ApplicationInfo.FLAG_SYSTEM) == 0 || it.flags and ApplicationInfo.FLAG_UPDATED_SYSTEM_APP != 0 }
+            // System apps stay out of the Apps tab unless the user gave them a
+            // rule from the firewall picker; then the override must survive.
+            .filter {
+                saved.containsKey(it.packageName) ||
+                    (it.flags and ApplicationInfo.FLAG_SYSTEM) == 0 ||
+                    it.flags and ApplicationInfo.FLAG_UPDATED_SYSTEM_APP != 0
+            }
             .map { info ->
                 val override = saved[info.packageName]
                 if (override != null) {
@@ -1609,8 +1773,14 @@ class AdGuardRepository(
                 }
             }
             .sortedBy { it.appName.lowercase() }
-            .take(MAX_APPS_SHOWN)
             .toList()
+        val shown = rows.take(MAX_APPS_SHOWN)
+        if (rows.size <= MAX_APPS_SHOWN) return shown
+        // A saved override beyond the display cap must stay in the list, or the
+        // next save would silently drop a rule set from the firewall picker.
+        val shownPackages = shown.mapTo(HashSet(shown.size)) { it.packageName }
+        return (shown + rows.filter { it.packageName in saved && it.packageName !in shownPackages })
+            .sortedBy { it.appName.lowercase() }
     }
 
     private fun appCategory(info: ApplicationInfo): String {
@@ -1642,27 +1812,144 @@ class AdGuardRepository(
 
     fun updateAppFirewall(
         packageName: String,
-        isCellularAllowed: Boolean? = null,
-        isWifiAllowed: Boolean? = null,
+        appName: String? = null,
+        wifi: FirewallAccess? = null,
+        wifiScreenOff: FirewallAccess? = null,
+        cellular: FirewallAccess? = null,
+        cellularScreenOff: FirewallAccess? = null,
+        roaming: FirewallAccess? = null,
         isFilterRouted: Boolean? = null,
-        blockWhenScreenOff: Boolean? = null,
         isHttpsFiltered: Boolean? = null,
+        notifyBlocked: Boolean? = null,
     ) {
         _appFirewallRules.update { list ->
-            list.map { app ->
+            var found = false
+            val mapped = list.map { app ->
                 if (app.packageName == packageName) {
+                    found = true
                     app.copy(
-                        isCellularAllowed = isCellularAllowed ?: app.isCellularAllowed,
-                        isWifiAllowed = isWifiAllowed ?: app.isWifiAllowed,
+                        wifiAccess = wifi ?: app.wifiAccess,
+                        wifiScreenOffAccess = wifiScreenOff ?: app.wifiScreenOffAccess,
+                        cellularAccess = cellular ?: app.cellularAccess,
+                        cellularScreenOffAccess =
+                            cellularScreenOff ?: app.cellularScreenOffAccess,
+                        roamingAccess = roaming ?: app.roamingAccess,
                         isFilterRouted = isFilterRouted ?: app.isFilterRouted,
-                        blockWhenScreenOff = blockWhenScreenOff ?: app.blockWhenScreenOff,
                         isHttpsFiltered = isHttpsFiltered ?: app.isHttpsFiltered,
+                        notifyBlocked = notifyBlocked ?: app.notifyBlocked,
                     )
                 } else app
+            }
+            // The firewall picker can offer a system app the Apps tab does not
+            // list; the first edit creates its row.
+            if (found) {
+                mapped
+            } else {
+                mapped + AppFirewallRule(
+                    packageName = packageName,
+                    appName = appName ?: packageName,
+                    wifiAccess = wifi ?: FirewallAccess.INHERIT,
+                    wifiScreenOffAccess = wifiScreenOff ?: FirewallAccess.INHERIT,
+                    cellularAccess = cellular ?: FirewallAccess.INHERIT,
+                    cellularScreenOffAccess = cellularScreenOff ?: FirewallAccess.INHERIT,
+                    roamingAccess = roaming ?: FirewallAccess.INHERIT,
+                    isFilterRouted = isFilterRouted ?: true,
+                    isHttpsFiltered = isHttpsFiltered ?: true,
+                    notifyBlocked = notifyBlocked ?: true,
+                )
             }
         }
         saveAppFirewallRules()
     }
+
+    /** Adds the picker's app row before its rule screen opens. */
+    fun ensureFirewallApp(packageName: String, appName: String) {
+        if (_appFirewallRules.value.any { it.packageName == packageName }) return
+        _appFirewallRules.update {
+            it + AppFirewallRule(packageName = packageName, appName = appName)
+        }
+    }
+
+    /** Global firewall defaults and the gates of the two rule sets. */
+    fun updateFirewallSettings(
+        globalRules: Boolean? = null,
+        customRules: Boolean? = null,
+        notifications: Boolean? = null,
+        allowWifi: Boolean? = null,
+        allowWifiScreenOff: Boolean? = null,
+        allowCellular: Boolean? = null,
+        allowCellularScreenOff: Boolean? = null,
+        allowRoaming: Boolean? = null,
+    ) = updateSettings { current ->
+        current.copy(
+            firewallGlobalRules = globalRules ?: current.firewallGlobalRules,
+            firewallCustomRules = customRules ?: current.firewallCustomRules,
+            firewallNotifications = notifications ?: current.firewallNotifications,
+            firewallAllowWifi = allowWifi ?: current.firewallAllowWifi,
+            firewallAllowWifiScreenOff = allowWifiScreenOff ?: current.firewallAllowWifiScreenOff,
+            firewallAllowCellular = allowCellular ?: current.firewallAllowCellular,
+            firewallAllowCellularScreenOff =
+                allowCellularScreenOff ?: current.firewallAllowCellularScreenOff,
+            firewallAllowRoaming = allowRoaming ?: current.firewallAllowRoaming,
+        )
+    }
+
+    /**
+     * Section reset: every firewall default back to allowed, both rule sets
+     * and notifications back on, and every per-app override (including a
+     * notification mute) dropped. Nothing outside the firewall is touched.
+     */
+    fun resetFirewall() {
+        _appFirewallRules.update { list ->
+            list.map {
+                AppFirewallRule(
+                    packageName = it.packageName,
+                    appName = it.appName,
+                    category = it.category,
+                )
+            }
+        }
+        saveAppFirewallRules()
+        updateSettings {
+            it.copy(
+                isFirewallEnabled = true,
+                firewallGlobalRules = true,
+                firewallCustomRules = true,
+                firewallNotifications = true,
+                firewallAllowWifi = true,
+                firewallAllowWifiScreenOff = true,
+                firewallAllowCellular = true,
+                firewallAllowCellularScreenOff = true,
+                firewallAllowRoaming = true,
+            )
+        }
+    }
+
+    /** Every installed app, including system ones, for the firewall picker. */
+    fun installedAppsForFirewall(): List<FirewallAppChoice> {
+        val pm = context.packageManager
+        val installed = if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) {
+            pm.getInstalledApplications(PackageManager.ApplicationInfoFlags.of(0L))
+        } else {
+            @Suppress("DEPRECATION")
+            pm.getInstalledApplications(0)
+        }
+        return installed
+            .asSequence()
+            .map { info ->
+                FirewallAppChoice(
+                    packageName = info.packageName,
+                    appName = pm.getApplicationLabel(info).toString(),
+                    isSystem = (info.flags and ApplicationInfo.FLAG_SYSTEM) != 0 &&
+                        (info.flags and ApplicationInfo.FLAG_UPDATED_SYSTEM_APP) == 0,
+                )
+            }
+            .sortedBy { it.appName.lowercase() }
+            .toList()
+    }
+
+    /** The persisted override count, independent of the Apps-tab filter. */
+    fun firewallOverrideCount(): Int = _appFirewallRules.value.count { it.hasNetworkRules }
 
     /**
      * Persists only the non-default choices. An absent package is all-default

@@ -34,22 +34,29 @@ import androidx.compose.material.icons.filled.Block
 import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material.icons.filled.Dns
 import androidx.compose.material.icons.filled.Extension
+import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.Layers
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.NotificationsOff
+import androidx.compose.material.icons.filled.RestartAlt
 import androidx.compose.material.icons.filled.Security
 import androidx.compose.material.icons.filled.Shield
 import androidx.compose.material.icons.filled.TrackChanges
 import androidx.compose.material.icons.filled.VisibilityOff
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Switch
 import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -68,8 +75,8 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import git.shin.adfree.R
+import git.shin.adfree.model.AppFirewallRule
 import git.shin.adfree.ui.AdGuardIntent
-import git.shin.adfree.ui.AdGuardTab
 import git.shin.adfree.ui.AdGuardViewModel
 import git.shin.adfree.ui.ProtectionSection
 import git.shin.adfree.ui.theme.AdGuardBlueDns
@@ -91,8 +98,8 @@ import git.shin.adfree.ui.theme.AdGuardOnAccent
  * else is one module's options, the way the reference client nests them.
  */
 private enum class ProtectionRoute {
-    LIST, AD_BLOCKING, ANNOYANCES, TRACKING, DNS, HTTPS, FIREWALL, BROWSING_SECURITY, ECO, FILTERS,
-    EXTENSIONS
+    LIST, AD_BLOCKING, ANNOYANCES, TRACKING, DNS, HTTPS, FIREWALL, FIREWALL_GLOBAL, FIREWALL_CUSTOM,
+    FIREWALL_APP, FIREWALL_QUICK, FIREWALL_NOTIFICATIONS, BROWSING_SECURITY, ECO, FILTERS, EXTENSIONS
 }
 
 private fun ProtectionSection.route(): ProtectionRoute = when (this) {
@@ -119,11 +126,17 @@ fun ProtectionScreen(
 ) {
     var route by rememberSaveable { mutableStateOf(ProtectionRoute.LIST) }
     var previous by rememberSaveable { mutableStateOf(ProtectionRoute.LIST) }
+    var firewallAppPackage by rememberSaveable { mutableStateOf("") }
 
     fun navigate(next: ProtectionRoute) {
         if (next == route) return
         previous = route
         route = next
+    }
+
+    fun openFirewallApp(packageName: String) {
+        firewallAppPackage = packageName
+        navigate(ProtectionRoute.FIREWALL_APP)
     }
 
     fun back() {
@@ -196,6 +209,38 @@ fun ProtectionScreen(
             ProtectionRoute.FIREWALL -> FirewallDetail(
                 viewModel = viewModel,
                 onBack = ::back,
+                onGlobal = { navigate(ProtectionRoute.FIREWALL_GLOBAL) },
+                onCustom = { navigate(ProtectionRoute.FIREWALL_CUSTOM) },
+                onQuick = { navigate(ProtectionRoute.FIREWALL_QUICK) },
+                onNotifications = { navigate(ProtectionRoute.FIREWALL_NOTIFICATIONS) },
+                modifier = modifier,
+            )
+            ProtectionRoute.FIREWALL_GLOBAL -> FirewallGlobalDetail(
+                viewModel = viewModel,
+                onBack = ::back,
+                modifier = modifier,
+            )
+            ProtectionRoute.FIREWALL_CUSTOM -> FirewallCustomDetail(
+                viewModel = viewModel,
+                onBack = ::back,
+                onOpenApp = { pkg, _ -> openFirewallApp(pkg) },
+                modifier = modifier,
+            )
+            ProtectionRoute.FIREWALL_APP -> FirewallAppRuleDetail(
+                viewModel = viewModel,
+                packageName = firewallAppPackage,
+                onBack = ::back,
+                modifier = modifier,
+            )
+            ProtectionRoute.FIREWALL_QUICK -> FirewallQuickActionsDetail(
+                viewModel = viewModel,
+                onBack = ::back,
+                onOpenAppRule = { pkg, _ -> openFirewallApp(pkg) },
+                modifier = modifier,
+            )
+            ProtectionRoute.FIREWALL_NOTIFICATIONS -> FirewallNotificationsDetail(
+                viewModel = viewModel,
+                onBack = ::back,
                 modifier = modifier,
             )
             ProtectionRoute.BROWSING_SECURITY -> BrowsingSecurityDetail(
@@ -240,9 +285,7 @@ private fun ProtectionLanding(
         .firstOrNull { it.id == settings.selectedDnsProviderId }
         ?.name
         ?: stringResource(R.string.hub_dns_unset)
-    val limitedApps = state.appFirewallRules.count {
-        !it.isCellularAllowed || !it.isWifiAllowed
-    }
+    val limitedApps = state.allAppFirewallRules.count { it.hasNetworkRules }
 
     Column(
         modifier = modifier
@@ -705,18 +748,50 @@ private fun HttpsDetail(
     }
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun FirewallDetail(
     viewModel: AdGuardViewModel,
     onBack: () -> Unit,
+    onGlobal: () -> Unit,
+    onCustom: () -> Unit,
+    onQuick: () -> Unit,
+    onNotifications: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val state by viewModel.uiState.collectAsState()
-    val limitedApps = state.appFirewallRules.count {
-        !it.isCellularAllowed || !it.isWifiAllowed
-    }
+    val settings = state.settings
+    val overrides = state.allAppFirewallRules.count { it.hasNetworkRules }
+    val blockedGlobals = listOf(
+        settings.firewallAllowWifi,
+        settings.firewallAllowWifiScreenOff,
+        settings.firewallAllowCellular,
+        settings.firewallAllowCellularScreenOff,
+        settings.firewallAllowRoaming,
+    ).count { !it }
+    var showReset by rememberSaveable { mutableStateOf(false) }
 
-    DetailScaffold(onBack = onBack, modifier = modifier) {
+    DetailScaffold(
+        onBack = onBack,
+        modifier = modifier,
+        trailing = {
+            TextButton(onClick = { showReset = true }) {
+                Icon(
+                    imageVector = Icons.Default.RestartAlt,
+                    contentDescription = null,
+                    tint = AdGuardOrangeWarning,
+                    modifier = Modifier.size(16.dp),
+                )
+                Spacer(modifier = Modifier.width(4.dp))
+                Text(
+                    text = stringResource(R.string.firewall_reset_action),
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    color = AdGuardOrangeWarning,
+                )
+            }
+        },
+    ) {
         ModuleDetailHero(
             icon = Icons.Default.Shield,
             tint = AdGuardGreenPrimary,
@@ -728,23 +803,191 @@ private fun FirewallDetail(
             icon = Icons.Default.Shield,
             title = stringResource(R.string.home_module_firewall_title),
             subtitle = stringResource(R.string.home_module_firewall_subtitle),
-            checked = state.settings.isFirewallEnabled,
+            checked = settings.isFirewallEnabled,
             onCheckedChange = { viewModel.onIntent(AdGuardIntent.ToggleFirewall) },
         )
 
-        Spacer(modifier = Modifier.height(10.dp))
+        Spacer(modifier = Modifier.height(9.dp))
+
+        FirewallToggleRow(
+            icon = Icons.Default.Shield,
+            accent = AdGuardGreenPrimary,
+            title = stringResource(R.string.firewall_global_title),
+            subtitle = if (settings.firewallGlobalRules && blockedGlobals > 0) {
+                stringResource(R.string.firewall_global_some_blocked, blockedGlobals)
+            } else {
+                stringResource(R.string.firewall_global_all_allowed)
+            },
+            checked = settings.firewallGlobalRules,
+            onCheckedChange = {
+                viewModel.onIntent(AdGuardIntent.UpdateFirewallSettings(globalRules = it))
+            },
+            onClick = onGlobal,
+        ) {
+            FirewallNetworkStrip(
+                rule = AppFirewallRule(packageName = "", appName = ""),
+                settings = settings,
+            )
+        }
+
+        Spacer(modifier = Modifier.height(9.dp))
+
+        FirewallToggleRow(
+            icon = Icons.Default.Apps,
+            accent = AdGuardGreenLight,
+            title = stringResource(R.string.firewall_custom_title),
+            subtitle = if (overrides == 0) {
+                stringResource(R.string.firewall_custom_empty)
+            } else {
+                stringResource(R.string.firewall_custom_summary, overrides)
+            },
+            checked = settings.firewallCustomRules,
+            onCheckedChange = {
+                viewModel.onIntent(AdGuardIntent.UpdateFirewallSettings(customRules = it))
+            },
+            onClick = onCustom,
+        )
+
+        Spacer(modifier = Modifier.height(9.dp))
 
         NavigationRow(
-            icon = Icons.Default.Apps,
-            accent = AdGuardBlueDns,
-            title = stringResource(R.string.protection_firewall_apps),
-            subtitle = if (limitedApps == 0) {
-                stringResource(R.string.protection_firewall_apps_none)
-            } else {
-                stringResource(R.string.protection_firewall_apps_summary, limitedApps)
-            },
-            onClick = { viewModel.onIntent(AdGuardIntent.SelectTab(AdGuardTab.APPS)) },
+            icon = Icons.Default.History,
+            accent = AdGuardOrangeWarning,
+            title = stringResource(R.string.firewall_quick_title),
+            subtitle = stringResource(R.string.firewall_quick_subtitle),
+            onClick = onQuick,
         )
+
+        Spacer(modifier = Modifier.height(9.dp))
+
+        FirewallToggleRow(
+            icon = Icons.Default.NotificationsOff,
+            accent = AdGuardOrangeWarning,
+            title = stringResource(R.string.firewall_notifications_title),
+            subtitle = stringResource(R.string.firewall_notifications_body),
+            checked = settings.firewallNotifications,
+            onCheckedChange = {
+                viewModel.onIntent(AdGuardIntent.UpdateFirewallSettings(notifications = it))
+            },
+            onClick = onNotifications,
+        )
+    }
+
+    if (showReset) {
+        ModalBottomSheet(
+            onDismissRequest = { showReset = false },
+            containerColor = AdGuardDarkSurface,
+            contentColor = AdGuardTextPrimary,
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 24.dp)
+                    .padding(bottom = 24.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
+            ) {
+                Text(
+                    text = stringResource(R.string.firewall_reset_title),
+                    fontSize = 18.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = AdGuardTextPrimary,
+                    textAlign = TextAlign.Center,
+                )
+                Spacer(modifier = Modifier.height(8.dp))
+                Text(
+                    text = stringResource(R.string.firewall_reset_body),
+                    fontSize = 12.sp,
+                    color = AdGuardTextSecondary,
+                    textAlign = TextAlign.Center,
+                )
+                Spacer(modifier = Modifier.height(18.dp))
+                Button(
+                    onClick = {
+                        viewModel.onIntent(AdGuardIntent.ResetFirewall)
+                        showReset = false
+                    },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(46.dp),
+                    shape = RoundedCornerShape(10.dp),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = AdGuardOrangeWarning,
+                        contentColor = Color.White,
+                    ),
+                ) {
+                    Text(
+                        text = stringResource(R.string.firewall_reset_confirm),
+                        fontSize = 13.sp,
+                        fontWeight = FontWeight.Bold,
+                    )
+                }
+            }
+        }
+    }
+}
+
+/** A firewall row whose switch edits the value while the row opens the screen. */
+@Composable
+private fun FirewallToggleRow(
+    icon: ImageVector,
+    accent: Color,
+    title: String,
+    subtitle: String,
+    checked: Boolean,
+    onCheckedChange: (Boolean) -> Unit,
+    onClick: () -> Unit,
+    preview: (@Composable () -> Unit)? = null,
+) {
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onClick),
+        shape = RoundedCornerShape(12.dp),
+        colors = CardDefaults.cardColors(containerColor = AdGuardDarkSurface),
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 14.dp, vertical = 12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Box(
+                contentAlignment = Alignment.Center,
+                modifier = Modifier
+                    .size(36.dp)
+                    .clip(RoundedCornerShape(10.dp))
+                    .background(accent.copy(alpha = 0.12f)),
+            ) {
+                Icon(icon, contentDescription = null, tint = accent, modifier = Modifier.size(18.dp))
+            }
+            Spacer(modifier = Modifier.width(12.dp))
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = title,
+                    fontSize = 13.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    color = AdGuardTextPrimary,
+                )
+                Text(
+                    text = subtitle,
+                    fontSize = 11.sp,
+                    color = AdGuardTextSecondary,
+                )
+                if (preview != null) {
+                    preview()
+                }
+            }
+            Switch(
+                checked = checked,
+                onCheckedChange = onCheckedChange,
+                colors = SwitchDefaults.colors(
+                    checkedThumbColor = Color.White,
+                    checkedTrackColor = AdGuardGreenPrimary,
+                    uncheckedThumbColor = AdGuardTextMuted,
+                    uncheckedTrackColor = AdGuardDarkSurfaceVariant,
+                ),
+            )
+        }
     }
 }
 
@@ -825,9 +1068,10 @@ private fun EcoDetail(
 
 /** Back arrow plus the scrolling body every module detail shares. */
 @Composable
-private fun DetailScaffold(
+internal fun DetailScaffold(
     onBack: () -> Unit,
     modifier: Modifier = Modifier,
+    trailing: (@Composable () -> Unit)? = null,
     content: @Composable () -> Unit,
 ) {
     Column(
@@ -835,12 +1079,16 @@ private fun DetailScaffold(
             .fillMaxSize()
             .background(AdGuardDarkBg),
     ) {
-        IconButton(onClick = onBack) {
-            Icon(
-                imageVector = Icons.AutoMirrored.Filled.ArrowBack,
-                contentDescription = stringResource(R.string.hub_back),
-                tint = AdGuardTextPrimary,
-            )
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            IconButton(onClick = onBack) {
+                Icon(
+                    imageVector = Icons.AutoMirrored.Filled.ArrowBack,
+                    contentDescription = stringResource(R.string.hub_back),
+                    tint = AdGuardTextPrimary,
+                )
+            }
+            Spacer(modifier = Modifier.weight(1f))
+            trailing?.invoke()
         }
 
         Column(
@@ -956,7 +1204,7 @@ private fun ModuleRow(
 }
 
 @Composable
-private fun NavigationRow(
+internal fun NavigationRow(
     icon: ImageVector,
     accent: Color,
     title: String,

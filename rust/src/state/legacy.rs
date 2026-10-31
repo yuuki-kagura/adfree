@@ -14,7 +14,7 @@ use serde_json::Value;
 use super::dnsaddr;
 use super::model::{
     AppFirewallRule, DnsBlockMode, DnsProtocol, DnsState, FilterChoice, FilterState,
-    ProtectionState, ProxyState, ScriptRecord, ScriptState,
+    FirewallAccess, ProtectionState, ProxyState, ScriptRecord, ScriptState,
 };
 
 #[derive(Deserialize, Default)]
@@ -250,13 +250,29 @@ fn settings_from(blob: LegacySettings) -> LegacySettingsPart {
             if package.is_empty() {
                 return None;
             }
+            // The old booleans meant "allowed", not "explicitly allowed": the
+            // global defaults did not exist, so `true` becomes `Inherit` and
+            // `false` becomes a block. The single screen-off switch maps onto
+            // both transports now that they are separate dimensions.
+            let access = |allowed: Option<bool>| match allowed {
+                Some(false) => FirewallAccess::Block,
+                _ => FirewallAccess::Inherit,
+            };
+            let screen_off = if f.screen_off == Some(true) {
+                FirewallAccess::Block
+            } else {
+                FirewallAccess::Inherit
+            };
             Some(AppFirewallRule {
                 package_name: package,
-                cellular: f.cellular.unwrap_or(true),
-                wifi: f.wifi.unwrap_or(true),
+                cellular: access(f.cellular),
+                wifi: access(f.wifi),
                 filtered: f.filtered.unwrap_or(true),
-                screen_off: f.screen_off.unwrap_or(false),
+                wifi_screen_off: screen_off,
+                cellular_screen_off: screen_off,
+                roaming: FirewallAccess::Inherit,
                 https: f.https.unwrap_or(true),
+                notify: true,
             })
         })
         .collect();
@@ -437,9 +453,12 @@ mod tests {
         assert_eq!(part.firewall.len(), 1);
         let fw = &part.firewall[0];
         assert_eq!(fw.package_name, "com.example");
-        assert!(!fw.cellular);
+        assert_eq!(fw.cellular, FirewallAccess::Block);
+        assert_eq!(fw.wifi, FirewallAccess::Inherit);
         assert!(!fw.filtered);
-        assert!(fw.screen_off);
+        assert_eq!(fw.wifi_screen_off, FirewallAccess::Block);
+        assert_eq!(fw.cellular_screen_off, FirewallAccess::Block);
+        assert_eq!(fw.roaming, FirewallAccess::Inherit);
         assert!(!fw.https);
         assert_eq!(part.dns.providers.len(), 1);
         assert_eq!(part.dns.providers[0].address, "9.9.9.9");

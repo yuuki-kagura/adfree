@@ -27,8 +27,10 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Apps
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.outlined.Language
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -50,6 +52,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -98,6 +101,7 @@ class AssistantActivity : AppCompatActivity() {
                     vpnController = container.vpnController,
                     onOpenLog = ::openLog,
                     onOpenApps = ::openApps,
+                    onOpenAppDetails = ::openAppDetails,
                     onDismiss = ::finish,
                 )
             }
@@ -129,6 +133,20 @@ class AssistantActivity : AppCompatActivity() {
         )
         finish()
     }
+
+    private fun openAppDetails(packageName: String, label: String) {
+        startActivity(
+            Intent(this, MainActivity::class.java).apply {
+                action = MainActivity.ACTION_OPEN_APP_DETAILS
+                flags = Intent.FLAG_ACTIVITY_NEW_TASK or
+                    Intent.FLAG_ACTIVITY_CLEAR_TOP or
+                    Intent.FLAG_ACTIVITY_SINGLE_TOP
+                putExtra(MainActivity.EXTRA_APP_PACKAGE, packageName)
+                putExtra(MainActivity.EXTRA_APP_NAME, label)
+            },
+        )
+        finish()
+    }
 }
 
 private data class RecentApp(
@@ -136,6 +154,8 @@ private data class RecentApp(
     val label: String,
     val lastSeenMs: Long,
     val blocked: Int,
+    val total: Int,
+    val savedBytes: Long,
 )
 
 private data class RecentDomain(
@@ -152,6 +172,7 @@ private fun AssistantSheet(
     vpnController: VpnController,
     onOpenLog: (String?, String?) -> Unit,
     onOpenApps: () -> Unit,
+    onOpenAppDetails: (String, String) -> Unit,
     onDismiss: () -> Unit,
 ) {
     val logs by repository.logs.collectAsState()
@@ -159,6 +180,7 @@ private fun AssistantSheet(
     val vpnActive by vpnController.isVpnActive.collectAsState()
     var paused by remember { mutableStateOf(vpnController.isPaused()) }
     var tab by rememberSaveable { mutableStateOf(0) }
+    var selectedApp by remember { mutableStateOf<RecentApp?>(null) }
 
     val recentApps = remember(logs, apps) {
         buildRecentApps(logs, apps.associate { it.packageName to it.appName })
@@ -259,31 +281,48 @@ private fun AssistantSheet(
                 ) {
                     Tab(
                         selected = tab == 0,
-                        onClick = { tab = 0 },
+                        onClick = {
+                            tab = 0
+                            selectedApp = null
+                        },
                         text = { Text(stringResource(R.string.assistant_tab_apps)) },
                     )
                     Tab(
                         selected = tab == 1,
-                        onClick = { tab = 1 },
+                        onClick = {
+                            tab = 1
+                            selectedApp = null
+                        },
                         text = { Text(stringResource(R.string.assistant_tab_websites)) },
                     )
                 }
 
-                LazyColumn(Modifier.weight(1f, fill = false).fillMaxWidth()) {
-                    if (tab == 0) {
-                        if (recentApps.isEmpty()) {
-                            item { EmptyState() }
-                        } else {
-                            items(recentApps, key = { it.packageName }) { entry ->
-                                RecentAppRow(entry) { onOpenLog(entry.packageName, null) }
+                val selected = selectedApp
+                if (tab == 0 && selected != null) {
+                    AssistantAppPanel(
+                        entry = selected,
+                        onOpenActivity = { onOpenLog(selected.packageName, null) },
+                        onManage = { onOpenAppDetails(selected.packageName, selected.label) },
+                        onBack = { selectedApp = null },
+                        modifier = Modifier.weight(1f, fill = false),
+                    )
+                } else {
+                    LazyColumn(Modifier.weight(1f, fill = false).fillMaxWidth()) {
+                        if (tab == 0) {
+                            if (recentApps.isEmpty()) {
+                                item { EmptyState() }
+                            } else {
+                                items(recentApps, key = { it.packageName }) { entry ->
+                                    RecentAppRow(entry) { selectedApp = entry }
+                                }
                             }
-                        }
-                    } else {
-                        if (recentDomains.isEmpty()) {
-                            item { EmptyState() }
                         } else {
-                            items(recentDomains, key = { it.domain }) { entry ->
-                                RecentDomainRow(entry) { onOpenLog(null, entry.domain) }
+                            if (recentDomains.isEmpty()) {
+                                item { EmptyState() }
+                            } else {
+                                items(recentDomains, key = { it.domain }) { entry ->
+                                    RecentDomainRow(entry) { onOpenLog(null, entry.domain) }
+                                }
                             }
                         }
                     }
@@ -327,7 +366,6 @@ private fun EmptyState() {
 
 @Composable
 private fun RecentAppRow(entry: RecentApp, onClick: () -> Unit) {
-    val icon = rememberAppIcon(entry.packageName)
     Row(
         Modifier
             .fillMaxWidth()
@@ -335,27 +373,7 @@ private fun RecentAppRow(entry: RecentApp, onClick: () -> Unit) {
             .padding(vertical = 10.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        if (icon != null) {
-            Image(
-                bitmap = icon,
-                contentDescription = null,
-                modifier = Modifier.size(36.dp),
-            )
-        } else {
-            Box(
-                Modifier
-                    .size(36.dp)
-                    .background(MaterialTheme.colorScheme.surfaceVariant, CircleShape),
-                contentAlignment = Alignment.Center,
-            ) {
-                Icon(
-                    Icons.Filled.Apps,
-                    contentDescription = null,
-                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.size(20.dp),
-                )
-            }
-        }
+        AssistantAppIcon(entry.packageName)
         Spacer(Modifier.width(12.dp))
         Column(Modifier.weight(1f)) {
             Text(entry.label, fontSize = 14.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
@@ -369,6 +387,155 @@ private fun RecentAppRow(entry: RecentApp, onClick: () -> Unit) {
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
+    }
+}
+
+@Composable
+private fun AssistantAppIcon(packageName: String, size: Int = 36) {
+    val icon = rememberAppIcon(packageName)
+    if (icon != null) {
+        Image(
+            bitmap = icon,
+            contentDescription = null,
+            modifier = Modifier.size(size.dp),
+        )
+    } else {
+        Box(
+            Modifier
+                .size(size.dp)
+                .background(MaterialTheme.colorScheme.surfaceVariant, CircleShape),
+            contentAlignment = Alignment.Center,
+        ) {
+            Icon(
+                Icons.Filled.Apps,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.size((size * 0.55f).dp),
+            )
+        }
+    }
+}
+
+/** The app's recent numbers and the shortcuts that leave the assistant. */
+@Composable
+private fun AssistantAppPanel(
+    entry: RecentApp,
+    onOpenActivity: () -> Unit,
+    onManage: () -> Unit,
+    onBack: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Column(
+        modifier
+            .fillMaxWidth()
+            .padding(top = 6.dp),
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            AssistantAppIcon(entry.packageName)
+            Spacer(Modifier.width(12.dp))
+            Column(Modifier.weight(1f)) {
+                Text(
+                    entry.label,
+                    fontSize = 15.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                Text(
+                    stringResource(R.string.assistant_app_used, relativeTime(entry.lastSeenMs)),
+                    fontSize = 12.sp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
+
+        Surface(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(top = 12.dp),
+            shape = RoundedCornerShape(12.dp),
+            color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f),
+        ) {
+            Column(Modifier.padding(horizontal = 14.dp, vertical = 12.dp)) {
+                Row(
+                    Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                ) {
+                    AssistantStat(
+                        label = stringResource(R.string.assistant_stats_requests),
+                        value = entry.total.toString(),
+                        modifier = Modifier.weight(1f),
+                    )
+                    AssistantStat(
+                        label = stringResource(R.string.assistant_stats_blocked),
+                        value = entry.blocked.toString(),
+                        modifier = Modifier.weight(1f),
+                    )
+                    AssistantStat(
+                        label = stringResource(R.string.assistant_stats_saved),
+                        value = stringResource(R.string.log_saved_value, entry.savedBytes / 1024),
+                        modifier = Modifier.weight(1f),
+                    )
+                }
+                Text(
+                    stringResource(R.string.assistant_stats_window),
+                    fontSize = 10.sp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(top = 6.dp),
+                )
+            }
+        }
+
+        HorizontalDivider(Modifier.padding(top = 10.dp))
+        AssistantActionRow(
+            icon = Icons.Default.History,
+            label = stringResource(R.string.assistant_app_recent_activity),
+            onClick = onOpenActivity,
+        )
+        AssistantActionRow(
+            icon = Icons.Default.Apps,
+            label = stringResource(R.string.assistant_app_manage),
+            onClick = onManage,
+        )
+        AssistantActionRow(
+            icon = Icons.AutoMirrored.Filled.ArrowBack,
+            label = stringResource(R.string.assistant_app_back),
+            onClick = onBack,
+        )
+    }
+}
+
+@Composable
+private fun AssistantStat(label: String, value: String, modifier: Modifier = Modifier) {
+    Column(modifier) {
+        Text(value, fontSize = 16.sp, fontWeight = FontWeight.SemiBold, maxLines = 1)
+        Text(
+            label,
+            fontSize = 10.sp,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+        )
+    }
+}
+
+@Composable
+private fun AssistantActionRow(icon: ImageVector, label: String, onClick: () -> Unit) {
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onClick)
+            .padding(vertical = 14.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Icon(
+            icon,
+            contentDescription = null,
+            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.size(20.dp),
+        )
+        Spacer(Modifier.width(16.dp))
+        Text(label, fontSize = 14.sp)
     }
 }
 
@@ -435,6 +602,8 @@ private fun buildRecentApps(
             label = names[packageName] ?: packageName,
             lastSeenMs = rows.maxOf { it.timestampMs },
             blocked = rows.count { it.status == FilterStatus.BLOCKED },
+            total = rows.size,
+            savedBytes = rows.sumOf { it.dataSavedBytes },
         )
     }
     .sortedByDescending { it.lastSeenMs }

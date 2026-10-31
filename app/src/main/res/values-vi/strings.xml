@@ -261,6 +261,10 @@
     <string name="tile_state_paused">Đã tạm dừng bảo vệ</string>
     <string name="notification_channel_updates">Cập nhật bộ lọc</string>
     <string name="notification_channel_updates_description">Kết quả làm mới bộ lọc tự động</string>
+    <string name="notification_channel_firewall">Chặn của tường lửa</string>
+    <string name="notification_channel_firewall_description">Ứng dụng bị tường lửa chặn truy cập Internet</string>
+    <string name="notification_firewall_title">Đã chặn %1$s</string>
+    <string name="notification_firewall_text">Tường lửa đã chặn ứng dụng này truy cập Internet</string>
     <string name="notification_filter_update_title">Đã cập nhật bộ lọc</string>
     <string name="notification_filter_update_text">Đã làm mới %1$d danh sách</string>
     <string name="threat_analyzing">Đang phân tích %1$s trên thiết bị…</string>
@@ -282,6 +286,14 @@
     <string name="assistant_shortcut_apps">Quản lý ứng dụng</string>
     <string name="assistant_vpn_off">VPN đang tắt</string>
     <string name="assistant_close">Đóng trợ lý</string>
+    <string name="assistant_app_used">Lần cuối %1$s</string>
+    <string name="assistant_stats_requests">Yêu cầu</string>
+    <string name="assistant_stats_blocked">Đã chặn</string>
+    <string name="assistant_stats_saved">Tiết kiệm</string>
+    <string name="assistant_stats_window">Tính từ nhật ký hoạt động đã tải</string>
+    <string name="assistant_app_recent_activity">Hoạt động gần đây</string>
+    <string name="assistant_app_manage">Quản lý ứng dụng</string>
+    <string name="assistant_app_back">Quay lại danh sách</string>
 
     <!-- Navigation -->
     <string name="nav_home">Trang chủ</string>
@@ -352,6 +364,73 @@
     <string name="protection_annoyances_empty">Chưa có danh sách chặn làm phiền nào</string>
     <string name="protection_annoyances_summary">%1$d danh sách đang bật</string>
     <string name="protection_browsing_security_body">Mỗi tên miền được đối chiếu với danh sách mã độc và lừa đảo ngay trên thiết bị. Những trang bạn truy cập không bao giờ rời khỏi máy; danh sách chỉ cập nhật cùng danh mục bộ lọc.</string>
+
+    <!-- Firewall -->
+    <string name="firewall_access_inherit">Kế thừa</string>
+    <string name="firewall_access_allow">Cho phép</string>
+    <string name="firewall_access_block">Chặn</string>
+    <string name="firewall_rule_wifi">Sử dụng Wi-Fi</string>
+    <string name="firewall_rule_wifi_body">Cho phép ứng dụng này dùng Wi-Fi</string>
+    <string name="firewall_rule_wifi_screen_off">Sử dụng Wi-Fi khi tắt màn hình</string>
+    <string name="firewall_rule_cellular">Sử dụng dữ liệu di động</string>
+    <string name="firewall_rule_cellular_body">Cho phép ứng dụng này dùng dữ liệu di động</string>
+    <string name="firewall_rule_cellular_screen_off">Sử dụng dữ liệu di động khi tắt màn hình</string>
+    <string name="firewall_rule_screen_off_body">Cho ứng dụng duy trì kết nối khi tắt màn hình; chặn giúp tiết kiệm pin</string>
+    <string name="firewall_rule_roaming">Sử dụng dữ liệu chuyển vùng</string>
+    <string name="firewall_rule_roaming_body">Dữ liệu di động ngoài mạng nhà</string>
+    <string name="firewall_global_title">Quy tắc tường lửa toàn cầu</string>
+    <string name="firewall_global_subtitle">Cho phép quản lý truy cập Internet cho tất cả các ứng dụng</string>
+    <string name="firewall_global_all_allowed">Tất cả các kết nối được phép</string>
+    <string name="firewall_global_some_blocked">%1$d trong 5 kiểu kết nối bị chặn</string>
+    <string name="firewall_custom_title">Quy tắc tường lửa tùy chỉnh</string>
+    <string name="firewall_custom_subtitle">Cho phép quản lý truy cập Internet cho các ứng dụng cụ thể. Các quy tắc này ghi đè lên các quy tắc toàn cầu</string>
+    <string name="firewall_custom_master">Quy tắc tường lửa tùy chỉnh</string>
+    <string name="firewall_custom_apps_header">Ứng dụng có quy tắc tùy chỉnh</string>
+    <string name="firewall_custom_empty">Chưa có ứng dụng nào có quy tắc tùy chỉnh</string>
+    <string name="firewall_custom_summary">%1$d ứng dụng có quy tắc tùy chỉnh</string>
+    <string name="firewall_add_app">Thêm ứng dụng</string>
+    <string name="firewall_picker_title">Thêm ứng dụng</string>
+    <string name="firewall_picker_body">Chọn một ứng dụng để đặt quy tắc tường lửa của ứng dụng đó</string>
+    <string name="firewall_picker_search">Tìm kiếm</string>
+    <string name="firewall_picker_empty">Không tìm thấy ứng dụng</string>
+    <string name="firewall_picker_system">Ứng dụng hệ thống</string>
+    <string name="firewall_picker_expand">Hiện ứng dụng hệ thống</string>
+    <string name="firewall_picker_collapse">Ẩn ứng dụng hệ thống</string>
+    <string name="firewall_app_subtitle">Quyền tường lửa cho ứng dụng này dựa trên quy tắc toàn cầu và tùy chỉnh</string>
+    <string name="firewall_app_applied_header">Đã áp dụng quy tắc tùy chỉnh</string>
+    <string name="firewall_app_applied_empty">Chưa áp dụng quy tắc tùy chỉnh nào</string>
+    <string name="firewall_app_available_header">Quy tắc tùy chỉnh có sẵn</string>
+    <string name="firewall_app_notify_title">Thông báo khi bị chặn</string>
+    <string name="firewall_app_notify_body">Hiện thông báo khi ứng dụng này bị tường lửa chặn</string>
+    <string name="firewall_quick_title">Hành động nhanh</string>
+    <string name="firewall_quick_subtitle">Các hành động dựa trên hoạt động Internet gần đây</string>
+    <string name="firewall_quick_search">Tìm kiếm</string>
+    <string name="firewall_quick_empty_title">Chưa có hoạt động gần đây</string>
+    <string name="firewall_quick_empty_body">Ứng dụng đã dùng mạng sẽ xuất hiện ở đây</string>
+    <string name="firewall_quick_has_wifi">Có quyền truy cập Wi-Fi</string>
+    <string name="firewall_quick_no_wifi">Không có quyền truy cập Wi-Fi</string>
+    <string name="firewall_quick_allowed_global">Được phép bởi quy tắc tường lửa toàn cầu</string>
+    <string name="firewall_quick_rule_blocked">Bị chặn bởi quy tắc của ứng dụng này</string>
+    <string name="firewall_quick_firewall_off">Tường lửa đang tắt</string>
+    <string name="firewall_quick_block">Chặn truy cập</string>
+    <string name="firewall_quick_unblock">Cho phép truy cập</string>
+    <string name="firewall_quick_overflow">Thao tác khác cho %1$s</string>
+    <string name="firewall_quick_recent_activity">Hoạt động gần đây của ứng dụng</string>
+    <string name="firewall_quick_app_rule">Quy tắc tường lửa ứng dụng</string>
+    <string name="firewall_quick_manage_app">Quản lý ứng dụng</string>
+    <string name="firewall_quick_mute">Tắt tiếng thông báo</string>
+    <string name="firewall_quick_unmute">Bật thông báo</string>
+    <string name="firewall_quick_ago_now">Vừa xong</string>
+    <string name="firewall_quick_ago_minutes">%1$d phút trước</string>
+    <string name="firewall_quick_ago_hours">%1$d giờ trước</string>
+    <string name="firewall_quick_ago_days">%1$d ngày trước</string>
+    <string name="firewall_notifications_title">Thông báo</string>
+    <string name="firewall_notifications_body">Thông báo cho bạn khi các ứng dụng được chọn cố gắng sử dụng Internet</string>
+    <string name="firewall_reset_action">Đặt lại mặc định</string>
+    <string name="firewall_reset_title">Đặt lại về mặc định?</string>
+    <string name="firewall_reset_body">Tất cả các cài đặt trong phần này sẽ được đặt lại về giá trị mặc định của chúng</string>
+    <string name="firewall_reset_confirm">Đặt lại</string>
+    <string name="firewall_reset_done">Đã đặt lại tường lửa về mặc định</string>
 
     <!-- Network destination -->
     <!-- DNS protection detail -->
@@ -564,6 +643,12 @@
     <string name="filters_edit_reload">Đổi URL sẽ tải lại nội dung của bộ lọc.</string>
     <string name="filters_save">Lưu</string>
     <string name="filters_detail_enable_title">Bật bộ lọc này</string>
+    <string name="filters_feature_hosts">Chặn theo định dạng Hosts</string>
+    <string name="filters_feature_rule_syntax">Cú pháp quy tắc AdGuard / EasyList</string>
+    <string name="filters_feature_auto_update">Tự động cập nhật từ nguồn</string>
+    <string name="filters_feature_static">Bản sao tĩnh lưu trên thiết bị</string>
+    <string name="filters_feature_trusted">Đã tin cậy: cho phép quy tắc giao diện và script</string>
+    <string name="filters_feature_untrusted">Chưa tin cậy: chỉ áp dụng quy tắc mạng</string>
     <string name="filters_detail_building">Đang biên dịch quy tắc…</string>
     <string name="filters_trusted_title">Bộ lọc tin cậy</string>
     <string name="filters_trusted_body">Cho phép list chạy JavaScript rule, scriptlet và các modifier ($removeparam, $replace, $urltransform, $hls, $removeheader) — chỉ bật khi bạn tin nguồn list</string>
@@ -624,6 +709,13 @@
     <string name="apps_cat_blocked">Đang chặn</string>
     <string name="apps_cat_filtered">Được lọc</string>
     <string name="apps_cat_unfiltered">Bỏ qua lọc</string>
+    <string name="apps_range_today">Hôm nay</string>
+    <string name="apps_range_week">7 ngày</string>
+    <string name="apps_range_month">30 ngày</string>
+    <string name="apps_range_all">Mọi lúc</string>
+    <string name="apps_sort_name">Tên</string>
+    <string name="apps_sort_blocked">Đã chặn</string>
+    <string name="apps_sort_saved">Tiết kiệm</string>
     <string name="apps_cat_browser">Trình duyệt</string>
     <string name="apps_cat_social">Mạng xã hội</string>
     <string name="apps_cat_media">Đa phương tiện</string>
@@ -669,7 +761,7 @@
     <string name="apps_detail_screen_off_title">Chặn khi màn hình tắt (Tiết kiệm pin)</string>
     <string name="apps_detail_screen_off_body">Không cho phép ứng dụng chạy ngầm tải dữ liệu khi khóa máy</string>
     <string name="apps_detail_bypass_warning">App này đang bỏ qua VPN: các giới hạn mạng ở trên không có tác dụng cho tới khi bật lại lọc.</string>
-    <string name="apps_detail_data_today">Dữ liệu tiết kiệm hôm nay</string>
+    <string name="apps_detail_data_today">Dữ liệu tiết kiệm</string>
     <string name="apps_detail_data_value">%1$d MB</string>
     <string name="apps_detail_blocked_queries">Truy vấn đã chặn</string>
     <string name="apps_detail_view_logs">Xem nhật ký lọc của %1$s</string>
@@ -683,6 +775,9 @@
     <string name="log_title">Nhật ký</string>
     <string name="log_subtitle">Truy vấn mạng gần đây</string>
     <string name="log_clear_action">Xóa nhật ký</string>
+    <string name="log_export_action">Xuất hoạt động</string>
+    <string name="log_export_done">Đã xuất hoạt động</string>
+    <string name="log_export_failed">Không ghi được tệp hoạt động</string>
     <string name="log_clear_title">Xoá nhật ký?</string>
     <string name="log_clear_body">Toàn bộ %1$d bản ghi sẽ bị xoá và không thể hoàn tác.</string>
     <string name="log_clear_confirm">Xoá</string>
@@ -704,6 +799,8 @@
     <string name="log_dest_header">TÊN MIỀN ĐÍCH</string>
     <string name="log_ip_protocol">Máy chủ: %1$s • Giao thức: %2$s</string>
     <string name="log_detail_domain">Tên miền</string>
+    <string name="log_detail_time">Thời gian</string>
+    <string name="log_detail_latency">Độ trễ</string>
     <string name="log_detail_action">Quyết định xử lý</string>
     <string name="log_detail_category">Phân loại</string>
     <string name="log_detail_app">Ứng dụng</string>
@@ -730,6 +827,12 @@
     <string name="settings_subtitle">Ngôn ngữ, giao diện, ghi log và sao lưu</string>
     <string name="settings_group_general">Chung</string>
     <string name="settings_group_logging">Nhật ký</string>
+    <string name="settings_group_network">Mạng</string>
+    <string name="settings_routing_mode_title">Chế độ định tuyến</string>
+    <string name="settings_routing_local_vpn">VPN cục bộ</string>
+    <string name="settings_routing_socks5">SOCKS5 thượng nguồn</string>
+    <string name="settings_notifications_title">Thông báo ứng dụng</string>
+    <string name="settings_notifications_subtitle">Mở công tắc hệ thống cho kênh bảo vệ, tường lửa và cập nhật</string>
     <string name="settings_group_data">Sao lưu &amp; dữ liệu</string>
     <string name="settings_group_about">Giới thiệu</string>
     <string name="settings_language_title">Ngôn ngữ ứng dụng</string>

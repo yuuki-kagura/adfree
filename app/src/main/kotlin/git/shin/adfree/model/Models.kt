@@ -323,11 +323,29 @@ object AppCategoryFilter {
     const val UNFILTERED = "unfiltered"
 }
 
+/** Time window for the per-app usage totals shown on the Apps tab. */
+enum class AppUsageRange { TODAY, WEEK, MONTH, ALL }
+
+/** One per-app answer for a firewall dimension. */
+enum class FirewallAccess {
+    /** Follow the matching global default. */
+    INHERIT,
+
+    /** This app may use the dimension even when the global default blocks it. */
+    ALLOW,
+
+    /** This app may not use the dimension even when the global default allows it. */
+    BLOCK,
+}
+
 data class AppFirewallRule(
     val packageName: String,
     val appName: String,
-    val isCellularAllowed: Boolean = true,
-    val isWifiAllowed: Boolean = true,
+    val wifiAccess: FirewallAccess = FirewallAccess.INHERIT,
+    val wifiScreenOffAccess: FirewallAccess = FirewallAccess.INHERIT,
+    val cellularAccess: FirewallAccess = FirewallAccess.INHERIT,
+    val cellularScreenOffAccess: FirewallAccess = FirewallAccess.INHERIT,
+    val roamingAccess: FirewallAccess = FirewallAccess.INHERIT,
     val isFilterRouted: Boolean = true,
     /**
      * Whether this app's HTTPS payload is decrypted for content filtering.
@@ -335,10 +353,25 @@ data class AppFirewallRule(
      * untouched, so ads inside HTTPS pages are not blocked.
      */
     val isHttpsFiltered: Boolean = true,
-    val blockWhenScreenOff: Boolean = false,
+    /** Whether a firewall block may raise a notification for this app. */
+    val notifyBlocked: Boolean = true,
     val category: String = AppCategory.OTHER,
     val blockedRequestsToday: Int = 0,
     val dataTransferredBytes: Long = 0L,
+) {
+    val hasNetworkRules: Boolean
+        get() = wifiAccess != FirewallAccess.INHERIT ||
+            wifiScreenOffAccess != FirewallAccess.INHERIT ||
+            cellularAccess != FirewallAccess.INHERIT ||
+            cellularScreenOffAccess != FirewallAccess.INHERIT ||
+            roamingAccess != FirewallAccess.INHERIT
+}
+
+/** Installed app offered by the firewall app picker; system rows are grouped last. */
+data class FirewallAppChoice(
+    val packageName: String,
+    val appName: String,
+    val isSystem: Boolean,
 )
 
 data class DnsProvider(
@@ -469,6 +502,16 @@ data class ProtectionSettings(
     // DNS answer loses its ECH config so every host stays decryptable.
     val isEchBlockingEnabled: Boolean = false,
     val isFirewallEnabled: Boolean = true,
+    /** Global and custom rule sets each have their own gate. */
+    val firewallGlobalRules: Boolean = true,
+    val firewallCustomRules: Boolean = true,
+    val firewallNotifications: Boolean = true,
+    /** Default access for dimensions an app leaves on [FirewallAccess.INHERIT]. */
+    val firewallAllowWifi: Boolean = true,
+    val firewallAllowWifiScreenOff: Boolean = true,
+    val firewallAllowCellular: Boolean = true,
+    val firewallAllowCellularScreenOff: Boolean = true,
+    val firewallAllowRoaming: Boolean = true,
     val isEcoBatteryModeEnabled: Boolean = true,
     // Stealth effects are opt-in; the sub-switches remember the choice.
     val isStealthModeEnabled: Boolean = false,

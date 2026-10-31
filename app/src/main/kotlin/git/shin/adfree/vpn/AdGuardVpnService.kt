@@ -128,15 +128,23 @@ class AdGuardVpnService : VpnService() {
 
     private fun pushNetworkType() {
         val caps = activeTransports.values
+        val cellular = caps.firstOrNull {
+            it.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR)
+        }
         val kind = when {
             caps.any { it.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) } ->
                 CoreEngine.NETWORK_WIFI
-            caps.any { it.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR) } ->
-                CoreEngine.NETWORK_CELLULAR
+            cellular != null -> CoreEngine.NETWORK_CELLULAR
             caps.isEmpty() -> CoreEngine.NETWORK_UNKNOWN
             else -> CoreEngine.NETWORK_OTHER
         }
         container.coreEngine.setNetworkType(kind)
+        // Older platforms do not report the capability; treating that as "not
+        // roaming" matches the pre-roaming behaviour.
+        val roaming = cellular != null &&
+            Build.VERSION.SDK_INT >= Build.VERSION_CODES.P &&
+            !cellular.hasCapability(NetworkCapabilities.NET_CAPABILITY_NOT_ROAMING)
+        container.coreEngine.setRoaming(roaming)
     }
 
     /**

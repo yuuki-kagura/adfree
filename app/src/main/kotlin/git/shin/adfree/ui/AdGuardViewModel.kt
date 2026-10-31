@@ -10,10 +10,13 @@ import git.shin.adfree.data.AdGuardRepository
 import git.shin.adfree.model.AppCategory
 import git.shin.adfree.model.AppCategoryFilter
 import git.shin.adfree.model.AppFirewallRule
+import git.shin.adfree.model.AppUsageRange
 import git.shin.adfree.model.DnsBackup
 import git.shin.adfree.model.DnsBackupMode
 import git.shin.adfree.model.DnsBlockMode
 import git.shin.adfree.model.FilterStatus
+import git.shin.adfree.model.FirewallAccess
+import git.shin.adfree.model.FirewallAppChoice
 import git.shin.adfree.model.NetworkRequestLog
 import git.shin.adfree.model.ProtectionSettings
 import git.shin.adfree.model.ProtectionStats
@@ -107,6 +110,10 @@ class AdGuardViewModel(
 
     /** Android drops the status notification when permission was missing. */
     fun refreshStatusNotification() = vpnController.refreshStatusNotification()
+
+    /** Enumerates installed apps for the firewall picker (binder work). */
+    fun installedAppsForFirewall(): List<FirewallAppChoice> =
+        repository.installedAppsForFirewall()
 
     private val _effect = MutableSharedFlow<AdGuardEffect>(
         replay = 0,
@@ -226,7 +233,11 @@ class AdGuardViewModel(
                 app.packageName.contains(d.appSearch, true)
             val matchesCat = when (d.appCategoryFilter) {
                 null -> true
-                AppCategoryFilter.BLOCKED -> !app.isCellularAllowed || !app.isWifiAllowed
+                AppCategoryFilter.BLOCKED -> app.wifiAccess == FirewallAccess.BLOCK ||
+                    app.wifiScreenOffAccess == FirewallAccess.BLOCK ||
+                    app.cellularAccess == FirewallAccess.BLOCK ||
+                    app.cellularScreenOffAccess == FirewallAccess.BLOCK ||
+                    app.roamingAccess == FirewallAccess.BLOCK
                 AppCategoryFilter.FILTERED -> app.isFilterRouted
                 AppCategoryFilter.UNFILTERED -> !app.isFilterRouted
                 else -> app.category == d.appCategoryFilter
@@ -245,6 +256,7 @@ class AdGuardViewModel(
             logAllowedTotal = a.logAllowedTotal,
             filterLists = b.filters,
             appFirewallRules = apps,
+            allAppFirewallRules = b.apps,
             // The log pane names a row's owner even when the Apps tab is
             // filtered down to something else.
             appNames = b.apps.associate { it.packageName to it.appName },
@@ -402,7 +414,7 @@ class AdGuardViewModel(
             }
 
             is AdGuardIntent.AddToWhitelist -> {
-                repository.addDomainToWhitelist(intent.domain)
+                repository.addDomainToWhitelist(intent.domain, intent.appPackage)
                 _inspectedLog.value = null
                 emit(
                     AdGuardEffect.ShowSnackbar(
@@ -412,7 +424,7 @@ class AdGuardViewModel(
             }
 
             is AdGuardIntent.AddToBlacklist -> {
-                repository.addDomainToBlacklist(intent.domain)
+                repository.addDomainToBlacklist(intent.domain, intent.appPackage)
                 _inspectedLog.value = null
                 emit(
                     AdGuardEffect.ShowSnackbar(
@@ -456,12 +468,16 @@ class AdGuardViewModel(
 
             is AdGuardIntent.UpdateAppFirewall -> {
                 repository.updateAppFirewall(
-                    intent.packageName,
-                    intent.cellular,
-                    intent.wifi,
-                    intent.filtered,
-                    intent.blockWhenScreenOff,
-                    intent.httpsFiltered,
+                    packageName = intent.packageName,
+                    appName = intent.appName,
+                    wifi = intent.wifi,
+                    wifiScreenOff = intent.wifiScreenOff,
+                    cellular = intent.cellular,
+                    cellularScreenOff = intent.cellularScreenOff,
+                    roaming = intent.roaming,
+                    isFilterRouted = intent.filtered,
+                    isHttpsFiltered = intent.httpsFiltered,
+                    notifyBlocked = intent.notifyBlocked,
                 )
                 // The sheet reads this snapshot, not the repository flow, so
                 // without the copy every switch would snap back to its old
@@ -471,14 +487,41 @@ class AdGuardViewModel(
                         current
                     } else {
                         current.copy(
-                            isCellularAllowed = intent.cellular ?: current.isCellularAllowed,
-                            isWifiAllowed = intent.wifi ?: current.isWifiAllowed,
+                            wifiAccess = intent.wifi ?: current.wifiAccess,
+                            wifiScreenOffAccess =
+                                intent.wifiScreenOff ?: current.wifiScreenOffAccess,
+                            cellularAccess = intent.cellular ?: current.cellularAccess,
+                            cellularScreenOffAccess =
+                                intent.cellularScreenOff ?: current.cellularScreenOffAccess,
+                            roamingAccess = intent.roaming ?: current.roamingAccess,
                             isFilterRouted = intent.filtered ?: current.isFilterRouted,
-                            blockWhenScreenOff = intent.blockWhenScreenOff ?: current.blockWhenScreenOff,
                             isHttpsFiltered = intent.httpsFiltered ?: current.isHttpsFiltered,
+                            notifyBlocked = intent.notifyBlocked ?: current.notifyBlocked,
                         )
                     }
                 }
+            }
+            is AdGuardIntent.UpdateFirewallSettings -> repository.updateFirewallSettings(
+                globalRules = intent.globalRules,
+                customRules = intent.customRules,
+                notifications = intent.notifications,
+                allowWifi = intent.allowWifi,
+                allowWifiScreenOff = intent.allowWifiScreenOff,
+                allowCellular = intent.allowCellular,
+                allowCellularScreenOff = intent.allowCellularScreenOff,
+                allowRoaming = intent.allowRoaming,
+            )
+            is AdGuardIntent.ResetFirewall -> {
+                repository.resetFirewall()
+                _inspectedApp.value = null
+                emit(AdGuardEffect.ShowSnackbar(UiText.Resource(R.string.firewall_reset_done)))
+            }
+            is AdGuardIntent.EnsureFirewallApp ->
+                repository.ensureFirewallApp(intent.packageName, intent.appName)
+            is AdGuardIntent.OpenAppManagement -> {
+                _currentTab.value = AdGuardTab.APPS
+                repository.setAppUsageVisible(true)
+                _inspectedApp.value = intent.app
             }
             is AdGuardIntent.RestartVpn -> {
                 if (vpnController.isVpnActive.value) {
@@ -499,9 +542,14 @@ class AdGuardViewModel(
             is AdGuardIntent.FilterLogsByApp -> _selectedAppFilter.value = intent.appPackageOrName
             is AdGuardIntent.AppSearchQueryChanged -> _appSearchQuery.value = intent.query
             is AdGuardIntent.AppCategoryFilterChanged -> _appCategoryFilter.value = intent.filter
+            is AdGuardIntent.SetAppUsageRange -> repository.setAppUsageRange(intent.range)
             is AdGuardIntent.ClearLogs -> repository.clearLogs()
             is AdGuardIntent.ResetStats -> repository.resetStats()
             is AdGuardIntent.LoadMoreLogs -> repository.loadMoreLogs()
+            is AdGuardIntent.ExportLogs -> viewModelScope.launch {
+                val result = repository.exportLogs(intent.uri)
+                emit(AdGuardEffect.ShowSnackbar(result.message))
+            }
             is AdGuardIntent.SetLogTailing -> repository.setLogTailing(intent.tailing)
             is AdGuardIntent.ShowCustomRuleDialog -> _showCustomRuleDialog.value = intent.show
             is AdGuardIntent.ShowCustomRuleEditor -> _showCustomRuleEditor.value = intent.show
@@ -637,6 +685,16 @@ class AdGuardViewModel(
         _searchQuery.value = domain
         _currentTab.value = AdGuardTab.ACTIVITY
     }
+
+    /** Assistant per-app panel: open the Apps tab on that app's management sheet. */
+    fun openAppDetails(packageName: String, appName: String? = null) {
+        val app = uiState.value.allAppFirewallRules.firstOrNull { it.packageName == packageName }
+            ?: AppFirewallRule(packageName, appName ?: packageName)
+        onIntent(AdGuardIntent.OpenAppManagement(app))
+    }
+
+    /** Initial chip selection for a freshly composed Apps screen. */
+    fun currentAppUsageRange(): AppUsageRange = repository.currentAppUsageRange()
 
     private fun toggleProtection() {
         // The switch follows the VPN itself, not a remembered flag: the flag

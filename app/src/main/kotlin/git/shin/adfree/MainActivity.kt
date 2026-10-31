@@ -327,6 +327,14 @@ class MainActivity : AppCompatActivity() {
                 }
             }
             ACTION_OPEN_APPS -> viewModel.onIntent(AdGuardIntent.SelectTab(AdGuardTab.APPS))
+            ACTION_OPEN_APP_DETAILS -> {
+                intent.getStringExtra(EXTRA_APP_PACKAGE)?.let { packageName ->
+                    viewModel.openAppDetails(
+                        packageName,
+                        intent.getStringExtra(EXTRA_APP_NAME),
+                    )
+                }
+            }
         }
     }
 
@@ -362,6 +370,11 @@ class MainActivity : AppCompatActivity() {
 
         /** Assistant shortcut: land on the Apps tab. */
         const val ACTION_OPEN_APPS = "git.shin.adfree.action.OPEN_APPS"
+
+        /** Assistant per-app panel: open that app's management sheet. */
+        const val ACTION_OPEN_APP_DETAILS = "git.shin.adfree.action.OPEN_APP_DETAILS"
+        const val EXTRA_APP_PACKAGE = "git.shin.adfree.extra.APP_PACKAGE"
+        const val EXTRA_APP_NAME = "git.shin.adfree.extra.APP_NAME"
 
         private const val NOTIFICATION_PREFS = "notification_permission"
         private const val KEY_NOTIFICATION_ASKED = "asked"

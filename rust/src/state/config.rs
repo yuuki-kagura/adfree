@@ -16,9 +16,8 @@ use super::StateStore;
 /// The per-app consequences of the firewall rules, computed once per apply.
 #[derive(Debug, Default)]
 pub struct PolicyPlan {
-    pub cellular_blocked: Vec<String>,
-    pub wifi_blocked: Vec<String>,
-    pub screen_off_blocked: Vec<String>,
+    /// Global defaults plus the per-app overrides the engine evaluates.
+    pub network: crate::engine::AppNetworkPolicy,
     /// Apps whose TLS is spliced instead of decrypted.
     pub https_skip_apps: Vec<String>,
     /// Apps kept outside the tunnel entirely.
@@ -82,11 +81,7 @@ pub fn apply(state: &StateStore, core: &Core, private_dns_strict: bool) -> Confi
     let plan = build(&state.snapshot(), private_dns_strict);
     core.set_config(plan.config);
     core.set_dns_rewrites(plan.rewrites);
-    core.set_app_network_policy(
-        plan.policy.cellular_blocked,
-        plan.policy.wifi_blocked,
-        plan.policy.screen_off_blocked,
-    );
+    core.set_app_network_policy(plan.policy.network);
     core.set_https_skip_apps(plan.policy.https_skip_apps);
     core.set_resolver(plan.upstream);
     core.set_secure_resolver(plan.secure);
@@ -331,20 +326,48 @@ pub fn policy(snapshot: &StateSnapshot) -> PolicyPlan {
     }
     // The firewall switch owns the per-app restrictions only: tunnel routing
     // and HTTPS filtering are separate switches and keep working when it is
-    // off. The core treats empty lists as "no restriction".
-    if snapshot.protection.is_firewall_enabled {
-        for rule in &snapshot.firewall {
-            if !rule.cellular {
-                plan.cellular_blocked.push(rule.package_name.clone());
-            }
-            if !rule.wifi {
-                plan.wifi_blocked.push(rule.package_name.clone());
-            }
-            if rule.screen_off {
-                plan.screen_off_blocked.push(rule.package_name.clone());
-            }
-        }
+    // off. A disabled global or custom set contributes no restriction, which
+    // is why the global defaults turn into "allow" instead of being ignored:
+    // `Inherit` still has to resolve to something.
+    let protection = &snapshot.protection;
+    let network = &mut plan.network;
+    network.active = protection.is_firewall_enabled;
+    network.allow_wifi = !protection.firewall_global_rules || protection.firewall_allow_wifi;
+    network.allow_wifi_screen_off =
+        !protection.firewall_global_rules || protection.firewall_allow_wifi_screen_off;
+    network.allow_cellular =
+        !protection.firewall_global_rules || protection.firewall_allow_cellular;
+    network.allow_cellular_screen_off =
+        !protection.firewall_global_rules || protection.firewall_allow_cellular_screen_off;
+    network.allow_roaming = !protection.firewall_global_rules || protection.firewall_allow_roaming;
+
+    if !protection.is_firewall_enabled || !protection.firewall_custom_rules {
+        return plan;
     }
+    let rules = snapshot
+        .firewall
+        .iter()
+        .filter(|rule| {
+            rule.wifi != FirewallAccess::Inherit
+                || rule.wifi_screen_off != FirewallAccess::Inherit
+                || rule.cellular != FirewallAccess::Inherit
+                || rule.cellular_screen_off != FirewallAccess::Inherit
+                || rule.roaming != FirewallAccess::Inherit
+        })
+        .map(|rule| {
+            (
+                rule.package_name.clone(),
+                crate::engine::AppFirewallState {
+                    wifi: rule.wifi,
+                    wifi_screen_off: rule.wifi_screen_off,
+                    cellular: rule.cellular,
+                    cellular_screen_off: rule.cellular_screen_off,
+                    roaming: rule.roaming,
+                },
+            )
+        })
+        .collect();
+    network.rules = std::sync::Arc::new(rules);
     plan
 }
 
@@ -524,27 +547,66 @@ mod tests {
         let mut s = snapshot();
         s.firewall.push(AppFirewallRule {
             package_name: "com.example".to_string(),
-            cellular: false,
-            wifi: false,
+            cellular: FirewallAccess::Block,
+            wifi: FirewallAccess::Block,
             filtered: false,
-            screen_off: true,
             https: false,
+            ..AppFirewallRule::default()
         });
         let on = policy(&s);
-        assert_eq!(on.cellular_blocked, vec!["com.example"]);
-        assert_eq!(on.wifi_blocked, vec!["com.example"]);
-        assert_eq!(on.screen_off_blocked, vec!["com.example"]);
+        assert!(on.network.active);
+        assert!(on.network.allow_wifi, "the global default still allows");
+        let rule = on.network.rules.get("com.example").expect("override kept");
+        assert_eq!(rule.wifi, FirewallAccess::Block);
+        assert_eq!(rule.cellular, FirewallAccess::Block);
         assert_eq!(on.excluded, vec!["com.example"]);
         assert_eq!(on.https_skip_apps, vec!["com.example"]);
 
         s.protection.is_firewall_enabled = false;
         let off = policy(&s);
-        assert!(off.cellular_blocked.is_empty());
-        assert!(off.wifi_blocked.is_empty());
-        assert!(off.screen_off_blocked.is_empty());
+        assert!(!off.network.active);
+        assert!(off.network.rules.is_empty());
         // Routing and HTTPS exclusion survive the firewall switch.
         assert_eq!(off.excluded, vec!["com.example"]);
         assert_eq!(off.https_skip_apps, vec!["com.example"]);
+    }
+
+    #[test]
+    fn global_defaults_apply_inherited_dimensions_and_drop_when_gated() {
+        let mut s = snapshot();
+        s.protection.firewall_allow_wifi = false;
+        s.protection.firewall_allow_roaming = false;
+        s.firewall.push(AppFirewallRule {
+            package_name: "com.example".to_string(),
+            wifi: FirewallAccess::Allow,
+            ..AppFirewallRule::default()
+        });
+
+        let plan = policy(&s);
+        assert!(!plan.network.allow_wifi);
+        assert!(!plan.network.allow_roaming);
+        let rule = plan.network.rules.get("com.example").expect("explicit allow");
+        assert_eq!(rule.wifi, FirewallAccess::Allow);
+        assert_eq!(
+            rule.cellular,
+            FirewallAccess::Inherit,
+            "only the dimensions the user touched are overrides"
+        );
+
+        // Turning global rules off restores the allowed defaults without
+        // discarding the per-app override.
+        s.protection.firewall_global_rules = false;
+        let plan = policy(&s);
+        assert!(plan.network.allow_wifi);
+        assert!(plan.network.allow_roaming);
+        assert!(plan.network.rules.contains_key("com.example"));
+
+        // Turning custom rules off drops the overrides; the globals decide.
+        s.protection.firewall_global_rules = true;
+        s.protection.firewall_custom_rules = false;
+        let plan = policy(&s);
+        assert!(plan.network.rules.is_empty());
+        assert!(!plan.network.allow_wifi);
     }
 
     #[test]

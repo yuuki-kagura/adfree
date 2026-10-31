@@ -27,6 +27,7 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Block
 import androidx.compose.material.icons.filled.ChevronRight
+import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Delete
@@ -1305,6 +1306,45 @@ fun FilterDetailSheet(
         if (displayDescription.isNotBlank()) {
             Spacer(modifier = Modifier.height(4.dp))
             Text(displayDescription, fontSize = 12.sp, color = AdGuardTextSecondary)
+        }
+
+        Spacer(modifier = Modifier.height(10.dp))
+        val features = buildList {
+            add(
+                if (list.format.equals("hosts", ignoreCase = true)) {
+                    R.string.filters_feature_hosts
+                } else {
+                    R.string.filters_feature_rule_syntax
+                },
+            )
+            add(
+                if (!list.subscriptionUrl.isNullOrBlank()) {
+                    R.string.filters_feature_auto_update
+                } else {
+                    R.string.filters_feature_static
+                },
+            )
+            if (list.isUserAdded) {
+                add(
+                    if (list.trusted) R.string.filters_feature_trusted
+                    else R.string.filters_feature_untrusted,
+                )
+            }
+        }
+        features.forEach { feature ->
+            Row(
+                modifier = Modifier.padding(vertical = 2.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Icon(
+                    Icons.Default.CheckCircle,
+                    contentDescription = null,
+                    tint = AdGuardGreenLight,
+                    modifier = Modifier.size(13.dp),
+                )
+                Spacer(modifier = Modifier.width(6.dp))
+                Text(stringResource(feature), fontSize = 11.sp, color = AdGuardTextSecondary)
+            }
         }
 
         Spacer(modifier = Modifier.height(14.dp))
