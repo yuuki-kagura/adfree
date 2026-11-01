@@ -187,15 +187,41 @@ Phase 3 instead of a second sheet.
 
 - Allowlist: give the website allowlist a dedicated screen (search + add) or
   document that HTTPS website rules cover it. AdGuard keeps it separate from
-  user rules.
-- Log detail (`73`–`79`): a request-detail screen with status, event type,
-  domain/URL/address, DNS answer, timings, connection id and sizes, plus the
-  applied rule. From an allowed request offer `Thêm quy tắc chặn`, from a
-  blocked one `Thêm quy tắc cho phép`; the sheet pre-fills the rule from the
-  request and scopes it to the app (block rules also get a priority option).
-  AdFree's Log tab already has the needed fields in `log_events` (action,
-  host, app, protocol, time) except sizes/connection id; store those if the
-  detail screen is built. Log overflow (`77`) adds export and clear.
+  user rules. Decided: no dedicated screen — `@@` rules created from the log
+  sheet land in `Quy tắc của bạn` and the `Cho phép` tab of that editor is the
+  allowlist view.
+- Log detail (`73`–`79`): **done.** The request-detail sheet shows status, event
+  type, domain/URL, DNS server and protocol, timings, connection id, size, the
+  applied rule and its filter list. `Chặn tên miền` / `Danh sách trắng` no longer
+  write a rule straight away; they open the rule-from-log sheet
+  (`ui/screens/RuleFromLogSheet.kt`), which pre-fills the rule from the request,
+  offers the exact-host and parent-domain candidates, lets the text be edited,
+  and for block rules offers a priority tick and an app-scope tick.
+  Composition lives in `model/RuleFromLog.kt` (`ruleCandidates`,
+  `composeRuleText`, `appScopeSupported`) and is unit-tested.
+  - "Priority" maps to the existing `$important` option — the engine has no
+    numeric priority; `app_merge` resolves it as
+    `blocked = important || (block && !exception)` (`rust/src/filter.rs:6663`),
+    so the combined form is `||host^$app=<pkg>,important`.
+  - App scope is offered only where the engine can honour it. `$app=` is
+    enforced on the HTTPS/MITM and cosmetic paths (`check_url(..., apps)`), but
+    `check_host()` (`rust/src/filter.rs:2216`) takes no apps and the decision
+    cache is keyed by host alone, so a DNS-time rule cannot be per-app. DNS
+    entries therefore show a note instead of the checkbox; no Rust change.
+  - Allow rules get no options section, matching the AdGuard capture (`79`).
+  - Sizes and connection id were already stored by Phase 6.1; log overflow
+    (`77`) export and clear already existed.
+  - Device verification record (2026-11-01, Sony 802SO / Android 10, release
+    build): the sheet renders like the AdGuard capture (`75`) — title
+    `Thêm quy tắc chặn`, prefilled `||<host>^` with a clear button, host and
+    parent-domain radios, and the `Tuỳ chọn` ticks. Ticking priority + app scope
+    on a UDP/Instagram entry produced
+    `||test-gateway.instagram.com^$app=com.instagram.android,important`, stored
+    once in `Quy tắc của bạn` and listed as a block rule. A DNS_UDP entry
+    showed no app checkbox, the DNS note instead, and stored
+    `||device-api.urbanairship.com^` with no `$app=`. Re-submitting that rule
+    showed `Quy tắc đã có trong danh sách` and left the list at the same count.
+    Both test rules were deleted afterwards.
 - Statistics (`52`–`59`): AdFree can build most of this from `log_events`:
   - data-type filter (all / mobile / Wi-Fi) and four time-range presets
     (24 h / 7 d / 30 d / all time);
@@ -222,7 +248,7 @@ matching feature:
 | Screen | Status | Use for |
 | --- | --- | --- |
 | Per-app statistics and `Xem tất cả ứng dụng` | captured (`55`–`59`) | implement from `log_events` as described above |
-| Log entry detail + "create rule from request" | captured (`73`–`78`) | request detail, applied rule, block/allow rule creation |
+| Log entry detail + "create rule from request" | implemented | request detail, applied rule, block/allow rule creation |
 | Settings → General → `Thông báo ứng dụng` | captured (`70`–`72`) | OS deep link; six AdGuard channels |
 | `Thêm trang` (allowlist), `Quy tắc người dùng mới`, `Thêm bộ lọc DNS`, `Thêm bộ lọc tuỳ chỉnh` dialogs | captured (`66`–`69`) | add-flow parity |
 | Quick actions / firewall overflow menus | captured (`60`–`62`) | navigation shortcuts, per-app mute, firewall reset |

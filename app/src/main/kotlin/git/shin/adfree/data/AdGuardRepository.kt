@@ -1549,28 +1549,6 @@ class AdGuardRepository(
         }
     }
 
-    fun addDomainToWhitelist(domain: String, appPackage: String? = null) {
-        val host = domain.trim().trimEnd('.')
-        if (host.isBlank()) return
-        addCustomRule("@@||$host^${appScope(appPackage)}")
-    }
-
-    fun addDomainToBlacklist(domain: String, appPackage: String? = null) {
-        val host = domain.trim().trimEnd('.')
-        if (host.isBlank()) return
-        addCustomRule("||$host^${appScope(appPackage)}")
-    }
-
-    /** `$app=` modifier for a rule created from one package's log row. */
-    private fun appScope(appPackage: String?): String {
-        val pkg = appPackage?.trim().orEmpty()
-        return if (pkg.isNotEmpty() && !pkg.any { it.isWhitespace() || it == ',' }) {
-            "\$app=$pkg"
-        } else {
-            ""
-        }
-    }
-
     fun checkHost(host: String): Triple<Boolean, String, String> {
         val verdict = engine.checkHost(host)
         return Triple(verdict.blocked, verdict.rule, verdict.listName)

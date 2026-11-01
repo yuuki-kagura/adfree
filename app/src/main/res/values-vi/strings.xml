@@ -235,8 +235,6 @@
     <string name="protection_off">Đã tắt bảo vệ</string>
     <string name="rule_added">Đã thêm quy tắc %1$s</string>
     <string name="rules_saved">Đã lưu %1$d quy tắc</string>
-    <string name="domain_whitelisted">Đã đưa %1$s vào danh sách trắng</string>
-    <string name="domain_blocked">Đã chặn %1$s</string>
     <string name="dns_upstream_changed">Đã đổi upstream DNS</string>
     <string name="filter_new_loading">Đang tải bộ lọc mới…</string>
     <string name="script_installing">Đang cài %1$s…</string>
@@ -1015,4 +1013,15 @@
     <string name="settings_https_dialog_body">Nhập tên miền, ví dụ example.com, *.example.com hoặc dán URL.</string>
     <string name="settings_https_dialog_invalid">Tên miền không hợp lệ (chỉ hỗ trợ ký tự ASCII; dùng dạng xn-- cho tên quốc tế).</string>
     <string name="settings_list_header">%1$s (%2$d)</string>
+    <string name="common_clear">Xoá</string>
+    <string name="rule_from_log_block_title">Thêm quy tắc chặn</string>
+    <string name="rule_from_log_allow_title">Thêm quy tắc cho phép</string>
+    <string name="rule_from_log_rule_text">Văn bản quy tắc</string>
+    <string name="rule_from_log_what_block">Những gì nên bị chặn</string>
+    <string name="rule_from_log_what_allow">Những gì nên được phép</string>
+    <string name="rule_from_log_options">Tuỳ chọn</string>
+    <string name="rule_from_log_priority">Cấp ưu tiên cao hơn cho quy tắc</string>
+    <string name="rule_from_log_app_scope">Chỉ áp dụng cho %1$s</string>
+    <string name="rule_from_log_dns_note">Quy tắc theo ứng dụng chỉ áp dụng cho traffic web đã lọc; truy vấn DNS được quyết định cho mọi ứng dụng.</string>
+    <string name="rule_from_log_add">Thêm quy tắc</string>
 </resources>

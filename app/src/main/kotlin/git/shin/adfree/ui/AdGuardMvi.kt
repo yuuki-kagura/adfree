@@ -118,14 +118,6 @@ sealed interface AdGuardIntent {
     data class AddCustomRule(val rule: String) : AdGuardIntent
     data class RemoveCustomRule(val rule: String) : AdGuardIntent
     data class UpdateAllCustomRules(val rules: List<String>) : AdGuardIntent
-    data class AddToWhitelist(
-        val domain: String,
-        val appPackage: String? = null,
-    ) : AdGuardIntent
-    data class AddToBlacklist(
-        val domain: String,
-        val appPackage: String? = null,
-    ) : AdGuardIntent
     data class SelectDnsProvider(val id: String) : AdGuardIntent
     data class AddCustomDnsProvider(
         val name: String,

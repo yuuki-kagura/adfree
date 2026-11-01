@@ -82,6 +82,9 @@ import git.shin.adfree.model.NetworkTransport
 import git.shin.adfree.model.assetSizeLabel
 import git.shin.adfree.model.ProtocolType
 import git.shin.adfree.model.RequestCategory
+import git.shin.adfree.model.RuleDraft
+import git.shin.adfree.model.RuleDraftKind
+import git.shin.adfree.model.appScopeSupported
 import git.shin.adfree.ui.AdGuardIntent
 import git.shin.adfree.ui.AdGuardTab
 import git.shin.adfree.ui.AdGuardViewModel
@@ -476,24 +479,57 @@ fun FilteringLogScreen(
     if (state.inspectedLog != null) {
         val inspected = state.inspectedLog!!
         val sheetState = rememberModalBottomSheetState()
+        var ruleDraft by remember(inspected) { mutableStateOf<RuleDraft?>(null) }
+        val existingRules = state.filterLists.firstOrNull { it.isCustom }?.customRules
+            ?: emptyList()
         ModalBottomSheet(
-            onDismissRequest = { viewModel.onIntent(AdGuardIntent.InspectLog(null)) },
+            onDismissRequest = {
+                if (ruleDraft != null) ruleDraft = null else viewModel.onIntent(AdGuardIntent.InspectLog(null))
+            },
             sheetState = sheetState,
             containerColor = AdGuardDarkSurface,
             contentColor = AdGuardTextPrimary
         ) {
-            PacketInspectionSheetContent(
-                log = inspected,
-                appLabel = appLabelFor(state.appNames, inspected.appPackage),
-                onAddToWhitelist = { viewModel.onIntent(AdGuardIntent.AddToWhitelist(it, inspected.appPackage)) },
-                onAddToBlacklist = { viewModel.onIntent(AdGuardIntent.AddToBlacklist(it, inspected.appPackage)) },
-                onAnalyzeWithAi = { domain ->
-                    viewModel.onIntent(AdGuardIntent.InspectLog(null))
-                    viewModel.onIntent(AdGuardIntent.SelectTab(AdGuardTab.AI_LAB))
-                    viewModel.onIntent(AdGuardIntent.RunThreatScan(domain))
-                },
-                onClose = { viewModel.onIntent(AdGuardIntent.InspectLog(null)) }
-            )
+            val draft = ruleDraft
+            if (draft == null) {
+                PacketInspectionSheetContent(
+                    log = inspected,
+                    appLabel = appLabelFor(state.appNames, inspected.appPackage),
+                    onAddToWhitelist = {
+                        ruleDraft = RuleDraft(
+                            kind = RuleDraftKind.ALLOW,
+                            host = it,
+                            appPackage = inspected.appPackage,
+                            appScopable = appScopeSupported(inspected.protocol, inspected.appPackage),
+                        )
+                    },
+                    onAddToBlacklist = {
+                        ruleDraft = RuleDraft(
+                            kind = RuleDraftKind.BLOCK,
+                            host = it,
+                            appPackage = inspected.appPackage,
+                            appScopable = appScopeSupported(inspected.protocol, inspected.appPackage),
+                        )
+                    },
+                    onAnalyzeWithAi = { domain ->
+                        viewModel.onIntent(AdGuardIntent.InspectLog(null))
+                        viewModel.onIntent(AdGuardIntent.SelectTab(AdGuardTab.AI_LAB))
+                        viewModel.onIntent(AdGuardIntent.RunThreatScan(domain))
+                    },
+                    onClose = { viewModel.onIntent(AdGuardIntent.InspectLog(null)) }
+                )
+            } else {
+                RuleFromLogSheetContent(
+                    draft = draft,
+                    appLabel = appLabelFor(state.appNames, draft.appPackage),
+                    existingRules = existingRules,
+                    onSubmit = { rule ->
+                        viewModel.onIntent(AdGuardIntent.AddCustomRule(rule))
+                        viewModel.onIntent(AdGuardIntent.InspectLog(null))
+                    },
+                    onCancel = { ruleDraft = null },
+                )
+            }
         }
     }
 }

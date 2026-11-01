@@ -236,8 +236,6 @@
     <string name="protection_off">Protection is off</string>
     <string name="rule_added">Added rule %1$s</string>
     <string name="rules_saved">Saved %1$d rules</string>
-    <string name="domain_whitelisted">%1$s added to the allowlist</string>
-    <string name="domain_blocked">Blocked %1$s</string>
     <string name="dns_upstream_changed">DNS upstream changed</string>
     <string name="filter_new_loading">Downloading the new filter…</string>
     <string name="script_installing">Installing %1$s…</string>
@@ -1018,4 +1016,15 @@
     <string name="settings_https_dialog_body">Enter a domain, e.g. example.com, *.example.com, or paste a URL.</string>
     <string name="settings_https_dialog_invalid">Invalid domain (ASCII only; use the xn-- form for international names).</string>
     <string name="settings_list_header">%1$s (%2$d)</string>
+    <string name="common_clear">Clear</string>
+    <string name="rule_from_log_block_title">Add block rule</string>
+    <string name="rule_from_log_allow_title">Add allow rule</string>
+    <string name="rule_from_log_rule_text">Rule text</string>
+    <string name="rule_from_log_what_block">What should be blocked</string>
+    <string name="rule_from_log_what_allow">What should be allowed</string>
+    <string name="rule_from_log_options">Options</string>
+    <string name="rule_from_log_priority">Give the rule higher priority</string>
+    <string name="rule_from_log_app_scope">Only apply to %1$s</string>
+    <string name="rule_from_log_dns_note">Per-app rules apply to filtered web traffic; a DNS lookup is decided for every app.</string>
+    <string name="rule_from_log_add">Add rule</string>
 </resources>

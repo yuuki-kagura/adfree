@@ -432,26 +432,6 @@ class AdGuardViewModel(
                 )
             }
 
-            is AdGuardIntent.AddToWhitelist -> {
-                repository.addDomainToWhitelist(intent.domain, intent.appPackage)
-                _inspectedLog.value = null
-                emit(
-                    AdGuardEffect.ShowSnackbar(
-                        UiText.Formatted(R.string.domain_whitelisted, intent.domain),
-                    ),
-                )
-            }
-
-            is AdGuardIntent.AddToBlacklist -> {
-                repository.addDomainToBlacklist(intent.domain, intent.appPackage)
-                _inspectedLog.value = null
-                emit(
-                    AdGuardEffect.ShowSnackbar(
-                        UiText.Formatted(R.string.domain_blocked, intent.domain),
-                    ),
-                )
-            }
-
             is AdGuardIntent.SelectDnsProvider -> {
                 repository.selectDnsProvider(intent.id)
                 emit(AdGuardEffect.ShowSnackbar(UiText.Resource(R.string.dns_upstream_changed)))
