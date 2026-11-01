@@ -60,8 +60,9 @@ const RECORD_HEADER: usize = 24;
 const RECORD_TRAILER: usize = 14;
 /// Events kept in the live ring. The durable log is the database the store
 /// writes first ([`crate::store`]); this ring only feeds the in-process tail,
-/// and an `Event` is ~360 bytes, so the previous 4 096 slots held ~1.5 MB of
-/// anonymous memory for a buffer a poll of the tail drains in one go.
+/// and an `Event` is ~560 bytes after the Phase 6 fields, so the previous
+/// 4 096 slots would have held ~2.2 MB of anonymous memory for a buffer a
+/// poll of the tail drains in one go.
 const CAPACITY: usize = 512;
 
 #[derive(Clone, Copy)]
@@ -409,6 +410,17 @@ fn put_str(dst: &mut [u8], dst_len: &mut u8, value: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_live_ring_stays_within_its_memory_budget() {
+        let ring_bytes = std::mem::size_of::<Event>() * CAPACITY;
+        // Phase 6 enrichment (url, dns answer, flow id, per-flow sizes) may
+        // not push the ring past the ~3 MB budget the plan set for it.
+        assert!(
+            ring_bytes <= 3 * 1024 * 1024,
+            "live ring is {ring_bytes} bytes for {CAPACITY} slots"
+        );
+    }
 
     #[test]
     fn push_and_drain_newest_last() {

@@ -503,3 +503,25 @@ inflates the high-water mark), 7 lists / 866,085 rules, each figure after a
   reports `doubleclick.net` blocked by `||doubleclick.net^` from *AdGuard DNS
   filter*, and the cached-block path re-reads the rule text.
 
+## Phase 6 ring-memory check (2026-11-01)
+
+PLAN.md asked that the event enrichment (transport/roaming bits, flow id, the
+128 B-capped URL, the 64 B DNS answer, per-flow byte counters) keep the live
+ring under ~3 MB. Measured on the host as `size_of::<Event>() × CAPACITY` —
+the ring's actual footprint, not an estimate — on HEAD and on the pre-Phase 6
+tree (`9c130b8`, checked out in a temporary worktree):
+
+| | Event | Ring (512 slots) |
+| --- | --- | --- |
+| Before Phase 6 (`9c130b8`) | 352 B | 176 KB |
+| After Phase 6 (`086ae01`) | 560 B | 280 KB |
+
+- The growth is ~104 KB, two orders of magnitude under the ~3 MB budget. The
+  plan's 2.5 MB figure assumed 10k events in RAM; the live ring is 512 slots
+  since `813c87d`, and the durable history lives in SQLite rows, not ring
+  memory.
+- The budget is pinned by `the_live_ring_stays_within_its_memory_budget` in
+  `rust/src/events.rs`.
+- The per-flow cost half of that benchmark note is still open: the probe
+  harness runs on the Redmi (`flare`), which is not connected this session.
+
