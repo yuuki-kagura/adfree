@@ -205,7 +205,7 @@ fun FilteringLogScreen(
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically
         ) {
-            Column {
+            Column(modifier = Modifier.weight(1f)) {
                 Text(
                     text = stringResource(R.string.log_title),
                     fontSize = 19.sp,
@@ -219,26 +219,30 @@ fun FilteringLogScreen(
                 )
             }
 
-            IconButton(
-                onClick = { exportLauncher.launch("adfree-activity.csv") },
-                modifier = Modifier.testTag("export_logs_button")
-            ) {
-                Icon(
-                    imageVector = Icons.Default.FileDownload,
-                    contentDescription = stringResource(R.string.log_export_action),
-                    tint = AdGuardTextSecondary
-                )
-            }
+            // Both actions sit at the right edge; SpaceBetween with three
+            // children would strand the download button mid-header.
+            Row {
+                IconButton(
+                    onClick = { exportLauncher.launch("adfree-activity.csv") },
+                    modifier = Modifier.testTag("export_logs_button")
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.FileDownload,
+                        contentDescription = stringResource(R.string.log_export_action),
+                        tint = AdGuardTextSecondary
+                    )
+                }
 
-            IconButton(
-                onClick = { showClearConfirm = true },
-                modifier = Modifier.testTag("clear_logs_button")
-            ) {
-                Icon(
-                    imageVector = Icons.Default.DeleteSweep,
-                    contentDescription = stringResource(R.string.log_clear_action),
-                    tint = AdGuardTextSecondary
-                )
+                IconButton(
+                    onClick = { showClearConfirm = true },
+                    modifier = Modifier.testTag("clear_logs_button")
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.DeleteSweep,
+                        contentDescription = stringResource(R.string.log_clear_action),
+                        tint = AdGuardTextSecondary
+                    )
+                }
             }
         }
 

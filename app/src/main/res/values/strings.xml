@@ -732,6 +732,11 @@
     <string name="apps_sort_ads">Ads</string>
     <string name="apps_sort_trackers">Trackers</string>
     <string name="apps_sort_requests">Requests</string>
+    <string name="apps_filter_sheet_button">Edit filters</string>
+    <string name="apps_filter_sheet_title">Filters</string>
+    <string name="apps_sheet_range_title">Time range</string>
+    <string name="apps_sheet_transport_title">Network</string>
+    <string name="apps_sheet_sort_title">Sort by</string>
 
     <!-- Statistics tab -->
     <string name="stats_requests_title">Requests</string>

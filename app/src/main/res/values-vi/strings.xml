@@ -732,6 +732,11 @@
     <string name="apps_sort_ads">Quảng cáo</string>
     <string name="apps_sort_trackers">Trình theo dõi</string>
     <string name="apps_sort_requests">Yêu cầu</string>
+    <string name="apps_filter_sheet_button">Sửa bộ lọc</string>
+    <string name="apps_filter_sheet_title">Bộ lọc</string>
+    <string name="apps_sheet_range_title">Khoảng thời gian</string>
+    <string name="apps_sheet_transport_title">Mạng</string>
+    <string name="apps_sheet_sort_title">Sắp xếp theo</string>
 
     <!-- Statistics tab -->
     <string name="stats_requests_title">Yêu cầu</string>

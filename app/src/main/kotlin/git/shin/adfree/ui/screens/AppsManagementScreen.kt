@@ -33,6 +33,7 @@ import androidx.compose.material.icons.filled.PowerSettingsNew
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Security
 import androidx.compose.material.icons.filled.Shield
+import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material.icons.filled.Wifi
 import git.shin.adfree.ui.rememberAppIcon
 import git.shin.adfree.model.FilterStatus
@@ -127,6 +128,26 @@ fun AppsManagementScreen(
         mutableStateOf(viewModel.currentAppUsageTransport())
     }
     var appSort by rememberSaveable { mutableStateOf(AppSort.NAME) }
+    var showFilterSheet by rememberSaveable { mutableStateOf(false) }
+    val rangeLabelRes = when (usageRange) {
+        AppUsageRange.TODAY -> R.string.apps_range_today
+        AppUsageRange.WEEK -> R.string.apps_range_week
+        AppUsageRange.MONTH -> R.string.apps_range_month
+        AppUsageRange.ALL -> R.string.apps_range_all
+    }
+    val transportLabelRes = when (usageTransport) {
+        AppUsageTransport.ALL -> R.string.apps_transport_all
+        AppUsageTransport.CELLULAR -> R.string.apps_transport_cellular
+        AppUsageTransport.WIFI -> R.string.apps_transport_wifi
+    }
+    val sortLabelRes = when (appSort) {
+        AppSort.NAME -> R.string.apps_sort_name
+        AppSort.BLOCKED -> R.string.apps_sort_blocked
+        AppSort.SAVED -> R.string.apps_sort_saved
+        AppSort.ADS -> R.string.apps_sort_ads
+        AppSort.TRACKERS -> R.string.apps_sort_trackers
+        AppSort.REQUESTS -> R.string.apps_sort_requests
+    }
     val sortedApps = remember(state.appFirewallRules, appSort) {
         when (appSort) {
             AppSort.NAME -> state.appFirewallRules
@@ -230,96 +251,43 @@ fun AppsManagementScreen(
 
         Spacer(modifier = Modifier.height(6.dp))
 
-        // Statistics window for the per-card blocked/saved totals. The core
-        // aggregates the persisted log, so 7/30 days survive a restart.
+        // Range, transport and sort rows live in a bottom sheet opened from
+        // this bar: stacked chip rows pushed the first app card below the fold.
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .horizontalScroll(rememberScrollState()),
-            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                .clip(RoundedCornerShape(10.dp))
+                .border(1.dp, AdGuardDarkOutline, RoundedCornerShape(10.dp))
+                .clickable { showFilterSheet = true }
+                .padding(horizontal = 12.dp, vertical = 10.dp)
+                .testTag("app_filter_sheet_button"),
+            verticalAlignment = Alignment.CenterVertically
         ) {
-            listOf(
-                AppUsageRange.TODAY to R.string.apps_range_today,
-                AppUsageRange.WEEK to R.string.apps_range_week,
-                AppUsageRange.MONTH to R.string.apps_range_month,
-                AppUsageRange.ALL to R.string.apps_range_all,
-            ).forEach { (range, labelRes) ->
-                FilterChip(
-                    selected = usageRange == range,
-                    onClick = {
-                        usageRange = range
-                        viewModel.onIntent(AdGuardIntent.SetAppUsageRange(range))
-                    },
-                    label = { Text(stringResource(labelRes), fontSize = 11.sp) },
-                    colors = FilterChipDefaults.filterChipColors(
-                        selectedContainerColor = AdGuardBlueDns,
-                        selectedLabelColor = AdGuardOnAccent,
-                        containerColor = AdGuardDarkSurface,
-                        labelColor = AdGuardTextSecondary
-                    )
-                )
-            }
-        }
-
-        Spacer(modifier = Modifier.height(6.dp))
-
-        // AdGuard's statistics header splits the same window by network.
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .horizontalScroll(rememberScrollState()),
-            horizontalArrangement = Arrangement.spacedBy(6.dp)
-        ) {
-            listOf(
-                AppUsageTransport.ALL to R.string.apps_transport_all,
-                AppUsageTransport.CELLULAR to R.string.apps_transport_cellular,
-                AppUsageTransport.WIFI to R.string.apps_transport_wifi,
-            ).forEach { (transport, labelRes) ->
-                FilterChip(
-                    selected = usageTransport == transport,
-                    onClick = {
-                        usageTransport = transport
-                        viewModel.onIntent(AdGuardIntent.SetAppUsageTransport(transport))
-                    },
-                    label = { Text(stringResource(labelRes), fontSize = 11.sp) },
-                    colors = FilterChipDefaults.filterChipColors(
-                        selectedContainerColor = AdGuardGreenPrimary,
-                        selectedLabelColor = AdGuardOnAccent,
-                        containerColor = AdGuardDarkSurface,
-                        labelColor = AdGuardTextSecondary
-                    )
-                )
-            }
-        }
-
-        Spacer(modifier = Modifier.height(6.dp))
-
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .horizontalScroll(rememberScrollState()),
-            horizontalArrangement = Arrangement.spacedBy(6.dp)
-        ) {
-            listOf(
-                AppSort.NAME to R.string.apps_sort_name,
-                AppSort.BLOCKED to R.string.apps_sort_blocked,
-                AppSort.SAVED to R.string.apps_sort_saved,
-                AppSort.ADS to R.string.apps_sort_ads,
-                AppSort.TRACKERS to R.string.apps_sort_trackers,
-                AppSort.REQUESTS to R.string.apps_sort_requests,
-            ).forEach { (sort, labelRes) ->
-                FilterChip(
-                    selected = appSort == sort,
-                    onClick = { appSort = sort },
-                    label = { Text(stringResource(labelRes), fontSize = 11.sp) },
-                    colors = FilterChipDefaults.filterChipColors(
-                        selectedContainerColor = AdGuardPurpleAI,
-                        selectedLabelColor = AdGuardOnAccent,
-                        containerColor = AdGuardDarkSurface,
-                        labelColor = AdGuardTextSecondary
-                    )
-                )
-            }
+            Icon(
+                imageVector = Icons.Default.Tune,
+                contentDescription = null,
+                tint = AdGuardGreenPrimary,
+                modifier = Modifier.size(16.dp)
+            )
+            Spacer(modifier = Modifier.width(8.dp))
+            Text(
+                text = stringResource(R.string.apps_filter_sheet_button),
+                fontSize = 12.sp,
+                fontWeight = FontWeight.Bold,
+                color = AdGuardTextPrimary
+            )
+            Spacer(modifier = Modifier.width(10.dp))
+            Text(
+                text = stringResource(rangeLabelRes) + " • " +
+                    stringResource(transportLabelRes) + " • " +
+                    stringResource(sortLabelRes),
+                fontSize = 11.sp,
+                color = AdGuardTextMuted,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f),
+                textAlign = androidx.compose.ui.text.style.TextAlign.End
+            )
         }
 
         Spacer(modifier = Modifier.height(10.dp))
@@ -448,6 +416,147 @@ fun AppsManagementScreen(
                 },
                 onClose = { viewModel.onIntent(AdGuardIntent.InspectAppDetails(null)) }
             )
+        }
+    }
+
+    // Bottom sheet: the range/transport/sort rows the header no longer shows.
+    // The core aggregates the persisted log, so 7/30 days survive a restart.
+    if (showFilterSheet) {
+        val filterSheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+        ModalBottomSheet(
+            onDismissRequest = { showFilterSheet = false },
+            sheetState = filterSheetState,
+            containerColor = AdGuardDarkSurface,
+            contentColor = AdGuardTextPrimary
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .verticalScroll(rememberScrollState())
+                    .padding(horizontal = 16.dp)
+                    .padding(bottom = 28.dp)
+                    .testTag("app_filter_sheet")
+            ) {
+                Text(
+                    text = stringResource(R.string.apps_filter_sheet_title),
+                    fontSize = 15.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = AdGuardTextPrimary
+                )
+
+                Spacer(modifier = Modifier.height(12.dp))
+
+                Text(
+                    text = stringResource(R.string.apps_sheet_range_title),
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = AdGuardTextSecondary
+                )
+                Spacer(modifier = Modifier.height(6.dp))
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    listOf(
+                        AppUsageRange.TODAY to R.string.apps_range_today,
+                        AppUsageRange.WEEK to R.string.apps_range_week,
+                        AppUsageRange.MONTH to R.string.apps_range_month,
+                        AppUsageRange.ALL to R.string.apps_range_all,
+                    ).forEach { (range, labelRes) ->
+                        FilterChip(
+                            selected = usageRange == range,
+                            onClick = {
+                                usageRange = range
+                                viewModel.onIntent(AdGuardIntent.SetAppUsageRange(range))
+                            },
+                            label = { Text(stringResource(labelRes), fontSize = 11.sp) },
+                            colors = FilterChipDefaults.filterChipColors(
+                                selectedContainerColor = AdGuardBlueDns,
+                                selectedLabelColor = AdGuardOnAccent,
+                                containerColor = AdGuardDarkBg,
+                                labelColor = AdGuardTextSecondary
+                            )
+                        )
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(12.dp))
+
+                // AdGuard's statistics header splits the same window by network.
+                Text(
+                    text = stringResource(R.string.apps_sheet_transport_title),
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = AdGuardTextSecondary
+                )
+                Spacer(modifier = Modifier.height(6.dp))
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    listOf(
+                        AppUsageTransport.ALL to R.string.apps_transport_all,
+                        AppUsageTransport.CELLULAR to R.string.apps_transport_cellular,
+                        AppUsageTransport.WIFI to R.string.apps_transport_wifi,
+                    ).forEach { (transport, labelRes) ->
+                        FilterChip(
+                            selected = usageTransport == transport,
+                            onClick = {
+                                usageTransport = transport
+                                viewModel.onIntent(AdGuardIntent.SetAppUsageTransport(transport))
+                            },
+                            label = { Text(stringResource(labelRes), fontSize = 11.sp) },
+                            colors = FilterChipDefaults.filterChipColors(
+                                selectedContainerColor = AdGuardGreenPrimary,
+                                selectedLabelColor = AdGuardOnAccent,
+                                containerColor = AdGuardDarkBg,
+                                labelColor = AdGuardTextSecondary
+                            )
+                        )
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(12.dp))
+
+                Text(
+                    text = stringResource(R.string.apps_sheet_sort_title),
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = AdGuardTextSecondary
+                )
+                Spacer(modifier = Modifier.height(6.dp))
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    listOf(
+                        AppSort.NAME to R.string.apps_sort_name,
+                        AppSort.BLOCKED to R.string.apps_sort_blocked,
+                        AppSort.SAVED to R.string.apps_sort_saved,
+                        AppSort.ADS to R.string.apps_sort_ads,
+                        AppSort.TRACKERS to R.string.apps_sort_trackers,
+                        AppSort.REQUESTS to R.string.apps_sort_requests,
+                    ).forEach { (sort, labelRes) ->
+                        FilterChip(
+                            selected = appSort == sort,
+                            onClick = { appSort = sort },
+                            label = { Text(stringResource(labelRes), fontSize = 11.sp) },
+                            colors = FilterChipDefaults.filterChipColors(
+                                selectedContainerColor = AdGuardPurpleAI,
+                                selectedLabelColor = AdGuardOnAccent,
+                                containerColor = AdGuardDarkBg,
+                                labelColor = AdGuardTextSecondary
+                            )
+                        )
+                    }
+                }
+            }
         }
     }
 }
@@ -1029,6 +1138,7 @@ private fun AppDetailsFirewallSheet(
                                 R.string.apps_card_breakdown,
                                 app.blockedAdsToday,
                                 app.blockedTrackersToday,
+                                app.requestsToday,
                             ),
                             fontSize = 10.sp,
                             color = AdGuardTextMuted,

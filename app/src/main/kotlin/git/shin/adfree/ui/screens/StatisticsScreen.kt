@@ -107,10 +107,10 @@ fun StatisticsScreen(
         modifier = modifier
             .fillMaxSize()
             .background(AdGuardDarkBg)
-            .verticalScroll(rememberScrollState())
             .padding(horizontal = 16.dp, vertical = 12.dp)
             .testTag("statistics_screen"),
     ) {
+        // Pinned title: the scrollable body below owns its own verticalScroll.
         Row(verticalAlignment = Alignment.CenterVertically) {
             Icon(
                 imageVector = Icons.Default.PieChart,
@@ -129,208 +129,215 @@ fun StatisticsScreen(
 
         Spacer(modifier = Modifier.height(12.dp))
 
-        FilterChipsRow {
-            listOf(
-                AppUsageRange.TODAY to R.string.apps_range_today,
-                AppUsageRange.WEEK to R.string.apps_range_week,
-                AppUsageRange.MONTH to R.string.apps_range_month,
-                AppUsageRange.ALL to R.string.apps_range_all,
-            ).forEach { (option, labelRes) ->
-                FilterChip(
-                    selected = range == option,
-                    onClick = {
-                        range = option
-                        viewModel.onIntent(AdGuardIntent.SetAppUsageRange(option))
-                    },
-                    label = { Text(stringResource(labelRes), fontSize = 11.sp) },
-                    colors = FilterChipDefaults.filterChipColors(
-                        selectedContainerColor = AdGuardBlueDns,
-                        selectedLabelColor = AdGuardOnAccent,
-                        containerColor = AdGuardDarkSurface,
-                        labelColor = AdGuardTextSecondary,
-                    ),
-                    modifier = Modifier.testTag("stats_range_${option.name}"),
-                )
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .weight(1f)
+                .verticalScroll(rememberScrollState()),
+        ) {
+            FilterChipsRow {
+                listOf(
+                    AppUsageRange.TODAY to R.string.apps_range_today,
+                    AppUsageRange.WEEK to R.string.apps_range_week,
+                    AppUsageRange.MONTH to R.string.apps_range_month,
+                    AppUsageRange.ALL to R.string.apps_range_all,
+                ).forEach { (option, labelRes) ->
+                    FilterChip(
+                        selected = range == option,
+                        onClick = {
+                            range = option
+                            viewModel.onIntent(AdGuardIntent.SetAppUsageRange(option))
+                        },
+                        label = { Text(stringResource(labelRes), fontSize = 11.sp) },
+                        colors = FilterChipDefaults.filterChipColors(
+                            selectedContainerColor = AdGuardBlueDns,
+                            selectedLabelColor = AdGuardOnAccent,
+                            containerColor = AdGuardDarkSurface,
+                            labelColor = AdGuardTextSecondary,
+                        ),
+                        modifier = Modifier.testTag("stats_range_${option.name}"),
+                    )
+                }
             }
-        }
 
-        Spacer(modifier = Modifier.height(6.dp))
+            Spacer(modifier = Modifier.height(6.dp))
 
-        FilterChipsRow {
-            listOf(
-                AppUsageTransport.ALL to R.string.apps_transport_all,
-                AppUsageTransport.CELLULAR to R.string.apps_transport_cellular,
-                AppUsageTransport.WIFI to R.string.apps_transport_wifi,
-            ).forEach { (option, labelRes) ->
-                FilterChip(
-                    selected = transport == option,
-                    onClick = {
-                        transport = option
-                        viewModel.onIntent(AdGuardIntent.SetAppUsageTransport(option))
-                    },
-                    label = { Text(stringResource(labelRes), fontSize = 11.sp) },
-                    colors = FilterChipDefaults.filterChipColors(
-                        selectedContainerColor = AdGuardGreenPrimary,
-                        selectedLabelColor = AdGuardOnAccent,
-                        containerColor = AdGuardDarkSurface,
-                        labelColor = AdGuardTextSecondary,
-                    ),
-                    modifier = Modifier.testTag("stats_transport_${option.name}"),
-                )
+            FilterChipsRow {
+                listOf(
+                    AppUsageTransport.ALL to R.string.apps_transport_all,
+                    AppUsageTransport.CELLULAR to R.string.apps_transport_cellular,
+                    AppUsageTransport.WIFI to R.string.apps_transport_wifi,
+                ).forEach { (option, labelRes) ->
+                    FilterChip(
+                        selected = transport == option,
+                        onClick = {
+                            transport = option
+                            viewModel.onIntent(AdGuardIntent.SetAppUsageTransport(option))
+                        },
+                        label = { Text(stringResource(labelRes), fontSize = 11.sp) },
+                        colors = FilterChipDefaults.filterChipColors(
+                            selectedContainerColor = AdGuardGreenPrimary,
+                            selectedLabelColor = AdGuardOnAccent,
+                            containerColor = AdGuardDarkSurface,
+                            labelColor = AdGuardTextSecondary,
+                        ),
+                        modifier = Modifier.testTag("stats_transport_${option.name}"),
+                    )
+                }
             }
-        }
 
-        Spacer(modifier = Modifier.height(14.dp))
+            Spacer(modifier = Modifier.height(14.dp))
 
-        SectionCard {
-            Text(
-                text = stringResource(R.string.stats_requests_title),
-                fontSize = 13.sp,
-                fontWeight = FontWeight.Bold,
-                color = AdGuardTextPrimary,
-            )
-            Spacer(modifier = Modifier.height(10.dp))
-            Row(modifier = Modifier.fillMaxWidth()) {
-                StatFigure(
-                    value = totals.ads,
-                    label = stringResource(R.string.stats_ads),
-                    color = AdGuardOrangeWarning,
-                    modifier = Modifier.weight(1f),
-                )
-                StatFigure(
-                    value = totals.trackers,
-                    label = stringResource(R.string.stats_trackers),
-                    color = TrackerAmber,
-                    modifier = Modifier.weight(1f),
-                )
-                StatFigure(
-                    value = totals.requests,
-                    label = stringResource(R.string.stats_requests),
+            SectionCard {
+                Text(
+                    text = stringResource(R.string.stats_requests_title),
+                    fontSize = 13.sp,
+                    fontWeight = FontWeight.Bold,
                     color = AdGuardTextPrimary,
-                    modifier = Modifier.weight(1f),
+                )
+                Spacer(modifier = Modifier.height(10.dp))
+                Row(modifier = Modifier.fillMaxWidth()) {
+                    StatFigure(
+                        value = totals.ads,
+                        label = stringResource(R.string.stats_ads),
+                        color = AdGuardOrangeWarning,
+                        modifier = Modifier.weight(1f),
+                    )
+                    StatFigure(
+                        value = totals.trackers,
+                        label = stringResource(R.string.stats_trackers),
+                        color = TrackerAmber,
+                        modifier = Modifier.weight(1f),
+                    )
+                    StatFigure(
+                        value = totals.requests,
+                        label = stringResource(R.string.stats_requests),
+                        color = AdGuardTextPrimary,
+                        modifier = Modifier.weight(1f),
+                    )
+                }
+                Spacer(modifier = Modifier.height(10.dp))
+                RatioBar(
+                    segments = listOf(
+                        totals.ads to AdGuardOrangeWarning,
+                        totals.trackers to TrackerAmber,
+                        (totals.requests - totals.ads - totals.trackers).coerceAtLeast(0L) to
+                            AdGuardTextMuted,
+                    ),
+                    total = totals.requests,
                 )
             }
+
             Spacer(modifier = Modifier.height(10.dp))
-            RatioBar(
-                segments = listOf(
-                    totals.ads to AdGuardOrangeWarning,
-                    totals.trackers to TrackerAmber,
-                    (totals.requests - totals.ads - totals.trackers).coerceAtLeast(0L) to
-                        AdGuardTextMuted,
-                ),
-                total = totals.requests,
+
+            NavigationRow(
+                title = stringResource(R.string.stats_recent_activity),
+                icon = Icons.AutoMirrored.Filled.ListAlt,
+                testTag = "stats_recent_activity",
+                onClick = { viewModel.onIntent(AdGuardIntent.SelectTab(AdGuardTab.ACTIVITY)) },
             )
-        }
 
-        Spacer(modifier = Modifier.height(10.dp))
+            Spacer(modifier = Modifier.height(14.dp))
 
-        NavigationRow(
-            title = stringResource(R.string.stats_recent_activity),
-            icon = Icons.AutoMirrored.Filled.ListAlt,
-            testTag = "stats_recent_activity",
-            onClick = { viewModel.onIntent(AdGuardIntent.SelectTab(AdGuardTab.ACTIVITY)) },
-        )
+            SectionCard {
+                Text(
+                    text = stringResource(R.string.stats_data_title),
+                    fontSize = 13.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = AdGuardTextPrimary,
+                )
+                Spacer(modifier = Modifier.height(10.dp))
+                Row(modifier = Modifier.fillMaxWidth()) {
+                    DataFigure(
+                        bytes = totals.bytesSaved,
+                        label = stringResource(R.string.stats_data_saved),
+                        color = AdGuardGreenPrimary,
+                        modifier = Modifier.weight(1f),
+                    )
+                    DataFigure(
+                        bytes = totals.bytesSent,
+                        label = stringResource(R.string.stats_data_uploaded),
+                        color = AdGuardPurpleAI,
+                        modifier = Modifier.weight(1f),
+                    )
+                    DataFigure(
+                        bytes = totals.bytesReceived,
+                        label = stringResource(R.string.stats_data_downloaded),
+                        color = AdGuardBlueDns,
+                        modifier = Modifier.weight(1f),
+                    )
+                }
+                Spacer(modifier = Modifier.height(10.dp))
+                RatioBar(
+                    segments = listOf(
+                        totals.bytesSaved to AdGuardGreenPrimary,
+                        totals.bytesSent to AdGuardPurpleAI,
+                        totals.bytesReceived to AdGuardBlueDns,
+                    ),
+                    total = totals.bytesSaved + totals.bytesSent + totals.bytesReceived,
+                )
+            }
 
-        Spacer(modifier = Modifier.height(14.dp))
+            Spacer(modifier = Modifier.height(16.dp))
 
-        SectionCard {
             Text(
-                text = stringResource(R.string.stats_data_title),
+                text = stringResource(R.string.stats_apps_title),
                 fontSize = 13.sp,
                 fontWeight = FontWeight.Bold,
                 color = AdGuardTextPrimary,
             )
-            Spacer(modifier = Modifier.height(10.dp))
-            Row(modifier = Modifier.fillMaxWidth()) {
-                DataFigure(
-                    bytes = totals.bytesSaved,
-                    label = stringResource(R.string.stats_data_saved),
-                    color = AdGuardGreenPrimary,
-                    modifier = Modifier.weight(1f),
-                )
-                DataFigure(
-                    bytes = totals.bytesSent,
-                    label = stringResource(R.string.stats_data_uploaded),
-                    color = AdGuardPurpleAI,
-                    modifier = Modifier.weight(1f),
-                )
-                DataFigure(
-                    bytes = totals.bytesReceived,
-                    label = stringResource(R.string.stats_data_downloaded),
-                    color = AdGuardBlueDns,
-                    modifier = Modifier.weight(1f),
-                )
+            Spacer(modifier = Modifier.height(6.dp))
+
+            FilterChipsRow {
+                listOf(
+                    StatsAppSort.ADS to R.string.apps_sort_ads,
+                    StatsAppSort.TRACKERS to R.string.apps_sort_trackers,
+                    StatsAppSort.REQUESTS to R.string.apps_sort_requests,
+                ).forEach { (option, labelRes) ->
+                    FilterChip(
+                        selected = sort == option,
+                        onClick = { sort = option },
+                        label = { Text(stringResource(labelRes), fontSize = 11.sp) },
+                        colors = FilterChipDefaults.filterChipColors(
+                            selectedContainerColor = AdGuardPurpleAI,
+                            selectedLabelColor = AdGuardOnAccent,
+                            containerColor = AdGuardDarkSurface,
+                            labelColor = AdGuardTextSecondary,
+                        ),
+                        modifier = Modifier.testTag("stats_sort_${option.name}"),
+                    )
+                }
             }
-            Spacer(modifier = Modifier.height(10.dp))
-            RatioBar(
-                segments = listOf(
-                    totals.bytesSaved to AdGuardGreenPrimary,
-                    totals.bytesSent to AdGuardPurpleAI,
-                    totals.bytesReceived to AdGuardBlueDns,
-                ),
-                total = totals.bytesSaved + totals.bytesSent + totals.bytesReceived,
+
+            Spacer(modifier = Modifier.height(8.dp))
+
+            if (topApps.isEmpty()) {
+                Text(
+                    text = stringResource(R.string.stats_no_activity),
+                    fontSize = 12.sp,
+                    color = AdGuardTextMuted,
+                    modifier = Modifier.padding(vertical = 10.dp),
+                )
+            } else {
+                topApps.forEach { app ->
+                    AppStatRow(
+                        app = app,
+                        onClick = { viewModel.onIntent(AdGuardIntent.OpenAppManagement(app)) },
+                    )
+                }
+            }
+
+            Spacer(modifier = Modifier.height(4.dp))
+
+            NavigationRow(
+                title = stringResource(R.string.stats_view_all_apps),
+                icon = Icons.Default.Apps,
+                testTag = "stats_view_all_apps",
+                onClick = { viewModel.onIntent(AdGuardIntent.SelectTab(AdGuardTab.APPS)) },
             )
+
+            Spacer(modifier = Modifier.height(16.dp))
         }
-
-        Spacer(modifier = Modifier.height(16.dp))
-
-        Text(
-            text = stringResource(R.string.stats_apps_title),
-            fontSize = 13.sp,
-            fontWeight = FontWeight.Bold,
-            color = AdGuardTextPrimary,
-        )
-        Spacer(modifier = Modifier.height(6.dp))
-
-        FilterChipsRow {
-            listOf(
-                StatsAppSort.ADS to R.string.apps_sort_ads,
-                StatsAppSort.TRACKERS to R.string.apps_sort_trackers,
-                StatsAppSort.REQUESTS to R.string.apps_sort_requests,
-            ).forEach { (option, labelRes) ->
-                FilterChip(
-                    selected = sort == option,
-                    onClick = { sort = option },
-                    label = { Text(stringResource(labelRes), fontSize = 11.sp) },
-                    colors = FilterChipDefaults.filterChipColors(
-                        selectedContainerColor = AdGuardPurpleAI,
-                        selectedLabelColor = AdGuardOnAccent,
-                        containerColor = AdGuardDarkSurface,
-                        labelColor = AdGuardTextSecondary,
-                    ),
-                    modifier = Modifier.testTag("stats_sort_${option.name}"),
-                )
-            }
-        }
-
-        Spacer(modifier = Modifier.height(8.dp))
-
-        if (topApps.isEmpty()) {
-            Text(
-                text = stringResource(R.string.stats_no_activity),
-                fontSize = 12.sp,
-                color = AdGuardTextMuted,
-                modifier = Modifier.padding(vertical = 10.dp),
-            )
-        } else {
-            topApps.forEach { app ->
-                AppStatRow(
-                    app = app,
-                    onClick = { viewModel.onIntent(AdGuardIntent.OpenAppManagement(app)) },
-                )
-            }
-        }
-
-        Spacer(modifier = Modifier.height(4.dp))
-
-        NavigationRow(
-            title = stringResource(R.string.stats_view_all_apps),
-            icon = Icons.Default.Apps,
-            testTag = "stats_view_all_apps",
-            onClick = { viewModel.onIntent(AdGuardIntent.SelectTab(AdGuardTab.APPS)) },
-        )
-
-        Spacer(modifier = Modifier.height(16.dp))
     }
 }
 
