@@ -350,6 +350,33 @@ sheet was skipped.
   with Wi-Fi off/mobile on, screen-off per transport, log detail fields,
   mobile/Wi-Fi statistics, per-app proxy routing and the DNS filter sheet;
   capture screenshots at 800×1340 for `52`–`59`, `69`, `73`–`79`.
+- Device verification record (2026-11-01, Sony 802SO / Android 10, the
+  connected device in place of the unavailable Redmi; VPN up on Wi-Fi,
+  per-app evidence read from the on-device `adfree.db`):
+  - Screen-off per-app firewall: verified. With the target app's
+    Wi-Fi-screen-off access set to block, turning the screen off produced
+    "App firewall" block rows for its DNS traffic (reason "app not allowed
+    on Wi-Fi while the screen is off") and the block lifted on screen-on
+    after the rule was reset. Caveat: with eco mode ON (the default)
+    `log_event` intentionally drops every event written while the screen is
+    off, so the enforcement is invisible in the log — the 333-row evidence
+    above only appeared after eco mode was turned off for the test.
+  - Per-app proxy routing: verified earlier in the same effort. A local
+    SOCKS5 witness (`adb reverse tcp:1080`) logged the device's upstream
+    CONNECTs: the baseline window with rules at INHERIT and the global
+    proxy OFF produced no traffic for ~7 minutes, and once proxy routing
+    was enabled the witness recorded the proxied connections (153 CONNECT
+    records) — the override drives the dial path in both directions.
+  - Roaming: negative path verified; positive enforcement not reachable on
+    this device. Cellular is out of service (active network is the Wi-Fi
+    VPN, `roaming=false` on every interface), so no SIM-roaming traffic can
+    be produced without root to spoof the capability. Setting the roaming
+    rule to block on an app while on Wi-Fi produced zero roaming blocks and
+    normal traffic, which shows the `network == CELLULAR && roaming` gate is
+    enforced; the decision function and flow-drop machinery are the same
+    ones the screen-off test exercised end to end.
+  - Device restored after the test: firewall table back to `[]`, eco mode
+    back ON, VPN running with the default config.
 - Benchmarks: the event enrichment sits on the packet hot path; run
   `BENCHMARK.md` and confirm ring memory growth stays under ~3 MB and
   per-flow cost is unchanged within noise.
