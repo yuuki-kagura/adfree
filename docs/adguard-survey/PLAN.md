@@ -456,6 +456,36 @@ sheet was skipped.
     ones the screen-off test exercised end to end.
   - Device restored after the test: firewall table back to `[]`, eco mode
     back ON, VPN running with the default config.
+- Device verification record (2026-11-02, Sony 802SO / Android 10, release
+  build versionName 1.1.1):
+  - Log retention line: renders where §6.1 put it — under "Truy vấn mạng gần
+    đây" the header reads "Cơ sở dữ liệu giữ 200000 dòng gần nhất trong 7
+    ngày" with 15048 rows loaded, so a short visible list no longer reads as
+    a short history (`adfree/adfree-77-log-retention.png`).
+  - Statistics byte totals: "Dữ liệu sử dụng 126,2 MB đã lưu / 21,6 MB đã tải
+    lên / 118,4 MB đã tải xuống" with the segmented bar, from
+    `log_window_totals` (`adfree/adfree-78-stats-byte-totals.png`).
+  - Filter group enabled count: "Đã bật: 1 trên 4" on the Riêng tư group
+    (`adfree/adfree-79-filters-group-enabled.png`).
+  - Datagram counting: corroborated, not proved. Switching "Chặn QUIC /
+    UDP 443" off and browsing Chrome, Facebook and Messenger for ~75 s made
+    UDP rows appear (b-graph.facebook.com · Facebook, www.messenger.com ·
+    Chrome, protocol UDP), the tunnel stayed up, blocking kept counting
+    (2,1K→2,3K ads, 6,4K→6,8K requests) and the byte totals rose (113,6→126,2
+    MB saved, 109,4→118,4 MB down). Chrome's per-app figure reached 1 MB /
+    184 requests. No surface separates datagram bytes from TCP bytes: the log
+    detail's transfer row only fills for rows whose size is known at log time
+    (cache-served DNS answers) and none occurred in the sampled window, so
+    per-transport attribution rests on
+    `a_reaped_udp_mapping_lands_in_the_store`,
+    `a_retired_mapping_reports_its_datagrams` and
+    `a_reaped_quic_flow_reports_its_datagrams`. The toggle was restored to
+    blocked afterwards.
+  - Caveat for later captures on this device: a third-party
+    `com.aistudio.screenmask.overlay` window covers [176,445][624,787] and a
+    Messenger chat head sits at the top right, so both intercept taps and
+    hide content. Scrolling the region of interest clear of them, and tapping
+    at x<176 or x>624, is what made these reads and screenshots possible.
 - Benchmarks: the event enrichment sits on the packet hot path; run
   `BENCHMARK.md` and confirm ring memory growth stays under ~3 MB and
   per-flow cost is unchanged within noise.
