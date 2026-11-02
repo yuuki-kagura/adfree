@@ -255,7 +255,7 @@ matching feature:
 
 | Screen | Status | Use for |
 | --- | --- | --- |
-| Per-app statistics and `Xem tất cả ứng dụng` | captured (`55`–`59`) | implement from `log_events` as described above |
+| Per-app statistics and `Xem tất cả ứng dụng` | captured (`55`–`58`; `59` out of scope) | implement from `log_events` as described above |
 | Log entry detail + "create rule from request" | implemented | request detail, applied rule, block/allow rule creation |
 | Settings → General → `Thông báo ứng dụng` | captured (`70`–`72`) | OS deep link; six AdGuard channels |
 | `Thêm trang` (allowlist), `Quy tắc người dùng mới`, `Thêm bộ lọc DNS`, `Thêm bộ lọc tuỳ chỉnh` dialogs | captured (`66`–`69`) | add-flow parity |
@@ -415,12 +415,33 @@ sheet was skipped.
   `a_retired_flag_reports_before_the_mapping_goes` (both UDP retirement
   paths), and `engine::tests::a_reaped_quic_flow_reports_its_datagrams` (a fed
   datagram is counted and a reaped QUIC flow reports it).
-- Known flake, not caused by this work:
-  `filter::tests::detailed_lookup_reports_rule_and_list` fails about one full
-  suite run in three, and fails every run filtered to `filter::tests` alone.
-  Every filter test writes its list bodies to the same
-  `/tmp/adfree-filter-test` path, so a parallel test can replace the body the
-  rule text is read back from. It reproduced with the traffic tests skipped.
+- Fixed, was a known flake:
+  `filter::tests::detailed_lookup_reports_rule_and_list` failed about one full
+  suite run in three, and failed every run filtered to `filter::tests` alone.
+  Every filter test wrote its list bodies to the same `/tmp/adfree-filter-test`
+  path, and the engine reads rule text back from the file when a lookup
+  resolves, so a parallel test could replace the body another one was reading
+  (`temp_list("base.txt", "! empty", …)` at the head of that path). `temp_list`
+  now writes under a per-test subdirectory named after the test thread. The
+  filtered run, which used to fail every time, passed three times in a row.
+- Two ECH path tests had been failing silently since the DNS cache landed
+  (`e4dc75c`, 29 Oct): `ech_configs_are_stripped_only_while_https_filtering_is_on`
+  and `a_host_that_requires_ech_keeps_its_config` each asked the same name twice
+  and their fake resolver expected to see both queries. The second is now a
+  cache hit, so the resolver timed out and the binary reported a product
+  failure that was a stale expectation. Bisected 74c6f66 (green) → e4dc75c
+  (red); `handle_reply` is on the hit path (`serve_cached_answer`) and the cache
+  stores the origin's unstripped answer, so the policy assertions still hold —
+  the tests now count forwarded queries and assert exactly one, which is the
+  stronger claim.
+- Same investigation found `Core::clear_dns_cache` never cleared the answer
+  cache it is named for: it dropped the rule cache, the connection tracker and
+  the in-flight queries, but not `dns_cache`, which only `set_resolver` clears.
+  It is exposed through uniffi (`core_clear_dns_cache`) and wrapped by
+  `CoreEngine.clearDnsCache`, neither of which has a caller yet, so nothing
+  broke in practice. The line is in, pinned by
+  `clearing_the_dns_cache_sends_the_next_query_upstream`, which fails without
+  it.
 - Kotlin tests: `NetworkRequestLog` mapping, CSV columns, data-type filter.
 - Bindings: `./gradlew :app:verifyBindings` with `ADFREE_RUST_TARGET_DIR`
   and `ANDROID_NDK_HOME`, rebuild the four ABIs with `cargo ndk`, then
