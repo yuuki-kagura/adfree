@@ -429,9 +429,8 @@ sheet was skipped.
   Sony instead of the Redmi — see the two records below. What still needs the
   Redmi: roaming with Wi-Fi off and mobile on (positive enforcement, not
   reachable without root on the Sony), and the per-flow memory probe in
-  `BENCHMARK.md`. Screenshots `52`–`59`, `69`, `73`–`79` are captured except
-  `55` and `58`, which the on-device mask app blocks (noted in the 2026-11-02
-  record).
+  `BENCHMARK.md`. Screenshots `52`–`58`, `69`, `73`–`79` are captured; `59`
+  stays out of scope per §6.2.
 - Device verification record (2026-11-01, Sony 802SO / Android 10, the
   connected device in place of the unavailable Redmi; VPN up on Wi-Fi,
   per-app evidence read from the on-device `adfree.db`):
@@ -482,10 +481,16 @@ sheet was skipped.
     `log_window_totals` (`adfree/adfree-81-stats-byte-totals.png`).
   - Filter group enabled count: "Đã bật: 1 trên 4" on the Riêng tư group
     (`adfree/adfree-82-filters-group-enabled.png`).
-  - Still not captured on this device: `55` and `58` (per-app statistics and
-    the all-apps list scrolled). AdFree's equivalent list is the Ứng dụng
-    screen, whose rows run straight through the mask window, so every row in
-    the middle of the frame is blacked out; these need the mask app closed.
+  - Per-app statistics and the tracker-sorted list, captured once the mask app
+    was closed. AdFree has no per-app statistics page: the figures live in each
+    card on the Ứng dụng screen — "161 chặn • 7 MB" over "0 quảng cáo • 158
+    trình theo dõi • 167 yêu cầu" (`adfree/adfree-55-per-app-stats.png`).
+    Sorting the same list by `Trình theo dõi` puts the tracker-heavy apps first
+    (AccuWeather 158, Viettel Tammi 46 of 524 requests) — the per-app view
+    AdGuard reaches through `Xem tất cả ứng dụng`
+    (`adfree/adfree-58-stats-all-apps-scrolled.png`). The sheet applies the
+    sort live and the header label tracks it; both were restored to `Tên`
+    afterwards.
   - Datagram counting: corroborated, not proved. Switching "Chặn QUIC /
     UDP 443" off and browsing Chrome, Facebook and Messenger for ~75 s made
     UDP rows appear (b-graph.facebook.com · Facebook, www.messenger.com ·
@@ -501,10 +506,17 @@ sheet was skipped.
     `a_reaped_quic_flow_reports_its_datagrams`. The toggle was restored to
     blocked afterwards.
   - Caveat for later captures on this device: a third-party
-    `com.aistudio.screenmask.overlay` window covers [176,445][624,787] and a
-    Messenger chat head sits at the top right, so both intercept taps and
-    hide content. Scrolling the region of interest clear of them, and tapping
-    at x<176 or x>624, is what made these reads and screenshots possible.
+    `com.aistudio.screenmask.overlay` window covered [176,445][624,787] and a
+    Messenger chat head sits at the top right, so both intercept taps and hide
+    content. Scrolling the region of interest clear of them, and tapping at
+    x<176 or x>624, is what made the earlier reads possible. The user closed
+    the mask app for the `55`/`58` captures; the chat head is still up at
+    roughly [593,159][800,276] over the search field, and it does not cover any
+    app card.
+  - Gesture caveat for repeat captures: `adb shell input swipe` only scrolls
+    this list when it starts inside it (y≳420). A swipe begun over the sticky
+    header does nothing, which first read as the sort chips not applying —
+    they do.
 - Benchmarks: the event enrichment sits on the packet hot path; run
   `BENCHMARK.md` and confirm ring memory growth stays under ~3 MB and
   per-flow cost is unchanged within noise.
