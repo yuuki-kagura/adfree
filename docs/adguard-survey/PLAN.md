@@ -61,7 +61,9 @@ Assistant (start minimal, grow later):
 
 Verification: `dumpsys notification` must show two actions and the stats
 lines; expand/collapse both states, toggle disable/enable, confirm AdFree VPN
-re-registers and the assistant opens over any app.
+re-registers and the assistant opens over any app. Done on the Sony 2026-11-02
+— see the group-2 device verification record in §6.5, which also lists the one
+open item there: the assistant's per-app panel cannot be scrolled back out.
 
 ## Phase 2 — Protection rows: annoyances and browsing security
 
@@ -546,6 +548,93 @@ sheet was skipped.
   `the_live_ring_stays_within_its_memory_budget` and
   `a_live_flow_carries_a_known_cost`. The on-device probe half still needs the
   Redmi; see the two dated sections in `BENCHMARK.md`.
+- Device verification record (2026-11-02, group 2 — Sony 802SO / Android 10,
+  release build versionName 1.1.1). This is the Phase 1 `Verification:` line,
+  the Phase 2/3 toggle persistence and the Phase 3 per-app-vs-global
+  precedence, in one pass. Captures live under `/tmp/sony` and are not
+  committed.
+  - Notification: `dumpsys notification` shows id 1001 on channel
+    `adfree_status` (IMPORTANCE_LOW) with `flags=0x62 actions=2` while
+    running — `Vô hiệu` and `Trợ lý` — and the BigText body `Đang chặn quảng
+    cáo và công cụ theo dõi` / `Bị chặn: N` / `Dữ liệu đã lưu: X MB`.
+    Expand and collapse both redraw correctly; the 10 s ticker only reposts
+    when a counter moved. The disabled state is a separate record
+    (`flags=0x2`, `groupKey=silent`, `Bảo vệ bị vô hiệu hóa`), and disable →
+    re-enable keeps the counter series continuous while AdFree VPN
+    re-registers as the active tunnel. The PAUSED variant is reachable only
+    from the assistant's `Tạm dừng bảo vệ` (or the QS tile), because the
+    active notification's action is DISABLE — verified through the assistant.
+  - Assistant over any app: opened from the `Trợ lý` action with Chrome
+    foreground, per-app panel included. `AssistantActivity` is
+    `exported="false"`, so a shell `am start` is refused with a
+    SecurityException; the notification action is the only entry, as intended.
+    Outstanding: the per-app panel does emit the `assistant_app_back` row but
+    it is not visible and the sheet does not scroll (content bottom y=1293
+    inside the sheet bounds [0,386][800,1316]), so a per-app panel is a dead
+    end on this viewport.
+  - Toggle persistence: `Chặn làm phiền`, `Bảo vệ Duyệt web` and `Tường lửa`
+    were switched off, then `am force-stop` + relaunch; all three came back
+    off, so the Rust-side `state` rows survive process death. They are
+    restored to ON.
+  - Firewall precedence: per-app `Chặn` beats the global allow (Chrome
+    `Sử dụng Wi-Fi` = Chặn under global "Tất cả các kết nối được phép" →
+    Chrome `ERR_TIMED_OUT`, every other app unaffected), per-app `Cho phép`
+    beats a global block, `Kế thừa` follows the global rule, and the rule
+    survives process death. The rule was removed and Chrome verified loading
+    normally again.
+  - Method caveat for every future capture here: the release build excludes
+    `com.android.shell` from the tunnel (`AdGuardVpnService.kt:331`), so adb
+    DNS and ping traffic bypasses filtering entirely and proves nothing.
+    Traffic evidence has to come from an ordinary app; counter evidence from
+    the app's own screens.
+  - Two defects came out of this pass and both are fixed.
+    1. `record_tcp_reset` counted *every* refused flow as a blocked request,
+       including the resets sent because a relay could not be built — port
+       reuse before the poller reaped the previous flow, a failed
+       `connect()`, a session that would not start, data for a dead flow.
+       Those paths pass `reason: None` and `None` fell back to
+       `"connection dropped"`, so transport failures were added to
+       `stats.tcp_reset` and `bytes_saved` and logged as BLOCKED rows; and
+       because no filter gate stands between them and the wire, they kept
+       arriving while protection was paused. Before/after on this device: the
+       old core logged 40 TCP rows as `connection dropped` / `Protection` in
+       the 28.5-minute window 21:24:48→21:53:22, for hosts no list names
+       (`youtubei.googleapis.com` ×9, `play.googleapis.com` ×7,
+       `vpn-api.proton.me` ×5, bare Google and Facebook IPs); the fixed core
+       logged 0 TCP BLOCKED rows in 21:53:34→22:00:40 under much denser
+       traffic, and every blocked row named a real rule
+       (`||la3.vnecdn.net^`, `||cm.g.doubleclick.net^`, `||eclick.vn^`,
+       `$third-party script`). `None` now returns before counting; the
+       genuine-block half is pinned by
+       `a_reset_of_a_learned_blocked_ip_counts_as_a_block` and the transport
+       half by `a_refused_reused_port_is_not_counted_as_a_block`.
+    2. The blocked-app notification could never fire. The notifier compared
+       `row.matchedRule` to `"App firewall"`, which is a *list* name, and the
+       TCP half of the firewall filed its rows under `"Protection"` while the
+       DNS half used `"App firewall"` — so fixing only one of the two would
+       still notify nobody. The notifier now reads `row.filterListName` and
+       `record_tcp_reset` files `app not allowed …` reasons under
+       `"App firewall"`. After the rebuild, blocking Chrome's Wi-Fi posted id
+       16081 on channel `adfree_firewall`: `Đã chặn Chrome` / `Tường lửa đã
+       chặn ứng dụng này truy cập Internet`.
+  - Impact check on `record_tcp_reset` came back HIGH risk (2 direct callers,
+    8 impacted symbols, 1 execution flow) and is reported rather than waived,
+    per `AGENTS.md`. `node .gitnexus/run.cjs analyze --index-only` failed on
+    this tree ("Worker pool exhausted all slots during idle-timeout retry",
+    gitnexus 1.6.12) and the index is ~10 commits behind, so the call sites
+    were confirmed by reading source instead: `refuse_setup`,
+    `refuse_answered_flow`, `reset_tcp` and `reset_tcp_inner` all take
+    `Option<&'static str>`, the only `Some` site is the `tcp_blocked` verdict
+    at `engine.rs:2732`, and every other site is a transport failure.
+  - Suites: `cargo test --lib` 776 passed / 0 failed / 2 ignored, and
+    `:app:testDebugUnitTest` 105 passed / 0 failed.
+  - Observed, not fixed: `Xuất hoạt động` writes `_logs.value` — the window
+    already loaded — rather than a fresh query (`AdGuardRepository.kt:1581`),
+    so an export taken without scrolling the log list off the top and back
+    exports a stale snapshot. The blocked and saved-data counters are
+    runtime-only and restart near zero with the process. And uiautomator
+    bounds are in the 800×1316 space while `screencap` returns 1080×1812:
+    taps must use the dump coordinates, not the screenshot.
 
 ### Risks
 
