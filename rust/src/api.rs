@@ -727,6 +727,11 @@ pub struct AppUsage {
     pub trackers: u32,
     /// Every request in the window, allowed and blocked.
     pub requests: u32,
+    /// Bytes this package put on the wire, summed over its closed
+    /// connections. A live connection is not counted until it retires.
+    pub bytes_sent: u64,
+    /// Bytes this package took off the wire.
+    pub bytes_recv: u64,
 }
 
 /// Whole-window totals for the Statistics header. Unlike [`AppUsage`] this
@@ -763,6 +768,8 @@ pub fn core_app_usage_since_transport(since_ms: i64, transport: i32) -> Vec<AppU
                 ads: row.ads.min(u32::MAX as i64) as u32,
                 trackers: row.trackers.min(u32::MAX as i64) as u32,
                 requests: row.requests.min(u32::MAX as i64) as u32,
+                bytes_sent: row.bytes_sent as u64,
+                bytes_recv: row.bytes_recv as u64,
             })
             .collect(),
         None => Vec::new(),

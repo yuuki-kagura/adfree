@@ -784,6 +784,30 @@ fn first_app(packages: &[String]) -> &str {
     packages.first().map(String::as_str).unwrap_or("")
 }
 
+/// The relay's sink: one row per closed connection, holding the bytes that
+/// actually crossed it.
+///
+/// The request log cannot carry these: its rows are decisions, and a host the
+/// app opened a dozen connections to still has one. This is what the statistics
+/// screens read for "data used".
+pub(crate) fn record_flow_traffic(app: &str, sent: u64, recv: u64) {
+    let core = core();
+    let Some(store) = core.store.get() else {
+        return;
+    };
+    let row = crate::store::FlowTraffic {
+        ts_ms: now_ms() as i64,
+        app: app.to_string(),
+        transport: i64::from(core.network_type.load(Ordering::Relaxed) & 0b11),
+        roaming: core.roaming.load(Ordering::Relaxed),
+        sent: i64::try_from(sent).unwrap_or(i64::MAX),
+        recv: i64::try_from(recv).unwrap_or(i64::MAX),
+    };
+    if !store.log_enqueue_traffic(row) {
+        core.stats.inc(&core.stats.log_dropped);
+    }
+}
+
 /// The HTTP/3 sink: a request answered by the QUIC hub is counted in its own
 /// bucket (so the UI can tell terminated QUIC from dropped datagrams) and then
 /// logged exactly like an HTTPS block.
@@ -2617,6 +2641,9 @@ impl Core {
         let mut relay =
             crate::mitm::relay::Relay::new_plain(flow, -1, pkt.raw.to_vec(), mss, true);
         relay.setup_pending = true;
+        // The relay reports what crossed it when it retires; nothing else knows
+        // both byte totals of one connection.
+        relay.traffic = Some(record_flow_traffic);
         {
             let mut guard = self.relays.lock().unwrap();
             if guard.get(pkt.src_port).is_some() {

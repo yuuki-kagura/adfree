@@ -726,6 +726,21 @@ fun AppFirewallCard(
     }
 }
 
+/// A traffic figure in the unit the number deserves, so a 30 KB connection
+/// does not read as "0 MB".
+private fun formatTraffic(bytes: Long): String {
+    if (bytes <= 0L) return "0 B"
+    val kb = 1024.0
+    val mb = kb * 1024.0
+    val gb = mb * 1024.0
+    return when {
+        bytes >= gb -> String.format(java.util.Locale.getDefault(), "%.1f GB", bytes / gb)
+        bytes >= mb -> String.format(java.util.Locale.getDefault(), "%.1f MB", bytes / mb)
+        bytes >= kb -> String.format(java.util.Locale.getDefault(), "%.0f KB", bytes / kb)
+        else -> "$bytes B"
+    }
+}
+
 /** Localized label for the stable category code stored on a rule. */
 @Composable
 private fun appCategoryLabel(code: String): String = when (code) {
@@ -1113,6 +1128,25 @@ private fun AppDetailsFirewallSheet(
                     Spacer(modifier = Modifier.height(2.dp))
                     Text(
                         stringResource(R.string.apps_detail_data_value, app.dataTransferredBytes / (1024 * 1024)),
+                        fontSize = 16.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = AdGuardTextPrimary
+                    )
+                }
+            }
+
+            Box(
+                modifier = Modifier
+                    .weight(1f)
+                    .clip(RoundedCornerShape(10.dp))
+                    .background(AdGuardDarkSurfaceVariant)
+                    .padding(12.dp)
+            ) {
+                Column {
+                    Text(stringResource(R.string.apps_detail_data_used), fontSize = 11.sp, color = AdGuardTextSecondary)
+                    Spacer(modifier = Modifier.height(2.dp))
+                    Text(
+                        formatTraffic(app.dataUsedBytes),
                         fontSize = 16.sp,
                         fontWeight = FontWeight.Bold,
                         color = AdGuardTextPrimary

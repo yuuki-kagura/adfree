@@ -147,7 +147,9 @@ Goal: global five-rule grid, per-app overrides, quick actions, notifications.
 AdFree already has `FiltersScreen`/`FiltersExtensions` and
 `FilterCatalog` groups. Bring the UI to parity:
 
-- Category landing: show `Đã bật: X trên Y` per group.
+- Category landing: show `Đã bật: X trên Y` per group. Done — `FilterGroupCard`
+  puts the sentence under the group name (`filters_group_enabled`) instead of
+  the bare `2/3` ratio it used to show on the right of the row.
 - Inactive warning: when the gate module is off, grey the affected category
   and offer `Kích hoạt` (AdGuard does this for tracking-gated security
   filters; AdFree needs it once annoyances/security have their own gates).
@@ -290,10 +292,23 @@ Screens `52`–`59` and `73`–`79` need fields the log does not store today.
   (`rust/src/engine.rs` ~729) writes it. Non-MITM events keep `url` empty.
 - DNS answer: when the packet path answers a query from upstream, attach the
   first A/AAAA answers to the event; otherwise leave empty.
-- Sizes: events are logged at decision time, so add `Store::finish_flow(id,
-  sent, recv)` called when a relay closes; blocked flows that moved no bytes
-  stay zero. Batch the update with the next insert if a write per close
-  shows up in benchmarks.
+- Sizes: implemented as a separate per-connection table, not an update of the
+  decision row. `flow_id` in `log_events` is the id the core gives each *row*
+  (`engine.rs`, `next_flow_id`), so no row can be "finished" at close, and a
+  host the app opened a dozen connections to still has one DNS row — a
+  decision row cannot carry a truthful size. Schema v7 adds `flow_traffic
+  (ts_ms, app, transport, roaming, sent, recv)` with `ts_ms` and `(app, ts_ms)`
+  indexes; `Relay` reports `flow.down_bytes` (device → server) and a new
+  `payload_to_client` counter (server → device, because `flow.up_bytes` also
+  counts the SYN-ACK and FIN sequence numbers) through a `TrafficSink` function
+  pointer in `Drop` — the one hook that fires on every retirement path. The
+  engine supplies the sink at the relay's single construction site
+  (`begin_tcp_relay`) and stamps the network there, exactly like `log_event`
+  does. Blocked flows that moved nothing report nothing. `usage_by_app` LEFT
+  JOINs the per-app traffic sums, `window_totals` adds them to the small DNS
+  answer bytes the log rows already carry, and `clear`/`prune_db` cover the new
+  table with the log. UDP and QUIC datagrams are still uncounted: only relayed
+  TCP connections report.
 - uniffi: extend `LogEvent` (`rust/src/api.rs` ~189) and both `From` impls;
   regenerate bindings (`app/src/main/kotlin/git/shin/adfree/core/adfree.kt`,
   `CoreEngine.kt`) with `./gradlew :app:verifyBindings`.
@@ -368,6 +383,11 @@ sheet was skipped.
 - Rust tests: v5→v6 migration keeps row counts and old rows read with
   defaults; `flags` transport/roaming round-trip; `GROUP BY app, category`
   counts; per-app routing override; DNS-only lists do not match HTTP rules.
+  For the v7 traffic table: `store::tests::traffic_rows_follow_the_log` (the
+  rows age out and clear with the log) and the extended
+  `app_usage_counts_blocked_rows_and_bytes` (per-app sums and the header
+  totals); `mitm::relay::tests::a_retired_relay_reports_what_crossed_it`
+  checks the relay reports payload only, once, with the owning package.
 - Kotlin tests: `NetworkRequestLog` mapping, CSV columns, data-type filter.
 - Bindings: `./gradlew :app:verifyBindings` with `ADFREE_RUST_TARGET_DIR`
   and `ANDROID_NDK_HOME`, rebuild the four ABIs with `cargo ndk`, then
@@ -411,7 +431,10 @@ sheet was skipped.
 
 - The log table grows wider on disk; the retention window (200k rows / 7
   days) may need to shrink or the URL column to stay empty outside MITM.
-- A write per closed relay doubles SQLite traffic if not batched.
+- A write per closed relay doubles SQLite traffic if not batched. It is
+  batched: `flow_traffic` rows ride the log writer's channel and commit in the
+  same transaction as the decision rows, and a relay that moved zero bytes
+  writes nothing.
 - Per-app proxy lookup adds a map probe on the dial path; reuse the firewall
   map and measure before shipping.
 - Splitting DNS lists can change existing block counts; run the full filter

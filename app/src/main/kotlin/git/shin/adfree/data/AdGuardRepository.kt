@@ -1779,6 +1779,8 @@ class AdGuardRepository(
                     app.copy(
                         blockedRequestsToday = row?.blocked?.toInt() ?: 0,
                         dataTransferredBytes = row?.bytesSaved?.toLong() ?: 0L,
+                        dataUsedBytes =
+                            (row?.bytesSent?.toLong() ?: 0L) + (row?.bytesRecv?.toLong() ?: 0L),
                         blockedAdsToday = row?.ads?.toInt() ?: 0,
                         blockedTrackersToday = row?.trackers?.toInt() ?: 0,
                         requestsToday = row?.requests?.toInt() ?: 0,

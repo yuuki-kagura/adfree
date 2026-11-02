@@ -43,10 +43,32 @@ const PRUNE_EVERY: Duration = Duration::from_secs(300);
 #[allow(clippy::large_enum_variant)]
 pub enum Msg {
     Event(Event),
+    /// One closed connection and what crossed it.
+    Traffic(FlowTraffic),
     /// Persist everything queued so far; the ack says it is on disk.
     Flush(SyncSender<()>),
     /// Throw away everything queued *and* empty the table.
     Clear(SyncSender<()>),
+}
+
+/// Bytes a single relayed connection moved, recorded when it retired.
+///
+/// The request log counts decisions, not connections, so nothing there can
+/// carry a truthful size: one DNS row stands for a host, while the app may
+/// open a dozen connections to it. These rows are what the statistics screens
+/// read for "data used".
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct FlowTraffic {
+    pub ts_ms: i64,
+    /// Package that owned the flow, empty when it could not be attributed.
+    pub app: String,
+    /// 0 unknown, 1 Wi-Fi, 2 cellular.
+    pub transport: i64,
+    pub roaming: bool,
+    /// Device towards the server.
+    pub sent: i64,
+    /// Server towards the device.
+    pub recv: i64,
 }
 
 /// The packet path's half of the channel.
@@ -59,6 +81,11 @@ impl Sender {
     /// full and the event was lost.
     pub fn enqueue(&self, event: Event) -> bool {
         self.tx.try_send(Msg::Event(event)).is_ok()
+    }
+
+    /// Queues one closed connection's byte totals; never blocks.
+    pub fn enqueue_traffic(&self, traffic: FlowTraffic) -> bool {
+        self.tx.try_send(Msg::Traffic(traffic)).is_ok()
     }
 
     /// Blocks until everything queued *before this call* is committed.
@@ -151,29 +178,37 @@ pub(super) fn spawn_writer(db: Arc<Db>, rx: Receiver<Msg>) {
 
 fn writer_loop(db: &Db, rx: &Receiver<Msg>) {
     let mut batch: Vec<LogRow> = Vec::with_capacity(BATCH);
+    let mut traffic: Vec<FlowTraffic> = Vec::with_capacity(BATCH);
     let mut last_prune = Instant::now();
     loop {
         match rx.recv_timeout(FLUSH_EVERY) {
             Ok(Msg::Event(e)) => {
                 batch.push(LogRow::from(&e));
                 if batch.len() >= BATCH {
-                    insert(db, &mut batch);
+                    insert(db, &mut batch, &mut traffic);
+                }
+            }
+            Ok(Msg::Traffic(t)) => {
+                traffic.push(t);
+                if traffic.len() >= BATCH {
+                    insert(db, &mut batch, &mut traffic);
                 }
             }
             Ok(Msg::Flush(ack)) => {
-                insert(db, &mut batch);
+                insert(db, &mut batch, &mut traffic);
                 let _ = ack.send(());
             }
             Ok(Msg::Clear(ack)) => {
                 batch.clear();
+                traffic.clear();
                 if let Err(e) = clear(db) {
                     crate::logbuf::push(&format!("store: clear log: {e}"));
                 }
                 let _ = ack.send(());
             }
-            Err(RecvTimeoutError::Timeout) => insert(db, &mut batch),
+            Err(RecvTimeoutError::Timeout) => insert(db, &mut batch, &mut traffic),
             Err(RecvTimeoutError::Disconnected) => {
-                insert(db, &mut batch);
+                insert(db, &mut batch, &mut traffic);
                 return;
             }
         }
@@ -186,19 +221,24 @@ fn writer_loop(db: &Db, rx: &Receiver<Msg>) {
     }
 }
 
-/// Commits the batch in one transaction. Failures are logged, not retried:
+/// Commits both batches in one transaction. Failures are logged, not retried:
 /// the log is a convenience, the packet path must never wait on it.
-fn insert(db: &Db, batch: &mut Vec<LogRow>) {
-    if batch.is_empty() {
+fn insert(db: &Db, batch: &mut Vec<LogRow>, traffic: &mut Vec<FlowTraffic>) {
+    if batch.is_empty() && traffic.is_empty() {
         return;
     }
-    if let Err(e) = write_batch(db, batch) {
-        crate::logbuf::push(&format!("store: write {} log rows: {e}", batch.len()));
+    if let Err(e) = write_batch(db, batch, traffic) {
+        crate::logbuf::push(&format!(
+            "store: write {} log rows, {} flows: {e}",
+            batch.len(),
+            traffic.len()
+        ));
     }
     batch.clear();
+    traffic.clear();
 }
 
-fn write_batch(db: &Db, rows: &[LogRow]) -> rusqlite::Result<()> {
+fn write_batch(db: &Db, rows: &[LogRow], traffic: &[FlowTraffic]) -> rusqlite::Result<()> {
     let mut conn = db.lock();
     let tx = conn.transaction()?;
     {
@@ -226,6 +266,14 @@ fn write_batch(db: &Db, rows: &[LogRow]) -> rusqlite::Result<()> {
             ])?;
         }
     }
+    {
+        let mut stmt = tx.prepare_cached(INSERT_TRAFFIC_SQL)?;
+        for t in traffic {
+            stmt.execute(rusqlite::params![
+                t.ts_ms, t.app, t.transport, t.roaming, t.sent, t.recv
+            ])?;
+        }
+    }
     tx.commit()
 }
 
@@ -237,6 +285,9 @@ const INSERT_SQL: &str = "INSERT INTO log_events \
      (ts_ms, action, category, domain, ip, rule, list_name, latency_ns, bytes_saved, ipv6, app, \
       transport, roaming, flow_id, url, dns_answer, bytes_sent, bytes_recv) \
      VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18)";
+
+const INSERT_TRAFFIC_SQL: &str = "INSERT INTO flow_traffic \
+     (ts_ms, app, transport, roaming, sent, recv) VALUES (?1, ?2, ?3, ?4, ?5, ?6)";
 
 fn row_from(r: &rusqlite::Row<'_>) -> rusqlite::Result<LogRow> {
     Ok(LogRow {
@@ -313,6 +364,11 @@ pub(super) fn status_counts(db: &Db) -> rusqlite::Result<(i64, i64)> {
 /// total request count (allowed and blocked). Anything but an allow decision
 /// counts as blocked; `transport` selects one network (0 unknown, 1 Wi-Fi,
 /// 2 cellular) or `-1` for all.
+///
+/// Real byte totals come from `flow_traffic` (one row per closed connection),
+/// not from the log rows: a log row is a decision, and a host that opens twelve
+/// connections still has one. The join is per package, so it cannot multiply
+/// the log aggregates.
 pub(super) fn usage_by_app(
     db: &Db,
     since_ms: i64,
@@ -320,15 +376,21 @@ pub(super) fn usage_by_app(
 ) -> rusqlite::Result<Vec<UsageRow>> {
     let conn = db.lock();
     let mut stmt = conn.prepare_cached(
-        "SELECT app, \
-                SUM(CASE WHEN action != 0 THEN 1 ELSE 0 END), \
-                SUM(bytes_saved), \
-                SUM(CASE WHEN action != 0 AND category = 0 THEN 1 ELSE 0 END), \
-                SUM(CASE WHEN action != 0 AND category IN (1, 2, 3) THEN 1 ELSE 0 END), \
-                COUNT(*) \
-         FROM log_events \
-         WHERE app != '' AND ts_ms >= ?1 AND (?2 < 0 OR transport = ?2) \
-         GROUP BY app \
+        "SELECT l.app, \
+                SUM(CASE WHEN l.action != 0 THEN 1 ELSE 0 END), \
+                SUM(l.bytes_saved), \
+                SUM(CASE WHEN l.action != 0 AND l.category = 0 THEN 1 ELSE 0 END), \
+                SUM(CASE WHEN l.action != 0 AND l.category IN (1, 2, 3) THEN 1 ELSE 0 END), \
+                COUNT(*), \
+                COALESCE(MAX(t.sent), 0), \
+                COALESCE(MAX(t.recv), 0) \
+         FROM log_events l \
+         LEFT JOIN (SELECT app, SUM(sent) AS sent, SUM(recv) AS recv \
+                    FROM flow_traffic \
+                    WHERE ts_ms >= ?1 AND (?2 < 0 OR transport = ?2) \
+                    GROUP BY app) t ON t.app = l.app \
+         WHERE l.app != '' AND l.ts_ms >= ?1 AND (?2 < 0 OR l.transport = ?2) \
+         GROUP BY l.app \
          ORDER BY 2 DESC",
     )?;
     let rows = stmt.query_map([since_ms, transport], |r| {
@@ -339,6 +401,8 @@ pub(super) fn usage_by_app(
             ads: r.get(3)?,
             trackers: r.get(4)?,
             requests: r.get(5)?,
+            bytes_sent: r.get(6)?,
+            bytes_recv: r.get(7)?,
         })
     })?;
     rows.collect()
@@ -353,6 +417,9 @@ pub struct UsageRow {
     pub ads: i64,
     pub trackers: i64,
     pub requests: i64,
+    /// Bytes that crossed this package's closed connections.
+    pub bytes_sent: i64,
+    pub bytes_recv: i64,
 }
 
 /// Whole-log totals over a window, unattributed rows included. The statistics
@@ -373,7 +440,7 @@ pub(super) fn window_totals(
     transport: i64,
 ) -> rusqlite::Result<WindowTotalsRow> {
     let conn = db.lock();
-    conn.query_row(
+    let mut row = conn.query_row(
         "SELECT \
                 COALESCE(SUM(CASE WHEN action != 0 AND category = 0 THEN 1 ELSE 0 END), 0), \
                 COALESCE(SUM(CASE WHEN action != 0 AND category IN (1, 2, 3) THEN 1 ELSE 0 END), 0), \
@@ -394,11 +461,25 @@ pub(super) fn window_totals(
                 bytes_recv: r.get(5)?,
             })
         },
-    )
+    )?;
+    // A log row is a decision, so the only sizes it can carry are the few bytes
+    // the engine itself wrote (DNS answers). Real traffic is counted once per
+    // connection in `flow_traffic` and added here.
+    let (sent, recv) = conn.query_row(
+        "SELECT COALESCE(SUM(sent), 0), COALESCE(SUM(recv), 0) \
+         FROM flow_traffic WHERE ts_ms >= ?1 AND (?2 < 0 OR transport = ?2)",
+        [since_ms, transport],
+        |r| Ok((r.get::<_, i64>(0)?, r.get::<_, i64>(1)?)),
+    )?;
+    row.bytes_sent += sent;
+    row.bytes_recv += recv;
+    Ok(row)
 }
 
 pub(super) fn clear(db: &Db) -> rusqlite::Result<()> {
-    db.lock().execute("DELETE FROM log_events", [])?;
+    let conn = db.lock();
+    conn.execute("DELETE FROM log_events", [])?;
+    conn.execute("DELETE FROM flow_traffic", [])?;
     Ok(())
 }
 
@@ -413,5 +494,13 @@ pub(super) fn prune_db(db: &Db, keep_ms: u64, max_rows: i64) -> rusqlite::Result
          (SELECT id FROM log_events ORDER BY id DESC LIMIT ?1))",
         [max_rows],
     )?;
-    Ok(by_age + by_count)
+    // Connection rows follow the same window; the table has no explicit id, so
+    // the implicit rowid plays the part.
+    let traffic_age = conn.execute("DELETE FROM flow_traffic WHERE ts_ms < ?1", [cutoff])?;
+    let traffic_count = conn.execute(
+        "DELETE FROM flow_traffic WHERE rowid < (SELECT MIN(rowid) FROM \
+         (SELECT rowid FROM flow_traffic ORDER BY rowid DESC LIMIT ?1))",
+        [max_rows],
+    )?;
+    Ok(by_age + by_count + traffic_age + traffic_count)
 }

@@ -2589,6 +2589,17 @@ data class AppUsage (
      * Every request in the window, allowed and blocked.
      */
     var `requests`: kotlin.UInt
+    , 
+    /**
+     * Bytes this package put on the wire, summed over its closed
+     * connections. A live connection is not counted until it retires.
+     */
+    var `bytesSent`: kotlin.ULong
+    , 
+    /**
+     * Bytes this package took off the wire.
+     */
+    var `bytesRecv`: kotlin.ULong
     
 ){
     
@@ -2611,6 +2622,8 @@ public object FfiConverterTypeAppUsage: FfiConverterRustBuffer<AppUsage> {
             FfiConverterUInt.read(buf),
             FfiConverterUInt.read(buf),
             FfiConverterUInt.read(buf),
+            FfiConverterULong.read(buf),
+            FfiConverterULong.read(buf),
         )
     }
 
@@ -2620,7 +2633,9 @@ public object FfiConverterTypeAppUsage: FfiConverterRustBuffer<AppUsage> {
             FfiConverterULong.allocationSize(value.`bytesSaved`) +
             FfiConverterUInt.allocationSize(value.`ads`) +
             FfiConverterUInt.allocationSize(value.`trackers`) +
-            FfiConverterUInt.allocationSize(value.`requests`)
+            FfiConverterUInt.allocationSize(value.`requests`) +
+            FfiConverterULong.allocationSize(value.`bytesSent`) +
+            FfiConverterULong.allocationSize(value.`bytesRecv`)
     )
 
     override fun write(value: AppUsage, buf: ByteBuffer) {
@@ -2630,6 +2645,8 @@ public object FfiConverterTypeAppUsage: FfiConverterRustBuffer<AppUsage> {
             FfiConverterUInt.write(value.`ads`, buf)
             FfiConverterUInt.write(value.`trackers`, buf)
             FfiConverterUInt.write(value.`requests`, buf)
+            FfiConverterULong.write(value.`bytesSent`, buf)
+            FfiConverterULong.write(value.`bytesRecv`, buf)
     }
 }
 

@@ -19,7 +19,7 @@
 
 mod log;
 
-pub use log::{LogRow, UsageRow, WindowTotalsRow};
+pub use log::{FlowTraffic, LogRow, UsageRow, WindowTotalsRow};
 
 use rusqlite::Connection;
 use std::path::{Path, PathBuf};
@@ -109,6 +109,12 @@ impl Store {
         self.log.enqueue(*event)
     }
 
+    /// Queues a closed connection's byte totals. Never blocks; `false` means
+    /// the queue was full and the sample was dropped.
+    pub fn log_enqueue_traffic(&self, traffic: log::FlowTraffic) -> bool {
+        self.log.enqueue_traffic(traffic)
+    }
+
     /// Waits until everything queued so far is committed (tests, shutdown).
     pub fn log_flush(&self) {
         self.log.flush();
@@ -166,10 +172,10 @@ impl Store {
         }
     }
 
-    /// `(package, blocked, bytes_saved, ads, trackers, requests)` since
-    /// `since_ms`, biggest blocked count first, restricted to one transport
-    /// when `transport >= 0`. The UI passes its local midnight, so "today"
-    /// means the user's day.
+    /// `(package, blocked, bytes_saved, ads, trackers, requests, bytes_sent,
+    /// bytes_recv)` since `since_ms`, biggest blocked count first, restricted to
+    /// one transport when `transport >= 0`. The UI passes its local midnight, so
+    /// "today" means the user's day.
     pub fn log_usage_by_app(&self, since_ms: i64, transport: i64) -> Vec<UsageRow> {
         match log::usage_by_app(&self.db, since_ms, transport) {
             Ok(mut rows) => {
@@ -179,6 +185,8 @@ impl Store {
                     row.ads = row.ads.max(0);
                     row.trackers = row.trackers.max(0);
                     row.requests = row.requests.max(0);
+                    row.bytes_sent = row.bytes_sent.max(0);
+                    row.bytes_recv = row.bytes_recv.max(0);
                 }
                 rows
             }
@@ -460,6 +468,28 @@ fn migrate(conn: &Connection) -> Result<(), String> {
         )
         .map_err(|e| format!("migrate schema to v6: {e}"))?;
     }
+    if version < 7 {
+        // v7: one row per closed connection, holding the bytes that actually
+        // crossed it. A log row is a decision, so it cannot carry a truthful
+        // size: an app that opens twelve connections to one host still has one
+        // DNS row. Statistics read the sizes from here.
+        conn.execute_batch(
+            "BEGIN;
+             CREATE TABLE flow_traffic (
+                 ts_ms     INTEGER NOT NULL,
+                 app       TEXT NOT NULL,
+                 transport INTEGER NOT NULL,
+                 roaming   INTEGER NOT NULL,
+                 sent      INTEGER NOT NULL,
+                 recv      INTEGER NOT NULL
+             );
+             CREATE INDEX flow_traffic_ts ON flow_traffic(ts_ms);
+             CREATE INDEX flow_traffic_app ON flow_traffic(app, ts_ms);
+             PRAGMA user_version = 7;
+             COMMIT;",
+        )
+        .map_err(|e| format!("migrate schema to v7: {e}"))?;
+    }
     Ok(())
 }
 
@@ -736,6 +766,23 @@ mod tests {
         let mut orphan = block_event(ACTION_BLOCK, "orphan.test", "", "", "Ads", 0, 10, 7, false);
         orphan.ts_ms = 2_300;
         store.log_enqueue(&orphan);
+        // One closed connection of the browser's, and one it cannot name.
+        store.log_enqueue_traffic(log::FlowTraffic {
+            ts_ms: 2_400,
+            app: "com.example.browser".to_string(),
+            transport: 0,
+            roaming: false,
+            sent: 1_000,
+            recv: 4_000,
+        });
+        store.log_enqueue_traffic(log::FlowTraffic {
+            ts_ms: 2_400,
+            app: String::new(),
+            transport: 0,
+            roaming: false,
+            sent: 300,
+            recv: 600,
+        });
         store.log_flush();
 
         let usage = store.log_usage_by_app(1_000, -1);
@@ -748,6 +795,8 @@ mod tests {
                 ads: 1,
                 trackers: 1,
                 requests: 3,
+                bytes_sent: 1_000,
+                bytes_recv: 4_000,
             }],
             "window and attribution both apply"
         );
@@ -760,7 +809,43 @@ mod tests {
         assert_eq!(totals.trackers, 1);
         assert_eq!(totals.requests, 4, "two blocks, an allow and the orphan");
         assert_eq!(totals.bytes_saved, 157);
+        assert_eq!(totals.bytes_sent, 1_300, "both connections counted");
+        assert_eq!(totals.bytes_recv, 4_600);
         assert_eq!(store.log_window_totals(1_000, 1), WindowTotalsRow::default());
+    }
+
+    /// Connection rows are pruned and cleared with the log they describe.
+    #[test]
+    fn traffic_rows_follow_the_log() {
+        let (store, _) = temp_store("traffic");
+        store.log_enqueue_traffic(log::FlowTraffic {
+            ts_ms: crate::util::now_ms() as i64 - 120_000,
+            app: "com.example.app".to_string(),
+            transport: 1,
+            roaming: false,
+            sent: 7,
+            recv: 11,
+        });
+        store.log_flush();
+        assert_eq!(store.log_window_totals(0, -1).bytes_sent, 7);
+
+        // Aging them out deletes only the old ones.
+        let removed = log::prune_db(&store.db, 60_000, 1_000_000).unwrap();
+        assert_eq!(removed, 1, "the connection row was outside the window");
+        assert_eq!(store.log_window_totals(0, -1).bytes_sent, 0);
+
+        store.log_enqueue_traffic(log::FlowTraffic {
+            ts_ms: 1,
+            app: "com.example.app".to_string(),
+            transport: 1,
+            roaming: false,
+            sent: 5,
+            recv: 5,
+        });
+        store.log_flush();
+        store.log_clear();
+        assert_eq!(store.log_window_totals(0, -1), WindowTotalsRow::default());
+        drop(store);
     }
 
     #[test]

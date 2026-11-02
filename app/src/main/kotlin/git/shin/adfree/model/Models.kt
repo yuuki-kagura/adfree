@@ -414,6 +414,12 @@ data class AppFirewallRule(
     val category: String = AppCategory.OTHER,
     val blockedRequestsToday: Int = 0,
     val dataTransferredBytes: Long = 0L,
+    /**
+     * Bytes that actually crossed this app's connections in the selected
+     * window, both directions. Counted per connection when it closed, so the
+     * live traffic of a connection still open is not in it yet.
+     */
+    val dataUsedBytes: Long = 0L,
     /** Blocked requests from ad lists in the selected window. */
     val blockedAdsToday: Int = 0,
     /** Blocked requests from tracker, analytics and social lists. */

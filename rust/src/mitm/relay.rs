@@ -19,6 +19,14 @@ use std::sync::Arc;
 /// Port we intercept for TLS termination. Everything else keeps flowing.
 pub const MITM_PORT: u16 = 443;
 
+/// Where a retired relay reports the bytes that crossed it: the package that
+/// owned the flow, device-to-server and server-to-device totals.
+///
+/// A plain function pointer, like [`crate::mitm::proxy::MitmSink`]: production
+/// points at the process-wide engine and tests run without one, so the relay
+/// never has to know how the log is stored.
+pub type TrafficSink = fn(app: &str, sent: u64, recv: u64);
+
 /// Fallback payload cap when the client's SYN carried no MSS option.
 pub const DEFAULT_MSS: usize = 1460;
 
@@ -105,6 +113,12 @@ pub struct Relay {
     /// Bytes buffered in [`Self::pending_client`]. Capped so a client that
     /// keeps sending during a slow setup cannot grow it without bound.
     pub pending_client_bytes: usize,
+    /// Payload bytes put on the wire towards the client. `flow.up_bytes` also
+    /// counts the SYN-ACK and the FIN, which are sequence numbers, not traffic,
+    /// so the statistics cannot read the total from it.
+    pub payload_to_client: u64,
+    /// Reports what crossed this connection when it retires; `None` in tests.
+    pub traffic: Option<TrafficSink>,
 }
 
 impl Relay {
@@ -141,6 +155,8 @@ impl Relay {
             setup_pending: false,
             pending_client: Vec::new(),
             pending_client_bytes: 0,
+            payload_to_client: 0,
+            traffic: None,
         }
     }
 
@@ -176,6 +192,8 @@ impl Relay {
             setup_pending: false,
             pending_client: Vec::new(),
             pending_client_bytes: 0,
+            payload_to_client: 0,
+            traffic: None,
         }
     }
 
@@ -262,6 +280,7 @@ impl Relay {
             };
             self.pending_to_client.drain(..take);
             self.flow.up_bytes += take as u64;
+            self.payload_to_client += take as u64;
             out.push(segment);
         }
         // Below the low-water mark the peer may be read again; the engine is
@@ -453,6 +472,14 @@ impl Relay {
 
 impl Drop for Relay {
     fn drop(&mut self) {
+        // A connection that moved nothing is not worth a row: a probe or a
+        // relay retired during setup would otherwise flood the table.
+        if self.flow.down_bytes != 0 || self.payload_to_client != 0 {
+            if let Some(sink) = self.traffic {
+                let app = self.app_packages.first().map(String::as_str).unwrap_or("");
+                sink(app, self.flow.down_bytes, self.payload_to_client);
+            }
+        }
         // The engine created this descriptor for us (and had the app protect
         // it), so retiring the relay must close it. -1 is the test sentinel.
         if self.peer_fd >= 0 {
@@ -644,6 +671,48 @@ mod tests {
         assert_eq!(
             back,
             (Vec::new(), b"HTTP/1.1 200 OK\r\n\r\n".to_vec(), false)
+        );
+    }
+
+    /// What the last retired relay reported.
+    static REPORTED: std::sync::Mutex<(String, u64, u64)> =
+        std::sync::Mutex::new((String::new(), 0, 0));
+
+    fn record(app: &str, sent: u64, recv: u64) {
+        let mut slot = REPORTED
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        *slot = (app.to_string(), sent, recv);
+    }
+
+    fn reported() -> (String, u64, u64) {
+        REPORTED
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone()
+    }
+
+    /// A connection reports its payload once, when it retires: the SYN-ACK and
+    /// the FIN are sequence numbers, not traffic, so they must not show up.
+    #[test]
+    fn a_retired_relay_reports_what_crossed_it() {
+        let mut r = plain_relay_with_syn();
+        r.traffic = Some(record);
+        r.app_packages = vec!["com.example.app".to_string()];
+        r.on_client_segment(1001, b"hello").expect("step");
+        r.segments_for_client(b"1234567");
+        assert_eq!(r.flow.up_bytes, 8, "up_bytes also counts the SYN-ACK");
+        drop(r);
+        assert_eq!(reported(), ("com.example.app".to_string(), 5, 7));
+
+        // A relay that moved nothing is not a row.
+        let mut quiet = plain_relay_with_syn();
+        quiet.traffic = Some(record);
+        drop(quiet);
+        assert_eq!(
+            reported(),
+            ("com.example.app".to_string(), 5, 7),
+            "the previous report is still there: nothing new was written"
         );
     }
 
