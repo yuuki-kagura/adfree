@@ -51,7 +51,8 @@ pub enum Msg {
     Clear(SyncSender<()>),
 }
 
-/// Bytes a single relayed connection moved, recorded when it retired.
+/// Bytes a single connection moved, recorded when it retired: a TCP relay, a
+/// datagram mapping or a terminated QUIC flow.
 ///
 /// The request log counts decisions, not connections, so nothing there can
 /// carry a truthful size: one DNS row stands for a host, while the app may

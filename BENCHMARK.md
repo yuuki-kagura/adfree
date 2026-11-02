@@ -525,3 +525,32 @@ tree (`9c130b8`, checked out in a temporary worktree):
 - The per-flow cost half of that benchmark note is still open: the probe
   harness runs on the Redmi (`flare`), which is not connected this session.
 
+
+## Flow traffic counters — per-flow memory (2026-11-02)
+
+The v7 traffic table added a byte counter pair and a sink pointer to every
+structure that owns a connection, so the plan's "per-flow cost" note now has a
+host-side half. Measured as `size_of` on the current tree (a temporary worktree
+would have been needed for the pre-v7 numbers; the delta is exactly the three
+words added, so it is stated as arithmetic):
+
+| Flow | Size | Added |
+| --- | --- | --- |
+| `mitm::relay::Relay` (TCP) | 928 B | `payload_to_client` + `traffic` = 16 B |
+| `udpnat::UdpFlow` (datagram mapping) | 176 B | `sent` + `recv` + `traffic` = 24 B |
+| `engine::H3Flow` (terminated QUIC) | 96 B | `sent` + `recv` + `traffic` = 24 B |
+
+- Worst case for both datagram tables at the caps the engine enforces:
+  `176 × UDP_MAX_FLOWS (512) + 96 × bridge::MAX_FLOWS (64)` = 94 KB, before this
+  change 81 KB. The relay table has no cap constant, but its 16 B is the same
+  order as the `template: Vec<u8>` each mapping already carried.
+- The budget is pinned by `a_live_flow_carries_a_known_cost` in
+  `rust/src/engine.rs`, next to the ring budget test.
+- Write cost is one `try_send` per retired flow and one extra row in a batch the
+  writer already commits: traffic rows ride the log writer's channel and share
+  its transaction, so the number of fsyncs per second does not change. A flow
+  that moved no bytes sends nothing.
+- The on-device half of the note stays open: the probe harness runs on the Redmi
+  (`flare`), still not connected this session. The Sony can only show that the
+  totals are non-zero, which they do (160 KB up / 29.1 MB down after a browser
+  download, 151 KB on one app).

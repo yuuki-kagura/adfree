@@ -36,10 +36,11 @@ use crate::filter::{FilterEngine, FilterListInfo, HostVerdict};
 use crate::fxhash::{hash_str, FxHashMap};
 use crate::mitm::quic::bridge;
 use crate::mitm::quic::socket::{Datagram, TunUdpSocket};
+use crate::mitm::relay::TrafficSink;
 use crate::packet::{self, IpKey, Packet, PROTO_TCP, PROTO_UDP};
 use crate::socks5::Socks5Handshake;
-use crate::stats::{self, Stats};
 use crate::state::model::{FirewallAccess, ProxyAccess};
+use crate::stats::{self, Stats};
 use crate::udpnat::{UdpFlow, UdpKey, UdpNat, UDP_MAX_FLOWS, UDP_MAX_PROXIED_FLOWS};
 use crate::uidmap::UidMap;
 use crate::upstream::Upstream;
@@ -594,6 +595,25 @@ struct H3Flow {
     /// the splice does not wait for the client's retransmission.
     pending: Vec<Vec<u8>>,
     pending_bytes: usize,
+    /// Datagram bytes the client sent into the terminations; quinn's own
+    /// retransmits are not counted, only what crossed the tun.
+    sent: u64,
+    /// Datagram bytes the engine wrote back to the client.
+    recv: u64,
+    /// Reports what crossed the flow once it is reaped, spliced or abandoned —
+    /// the same sink the TCP relays and NAT mappings use.
+    traffic: Option<TrafficSink>,
+}
+
+impl Drop for H3Flow {
+    fn drop(&mut self) {
+        if self.sent != 0 || self.recv != 0 {
+            if let Some(sink) = self.traffic {
+                let app = self.apps.first().map(String::as_str).unwrap_or("");
+                sink(app, self.sent, self.recv);
+            }
+        }
+    }
 }
 
 pub struct Core {
@@ -784,8 +804,8 @@ fn first_app(packages: &[String]) -> &str {
     packages.first().map(String::as_str).unwrap_or("")
 }
 
-/// The relay's sink: one row per closed connection, holding the bytes that
-/// actually crossed it.
+/// The relay, NAT and QUIC sinks: one row per closed connection, holding the
+/// bytes that actually crossed it.
 ///
 /// The request log cannot carry these: its rows are decisions, and a host the
 /// app opened a dozen connections to still has one. This is what the statistics
@@ -1833,6 +1853,7 @@ impl Core {
                 self.refuse_udp(pkt);
                 return;
             }
+            flow.sent += payload.len() as u64;
             self.stats.inc(&self.stats.udp_relayed);
             return;
         }
@@ -1913,6 +1934,10 @@ impl Core {
             app_packages,
             retire: false,
             proxied,
+            // The datagram that opened the mapping is already through.
+            sent: payload.len() as u64,
+            recv: 0,
+            traffic: Some(record_flow_traffic),
         });
         // The reply can only arrive on this descriptor, so the forwarder must
         // start watching it now rather than at its next cadence tick.
@@ -2031,6 +2056,7 @@ impl Core {
             return false;
         };
         flow.last_ms = now_ms();
+        flow.sent += pkt.l4_payload().len() as u64;
         if flow.pending_bytes + raw.len() <= H3_PENDING_BYTES {
             flow.pending.push(raw.to_vec());
             flow.pending_bytes += raw.len();
@@ -2096,6 +2122,9 @@ impl Core {
                 last_ms: now_ms(),
                 pending: Vec::new(),
                 pending_bytes: 0,
+                sent: 0,
+                recv: 0,
+                traffic: Some(record_flow_traffic),
             },
         );
         self.feed_h3(key, pkt);
@@ -2219,8 +2248,10 @@ impl Core {
     }
 
     /// Sends the buffered flight of a spliced flow through a fresh NAT mapping.
-    fn replay_spliced(&self, flow: H3Flow) {
-        for raw in flow.pending {
+    fn replay_spliced(&self, mut flow: H3Flow) {
+        // `take` rather than a move: the flow still has to run its Drop, which
+        // reports the datagrams that crossed the terminated half.
+        for raw in std::mem::take(&mut flow.pending) {
             if let Some(pkt) = Packet::parse(&raw) {
                 self.relay_udp(&pkt);
             }
@@ -2324,6 +2355,17 @@ impl Core {
             let dst = packet::ip_key_from(datagram.destination.ip());
             if src.as_ip().is_unspecified() || dst.as_ip().is_unspecified() {
                 continue;
+            }
+            // The client's five-tuple is still the key here, so a datagram
+            // quinn produced is attributed to its flow before it is built.
+            let key = UdpKey {
+                client: dst,
+                client_port: datagram.destination.port(),
+                server: src,
+                server_port: datagram.source.port(),
+            };
+            if let Some(flow) = self.h3_flows.lock().unwrap().get_mut(&key) {
+                flow.recv += datagram.payload.len() as u64;
             }
             let Some(raw) = packet::build_udp(
                 src,
@@ -4987,6 +5029,7 @@ impl Core {
                     return;
                 };
                 flow.last_ms = now_ms();
+                flow.recv += read as u64;
                 match Packet::parse(&flow.template) {
                     // Swaps addresses and ports, recomputes lengths and
                     // checksums: the datagram looks like it came from the real
@@ -5603,6 +5646,9 @@ mod tests {
             app_packages: Vec::new(),
             retire: false,
             proxied: false,
+            sent: 0,
+            recv: 0,
+            traffic: None,
         });
         assert_eq!(core.forward_wait_ms(0), FORWARD_WAIT_MS);
     }
@@ -5672,6 +5718,9 @@ mod tests {
             last_ms: now_ms(),
             pending: Vec::new(),
             pending_bytes: 0,
+            sent: 0,
+            recv: 0,
+            traffic: None,
         }
     }
 
@@ -5800,6 +5849,77 @@ mod tests {
 
         core.expire_quic(now + H3_SPLICE_MS + 1);
         assert!(core.spliced_until(key).is_none());
+    }
+
+    /// What the last reaped QUIC flow reported.
+    static H3_REPORTED: std::sync::Mutex<(String, u64, u64)> =
+        std::sync::Mutex::new((String::new(), 0, 0));
+
+    fn record_h3(app: &str, sent: u64, recv: u64) {
+        let mut slot = H3_REPORTED
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        *slot = (app.to_string(), sent, recv);
+    }
+
+    fn h3_reported() -> (String, u64, u64) {
+        H3_REPORTED
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone()
+    }
+
+    /// A terminated flow counts the client's datagrams as they are fed to
+    /// quinn and reports them when it is reaped, so HTTP/3 is not invisible in
+    /// the per-app totals.
+    #[test]
+    fn a_reaped_quic_flow_reports_its_datagrams() {
+        let core = Core::new();
+        let key = quic_key(50007, [203, 0, 113, 7]);
+        let socket = TunUdpSocket::new(
+            SocketAddr::new(key.server.as_ip(), 443),
+            std::sync::mpsc::sync_channel(4).0,
+        );
+        let mut flow = test_quic_flow(socket);
+        flow.apps = vec!["com.example.app".to_string()];
+        flow.traffic = Some(record_h3);
+        flow.last_ms = 0;
+        core.h3_flows.lock().unwrap().insert(key, flow);
+
+        core.feed_h3(
+            key,
+            &Packet::parse(&udp_packet(50007, [203, 0, 113, 7], 443)).expect("pkt"),
+        );
+        let sent = {
+            let flows = core.h3_flows.lock().unwrap();
+            flows.get(&key).expect("flow").sent
+        };
+        assert_eq!(sent, 4, "the fed datagram was counted");
+
+        // Feeding refreshed the idle clock, so reap it a full window later.
+        core.expire_quic(now_ms() + H3_IDLE_MS + 1);
+        assert!(core.h3_flows.lock().unwrap().is_empty());
+        assert_eq!(
+            h3_reported(),
+            ("com.example.app".to_string(), 4, 0),
+            "reaping reported the client's half"
+        );
+    }
+
+    /// The traffic counters cost three words per live flow, and the plan's
+    /// memory note wants that pinned rather than assumed.
+    #[test]
+    fn a_live_flow_carries_a_known_cost() {
+        let relay = std::mem::size_of::<crate::mitm::relay::Relay>();
+        let udp = std::mem::size_of::<UdpFlow>();
+        let h3 = std::mem::size_of::<H3Flow>();
+        assert!(relay <= 1024, "a TCP relay is {relay} B");
+        assert!(udp <= 192, "a datagram mapping is {udp} B");
+        assert!(h3 <= 112, "a terminated QUIC flow is {h3} B");
+        // The worst case for both datagram tables at the caps the engine
+        // enforces: no app can grow them past this.
+        let worst = udp * UDP_MAX_FLOWS + h3 * bridge::MAX_FLOWS;
+        assert!(worst <= 128 * 1024, "the datagram tables cost {worst} B");
     }
 
     /// A full table loses the new flow instead of growing without bound; the
@@ -6664,6 +6784,76 @@ mod tests {
         assert_eq!(core.snapshot().udp_dropped, 0);
         // Three datagrams went out: two on the first mapping, one on the other.
         assert_eq!(core.stats.snapshot().udp_relayed, 3);
+    }
+
+    /// A datagram mapping is a connection like any other: reaping it hands its
+    /// byte counters to the store, so UDP traffic shows up in the app's "data
+    /// used" figure rather than only TCP.
+    ///
+    /// Goes through the process-wide engine because that is where the sink reads
+    /// its store from; the configuration it needs is put back afterwards.
+    #[test]
+    fn a_reaped_udp_mapping_lands_in_the_store() {
+        let dir = std::env::temp_dir().join(format!(
+            "adfree-engine-udp-traffic-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("temp dir");
+        let core = crate::core();
+        core.set_socket_protector(Arc::new(AllowAll));
+        core.set_uid_lookup(Arc::new(FixedUid(10_123)));
+        core.set_uid_apps(vec![(10_123, vec!["com.example.udpsink".to_string()])]);
+        // Any per-app entry makes the attribution path run; the proxy itself
+        // stays off, so the mapping is a plain connected socket.
+        let policy = AppNetworkPolicy {
+            proxy_rules: Arc::new(
+                [("com.example.udpsink".to_string(), ProxyAccess::Inherit)]
+                    .into_iter()
+                    .collect(),
+            ),
+            ..Default::default()
+        };
+        core.set_app_network_policy(policy);
+        core.set_lists(Vec::new(), vec!["||ads.test^".to_string()]);
+        assert!(core.set_data_root(dir.to_str().expect("utf-8 path")));
+
+        // A blocked query gives the app a decision row, which is what the
+        // per-app join hangs the traffic on.
+        assert_eq!(dns_reply_rcode(core, "ads.test"), Some(3));
+
+        let pkt = udp_packet(50020, [203, 0, 113, 9], 4433);
+        core.handle_packet(&pkt);
+        core.handle_packet(&pkt);
+        assert_eq!(core.udp_nat.lock().unwrap().len(), 1, "one mapping");
+
+        core.udp_nat
+            .lock()
+            .unwrap()
+            .expire(now_ms() + crate::udpnat::UDP_FLOW_IDLE_MS + 1);
+        assert!(core.udp_nat.lock().unwrap().is_empty());
+
+        let store = core.store.get().expect("store");
+        store.log_flush();
+        let usage = store.log_usage_by_app(0, -1);
+        let row = usage
+            .iter()
+            .find(|r| r.app == "com.example.udpsink")
+            .expect("the app row");
+        assert_eq!(row.bytes_sent, 8, "two datagrams of four bytes");
+        assert_eq!(row.bytes_recv, 0, "nothing came back on the mapping");
+        let totals = store.log_window_totals(0, -1);
+        assert!(
+            totals.bytes_sent >= 8,
+            "the header adds the DNS answer bytes too: {}",
+            totals.bytes_sent
+        );
+        // Leave the shared engine as the other tests expect to find it.
+        core.set_app_network_policy(AppNetworkPolicy::default());
+        *core.uid_lookup.write().unwrap() = None;
+        core.set_uid_apps(Vec::new());
+        core.set_lists(Vec::new(), Vec::new());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// A SYN-only IPv4 packet (only the fields `Packet::parse` reads matter).

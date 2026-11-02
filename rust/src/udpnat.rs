@@ -10,6 +10,7 @@
 //! the forwarder thread — the one that polls their descriptors — so a file
 //! descriptor is never closed under a running `poll()`.
 
+use crate::mitm::relay::TrafficSink;
 use crate::packet::IpKey;
 use std::collections::HashMap;
 use std::os::unix::io::RawFd;
@@ -55,10 +56,26 @@ pub struct UdpFlow {
     /// instead of a connected socket: payloads are raw server data and a clean
     /// EOF means the thread is gone.
     pub proxied: bool,
+    /// Datagram bytes the client pushed through this mapping.
+    pub sent: u64,
+    /// Datagram bytes the server answered with.
+    pub recv: u64,
+    /// Where a retired mapping reports what crossed it — the same sink the TCP
+    /// relays use, so datagrams land in the same per-app totals.
+    pub traffic: Option<TrafficSink>,
 }
 
 impl Drop for UdpFlow {
     fn drop(&mut self) {
+        // Idle expiry, a policy retire and the shutdown clear all end here, so
+        // this is the one place a mapping can report its traffic. A flow that
+        // moved nothing reports nothing.
+        if self.sent != 0 || self.recv != 0 {
+            if let Some(sink) = self.traffic {
+                let app = self.app_packages.first().map(String::as_str).unwrap_or("");
+                sink(app, self.sent, self.recv);
+            }
+        }
         // The engine created this descriptor (and had the app protect it), so
         // retiring the mapping must close it. -1 is a test sentinel.
         if self.fd >= 0 {
@@ -174,6 +191,9 @@ mod tests {
             app_packages: Vec::new(),
             retire: false,
             proxied: false,
+            sent: 0,
+            recv: 0,
+            traffic: None,
         });
         assert_eq!(nat.len(), 1);
         assert!(nat.get_mut(&key(5000)).is_some());
@@ -191,6 +211,9 @@ mod tests {
             app_packages: Vec::new(),
             retire: false,
             proxied: false,
+            sent: 0,
+            recv: 0,
+            traffic: None,
         });
         // Still fresh just under the threshold...
         assert_eq!(nat.expire(1000 + UDP_FLOW_IDLE_MS - 1), 0);
@@ -210,10 +233,73 @@ mod tests {
             app_packages: Vec::new(),
             retire: false,
             proxied: false,
+            sent: 0,
+            recv: 0,
+            traffic: None,
         });
         let snapshot = nat.poll_snapshot();
         assert_eq!(snapshot.len(), 1);
         assert_eq!(snapshot[0].1, 7);
         assert_eq!(snapshot[0].0, key(5000));
+    }
+
+    /// What the last retired mapping reported.
+    static REPORTED: std::sync::Mutex<(String, u64, u64)> =
+        std::sync::Mutex::new((String::new(), 0, 0));
+
+    fn record(app: &str, sent: u64, recv: u64) {
+        let mut slot = REPORTED
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        *slot = (app.to_string(), sent, recv);
+    }
+
+    fn reported() -> (String, u64, u64) {
+        REPORTED
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone()
+    }
+
+    fn counted_flow(port: u16, sent: u64, recv: u64) -> UdpFlow {
+        UdpFlow {
+            fd: -1,
+            key: key(port),
+            template: Vec::new(),
+            last_ms: 1000,
+            app_packages: vec!["com.example.app".to_string()],
+            retire: false,
+            proxied: false,
+            sent,
+            recv,
+            traffic: Some(record),
+        }
+    }
+
+    /// A datagram mapping reports both directions once it is reaped, exactly
+    /// like a TCP relay, so the per-app totals hold one row per connection.
+    #[test]
+    fn a_retired_mapping_reports_its_datagrams() {
+        let mut nat = UdpNat::new();
+        nat.insert(counted_flow(5000, 120, 3400));
+        assert_eq!(nat.expire(1000 + UDP_FLOW_IDLE_MS + 1), 1);
+        assert_eq!(reported(), ("com.example.app".to_string(), 120, 3400));
+
+        // A mapping that never carried a datagram is not a row: the report is
+        // still the previous one.
+        let mut quiet = UdpNat::new();
+        quiet.insert(counted_flow(5001, 0, 0));
+        drop(quiet);
+        assert_eq!(reported(), ("com.example.app".to_string(), 120, 3400));
+    }
+
+    /// A policy retire is a retirement too — the flag path must report as well.
+    #[test]
+    fn a_retired_flag_reports_before_the_mapping_goes() {
+        let mut nat = UdpNat::new();
+        nat.insert(counted_flow(5002, 512, 0));
+        nat.retire_matching(|_| true);
+        assert_eq!(nat.expire(1000), 1);
+        assert_eq!(reported(), ("com.example.app".to_string(), 512, 0));
     }
 }
