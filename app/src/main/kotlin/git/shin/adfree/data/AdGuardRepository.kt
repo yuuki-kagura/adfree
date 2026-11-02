@@ -1571,69 +1571,46 @@ class AdGuardRepository(
     }
 
     /**
-     * Writes the currently loaded log window as CSV to a SAF document.
+     * Writes the whole log store as CSV to a SAF document.
      *
-     * Only the rows already paged into memory are exported: the store keeps
-     * far more than the UI ever holds, and silently walking it here would make
-     * "export" look like it covered everything.
+     * The store keeps far more than the loaded window, so the export walks it by
+     * cursor a page at a time and streams each page out. Paging starts from an
+     * id rather than an offset, so a row arriving mid-export cannot shift the
+     * page below it or repeat one.
      */
     suspend fun exportLogs(uriText: String): BackupResult {
-        val rows = _logs.value
-        val ok = withContext(Dispatchers.IO) {
-            runCatching {
+        val written = withContext(Dispatchers.IO) {
+            val rows = runCatching {
                 val uri = android.net.Uri.parse(uriText)
-                context.contentResolver.openOutputStream(uri)
-                    ?.bufferedWriter(Charsets.UTF_8)
-                    ?.use { writer ->
-                        writer.appendLine(
-                            "time,app,domain,ip,protocol,status,category,rule,list,latency_us,saved_bytes," +
-                                "transport,roaming,flow_id,url,dns_answer,bytes_sent,bytes_recv",
-                        )
-                        val time = java.text.SimpleDateFormat(
-                            "yyyy-MM-dd'T'HH:mm:ssXXX",
-                            java.util.Locale.US,
-                        )
-                        rows.forEach { log ->
-                            writer.appendLine(
-                                listOf(
-                                    time.format(java.util.Date(log.timestampMs)),
-                                    log.appPackage.orEmpty(),
-                                    log.domain,
-                                    log.ipAddress,
-                                    log.protocol.name,
-                                    log.status.name,
-                                    log.category.name,
-                                    log.matchedRule.orEmpty(),
-                                    log.filterListName.orEmpty(),
-                                    log.latencyMicros.toString(),
-                                    log.dataSavedBytes.toString(),
-                                    log.transport.name,
-                                    log.roaming.toString(),
-                                    log.flowId.toString(),
-                                    log.url.orEmpty(),
-                                    log.dnsAnswer.orEmpty(),
-                                    log.bytesSent.toString(),
-                                    log.bytesReceived.toString(),
-                                ).joinToString(",") { csvField(it) },
-                            )
-                        }
-                    }
+                val stream = context.contentResolver.openOutputStream(uri)
                     ?: error("no output stream")
-            }.isSuccess
+                stream.bufferedWriter(Charsets.UTF_8).use { writer ->
+                    writeLogCsv(storedLogRows(), writer)
+                }
+            }.getOrDefault(-1L)
+            // The core turns a failed page into an empty one, so a walk that
+            // writes nothing from a non-empty store has to count as a failure:
+            // an empty file is exactly what a broken export looks like.
+            if (rows <= 0L && engine.logCount() > 0L) -1L else rows
         }
-        return if (ok) {
+        return if (written >= 0) {
             BackupResult(true, UiText.Resource(R.string.log_export_done))
         } else {
             BackupResult(false, UiText.Resource(R.string.log_export_failed))
         }
     }
 
-    private fun csvField(raw: String): String =
-        if (raw.any { it == ',' || it == '"' || it == '\n' || it == '\r' }) {
-            "\"${raw.replace("\"", "\"\"")}\""
-        } else {
-            raw
+    /** Every row in the store, newest first, one core page at a time. */
+    private fun storedLogRows(): Sequence<NetworkRequestLog> = sequence {
+        var cursor = Long.MAX_VALUE
+        while (true) {
+            val page = engine.logPageBefore(cursor, LOG_EXPORT_PAGE_SIZE)
+            if (page.isEmpty()) break
+            yieldAll(page.map(NetworkRequestLog::from))
+            cursor = page.last().id
+            if (page.size < LOG_EXPORT_PAGE_SIZE) break
         }
+    }
 
     /**
      * Pushes the whole filter state (enabled lists + user rules) to the core in
@@ -2570,6 +2547,9 @@ class AdGuardRepository(
 
         /** Ceiling for the in-RAM window so paging cannot grow without bound. */
         const val LOG_ROW_CAP = 10_000
+
+        /** Rows pulled per step while exporting: the core caps a page at 500. */
+        private const val LOG_EXPORT_PAGE_SIZE = 500
 
         /**
          * What the SQLite store actually keeps, for the log's retention note.
