@@ -391,6 +391,8 @@ class AdGuardViewModel(
             is AdGuardIntent.ToggleStealth ->
                 repository.toggleStealthMode(!uiState.value.settings.isStealthModeEnabled)
 
+            is AdGuardIntent.SetStealthPreset -> repository.applyStealthPreset(intent.preset)
+
             is AdGuardIntent.ToggleBlockQuic -> repository.toggleBlockQuic(intent.enabled)
             is AdGuardIntent.SetAppLanguage -> repository.setAppLanguage(intent.language)
             is AdGuardIntent.SetThemeMode -> repository.setThemeMode(intent.mode)

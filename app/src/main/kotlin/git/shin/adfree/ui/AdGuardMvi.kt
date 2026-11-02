@@ -18,6 +18,7 @@ import git.shin.adfree.model.ProtectionSettings
 import git.shin.adfree.model.ProtectionStats
 import git.shin.adfree.model.ProtocolType
 import git.shin.adfree.model.ProxyAccess
+import git.shin.adfree.model.StealthPreset
 import git.shin.adfree.model.ThreatAnalysisResult
 import git.shin.adfree.model.ThemeMode
 import git.shin.adfree.model.UserScriptInfo
@@ -95,6 +96,8 @@ sealed interface AdGuardIntent {
     data object ToggleFirewall : AdGuardIntent
     data object ToggleEcoMode : AdGuardIntent
     data object ToggleStealth : AdGuardIntent
+    /** Writes one privacy level's documented switch set. */
+    data class SetStealthPreset(val preset: StealthPreset) : AdGuardIntent
     data class SetAppLanguage(val language: AppLanguage) : AdGuardIntent
     data class SetThemeMode(val mode: ThemeMode) : AdGuardIntent
     data class ToggleBlockQuic(val enabled: Boolean) : AdGuardIntent

@@ -958,6 +958,17 @@
     <string name="settings_stealth_push_subtitle">Trang web không còn xin gửi thông báo; push trên web sẽ hỏng</string>
     <string name="settings_stealth_geo_title">Chặn API Geolocation</string>
     <string name="settings_stealth_geo_subtitle">Trang web nhận câu từ chối thay vì hộp thoại xin vị trí</string>
+    <string name="settings_stealth_preset_title">Mức riêng tư</string>
+    <string name="settings_stealth_preset_note">Chọn một mức sẽ ghi các tuỳ chọn bên dưới và bật luôn chế độ tàng hình</string>
+    <string name="settings_stealth_preset_standard_title">Tiêu chuẩn</string>
+    <string name="settings_stealth_preset_standard_body">Tham số tracking và cookie bên thứ ba — đúng bộ mà bản cài mới có</string>
+    <string name="settings_stealth_preset_high_title">Cao</string>
+    <string name="settings_stealth_preset_high_body">Thêm lá chắn WebRTC, referer bên thứ ba, từ khoá tìm kiếm và Do Not Track</string>
+    <string name="settings_stealth_preset_ultra_title">Cực đại</string>
+    <string name="settings_stealth_preset_ultra_body">Mọi tuỳ chọn, gồm cả chặn hết cookie và ETag — đăng nhập và cache sẽ hỏng</string>
+    <string name="settings_stealth_preset_custom_title">Tuỳ chỉnh</string>
+    <string name="settings_stealth_preset_custom_body">Các tuỳ chọn đúng như bạn đã đặt</string>
+    <string name="settings_stealth_preset_custom">Các tuỳ chọn đang đặt thủ công — không mức nào trùng khít</string>
     <string name="settings_lab_title">Phòng thí nghiệm bảo mật</string>
     <string name="settings_lab_subtitle">Quét một tên miền qua engine để xem luồng phân tích</string>
     <string name="settings_restore_title">Khôi phục bản sao lưu?</string>

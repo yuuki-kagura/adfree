@@ -44,6 +44,7 @@ import git.shin.adfree.model.NetworkRequestLog
 import git.shin.adfree.model.LogWindowTotals
 import git.shin.adfree.model.ProtectionStats
 import git.shin.adfree.model.ProtectionSettings
+import git.shin.adfree.model.StealthPreset
 import git.shin.adfree.model.ProxySettings
 import git.shin.adfree.model.ProtocolType
 import git.shin.adfree.model.RequestCategory
@@ -658,6 +659,15 @@ class AdGuardRepository(
 
     fun toggleStealthMode(enabled: Boolean) =
         updateSettings { it.copy(isStealthModeEnabled = enabled) }
+
+    /**
+     * Writes one privacy level's whole switch set, and turns stealth mode on so
+     * the choice takes effect: a level that leaves the master off is a level the
+     * traffic never sees. The level itself is not stored — [StealthPreset.of]
+     * reads it back from the switches.
+     */
+    fun applyStealthPreset(preset: StealthPreset) =
+        updateSettings { preset.applyTo(it) }
 
     /**
      * Writes the stealth sub-switches. Every argument is optional: `null`

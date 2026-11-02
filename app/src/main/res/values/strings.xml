@@ -958,6 +958,17 @@
     <string name="settings_stealth_push_subtitle">Sites stop asking to send notifications; web push breaks</string>
     <string name="settings_stealth_geo_title">Block the Geolocation API</string>
     <string name="settings_stealth_geo_subtitle">A page gets a denial instead of a location prompt</string>
+    <string name="settings_stealth_preset_title">Privacy level</string>
+    <string name="settings_stealth_preset_note">Picking a level writes the switches below and turns stealth mode on</string>
+    <string name="settings_stealth_preset_standard_title">Standard</string>
+    <string name="settings_stealth_preset_standard_body">Tracking parameters and third-party cookies — the set a fresh install ships</string>
+    <string name="settings_stealth_preset_high_title">High</string>
+    <string name="settings_stealth_preset_high_body">Adds the WebRTC guard, the third-party referer, the search query and Do Not Track</string>
+    <string name="settings_stealth_preset_ultra_title">Ultra</string>
+    <string name="settings_stealth_preset_ultra_body">Every switch, all cookies and ETag included — logins and caching break</string>
+    <string name="settings_stealth_preset_custom_title">Custom</string>
+    <string name="settings_stealth_preset_custom_body">The switches as you left them</string>
+    <string name="settings_stealth_preset_custom">The switches are set by hand — no level matches them exactly</string>
     <string name="settings_lab_title">Security lab</string>
     <string name="settings_lab_subtitle">Scan a domain through the engine to see the analysis</string>
     <string name="settings_restore_title">Restore this backup?</string>

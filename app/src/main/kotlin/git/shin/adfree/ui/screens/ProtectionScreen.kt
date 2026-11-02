@@ -54,6 +54,7 @@ import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Switch
 import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
@@ -77,6 +78,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import git.shin.adfree.R
 import git.shin.adfree.model.AppFirewallRule
+import git.shin.adfree.model.StealthPreset
 import git.shin.adfree.ui.AdGuardIntent
 import git.shin.adfree.ui.AdGuardViewModel
 import git.shin.adfree.ui.ProtectionSection
@@ -604,6 +606,74 @@ private fun TrackingDetail(
 
         Spacer(modifier = Modifier.height(10.dp))
 
+        Text(
+            text = stringResource(R.string.settings_stealth_preset_title),
+            fontSize = 12.sp,
+            fontWeight = FontWeight.Bold,
+            color = AdGuardTextSecondary,
+        )
+        Text(
+            text = stringResource(R.string.settings_stealth_preset_note),
+            fontSize = 11.sp,
+            color = AdGuardTextMuted,
+            modifier = Modifier.padding(top = 2.dp, bottom = 8.dp),
+        )
+
+        val preset = StealthPreset.of(settings)
+        Card(
+            modifier = Modifier.fillMaxWidth(),
+            shape = RoundedCornerShape(12.dp),
+            colors = CardDefaults.cardColors(containerColor = AdGuardDarkSurface),
+        ) {
+            Column(modifier = Modifier.padding(14.dp)) {
+                StealthPreset.entries
+                    .filter { it != StealthPreset.CUSTOM }
+                    .forEachIndexed { index, level ->
+                        if (index > 0) Spacer(modifier = Modifier.height(10.dp))
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(8.dp))
+                                .clickable {
+                                    viewModel.onIntent(AdGuardIntent.SetStealthPreset(level))
+                                }
+                                .padding(vertical = 4.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            RadioButton(
+                                selected = preset == level,
+                                onClick = {
+                                    viewModel.onIntent(AdGuardIntent.SetStealthPreset(level))
+                                },
+                            )
+                            Spacer(modifier = Modifier.width(10.dp))
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    text = stringResource(level.titleRes()),
+                                    fontSize = 15.sp,
+                                    color = AdGuardTextPrimary,
+                                )
+                                Text(
+                                    text = stringResource(level.bodyRes()),
+                                    fontSize = 12.sp,
+                                    color = AdGuardTextMuted,
+                                )
+                            }
+                        }
+                    }
+                if (preset == StealthPreset.CUSTOM) {
+                    Spacer(modifier = Modifier.height(10.dp))
+                    Text(
+                        text = stringResource(R.string.settings_stealth_preset_custom),
+                        fontSize = 12.sp,
+                        color = AdGuardBlueDns,
+                    )
+                }
+            }
+        }
+
+        Spacer(modifier = Modifier.height(16.dp))
+
         Card(
             modifier = Modifier.fillMaxWidth(),
             shape = RoundedCornerShape(12.dp),
@@ -757,6 +827,22 @@ private fun TrackingDetail(
             }
         }
     }
+}
+
+/** The label the radio shows for a level. */
+private fun StealthPreset.titleRes(): Int = when (this) {
+    StealthPreset.STANDARD -> R.string.settings_stealth_preset_standard_title
+    StealthPreset.HIGH -> R.string.settings_stealth_preset_high_title
+    StealthPreset.ULTRA -> R.string.settings_stealth_preset_ultra_title
+    StealthPreset.CUSTOM -> R.string.settings_stealth_preset_custom_title
+}
+
+/** What the level turns on, and what it costs. */
+private fun StealthPreset.bodyRes(): Int = when (this) {
+    StealthPreset.STANDARD -> R.string.settings_stealth_preset_standard_body
+    StealthPreset.HIGH -> R.string.settings_stealth_preset_high_body
+    StealthPreset.ULTRA -> R.string.settings_stealth_preset_ultra_body
+    StealthPreset.CUSTOM -> R.string.settings_stealth_preset_custom_body
 }
 
 @Composable
