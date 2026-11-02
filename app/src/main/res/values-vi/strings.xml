@@ -835,6 +835,7 @@
     <string name="log_empty_filtered_title">Không có dòng nào khớp</string>
     <string name="log_empty_filtered_body">Đổi từ khoá hoặc bỏ bộ lọc</string>
     <string name="log_window_capped">Chỉ tải %1$d dòng gần nhất trong tổng %2$d dòng</string>
+    <string name="log_retention_note">Cơ sở dữ liệu giữ %1$d dòng gần nhất trong %2$d ngày</string>
     <string name="log_status_blocked">Đã chặn</string>
     <string name="log_status_allowed">Cho phép</string>
     <string name="log_status_whitelisted">Trắng</string>

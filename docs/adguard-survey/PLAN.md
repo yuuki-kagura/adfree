@@ -240,7 +240,13 @@ Phase 3 instead of a second sheet.
   `log_events_action`.
 - Statistics/log wording: AdGuard advertises "newest 10k requests stored";
   AdFree already shows `log_window_capped` at 10k in RAM, but the SQLite store
-  keeps 200k rows for 7 days. Keep the UI honest about the difference.
+  keeps 200k rows for 7 days. Keep the UI honest about the difference. Done —
+  `log_retention_note` sits under the log's subtitle (testTag
+  `log_retention_note`), not in the capped footer, because that footer only
+  renders once 10k rows are loaded and would hide the window from every shorter
+  log. It reads the store's own numbers (`LOG_DB_MAX_ROWS`/`LOG_DB_KEEP_DAYS`
+  in `AdGuardRepository`, kept in step with `MAX_ROWS`/`KEEP_MS` in
+  `rust/src/store/log.rs`).
 
 ### Screens still missing from the survey
 
@@ -307,8 +313,17 @@ Screens `52`–`59` and `73`–`79` need fields the log does not store today.
   does. Blocked flows that moved nothing report nothing. `usage_by_app` LEFT
   JOINs the per-app traffic sums, `window_totals` adds them to the small DNS
   answer bytes the log rows already carry, and `clear`/`prune_db` cover the new
-  table with the log. UDP and QUIC datagrams are still uncounted: only relayed
-  TCP connections report.
+  table with the log.
+  The two datagram paths ride the same sink. `UdpFlow` carries `sent`/`recv`
+  plus the sink: `relay_udp` counts each client datagram after a successful
+  send, `handle_udp_reply` counts each rewritten reply, and the mapping's
+  `Drop` reports, so idle expiry, a policy retire and the shutdown clear all
+  account for themselves. A terminated QUIC flow does the same through
+  `H3Flow`: `feed_h3` counts what the client pushed into quinn, `drain_quic`
+  attributes each datagram quinn produced back to its flow by the client's
+  five-tuple, and reaping, splicing or abandoning reports. Quinn's upstream
+  half is deliberately not counted — the client-facing side is what the app
+  actually put on and took off the wire.
 - uniffi: extend `LogEvent` (`rust/src/api.rs` ~189) and both `From` impls;
   regenerate bindings (`app/src/main/kotlin/git/shin/adfree/core/adfree.kt`,
   `CoreEngine.kt`) with `./gradlew :app:verifyBindings`.
@@ -375,19 +390,37 @@ sheet was skipped.
 
 ### 6.5 Carry-over and verification
 
-- Phase 4 leftovers are navigation-only and may ride along: `Cách chặn quảng
-  cáo trên YouTube` help row and the private-browser link.
+- Phase 4 leftovers are navigation-only. Decided against the
+  `Cách chặn quảng cáo trên YouTube` row: AdFree has exactly one help target
+  (`HELP_URL`, the project README, already surfaced in Settings) and no docs
+  page for this how-to, so a second navigation row on the Protection list would
+  either duplicate it or point at a third party's site. The private-browser
+  link stays out of scope with the rest of that product.
 - Allowlist (`67`): keep the current HTTPS website rules as the answer. If a
   dedicated search + add screen is still wanted, reuse the user-rule list
   path; it is cosmetic parity, not engine behavior.
 - Rust tests: v5→v6 migration keeps row counts and old rows read with
   defaults; `flags` transport/roaming round-trip; `GROUP BY app, category`
   counts; per-app routing override; DNS-only lists do not match HTTP rules.
-  For the v7 traffic table: `store::tests::traffic_rows_follow_the_log` (the
-  rows age out and clear with the log) and the extended
-  `app_usage_counts_blocked_rows_and_bytes` (per-app sums and the header
-  totals); `mitm::relay::tests::a_retired_relay_reports_what_crossed_it`
-  checks the relay reports payload only, once, with the owning package.
+  For the v7 traffic table, seven checks:
+  `store::tests::traffic_rows_follow_the_log` (the rows age out and clear with
+  the log), the extended `app_usage_counts_blocked_rows_and_bytes` (per-app
+  sums and the header totals),
+  `mitm::relay::tests::a_retired_relay_reports_what_crossed_it` (payload only,
+  once, with the owning package),
+  `engine::tests::a_reaped_udp_mapping_lands_in_the_store` (the engine's own
+  sink really reaches the database: two datagrams reaped on idle expiry, read
+  back through the per-app join),
+  `udpnat::tests::a_retired_mapping_reports_its_datagrams` and
+  `a_retired_flag_reports_before_the_mapping_goes` (both UDP retirement
+  paths), and `engine::tests::a_reaped_quic_flow_reports_its_datagrams` (a fed
+  datagram is counted and a reaped QUIC flow reports it).
+- Known flake, not caused by this work:
+  `filter::tests::detailed_lookup_reports_rule_and_list` fails about one full
+  suite run in three, and fails every run filtered to `filter::tests` alone.
+  Every filter test writes its list bodies to the same
+  `/tmp/adfree-filter-test` path, so a parallel test can replace the body the
+  rule text is read back from. It reproduced with the traffic tests skipped.
 - Kotlin tests: `NetworkRequestLog` mapping, CSV columns, data-type filter.
 - Bindings: `./gradlew :app:verifyBindings` with `ADFREE_RUST_TARGET_DIR`
   and `ANDROID_NDK_HOME`, rebuild the four ABIs with `cargo ndk`, then
@@ -434,7 +467,9 @@ sheet was skipped.
 - A write per closed relay doubles SQLite traffic if not batched. It is
   batched: `flow_traffic` rows ride the log writer's channel and commit in the
   same transaction as the decision rows, and a relay that moved zero bytes
-  writes nothing.
+  writes nothing. Datagram mappings retire on a 60 s idle clock and QUIC flows
+  on their own, so a chatty app adds roughly one row per live mapping, capped by
+  `UDP_MAX_FLOWS` (512) and `bridge::MAX_FLOWS`.
 - Per-app proxy lookup adds a map probe on the dial path; reuse the firewall
   map and measure before shipping.
 - Splitting DNS lists can change existing block counts; run the full filter

@@ -2570,6 +2570,14 @@ class AdGuardRepository(
 
         /** Ceiling for the in-RAM window so paging cannot grow without bound. */
         const val LOG_ROW_CAP = 10_000
+
+        /**
+         * What the SQLite store actually keeps, for the log's retention note.
+         * `rust/src/store/log.rs` owns these windows (`MAX_ROWS`, `KEEP_MS`);
+         * change them there and here together.
+         */
+        const val LOG_DB_MAX_ROWS = 200_000
+        const val LOG_DB_KEEP_DAYS = 7
         private const val MAX_APPS_SHOWN = 250
         private const val BUILTIN_CUSTOM = "builtin_custom"
 

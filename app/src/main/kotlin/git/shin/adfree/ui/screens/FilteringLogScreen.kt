@@ -220,6 +220,22 @@ fun FilteringLogScreen(
                     fontSize = 12.sp,
                     color = AdGuardTextMuted
                 )
+                // The screen mirrors a window of the database, so state the
+                // window the store actually keeps: AdGuard advertises "the
+                // newest 10k requests" and this list loads fewer rows than
+                // that, which reads as a shorter history than there is.
+                Text(
+                    text = stringResource(
+                        R.string.log_retention_note,
+                        AdGuardRepository.LOG_DB_MAX_ROWS,
+                        AdGuardRepository.LOG_DB_KEEP_DAYS,
+                    ),
+                    fontSize = 11.sp,
+                    color = AdGuardTextMuted,
+                    modifier = Modifier
+                        .padding(top = 2.dp)
+                        .testTag("log_retention_note")
+                )
             }
 
             // Both actions sit at the right edge; SpaceBetween with three

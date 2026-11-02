@@ -835,6 +835,7 @@
     <string name="log_empty_filtered_title">No matching entries</string>
     <string name="log_empty_filtered_body">Change the search or clear the filters</string>
     <string name="log_window_capped">Showing the newest %1$d of %2$d rows</string>
+    <string name="log_retention_note">The database keeps the newest %1$d rows for %2$d days</string>
     <string name="log_status_blocked">Blocked</string>
     <string name="log_status_allowed">Allowed</string>
     <string name="log_status_whitelisted">Allowlisted</string>
