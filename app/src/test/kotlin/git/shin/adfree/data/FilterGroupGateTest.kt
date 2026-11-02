@@ -2,6 +2,7 @@ package git.shin.adfree.data
 
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
@@ -38,5 +39,29 @@ class FilterGroupGateTest {
     @Test
     fun `other lists are never gated`() {
         assertNull(FilterGroup.OTHER.moduleGate)
+    }
+
+    /**
+     * The card's one-tap Enable button flips the module behind the gate, through
+     * an intent that calls one repository toggle. A gate whose toggle is missing
+     * or renamed would leave a button on screen that does nothing at all, so the
+     * enum-to-toggle pairing is pinned here rather than trusted to the screen.
+     */
+    @Test
+    fun `every module gate has a repository toggle`() {
+        val toggles = AdGuardRepository::class.java.methods
+            .filter { method ->
+                method.parameterTypes.size == 1 && method.parameterTypes[0] == java.lang.Boolean.TYPE
+            }
+            .map { it.name }
+        for (gate in ModuleGate.entries) {
+            val toggle = when (gate) {
+                ModuleGate.AD_BLOCKING -> "toggleAdBlocking"
+                ModuleGate.ANNOYANCES -> "toggleAnnoyances"
+                ModuleGate.TRACKING -> "toggleTrackingProtection"
+                ModuleGate.BROWSING_SECURITY -> "toggleBrowsingSecurity"
+            }
+            assertTrue("$gate needs $toggle()", toggle in toggles)
+        }
     }
 }
