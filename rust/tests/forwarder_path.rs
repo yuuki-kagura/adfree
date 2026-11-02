@@ -306,15 +306,19 @@ fn ech_configs_are_stripped_only_while_https_filtering_is_on() {
     resolver
         .set_read_timeout(Some(std::time::Duration::from_secs(2)))
         .expect("resolver timeout");
+    // Answers every query that reaches it until the read timeout ends the loop,
+    // and reports how many the engine forwarded.
     let resolver_thread = std::thread::spawn(move || {
         let mut buf = [0u8; 2048];
-        for _ in 0..2 {
-            let (n, peer) = resolver.recv_from(&mut buf).expect("recv query");
+        let mut forwarded = 0;
+        while let Ok((n, peer)) = resolver.recv_from(&mut buf) {
             let q = dns::parse_query(&buf[..n]).expect("a valid DNS query must arrive");
             assert_eq!(q.qtype, 0x0041, "the type-65 query must reach the resolver");
             let reply = https_answer(&q, &[0xab; 8]);
             resolver.send_to(&reply, peer).expect("answer");
+            forwarded += 1;
         }
+        forwarded
     });
 
     let sockets: Vec<UdpSocket> = (0..4)
@@ -363,7 +367,13 @@ fn ech_configs_are_stripped_only_while_https_filtering_is_on() {
     core.set_config(Config::default());
     unsafe { libc::close(tun_w) };
     unsafe { libc::close(tun_r) };
-    resolver_thread.join().expect("resolver thread");
+    let forwarded = resolver_thread.join().expect("resolver thread");
+    // The second answer comes out of the DNS cache, which holds the origin's
+    // unstripped copy, so the policy above is proven to apply to a hit.
+    assert_eq!(
+        forwarded, 1,
+        "only the first query may reach the resolver; the second is a cache hit"
+    );
 }
 
 /// A host that requires ECH cannot be filtered at all: the terminator sees
@@ -393,12 +403,14 @@ fn a_host_that_requires_ech_keeps_its_config() {
         .expect("resolver timeout");
     let resolver_thread = std::thread::spawn(move || {
         let mut buf = [0u8; 2048];
-        for _ in 0..2 {
-            let (n, peer) = resolver.recv_from(&mut buf).expect("recv query");
+        let mut forwarded = 0;
+        while let Ok((n, peer)) = resolver.recv_from(&mut buf) {
             let q = dns::parse_query(&buf[..n]).expect("a valid DNS query must arrive");
             let reply = https_answer(&q, CF_ECH_CONFIG);
             resolver.send_to(&reply, peer).expect("answer");
+            forwarded += 1;
         }
+        forwarded
     });
 
     let sockets: Vec<UdpSocket> = (0..4)
@@ -487,7 +499,13 @@ fn a_host_that_requires_ech_keeps_its_config() {
     core.set_config(Config::default());
     unsafe { libc::close(tun_w) };
     unsafe { libc::close(tun_r) };
-    resolver_thread.join().expect("resolver thread");
+    let forwarded = resolver_thread.join().expect("resolver thread");
+    // The exemption above is applied to the cached copy of the same answer, so
+    // the second query never goes upstream.
+    assert_eq!(
+        forwarded, 1,
+        "only the first query may reach the resolver; the second is a cache hit"
+    );
 }
 
 /// Full ECH, the opt-in trade: the client keeps the origin's config and may
@@ -579,4 +597,58 @@ fn full_ech_keeps_the_config_for_the_client() {
     unsafe { libc::close(tun_w) };
     unsafe { libc::close(tun_r) };
     resolver_thread.join().expect("resolver thread");
+}
+
+/// `Core::clear_dns_cache` is the API the app calls when the answer set has to
+/// go — it must drop the replayed answers themselves, not only the rule cache,
+/// the connection tracker and the in-flight queries.
+#[test]
+fn clearing_the_dns_cache_sends_the_next_query_upstream() {
+    let _guard = LOCK.lock().unwrap_or_else(|e| e.into_inner());
+
+    let resolver = UdpSocket::bind(SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 0)))
+        .expect("bind resolver");
+    let resolver_addr = resolver.local_addr().expect("resolver addr");
+    resolver
+        .set_read_timeout(Some(std::time::Duration::from_secs(2)))
+        .expect("resolver timeout");
+    let resolver_thread = std::thread::spawn(move || {
+        let mut buf = [0u8; 2048];
+        let mut forwarded = 0;
+        while let Ok((n, peer)) = resolver.recv_from(&mut buf) {
+            let q = dns::parse_query(&buf[..n]).expect("a valid DNS query must arrive");
+            let reply = https_answer(&q, &[0xab; 8]);
+            resolver.send_to(&reply, peer).expect("answer");
+            forwarded += 1;
+        }
+        forwarded
+    });
+
+    let sockets: Vec<UdpSocket> = (0..4)
+        .map(|_| {
+            UdpSocket::bind(SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 0)))
+                .expect("bind socket")
+        })
+        .collect();
+    let fds: Vec<i32> = sockets.iter().map(|s| s.as_raw_fd()).collect();
+    let (tun_w, tun_r) = fake_tun();
+
+    let core = core();
+    core.set_config(Config::default());
+    core.set_socket_fds(&fds);
+    core.set_resolver(resolver_addr);
+    core.set_tun_fd_for_test(tun_w);
+
+    ask_https(core, tun_r, "cleared.example.com", 0x7001);
+    core.clear_dns_cache();
+    ask_https(core, tun_r, "cleared.example.com", 0x7002);
+
+    core.set_config(Config::default());
+    unsafe { libc::close(tun_w) };
+    unsafe { libc::close(tun_r) };
+    let forwarded = resolver_thread.join().expect("resolver thread");
+    assert_eq!(
+        forwarded, 2,
+        "a cleared name must be asked upstream again, not replayed from the cache"
+    );
 }

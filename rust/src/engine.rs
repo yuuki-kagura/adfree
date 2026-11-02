@@ -1581,6 +1581,7 @@ impl Core {
     }
 
     pub fn clear_dns_cache(&self) {
+        self.dns_cache.lock().unwrap().clear();
         self.filter.clear_cache();
         self.conntrack.lock().unwrap().clear();
         self.upstream.lock().unwrap().clear();
