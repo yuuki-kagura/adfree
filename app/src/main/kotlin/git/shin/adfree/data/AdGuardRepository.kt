@@ -369,7 +369,7 @@ class AdGuardRepository(
                 for (row in rows.asReversed()) {
                     if (row.id <= baseline) continue
                     if (row.status != FilterStatus.BLOCKED) continue
-                    if (row.matchedRule != "App firewall") continue
+                    if (row.filterListName != "App firewall") continue
                     val packageName = row.appPackage ?: continue
                     val rule = _appFirewallRules.value.firstOrNull {
                         it.packageName == packageName

@@ -3359,14 +3359,31 @@ impl Core {
     }
 
     /// Counts and logs a refused flow whose reset has already been sent.
+    ///
+    /// Only a refusal the engine made *as a decision* belongs in the blocked
+    /// totals. The resets sent because a relay could not be built — port reuse
+    /// before the poller reaped the previous flow, a failed `connect()`, a
+    /// session that would not start — are transport failures. Counting them
+    /// put connections that no rule refused into the notification's blocked
+    /// number, and they kept being logged while protection was paused, because
+    /// no filter gate stands between them and the wire.
     fn record_tcp_reset(&self, pkt: &Packet<'_>, reason: Option<&'static str>) {
+        let Some(rule) = reason else { return };
         self.stats.inc(&self.stats.tcp_reset);
         let saved = BYTES_PER_BLOCKED_REQUEST;
         self.stats.add(&self.stats.bytes_saved, saved);
         let host = self
             .host_for_ip(pkt.dst_ip())
             .unwrap_or_else(|| pkt.dst_ip_text());
-        let rule = reason.unwrap_or("connection dropped");
+        // Every app-firewall reason names the app and the network it was barred
+        // from. The DNS half already files those rows under "App firewall", and
+        // the blocked-app notification reads that field, so the TCP half has to
+        // agree or its rows notify nobody.
+        let list = if rule.starts_with("app not allowed") {
+            "App firewall"
+        } else {
+            "Protection"
+        };
         let category = if rule.contains("DNS") {
             crate::filter::CAT_TRACKER
         } else {
@@ -3385,7 +3402,7 @@ impl Core {
                 // connection as `ip:port`, not the bare address.
                 &format!("{}:{}", pkt.dst_ip_text(), pkt.dst_port),
                 rule,
-                "Protection",
+                list,
                 category,
                 0,
                 saved as u32,
@@ -7323,6 +7340,87 @@ mod tests {
         assert_eq!(events.len(), 1);
         assert_eq!(events[0].action, crate::events::ACTION_TCP_RESET);
         assert_eq!(events[0].app(), "com.example.news");
+        // The blocked-app notification looks for this list name; a TCP refusal
+        // filed anywhere else would notify nobody.
+        assert_eq!(events[0].list(), "App firewall");
+    }
+
+    /// A flow refused because its destination was learned from a blocked
+    /// answer IS a decision, so it keeps counting and keeps its row.
+    #[test]
+    fn a_reset_of_a_learned_blocked_ip_counts_as_a_block() {
+        use std::os::unix::io::IntoRawFd;
+
+        let core = Core::new();
+        core.set_socket_protector(Arc::new(AllowAll));
+        core.set_config(Config::default());
+        let tun = std::fs::OpenOptions::new()
+            .write(true)
+            .open("/dev/null")
+            .expect("write end")
+            .into_raw_fd();
+        core.set_tun_fd_for_test(tun);
+        core.conntrack.lock().unwrap().learn(
+            &crate::dns::LearnedRecord {
+                ip: packet::ip_key_from(std::net::IpAddr::from([93, 184, 216, 34])),
+                ttl: 60,
+            },
+            "ads.example.test",
+            true,
+            now_ms(),
+        );
+
+        core.handle_packet(&tcp_syn(40000, [93, 184, 216, 34], 80));
+
+        assert_eq!(core.stats().tcp_reset.load(Ordering::Relaxed), 1);
+        let events = core.take_events(8);
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].rule(), "connection dropped");
+        assert_eq!(events[0].list(), "Protection");
+    }
+
+    /// A SYN that arrives while the previous flow on its client port is still
+    /// waiting to be reaped has to be refused — but that refusal is a transport
+    /// detail, not a filtering decision, so it belongs neither in the blocked
+    /// totals nor in the log.
+    #[test]
+    fn a_refused_reused_port_is_not_counted_as_a_block() {
+        use std::os::unix::io::IntoRawFd;
+
+        let core = Core::new();
+        core.set_socket_protector(Arc::new(AllowAll));
+        core.set_config(Config::default());
+        let tun = std::fs::OpenOptions::new()
+            .write(true)
+            .open("/dev/null")
+            .expect("write end")
+            .into_raw_fd();
+        core.set_tun_fd_for_test(tun);
+        let flow = crate::mitm::tcp::Flow::new(
+            crate::packet::IpKey::V4(u32::from_be_bytes([10, 0, 2, 15])),
+            40000,
+            80,
+            7,
+            7000,
+        );
+        let relay = crate::mitm::relay::Relay::new_plain(
+            flow,
+            -1,
+            tcp_syn(40000, [93, 184, 216, 34], 80),
+            crate::mitm::relay::DEFAULT_MSS,
+            true,
+        );
+        core.relays.lock().unwrap().insert(relay);
+
+        core.handle_packet(&tcp_syn(40000, [93, 184, 216, 34], 80));
+
+        assert_eq!(
+            core.stats().tcp_reset.load(Ordering::Relaxed),
+            0,
+            "a flow refused for port reuse is not a blocked request"
+        );
+        assert_eq!(core.stats().bytes_saved.load(Ordering::Relaxed), 0);
+        assert!(core.take_events(8).is_empty());
     }
 
     #[test]
