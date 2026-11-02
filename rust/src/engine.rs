@@ -246,9 +246,10 @@ pub struct Config {
     pub tracking_protection: bool,
     /// DNS protection; off means host lookups are forwarded unfiltered.
     pub dns_protection: bool,
-    /// Let a host that is blocked in a tight retry loop through for a cooldown
-    /// (see [`crate::smart`]). On by default: a refused request an app insists
-    /// on otherwise costs CPU on every retry.
+    /// Let one app that is blocked on the same host in a tight retry loop
+    /// through for a cooldown (see [`crate::smart`]). Off by default: the
+    /// cooldown is a hole in the blocking, and a benchmark host that trips it
+    /// connects. Apps that genuinely need a request can opt in from the UI.
     pub smart_filtering: bool,
     pub block_mode: BlockMode,
     /// Log requests that were *not* blocked (off by default: pure CPU cost).
@@ -293,7 +294,7 @@ impl Default for Config {
             browsing_security: true,
             tracking_protection: true,
             dns_protection: true,
-            smart_filtering: true,
+            smart_filtering: false,
             block_mode: BlockMode::NxDomain,
             log_allowed: false,
             eco_mode: true,
@@ -635,8 +636,9 @@ pub struct Core {
     /// opened back to back are set up in the order they were answered.
     setup_jobs: Mutex<std::collections::VecDeque<SetupJob>>,
     conntrack: Mutex<ConnTable>,
-    /// Hosts let through because their block is being retried in a loop
-    /// (see [`crate::smart`]); disabled by the matching config switch.
+    /// Per (host, app) windows that spare a block being retried in a loop
+    /// (see [`crate::smart`]); the matching config switch is off by default,
+    /// so the table stays empty unless the user opts in.
     smart: Mutex<crate::smart::SmartFilter>,
     /// User `host -> address` answers, checked before the filter lists.
     dns_rewrites: RwLock<Vec<crate::dnsrewrite::DnsRewriteRule>>,
@@ -864,7 +866,7 @@ impl Core {
             setup_fd: unsafe { libc::eventfd(0, libc::EFD_CLOEXEC | libc::EFD_NONBLOCK) },
             setup_jobs: Mutex::new(std::collections::VecDeque::new()),
             conntrack: Mutex::new(ConnTable::new()),
-            smart: Mutex::new(crate::smart::SmartFilter::new(true)),
+            smart: Mutex::new(crate::smart::SmartFilter::default()),
             dns_rewrites: RwLock::new(Vec::new()),
             safe_cache: Mutex::new(FxHashMap::default()),
             dns_cache: Mutex::new(crate::dnscache::DnsCache::new()),
@@ -3291,10 +3293,18 @@ impl Core {
         drop(conn);
         // The address came from a DNS answer learned as blocked. An app
         // that keeps dialling it is the retry loop smart filtering exists
-        // for: once the host trips the limit the SYN is relayed as usual.
+        // for: once that (host, app) pair trips the limit the SYN is relayed
+        // as usual. With the switch down — the shipped default — the refusal
+        // stands and no attribution or table lock is paid for it.
         match verdict {
             IpVerdict::Blocked { host } => {
-                if self.smart.lock().unwrap().note_blocked(&host) {
+                let spared = cfg.smart_filtering
+                    && self
+                        .smart
+                        .lock()
+                        .unwrap()
+                        .note_blocked(&host, self.uid_for_tcp(pkt));
+                if spared {
                     None
                 } else {
                     Some("connection dropped")
@@ -3523,11 +3533,19 @@ impl Core {
         // rule really applies to. Without TLS termination there is nothing to
         // serve it, so the host is sinkholed as usual rather than let through.
         let deferred = verdict.redirect && self.mitm_ready(cfg);
-        // A host the app keeps demanding must not become a retry storm: after
-        // a few blocked attempts inside the window it is forwarded for a
-        // cooldown and the answer below is learned as allowed.
-        let smart_allowed =
-            verdict.blocked && !deferred && self.smart.lock().unwrap().note_blocked(host);
+        // One app demanding a host it keeps losing must not become a retry
+        // storm: after a few blocked attempts from that app inside the window,
+        // the host is forwarded for a cooldown and the answer below is learned
+        // as allowed. The lookup only happens when the feature is on and the
+        // query was refused, so the default path never pays for it.
+        let smart_allowed = verdict.blocked
+            && !deferred
+            && cfg.smart_filtering
+            && self
+                .smart
+                .lock()
+                .unwrap()
+                .note_blocked(host, self.uid_for_udp(pkt));
         if verdict.blocked && !deferred && !smart_allowed {
             self.stats.inc(&self.stats.dns_blocked);
             let saved = BYTES_PER_BLOCKED_REQUEST;
@@ -3602,19 +3620,34 @@ impl Core {
             if !forwarded {
                 self.forward_query(pkt, Some(&query), None);
             }
-            if cfg.log_allowed && self.logging_live() {
-                let packages = app_packages.unwrap_or_else(|| self.apps_for_udp(pkt));
-                let mut event = events::with_app(
-                    events::allow_event(host, &self.dns_server_text(), latency_ns),
-                    first_app(&packages),
-                );
-                if let Some((answer, reply_len)) = &served {
-                    if !answer.is_empty() {
-                        event = events::with_answer(event, answer);
-                    }
-                    event = events::with_traffic(event, 0, *reply_len);
+            // A host the lists refuse but a retry window let through is the one
+            // exception the user has to be able to see: it explains a connection
+            // the lists say should not exist. So the spared row is written even
+            // when allowed traffic is not being logged, while the ordinary allow
+            // row keeps its own switch.
+            if self.logging_live() && (smart_allowed || cfg.log_allowed) {
+                let packages = app_packages
+                    .take()
+                    .unwrap_or_else(|| self.apps_for_udp(pkt));
+                if smart_allowed {
+                    self.log_event(events::with_app(
+                        events::spared_event(host, &self.dns_server_text(), latency_ns),
+                        first_app(&packages),
+                    ));
                 }
-                self.log_event(event);
+                if cfg.log_allowed {
+                    let mut event = events::with_app(
+                        events::allow_event(host, &self.dns_server_text(), latency_ns),
+                        first_app(&packages),
+                    );
+                    if let Some((answer, reply_len)) = &served {
+                        if !answer.is_empty() {
+                            event = events::with_answer(event, answer);
+                        }
+                        event = events::with_traffic(event, 0, *reply_len);
+                    }
+                    self.log_event(event);
+                }
             }
         }
     }
@@ -4136,11 +4169,11 @@ impl Core {
         let verdict = self.filter.check_host(&host);
         // A `$redirect` host is answered by the HTTPS path, so its addresses
         // must stay reachable — but only while that path is actually armed.
-        // A host in a smart-allow window is reachable too, otherwise the DNS
-        // answer would contradict the forwarded query.
-        let blocked = verdict.blocked
-            && !(verdict.redirect && mitm)
-            && !self.smart.lock().unwrap().allows(&host);
+        // A smart-allow window is deliberately not consulted here: the tracker
+        // learns per address and the SYN path decides per (host, app), so an
+        // app in its cooldown still connects while every other app keeps
+        // meeting the block this answer came from.
+        let blocked = verdict.blocked && !(verdict.redirect && mitm);
         let records = dns::parse_answers(message);
         if records.is_empty() {
             return;
@@ -4453,8 +4486,15 @@ impl Core {
     /// that always need the name: the request log names the app on every
     /// entry, so a reset whose flows match no `$app=` rule still gets one.
     fn resolve_tcp_apps(&self, pkt: &Packet<'_>) -> Vec<String> {
+        self.packages_for_uid(self.uid_for_tcp(pkt))
+    }
+
+    /// The uid owning one TCP flow: what flow attribution resolves before it
+    /// maps to package names, so callers that only need to tell apps apart
+    /// (the smart filter's windows) pay no clone. 0 means unattributable.
+    fn uid_for_tcp(&self, pkt: &Packet<'_>) -> crate::smart::FlowOwner {
         let lookup = self.uid_lookup.read().unwrap().clone();
-        let uid = match lookup {
+        match lookup {
             Some(lookup) => lookup
                 .owner_uid(
                     PROTO_TCP,
@@ -4469,15 +4509,19 @@ impl Core {
             // `pin_uid_for_port`, since their synthetic ports belong to no
             // real process.
             None => self.uidmap.lock().unwrap().lookup_tcp(pkt.src_port),
-        };
-        self.packages_for_uid(uid)
+        }
     }
 
     /// Packages owning one UDP datagram. The platform callback answers on
     /// Android 14+; older releases fall back to the kernel's socket table.
     fn apps_for_udp(&self, pkt: &Packet<'_>) -> Vec<String> {
+        self.packages_for_uid(self.uid_for_udp(pkt))
+    }
+
+    /// The uid owning one UDP datagram; see [`Self::uid_for_tcp`].
+    fn uid_for_udp(&self, pkt: &Packet<'_>) -> crate::smart::FlowOwner {
         let lookup = self.uid_lookup.read().unwrap().clone();
-        let uid = match lookup {
+        match lookup {
             Some(lookup) => lookup
                 .owner_uid(
                     PROTO_UDP,
@@ -4488,8 +4532,7 @@ impl Core {
                 )
                 .unwrap_or(0),
             None => self.uidmap.lock().unwrap().lookup(pkt.src_port),
-        };
-        self.packages_for_uid(uid)
+        }
     }
 
     fn packages_for_uid(&self, uid: u32) -> Vec<String> {
@@ -6369,7 +6412,8 @@ mod tests {
 
     /// Some apps retry a refused request until it succeeds. After a few
     /// attempts inside the window the host is forwarded, which stops the
-    /// storm; turning the switch off restores plain blocking.
+    /// storm. That is opt-in: both the shipped default and an explicit "off"
+    /// keep the block no matter how hard the app tries.
     #[test]
     fn a_blocked_query_retry_loop_is_forwarded() {
         let dir = std::env::temp_dir().join("adfree-engine-smart");
@@ -6394,6 +6438,10 @@ mod tests {
 
         let core = Core::new();
         core.set_lists(lists.clone(), Vec::new());
+        core.set_config(Config {
+            smart_filtering: true,
+            ..Config::default()
+        });
         for _ in 0..crate::smart::RETRY_LIMIT - 1 {
             assert_eq!(dns_reply_rcode(&core, "ads.test"), Some(NXDOMAIN));
         }
@@ -6402,6 +6450,12 @@ mod tests {
         // forwarder answers SERVFAIL — anything but NXDOMAIN is the signal.
         assert_eq!(dns_reply_rcode(&core, "ads.test"), Some(SERVFAIL));
         assert_eq!(dns_reply_rcode(&core, "ads.test"), Some(SERVFAIL));
+
+        let shipped = Core::new();
+        shipped.set_lists(lists.clone(), Vec::new());
+        for _ in 0..crate::smart::RETRY_LIMIT * 4 {
+            assert_eq!(dns_reply_rcode(&shipped, "ads.test"), Some(NXDOMAIN));
+        }
 
         let plain = Core::new();
         plain.set_lists(lists, Vec::new());

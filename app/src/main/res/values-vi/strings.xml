@@ -899,7 +899,7 @@
     <string name="settings_log_allowed_title">Ghi log cả request hợp lệ</string>
     <string name="settings_log_allowed_subtitle">Tắt để tiết kiệm CPU: chỉ ghi lại những gì bị chặn</string>
     <string name="settings_smart_filtering_title">Lọc thông minh</string>
-    <string name="settings_smart_filtering_subtitle">Host bị chặn liên tục được tạm cho qua 60 giây để app ngừng retry tốn CPU</string>
+    <string name="settings_smart_filtering_subtitle">Mặc định tắt. Khi bật, tên miền bị cùng một app chặn 7 lần trong 10 giây sẽ được cho qua 60 giây — trong thời gian đó tên miền này vẫn kết nối được</string>
     <string name="settings_block_mode_title">Trả lời khi chặn</string>
     <string name="settings_block_mode_nxdomain">NXDOMAIN (không tồn tại)</string>
     <string name="settings_block_mode_zero">0.0.0.0</string>

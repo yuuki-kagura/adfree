@@ -899,7 +899,7 @@
     <string name="settings_log_allowed_title">Log allowed requests too</string>
     <string name="settings_log_allowed_subtitle">Turn off to save CPU: only blocked requests are recorded</string>
     <string name="settings_smart_filtering_title">Smart filtering</string>
-    <string name="settings_smart_filtering_subtitle">Repeatedly blocked hosts are let through for 60 seconds so apps stop retrying</string>
+    <string name="settings_smart_filtering_subtitle">Off by default. When on, a host blocked 7 times in 10 seconds by the same app is let through for 60 seconds — that host is reachable while the window is open</string>
     <string name="settings_block_mode_title">Block response</string>
     <string name="settings_block_mode_nxdomain">NXDOMAIN (not found)</string>
     <string name="settings_block_mode_zero">0.0.0.0</string>

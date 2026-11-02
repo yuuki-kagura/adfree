@@ -350,6 +350,29 @@ pub fn allow_event(domain: &str, ip: &str, latency_ns: u32) -> Event {
     build(ACTION_ALLOW, domain, ip, "", "", latency_ns, 0, 0, false)
 }
 
+/// A request the lists refused and the smart filter let through. The action
+/// stays ALLOW so the row never inflates a block counter, while the rule and
+/// list columns say which switch spared it and why — without that row a
+/// connection that the lists forbid looks unexplained.
+pub fn spared_event(domain: &str, ip: &str, latency_ns: u32) -> Event {
+    let rule = format!(
+        "blocked {}x in {}s by the same app",
+        crate::smart::RETRY_LIMIT,
+        crate::smart::RETRY_WINDOW_MS / 1000
+    );
+    build(
+        ACTION_ALLOW,
+        domain,
+        ip,
+        &rule,
+        "Smart filtering",
+        latency_ns,
+        0,
+        0,
+        false,
+    )
+}
+
 pub fn block_event(
     action: u8,
     domain: &str,

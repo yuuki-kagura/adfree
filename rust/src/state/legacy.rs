@@ -182,7 +182,6 @@ fn settings_from(blob: LegacySettings) -> LegacySettingsPart {
     take!(is_ad_blocking_enabled, ad_blocking);
     take!(is_tracking_protection_enabled, tracking);
     take!(is_dns_protection_enabled, dns);
-    take!(is_smart_filtering_enabled, smart_filtering);
     take!(is_https_filtering_enabled, https);
     // The old switch meant "Full ECH" (allow ECH end to end), the inverse of
     // today's Block ECH. Carrying it over inverted keeps the choice the user
@@ -231,6 +230,13 @@ fn settings_from(blob: LegacySettings) -> LegacySettingsPart {
     p.block_web_rtc_leaks = false;
     let _ = blob.stealth;
     let _ = blob.block_web_rtc;
+
+    // Same reasoning for the old smart filtering: the switch was on and silent,
+    // so `true` in a blob is not a choice the user made. Carrying it forward
+    // would keep a blocked probe host connecting for a minute at a time; the
+    // window is opt-in now.
+    p.is_smart_filtering_enabled = false;
+    let _ = blob.smart_filtering;
 
     p.proxy = ProxyState {
         enabled: blob.proxy_enabled.unwrap_or(defaults.proxy.enabled),
@@ -423,6 +429,20 @@ mod tests {
         assert!(p.proxy.enabled);
         assert_eq!(p.proxy.port, 1080);
         assert!(!p.safe_search);
+    }
+
+    /// The old smart filter was on and silent, so `true` in a blob is not a
+    /// choice the user made. Upgrades must not inherit a blocked host that
+    /// connects for a minute at a time.
+    #[test]
+    fn legacy_smart_filtering_does_not_carry_over() {
+        let part = settings_from_str(r#"{"smartFiltering": true}"#);
+        assert!(
+            !part.protection.is_smart_filtering_enabled,
+            "an opted-in-looking blob still lands on the new default (off)"
+        );
+        let part = settings_from_str(r#"{"smartFiltering": false}"#);
+        assert!(!part.protection.is_smart_filtering_enabled);
     }
 
     #[test]

@@ -567,9 +567,9 @@ data class ProtectionSettings(
     val isBrowsingSecurityEnabled: Boolean = true,
     val isTrackingProtectionEnabled: Boolean = true,
     val isDnsProtectionEnabled: Boolean = true,
-    // On by default: an app that keeps retrying a blocked host otherwise
-    // burns CPU on connections the engine resets every time.
-    val isSmartFilteringEnabled: Boolean = true,
+    // Off by default: the retry window lets a host the lists refuse connect,
+    // so it is a hole in the blocking an app has to ask for.
+    val isSmartFilteringEnabled: Boolean = false,
     // Off until the CA is installed in the trust store and the user opts in:
     // terminating TLS without a trusted certificate would hand apps a leaf
     // they reject, breaking HTTPS instead of filtering it.

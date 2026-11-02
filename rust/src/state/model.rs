@@ -111,6 +111,8 @@ pub struct ProtectionState {
     pub is_browsing_security_enabled: bool,
     pub is_tracking_protection_enabled: bool,
     pub is_dns_protection_enabled: bool,
+    /// Spare one app that keeps retrying a host the lists refuse (see
+    /// [`crate::smart`]). Opt-in: the cooldown lets a blocked host connect.
     pub is_smart_filtering_enabled: bool,
     pub is_https_filtering_enabled: bool,
     /// Terminate and filter QUIC (HTTP/3) instead of dropping it. Needs HTTPS
@@ -170,7 +172,9 @@ impl Default for ProtectionState {
             is_browsing_security_enabled: true,
             is_tracking_protection_enabled: true,
             is_dns_protection_enabled: true,
-            is_smart_filtering_enabled: true,
+            // The retry window is a hole in the blocking: a host it spares
+            // connects. Off until the user asks for it.
+            is_smart_filtering_enabled: false,
             is_https_filtering_enabled: false,
             // AdGuard keeps HTTP/3 blocked until the user opts in: the
             // termination is new and browser support varies.
