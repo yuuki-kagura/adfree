@@ -46,12 +46,14 @@ import git.shin.adfree.model.ProtectionStats
 import git.shin.adfree.model.ProtectionSettings
 import git.shin.adfree.model.ProxySettings
 import git.shin.adfree.model.ProtocolType
+import git.shin.adfree.model.RequestCategory
 import git.shin.adfree.ui.CoreText
 import git.shin.adfree.ui.Localization
 import git.shin.adfree.ui.UiText
 import git.shin.adfree.vpn.HttpsReminder
 import git.shin.adfree.work.FilterUpdateScheduler
 import git.shin.adfree.work.FirewallNotifier
+import git.shin.adfree.work.SecurityNotifier
 import java.io.IOException
 import java.net.URLEncoder
 import java.util.Calendar
@@ -95,6 +97,14 @@ private const val MAX_BACKUP_BYTES = 4 * 1024 * 1024
 private const val FIREWALL_NOTICE_POLL_MS = 5_000L
 private const val FIREWALL_NOTICE_PAGE = 32
 private const val FIREWALL_NOTICE_WINDOW_MS = 60 * 60 * 1000L
+
+/**
+ * Malicious-domain notifications: same cadence and window as the firewall,
+ * keyed by domain instead of package. The dedupe table is bounded because one
+ * hostile app can pull in a fresh lookalike domain per request.
+ */
+private const val SECURITY_NOTICE_PAGE = 32
+private const val SECURITY_NOTICE_MAX_DOMAINS = 64
 
 /**
  * Single source of truth.
@@ -384,6 +394,50 @@ class AdGuardRepository(
                         packageName,
                         rule?.appName ?: packageName,
                     )
+                }
+            }
+        }
+    }
+
+    /**
+     * One malicious domain per window, raised when a security list refuses a
+     * lookup. Blocking security is silent by design, so the log is the only
+     * place a user can find out an attempt was stopped; this lifts the newest
+     * row into the shade. As with the firewall watcher, the first scan only
+     * records a baseline so a restart cannot replay an old block.
+     */
+    private fun startSecurityNotifier() {
+        scope.launch {
+            while (true) {
+                delay(FIREWALL_NOTICE_POLL_MS)
+                val settings = _settings.value
+                if (!settings.isProtectionActive || !settings.isBrowsingSecurityEnabled) {
+                    lastSecurityLogId = null
+                    continue
+                }
+                val rows = withContext(Dispatchers.IO) {
+                    runCatching {
+                        engine.logPage(0, SECURITY_NOTICE_PAGE).map(NetworkRequestLog::from)
+                    }.getOrDefault(emptyList())
+                }
+                if (rows.isEmpty()) continue
+                val newest = rows.maxOf { it.id }
+                val baseline = lastSecurityLogId
+                lastSecurityLogId = newest
+                if (baseline == null) continue
+                val now = System.currentTimeMillis()
+                for (row in rows.asReversed()) {
+                    if (row.id <= baseline) continue
+                    if (row.status != FilterStatus.BLOCKED) continue
+                    if (row.category != RequestCategory.MALWARE) continue
+                    if (row.domain.isBlank()) continue
+                    if (securityNoticeAt.size >= SECURITY_NOTICE_MAX_DOMAINS) {
+                        securityNoticeAt.entries.retainAll { it.value + FIREWALL_NOTICE_WINDOW_MS > now }
+                    }
+                    val last = securityNoticeAt[row.domain] ?: 0L
+                    if (now - last < FIREWALL_NOTICE_WINDOW_MS) continue
+                    securityNoticeAt[row.domain] = now
+                    SecurityNotifier.notify(context, settings.appLanguage, row.domain, row.filterListName)
                 }
             }
         }
@@ -1691,6 +1745,12 @@ class AdGuardRepository(
     /** Per-app timestamp of the last firewall notification (one per window). */
     private val firewallNoticeAt = HashMap<String, Long>()
 
+    /** Newest log row already considered by the security notification poller. */
+    private var lastSecurityLogId: Long? = null
+
+    /** Per-domain timestamp of the last malicious notice (one per window). */
+    private val securityNoticeAt = HashMap<String, Long>()
+
     /** The Apps screen reports its visibility so the poller can keep it live. */
     fun setAppUsageVisible(visible: Boolean) {
         appUsageVisible = visible
@@ -2539,6 +2599,7 @@ class AdGuardRepository(
     init {
         startStatsPoller()
         startFirewallNotifier()
+        startSecurityNotifier()
     }
 
     companion object {

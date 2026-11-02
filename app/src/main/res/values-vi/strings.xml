@@ -266,6 +266,9 @@
     <string name="notification_channel_firewall_description">Ứng dụng bị tường lửa chặn truy cập Internet</string>
     <string name="notification_firewall_title">Đã chặn %1$s</string>
     <string name="notification_firewall_text">Tường lửa đã chặn ứng dụng này truy cập Internet</string>
+    <string name="notification_security_title">%1$s là trang độc hại</string>
+    <string name="notification_security_text">Bị chặn theo danh sách malware hoặc lừa đảo</string>
+    <string name="notification_security_text_list">Bị chặn theo danh sách bảo mật %1$s</string>
     <string name="notification_filter_update_title">Đã cập nhật bộ lọc</string>
     <string name="notification_filter_update_text">Đã làm mới %1$d danh sách</string>
     <string name="threat_analyzing">Đang phân tích %1$s trên thiết bị…</string>

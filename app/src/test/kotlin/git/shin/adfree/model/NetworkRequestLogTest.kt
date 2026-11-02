@@ -93,6 +93,10 @@ class NetworkRequestLogTest {
         val tracker = NetworkRequestLog.from(event(CoreActions.TCP_RESET.toInt()))
         assertEquals(RequestCategory.AD, tracker.category)
         assertEquals(RequestCategory.TRACKER, RequestCategory.fromIndex(1))
+        // The malicious-domain notice only fires on rows the core tagged with
+        // CAT_MALWARE (rust/src/filter.rs: 5). If the two ever drift apart the
+        // notice silently stops appearing, so the number is pinned here.
+        assertEquals(RequestCategory.MALWARE, RequestCategory.fromIndex(5))
     }
 
     @Test

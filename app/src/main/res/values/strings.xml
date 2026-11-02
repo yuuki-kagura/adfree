@@ -267,6 +267,9 @@
     <string name="notification_channel_firewall_description">Apps stopped from using the Internet by the firewall</string>
     <string name="notification_firewall_title">%1$s blocked</string>
     <string name="notification_firewall_text">The firewall stopped this app from using the Internet</string>
+    <string name="notification_security_title">%1$s is a dangerous site</string>
+    <string name="notification_security_text">Blocked by a malware or phishing list</string>
+    <string name="notification_security_text_list">Blocked by the %1$s security list</string>
     <string name="notification_filter_update_title">Filters updated</string>
     <string name="notification_filter_update_text">Refreshed %1$d lists</string>
     <string name="threat_analyzing">Analyzing %1$s on this device…</string>
