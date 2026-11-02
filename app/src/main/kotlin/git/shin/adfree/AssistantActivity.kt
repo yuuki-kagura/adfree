@@ -24,8 +24,10 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Apps
@@ -426,7 +428,11 @@ private fun AssistantAppPanel(
     modifier: Modifier = Modifier,
 ) {
     Column(
+        // The sheet caps its height, so the panel scrolls instead of cutting the
+        // shortcuts off the bottom; the divider and the shortcut row below it sit
+        // outside this region and stay pinned.
         modifier
+            .verticalScroll(rememberScrollState())
             .fillMaxWidth()
             .padding(top = 6.dp),
     ) {
