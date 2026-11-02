@@ -35,6 +35,7 @@ pub mod logbuf;
 pub mod packet;
 pub mod pathmask;
 pub mod safesearch;
+pub mod services;
 pub mod smart;
 pub mod socks5;
 pub mod state;

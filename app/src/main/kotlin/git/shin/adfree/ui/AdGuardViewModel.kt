@@ -4,6 +4,7 @@ import android.util.Log
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import git.shin.adfree.R
+import git.shin.adfree.core.AssetState
 import git.shin.adfree.core.ConfigWarning
 import git.shin.adfree.core.CoreEngine
 import git.shin.adfree.data.AdGuardRepository
@@ -24,6 +25,7 @@ import git.shin.adfree.model.ProtectionSettings
 import git.shin.adfree.model.ProtectionStats
 import git.shin.adfree.model.ProxyAccess
 import git.shin.adfree.model.ProxySettings
+import git.shin.adfree.model.ServiceUsage
 import git.shin.adfree.model.ThreatAnalysisResult
 import git.shin.adfree.model.UserScriptInfo
 import git.shin.adfree.model.UserScriptStoreState
@@ -100,6 +102,9 @@ class AdGuardViewModel(
     private val _privateDnsOn = MutableStateFlow(false)
     val privateDnsOn: StateFlow<Boolean> = _privateDnsOn.asStateFlow()
 
+    /** The downloaded services table, or null while the shipped one is used. */
+    val servicesTableState: StateFlow<AssetState?> = repository.servicesState
+
     /**
      * One-shot request for the Protection tab to open a specific detail page.
      * The screen consumes it, so re-selecting the tab later lands on the list.
@@ -139,7 +144,10 @@ class AdGuardViewModel(
                 repository.logBlockedTotal,
                 repository.logAllowedTotal,
                 repository.windowTotals,
-            ) { total, blocked, allowed, window -> LogTotals(total, blocked, allowed, window) },
+                repository.serviceUsage,
+            ) { total, blocked, allowed, window, services ->
+                LogTotals(total, blocked, allowed, window, services)
+            },
             _searchQuery,
         ) { head, logs, totals, query ->
             val (tab, settings, stats) = head
@@ -152,6 +160,7 @@ class AdGuardViewModel(
                 totals.blocked,
                 totals.allowed,
                 totals.window,
+                totals.services,
                 query,
             )
         },
@@ -265,6 +274,7 @@ class AdGuardViewModel(
             settings = a.settings,
             stats = a.stats,
             windowTotals = a.windowTotals,
+            serviceUsage = a.services,
             logs = a.logs,
             filteredLogs = logs,
             logTotal = a.logTotal,
@@ -639,6 +649,10 @@ class AdGuardViewModel(
             is AdGuardIntent.RefreshAllSubscriptions -> repository.refreshAllSubscriptions()
             is AdGuardIntent.ToggleFilterList -> repository.toggleFilterList(intent.id, intent.enabled)
             is AdGuardIntent.SetFilterTrusted -> repository.setFilterTrusted(intent.id, intent.trusted)
+            is AdGuardIntent.SetServicesBreakdown ->
+                repository.setServicesBreakdownVisible(intent.visible)
+            is AdGuardIntent.SetServicesTableUrl -> repository.setServicesTableUrl(intent.url)
+            AdGuardIntent.RefreshServicesTable -> repository.refreshServicesTable()
             is AdGuardIntent.RunThreatScan -> handleThreatScan(intent.domain)
             is AdGuardIntent.ResetAiLab -> _aiLabState.value = AiLabUiState.Idle
             is AdGuardIntent.UpdateStealth -> repository.updateStealthSetting(
@@ -940,6 +954,7 @@ class AdGuardViewModel(
         val logBlockedTotal: Long,
         val logAllowedTotal: Long,
         val windowTotals: LogWindowTotals,
+        val services: List<ServiceUsage>,
         val query: String,
     )
 
@@ -949,6 +964,7 @@ class AdGuardViewModel(
         val blocked: Long,
         val allowed: Long,
         val window: LogWindowTotals,
+        val services: List<ServiceUsage>,
     )
 
     private data class UiPartB(

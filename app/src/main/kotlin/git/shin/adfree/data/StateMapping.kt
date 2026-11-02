@@ -88,6 +88,8 @@ internal fun ProtectionSettings.toCoreState(): CoreProtectionState = CoreProtect
     autoStart = autoStart,
     cosmeticFiltering = cosmeticFiltering,
     safeSearch = safeSearch,
+    showServicesBreakdown = showServicesBreakdown,
+    servicesTableUrl = servicesTableUrl,
 )
 
 internal fun CoreProtectionState.toModel(): ProtectionSettings = ProtectionSettings(
@@ -140,6 +142,8 @@ internal fun CoreProtectionState.toModel(): ProtectionSettings = ProtectionSetti
     autoStart = autoStart,
     cosmeticFiltering = cosmeticFiltering,
     safeSearch = safeSearch,
+    showServicesBreakdown = showServicesBreakdown,
+    servicesTableUrl = servicesTableUrl,
 )
 
 private fun ProxySettings.toCore(): CoreProxyState = CoreProxyState(

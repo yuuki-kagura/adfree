@@ -644,6 +644,15 @@
     <string name="filters_dns_add_body">Paste the address of a hosts or dnsmasq list. Its rules are checked on every domain lookup; URLs and SNI are never matched against it.</string>
     <string name="filters_user_rules_title">Your rules</string>
     <string name="filters_user_rules_meta">%1$d rules • %2$d exceptions</string>
+    <string name="services_table_title">Services table</string>
+    <string name="services_table_subtitle">Names the company behind each domain in the Statistics breakdown. Grouping the log is a query over the whole window, so the breakdown stays off until you switch it on.</string>
+    <string name="services_table_url_label">Subscription URL (optional)</string>
+    <string name="services_table_reset">Built-in table</string>
+    <string name="services_table_downloaded">Downloaded table: %1$s</string>
+    <string name="services_table_shipped">Using the table that shipped with this build.</string>
+    <string name="services_table_updated">Services table updated</string>
+    <string name="services_table_failed">Services table update failed: %1$s</string>
+    <string name="services_using_shipped_table">Subscription cleared; the built-in table is in use again.</string>
     <string name="filters_add_title">Add custom filter</string>
     <string name="filters_add_body">Paste a filter-list URL (AdGuard, EasyList, hosts…) or pick a file already on this device.</string>
     <string name="filters_add_suggestions">Popular suggestions (tap to fill in):</string>
@@ -763,6 +772,11 @@
     <string name="stats_view_all_apps">View all apps</string>
     <string name="stats_no_activity">No activity yet</string>
     <string name="stats_app_counts">%1$s / %2$s / %3$s</string>
+    <string name="stats_services_title">Services</string>
+    <string name="stats_domains_title">Domains contacted</string>
+    <string name="stats_services_note">Grouped by domain and labelled from the services table; a domain the table does not know is shown by name.</string>
+    <string name="stats_domains_note">The services table has no row for these domains, so they are listed by name only.</string>
+    <string name="stats_service_counts">%1$s blocked / %2$s sent</string>
     <string name="apps_cat_browser">Browsers</string>
     <string name="apps_cat_social">Social</string>
     <string name="apps_cat_media">Media</string>

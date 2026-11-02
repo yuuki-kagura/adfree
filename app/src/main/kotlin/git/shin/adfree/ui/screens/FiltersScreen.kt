@@ -498,6 +498,20 @@ fun FiltersScreen(
                     )
                 }
 
+                item(key = "services_table") {
+                    val table by viewModel.servicesTableState.collectAsState()
+                    ServicesTableCard(
+                        url = state.settings.servicesTableUrl,
+                        downloadedSize = table?.let { assetSizeLabel(it.sizeBytes) },
+                        breakdownOn = state.settings.showServicesBreakdown,
+                        onToggleBreakdown = {
+                            viewModel.onIntent(AdGuardIntent.SetServicesBreakdown(it))
+                        },
+                        onSetUrl = { viewModel.onIntent(AdGuardIntent.SetServicesTableUrl(it)) },
+                        onRefresh = { viewModel.onIntent(AdGuardIntent.RefreshServicesTable) },
+                    )
+                }
+
                 item { Spacer(modifier = Modifier.height(72.dp)) }
             }
         }
@@ -1079,6 +1093,161 @@ private fun UserRulesCard(
                 )
             }
             Icon(Icons.Default.ChevronRight, contentDescription = null, tint = AdGuardTextMuted, modifier = Modifier.size(20.dp))
+        }
+    }
+}
+
+/**
+ * The domain-to-company table behind the Statistics breakdown. The switch
+ * stays off by default: the group-by is a whole-window query and the labels
+ * cost a disk read. A subscription is optional — with the URL empty the table
+ * this build ships is used and nothing is downloaded.
+ */
+@Composable
+private fun ServicesTableCard(
+    url: String,
+    downloadedSize: String?,
+    breakdownOn: Boolean,
+    onToggleBreakdown: (Boolean) -> Unit,
+    onSetUrl: (String) -> Unit,
+    onRefresh: () -> Unit,
+) {
+    var draft by remember(url) { mutableStateOf(url) }
+    val draftUrl = draft.trim()
+    val draftError = if (draftUrl.isEmpty()) null else filterUrlError(draftUrl)
+
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .testTag("services_table_card"),
+        shape = RoundedCornerShape(14.dp),
+        colors = CardDefaults.cardColors(containerColor = AdGuardDarkSurface),
+        border = BorderStroke(1.dp, AdGuardDarkOutline),
+    ) {
+        Column(modifier = Modifier.padding(14.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Box(
+                    modifier = Modifier
+                        .size(38.dp)
+                        .clip(RoundedCornerShape(10.dp))
+                        .background(AdGuardBlueDns.copy(alpha = 0.12f)),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Icon(
+                        Icons.Default.Language,
+                        contentDescription = null,
+                        tint = AdGuardBlueDns,
+                        modifier = Modifier.size(20.dp),
+                    )
+                }
+                Spacer(modifier = Modifier.width(12.dp))
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        stringResource(R.string.services_table_title),
+                        fontSize = 13.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = AdGuardTextPrimary,
+                    )
+                    Text(
+                        stringResource(R.string.services_table_subtitle),
+                        fontSize = 11.sp,
+                        color = AdGuardTextMuted,
+                    )
+                }
+                Switch(
+                    checked = breakdownOn,
+                    onCheckedChange = onToggleBreakdown,
+                    modifier = Modifier.testTag("services_breakdown_switch"),
+                    colors = SwitchDefaults.colors(checkedTrackColor = AdGuardGreenPrimary),
+                )
+            }
+
+            Spacer(modifier = Modifier.height(12.dp))
+
+            OutlinedTextField(
+                value = draft,
+                onValueChange = { draft = it },
+                label = { Text(stringResource(R.string.services_table_url_label), fontSize = 12.sp) },
+                placeholder = { Text("https://…", fontSize = 12.sp, color = AdGuardTextMuted) },
+                singleLine = true,
+                isError = draftError != null,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .testTag("services_table_url_field"),
+                shape = RoundedCornerShape(10.dp),
+                colors = OutlinedTextFieldDefaults.colors(
+                    focusedBorderColor = AdGuardGreenPrimary,
+                    unfocusedBorderColor = AdGuardDarkOutline,
+                    focusedTextColor = AdGuardTextPrimary,
+                    unfocusedTextColor = AdGuardTextPrimary,
+                ),
+            )
+            draftError?.let { error ->
+                Text(
+                    text = CoreText.filterUrlError(error).asString(),
+                    fontSize = 11.sp,
+                    color = AdGuardRedBlocked,
+                    modifier = Modifier.padding(start = 6.dp, top = 4.dp),
+                )
+            }
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.End,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                if (url.isNotBlank()) {
+                    TextButton(
+                        onClick = { onSetUrl("") },
+                        modifier = Modifier.testTag("services_table_reset"),
+                    ) {
+                        Text(
+                            stringResource(R.string.services_table_reset),
+                            fontSize = 12.sp,
+                            color = AdGuardTextMuted,
+                        )
+                    }
+                    TextButton(
+                        onClick = onRefresh,
+                        modifier = Modifier.testTag("services_table_refresh"),
+                    ) {
+                        Icon(
+                            Icons.Default.Refresh,
+                            contentDescription = null,
+                            tint = AdGuardBlueDns,
+                            modifier = Modifier.size(16.dp),
+                        )
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text(
+                            stringResource(R.string.filters_refresh),
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = AdGuardBlueDns,
+                        )
+                    }
+                }
+                Button(
+                    onClick = { onSetUrl(draftUrl) },
+                    enabled = draftError == null && draftUrl != url,
+                    modifier = Modifier.testTag("services_table_save"),
+                    colors = ButtonDefaults.buttonColors(containerColor = AdGuardGreenPrimary),
+                    contentPadding = PaddingValues(horizontal = 14.dp, vertical = 6.dp),
+                ) {
+                    Text(
+                        stringResource(R.string.filters_save),
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.Bold,
+                    )
+                }
+            }
+
+            Text(
+                text = downloadedSize?.let {
+                    stringResource(R.string.services_table_downloaded, it)
+                } ?: stringResource(R.string.services_table_shipped),
+                fontSize = 11.sp,
+                color = AdGuardTextMuted,
+            )
         }
     }
 }

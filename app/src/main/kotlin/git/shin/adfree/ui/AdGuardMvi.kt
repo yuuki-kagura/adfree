@@ -18,6 +18,7 @@ import git.shin.adfree.model.ProtectionSettings
 import git.shin.adfree.model.ProtectionStats
 import git.shin.adfree.model.ProtocolType
 import git.shin.adfree.model.ProxyAccess
+import git.shin.adfree.model.ServiceUsage
 import git.shin.adfree.model.StealthPreset
 import git.shin.adfree.model.ThreatAnalysisResult
 import git.shin.adfree.model.ThemeMode
@@ -32,6 +33,12 @@ data class AdGuardUiState(
     val stats: ProtectionStats = ProtectionStats(),
     /** Totals for the Statistics tab's selected window and network. */
     val windowTotals: LogWindowTotals = LogWindowTotals(),
+    /**
+     * Per-domain groups for the services breakdown, same window as
+     * [windowTotals]. Empty while the switch is off — the section then shows
+     * nothing rather than an empty list.
+     */
+    val serviceUsage: List<ServiceUsage> = emptyList(),
     val logs: List<NetworkRequestLog> = emptyList(),
     val filteredLogs: List<NetworkRequestLog> = emptyList(),
     val logTotal: Long = 0L,
@@ -229,6 +236,11 @@ sealed interface AdGuardIntent {
     data object RefreshAllSubscriptions : AdGuardIntent
     data class ToggleFilterList(val id: String, val enabled: Boolean) : AdGuardIntent
     data class SetFilterTrusted(val id: String, val trusted: Boolean) : AdGuardIntent
+    /** Turns the per-domain breakdown on the Statistics tab on or off. */
+    data class SetServicesBreakdown(val visible: Boolean) : AdGuardIntent
+    /** Subscribed table of domain owners; an empty URL restores the shipped one. */
+    data class SetServicesTableUrl(val url: String) : AdGuardIntent
+    data object RefreshServicesTable : AdGuardIntent
     data class RunThreatScan(val domain: String) : AdGuardIntent
     data object ResetAiLab : AdGuardIntent
     /**

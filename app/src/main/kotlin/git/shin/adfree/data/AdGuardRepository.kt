@@ -42,6 +42,7 @@ import git.shin.adfree.model.UserScriptStoreSort
 import git.shin.adfree.model.UserScriptStoreState
 import git.shin.adfree.model.NetworkRequestLog
 import git.shin.adfree.model.LogWindowTotals
+import git.shin.adfree.model.ServiceUsage
 import git.shin.adfree.model.ProtectionStats
 import git.shin.adfree.model.ProtectionSettings
 import git.shin.adfree.model.StealthPreset
@@ -178,6 +179,14 @@ class AdGuardRepository(
     private val _windowTotals = MutableStateFlow(LogWindowTotals())
     val windowTotals: StateFlow<LogWindowTotals> = _windowTotals.asStateFlow()
 
+    /**
+     * Domain groups for the services breakdown; same window as the app rows.
+     * Empty while the switch is off, because filling it is a second aggregation
+     * over the log.
+     */
+    private val _serviceUsage = MutableStateFlow<List<ServiceUsage>>(emptyList())
+    val serviceUsage: StateFlow<List<ServiceUsage>> = _serviceUsage.asStateFlow()
+
     private val _dnsProviders = MutableStateFlow<List<DnsProvider>>(emptyList())
     val dnsProviders: StateFlow<List<DnsProvider>> = _dnsProviders.asStateFlow()
 
@@ -235,6 +244,17 @@ class AdGuardRepository(
     @Volatile
     private var lastAutoUpdateCheckMs = 0L
 
+    /**
+     * Guards the services-table download against a double start, and remembers
+     * when it last ran: the table rides the stale-list pass but has its own
+     * throttle, because one download can be asked for by both the settings
+     * screen and the update pass in the same minute.
+     */
+    private val servicesRefreshRunning = AtomicBoolean(false)
+
+    @Volatile
+    private var servicesRefreshLastMs = 0L
+
     private val scriptStoreClient by lazy {
         OkHttpClient.Builder()
             .connectTimeout(15, TimeUnit.SECONDS)
@@ -256,6 +276,9 @@ class AdGuardRepository(
         _dnsBackup.value = snapshot.dns.backup?.toModel()
         _dnsBackupMode.value = snapshot.dns.backupMode.toModel()
         _scriptsMasterEnabled.value = snapshot.scripts.master
+        // The settings row has to say which table is in use before the user
+        // opens the Filters screen, and the stale-list pass may never run.
+        loadServicesState()
         // Enumerating installed apps is binder work; keep it off the caller
         // (the Application's main thread) while the rest hydrates at once.
         val firewall = snapshot.firewall
@@ -1028,9 +1051,17 @@ class AdGuardRepository(
                 it.isEnabled && !it.isCustom && !it.subscriptionUrl.isNullOrBlank() &&
                     filterUpdateDue(it.lastUpdatedMs, now, hours)
             }
-            if (stale.isEmpty()) return 0
+            // The services table is a subscription too, just not a filter list,
+            // so it refreshes on this pass and on the same interval, and is
+            // never pushed to the engine. Nobody who left the URL empty pays a
+            // request for it.
+            if (_servicesState.value == null) {
+                _servicesState.value = withContext(Dispatchers.IO) { engine.servicesState() }
+            }
+            val servicesDue = servicesTableDue(now, hours)
+            if (stale.isEmpty() && !servicesDue) return 0
 
-            if (reportToUi) {
+            if (reportToUi && stale.isNotEmpty()) {
                 _loadingMessage.value =
                     UiText.Formatted(R.string.filter_auto_update_progress, stale.size)
             }
@@ -1045,7 +1076,15 @@ class AdGuardRepository(
                 }
             }
             if (updated > 0) pushListsToEngine()
-            if (reportToUi) {
+            if (servicesDue) {
+                val result = downloadServicesTable()
+                if (reportToUi && result != null && !result.ok) {
+                    showTransientStatus(
+                        UiText.Formatted(R.string.services_table_failed, result.message),
+                    )
+                }
+            }
+            if (reportToUi && stale.isNotEmpty()) {
                 showTransientStatus(
                     if (updated == stale.size) {
                         UiText.Formatted(R.string.filter_auto_update_done, stale.size)
@@ -1865,7 +1904,103 @@ class AdGuardRepository(
                 bytesSent = totals.bytesSent.toLong(),
                 bytesReceived = totals.bytesRecv.toLong(),
             )
+            // The services breakdown is a second GROUP BY over the same window,
+            // so it runs only for a user who switched it on. Off, the query is
+            // never issued and the services table is never read.
+            if (_settings.value.showServicesBreakdown) {
+                _serviceUsage.value = serviceRows(engine.domainUsageSince(since, transport))
+            } else {
+                _serviceUsage.value = emptyList()
+            }
         }
+    }
+
+    /**
+     * Turns the per-domain breakdown on or off. Turning it on re-aggregates the
+     * current window so the section is filled without waiting for the next poll.
+     */
+    fun setServicesBreakdownVisible(visible: Boolean) {
+        if (_settings.value.showServicesBreakdown == visible) return
+        updateSettings { it.copy(showServicesBreakdown = visible) }
+        if (visible) refreshAppUsage()
+    }
+
+    /**
+     * Sets the optional subscription for the services table. An empty URL hands
+     * the labels back to the table this build ships and deletes the downloaded
+     * copy; a new URL is fetched once, here, and then with the filter lists.
+     */
+    fun setServicesTableUrl(url: String) {
+        val trimmed = url.trim()
+        if (trimmed.isNotEmpty() && filterUrlError(trimmed) != null) return
+        if (_settings.value.servicesTableUrl == trimmed) return
+        updateSettings { it.copy(servicesTableUrl = trimmed) }
+        if (trimmed.isEmpty()) {
+            _servicesState.value = null
+            servicesRefreshLastMs = 0L
+            scope.launch {
+                withContext(Dispatchers.IO) { engine.servicesRemove() }
+                showTransientStatus(UiText.Resource(R.string.services_using_shipped_table))
+            }
+        } else {
+            refreshServicesTable()
+        }
+    }
+
+    /** Downloads the configured table now, reporting the outcome to the UI. */
+    fun refreshServicesTable() {
+        scope.launch {
+            val result = downloadServicesTable() ?: return@launch
+            showTransientStatus(
+                if (result.ok) {
+                    UiText.Resource(R.string.services_table_updated)
+                } else {
+                    UiText.Formatted(R.string.services_table_failed, result.message)
+                },
+            )
+            if (_settings.value.showServicesBreakdown) refreshAppUsage()
+        }
+    }
+
+    /**
+     * One download of the services table, under the single-flight guard. Null
+     * when there is nothing subscribed or another refresh already runs; the
+     * on-disk state is re-read either way so the settings row tells the truth.
+     */
+    private suspend fun downloadServicesTable(): DownloadResult? {
+        val url = _settings.value.servicesTableUrl
+        if (url.isBlank() || !servicesRefreshRunning.compareAndSet(false, true)) return null
+        try {
+            val result = withContext(Dispatchers.IO) { engine.downloadServicesTable(url) }
+            servicesRefreshLastMs = System.currentTimeMillis()
+            _servicesState.value = withContext(Dispatchers.IO) { engine.servicesState() }
+            return result
+        } finally {
+            servicesRefreshRunning.set(false)
+        }
+    }
+
+    /** The downloaded table, or null while the shipped one is in charge. */
+    private val _servicesState = MutableStateFlow<AssetState?>(null)
+    val servicesState: StateFlow<AssetState?> = _servicesState.asStateFlow()
+
+    /** Reads the table's on-disk date once at startup, for the stale check. */
+    fun loadServicesState() {
+        scope.launch {
+            _servicesState.value = withContext(Dispatchers.IO) { engine.servicesState() }
+        }
+    }
+
+    /**
+     * True when the subscription is older than the list interval. A table that
+     * was never downloaded is due; a refresh started in this session is not, so
+     * a foreground resume cannot re-download it on every tab switch.
+     */
+    private fun servicesTableDue(nowMs: Long, hours: Int): Boolean {
+        if (_settings.value.servicesTableUrl.isBlank()) return false
+        if (nowMs - servicesRefreshLastMs < hours.toLong() * 3_600_000L) return false
+        val modified = _servicesState.value?.modifiedMs ?: return true
+        return filterUpdateDue(modified, nowMs, hours)
     }
 
     /** Read installed apps through PackageManager and overlay the persisted rows. */

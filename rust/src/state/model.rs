@@ -173,6 +173,13 @@ pub struct ProtectionState {
     pub cosmetic_filtering: bool,
     /// Force safe search on the major engines (CNAME rewrites).
     pub safe_search: bool,
+    /// Group the request log by domain for the services breakdown. Off by
+    /// default: it is a `GROUP BY` over the whole window on every statistics
+    /// refresh, and the labels need the services table read from disk.
+    pub show_services_breakdown: bool,
+    /// Optional subscription for the services table, fetched with the filter
+    /// lists. Empty keeps the table this build ships: no extra request.
+    pub services_table_url: String,
 }
 
 impl Default for ProtectionState {
@@ -243,6 +250,9 @@ impl Default for ProtectionState {
             auto_start: false,
             cosmetic_filtering: true,
             safe_search: false,
+            // The breakdown is a query the user has to ask for.
+            show_services_breakdown: false,
+            services_table_url: String::new(),
         }
     }
 }

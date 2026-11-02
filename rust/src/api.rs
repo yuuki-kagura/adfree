@@ -734,6 +734,22 @@ pub struct AppUsage {
     pub bytes_recv: u64,
 }
 
+/// One domain's totals in the window the services breakdown shows. No bytes on
+/// the wire: `flow_traffic` has no domain column, and a guess there would be a
+/// number the user cannot check.
+#[derive(uniffi::Record, Clone, Debug, Default, PartialEq, Eq)]
+pub struct DomainUsage {
+    pub domain: String,
+    /// The company that owns the domain, from the services table. Empty when
+    /// the table has no row: the UI shows the name and claims nothing more.
+    pub company: String,
+    /// Requests the engine answered without forwarding.
+    pub blocked: u32,
+    /// Every request in the window, allowed and blocked.
+    pub requests: u32,
+    pub bytes_saved: u64,
+}
+
 /// Whole-window totals for the Statistics header. Unlike [`AppUsage`] this
 /// includes rows the core could not attribute to a package.
 #[derive(uniffi::Record, Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -772,6 +788,35 @@ pub fn core_app_usage_since_transport(since_ms: i64, transport: i32) -> Vec<AppU
                 bytes_recv: row.bytes_recv as u64,
             })
             .collect(),
+        None => Vec::new(),
+    })
+}
+
+/// The log grouped by domain since `since_ms`, biggest blocked count first, at
+/// most 200 groups. `transport` selects one network (`-1` all, `0` unknown,
+/// `1` Wi-Fi, `2` cellular).
+///
+/// The services breakdown is the only caller, and it is behind a switch that
+/// ships off: this is a `GROUP BY` over the window, so a user who never opened
+/// the section should not pay for it on every statistics refresh.
+#[uniffi::export]
+pub fn core_domain_usage_since(since_ms: i64, transport: i32) -> Vec<DomainUsage> {
+    guard(Vec::new(), || match crate::core().store() {
+        Some(store) => {
+            let dir = store.filters_dir();
+            let services = crate::services::Resolver::new(Some(&dir));
+            store
+                .log_usage_by_domain(since_ms, transport as i64)
+                .into_iter()
+                .map(|row| DomainUsage {
+                    company: services.company(&row.domain).unwrap_or_default(),
+                    domain: row.domain,
+                    blocked: row.blocked.min(u32::MAX as i64) as u32,
+                    requests: row.requests.min(u32::MAX as i64) as u32,
+                    bytes_saved: row.bytes_saved as u64,
+                })
+                .collect()
+        }
         None => Vec::new(),
     })
 }
@@ -955,6 +1000,86 @@ pub fn core_filter_remove(id: String) -> bool {
             return false;
         };
         crate::assets::remove(&store.filters_dir(), &id, "txt")
+    })
+}
+
+/// Downloads a services table (domain, company) into `filters/services.tsv`,
+/// replacing the one this build ships.
+///
+/// The body is checked before it is kept: the lookup binary searches, so a
+/// table that is not byte-sorted on the domain column would answer with
+/// silent misses, and a file with no rows at all is not a table. Either way
+/// the previous copy survives.
+#[uniffi::export]
+pub fn core_services_fetch(url: String) -> DownloadOutcome {
+    guard(
+        download_failure(DownloadError::StoreUnavailable, "store is not open"),
+        || {
+            let Some(store) = crate::core().store() else {
+                return download_failure(DownloadError::StoreUnavailable, "store is not open");
+            };
+            let dir = store.filters_dir();
+            let outcome = match crate::assets::fetch(
+                &dir,
+                crate::services::OVERRIDE_ID,
+                "tsv",
+                &url,
+                false,
+            ) {
+                Ok(o) => o,
+                Err(e) => return download_failure(classify_download(&e), &e),
+            };
+            let reject = match crate::assets::read_text(&dir, crate::services::OVERRIDE_ID, "tsv")
+                .as_deref()
+            {
+                Some(body)
+                    if crate::services::row_count(body) > 0 && crate::services::is_sorted(body) =>
+                {
+                    None
+                }
+                Some(_) => Some("the table is not a sorted domain list"),
+                None => Some("the table could not be read back"),
+            };
+            match reject {
+                Some(message) => {
+                    crate::assets::remove(&dir, crate::services::OVERRIDE_ID, "tsv");
+                    download_failure(DownloadError::Empty, message)
+                }
+                None => to_outcome(outcome),
+            }
+        },
+    )
+}
+
+/// The downloaded services table, if the user subscribes to one. `None` means
+/// the shipped table is in charge.
+#[uniffi::export]
+pub fn core_services_state() -> Option<AssetState> {
+    guard(None, || {
+        let store = crate::core().store()?;
+        crate::assets::state(
+            &store.filters_dir(),
+            crate::services::OVERRIDE_ID,
+            crate::services::OVERRIDE_EXT,
+            false,
+        )
+        .map(to_asset_state)
+    })
+}
+
+/// Backs the labels with the table this build ships. False when there was
+/// nothing downloaded to delete.
+#[uniffi::export]
+pub fn core_services_remove() -> bool {
+    guard(false, || {
+        let Some(store) = crate::core().store() else {
+            return false;
+        };
+        crate::assets::remove(
+            &store.filters_dir(),
+            crate::services::OVERRIDE_ID,
+            crate::services::OVERRIDE_EXT,
+        )
     })
 }
 

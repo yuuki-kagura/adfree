@@ -423,6 +423,52 @@ pub struct UsageRow {
     pub bytes_recv: i64,
 }
 
+/// The `Các dịch vụ` view: the log grouped by the domain a decision was made
+/// about, biggest blocked count first, capped at 200 groups. `transport`
+/// selects one network (`0` unknown, `1` Wi-Fi, `2` cellular) or `-1` for all.
+///
+/// Deliberately narrower than [`usage_by_app`]: no bytes on the wire, because
+/// `flow_traffic` has no domain column and inventing one would mean joining a
+/// table this view does not need. The company name is not here either — this
+/// returns domains and the Kotlin side resolves them against the service
+/// table, so a missing or stale dataset costs a label, not a query.
+pub(super) fn usage_by_domain(
+    db: &Db,
+    since_ms: i64,
+    transport: i64,
+) -> rusqlite::Result<Vec<DomainUsageRow>> {
+    let conn = db.lock();
+    let mut stmt = conn.prepare_cached(
+        "SELECT domain, \
+                SUM(CASE WHEN action != 0 THEN 1 ELSE 0 END), \
+                COUNT(*), \
+                SUM(bytes_saved) \
+         FROM log_events \
+         WHERE domain != '' AND ts_ms >= ?1 AND (?2 < 0 OR transport = ?2) \
+         GROUP BY domain \
+         ORDER BY 2 DESC \
+         LIMIT 200",
+    )?;
+    let rows = stmt.query_map([since_ms, transport], |r| {
+        Ok(DomainUsageRow {
+            domain: r.get(0)?,
+            blocked: r.get(1)?,
+            requests: r.get(2)?,
+            bytes_saved: r.get(3)?,
+        })
+    })?;
+    rows.collect()
+}
+
+/// One domain's totals over a window.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DomainUsageRow {
+    pub domain: String,
+    pub blocked: i64,
+    pub requests: i64,
+    pub bytes_saved: i64,
+}
+
 /// Whole-log totals over a window, unattributed rows included. The statistics
 /// header shows these; per-app rows are a narrower view of the same data.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]

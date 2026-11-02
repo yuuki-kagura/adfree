@@ -745,6 +745,8 @@ internal object IntegrityCheckingUniffiLib {
     ): Int
     external fun uniffi_adfree_core_checksum_func_core_dns_save(
     ): Int
+    external fun uniffi_adfree_core_checksum_func_core_domain_usage_since(
+    ): Int
     external fun uniffi_adfree_core_checksum_func_core_drain_events(
     ): Int
     external fun uniffi_adfree_core_checksum_func_core_ensure_ca(
@@ -820,6 +822,12 @@ internal object IntegrityCheckingUniffiLib {
     external fun uniffi_adfree_core_checksum_func_core_script_text(
     ): Int
     external fun uniffi_adfree_core_checksum_func_core_scripts_save(
+    ): Int
+    external fun uniffi_adfree_core_checksum_func_core_services_fetch(
+    ): Int
+    external fun uniffi_adfree_core_checksum_func_core_services_remove(
+    ): Int
+    external fun uniffi_adfree_core_checksum_func_core_services_state(
     ): Int
     external fun uniffi_adfree_core_checksum_func_core_set_data_root(
     ): Int
@@ -933,6 +941,8 @@ internal object UniffiLib {
     ): RustBuffer.ByValue
     external fun uniffi_adfree_core_fn_func_core_dns_save(`value`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): Byte
+    external fun uniffi_adfree_core_fn_func_core_domain_usage_since(`sinceMs`: Long,`transport`: Int,uniffi_out_err: UniffiRustCallStatus, 
+    ): RustBuffer.ByValue
     external fun uniffi_adfree_core_fn_func_core_drain_events(`max`: Int,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
     external fun uniffi_adfree_core_fn_func_core_ensure_ca(uniffi_out_err: UniffiRustCallStatus, 
@@ -1009,6 +1019,12 @@ internal object UniffiLib {
     ): RustBuffer.ByValue
     external fun uniffi_adfree_core_fn_func_core_scripts_save(`value`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): Byte
+    external fun uniffi_adfree_core_fn_func_core_services_fetch(`url`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    ): RustBuffer.ByValue
+    external fun uniffi_adfree_core_fn_func_core_services_remove(uniffi_out_err: UniffiRustCallStatus, 
+    ): Byte
+    external fun uniffi_adfree_core_fn_func_core_services_state(uniffi_out_err: UniffiRustCallStatus, 
+    ): RustBuffer.ByValue
     external fun uniffi_adfree_core_fn_func_core_set_data_root(`path`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): Byte
     external fun uniffi_adfree_core_fn_func_core_set_doh_ranges(`ranges`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
@@ -1211,6 +1227,9 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
     if ((lib.uniffi_adfree_core_checksum_func_core_dns_save() and 0xFFFF) != 28630) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
+    if ((lib.uniffi_adfree_core_checksum_func_core_domain_usage_since() and 0xFFFF) != 24562) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
     if ((lib.uniffi_adfree_core_checksum_func_core_drain_events() and 0xFFFF) != 38967) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
@@ -1323,6 +1342,15 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if ((lib.uniffi_adfree_core_checksum_func_core_scripts_save() and 0xFFFF) != 31369) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if ((lib.uniffi_adfree_core_checksum_func_core_services_fetch() and 0xFFFF) != 55690) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if ((lib.uniffi_adfree_core_checksum_func_core_services_remove() and 0xFFFF) != 10620) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if ((lib.uniffi_adfree_core_checksum_func_core_services_state() and 0xFFFF) != 65196) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if ((lib.uniffi_adfree_core_checksum_func_core_set_data_root() and 0xFFFF) != 27462) {
@@ -3174,6 +3202,74 @@ public object FfiConverterTypeDnsValidation: FfiConverterRustBuffer<DnsValidatio
 
 
 /**
+ * One domain's totals in the window the services breakdown shows. No bytes on
+ * the wire: `flow_traffic` has no domain column, and a guess there would be a
+ * number the user cannot check.
+ */
+data class DomainUsage (
+    var `domain`: kotlin.String
+    , 
+    /**
+     * The company that owns the domain, from the services table. Empty when
+     * the table has no row: the UI shows the name and claims nothing more.
+     */
+    var `company`: kotlin.String
+    , 
+    /**
+     * Requests the engine answered without forwarding.
+     */
+    var `blocked`: kotlin.UInt
+    , 
+    /**
+     * Every request in the window, allowed and blocked.
+     */
+    var `requests`: kotlin.UInt
+    , 
+    var `bytesSaved`: kotlin.ULong
+    
+){
+    
+
+    
+
+    
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeDomainUsage: FfiConverterRustBuffer<DomainUsage> {
+    override fun read(buf: ByteBuffer): DomainUsage {
+        return DomainUsage(
+            FfiConverterString.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterUInt.read(buf),
+            FfiConverterUInt.read(buf),
+            FfiConverterULong.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: DomainUsage) = (
+            FfiConverterString.allocationSize(value.`domain`) +
+            FfiConverterString.allocationSize(value.`company`) +
+            FfiConverterUInt.allocationSize(value.`blocked`) +
+            FfiConverterUInt.allocationSize(value.`requests`) +
+            FfiConverterULong.allocationSize(value.`bytesSaved`)
+    )
+
+    override fun write(value: DomainUsage, buf: ByteBuffer) {
+            FfiConverterString.write(value.`domain`, buf)
+            FfiConverterString.write(value.`company`, buf)
+            FfiConverterUInt.write(value.`blocked`, buf)
+            FfiConverterUInt.write(value.`requests`, buf)
+            FfiConverterULong.write(value.`bytesSaved`, buf)
+    }
+}
+
+
+
+/**
  * Result of fetching (or saving) a filter list or userscript body.
  */
 data class DownloadOutcome (
@@ -4029,6 +4125,19 @@ data class ProtectionState (
      * Force safe search on the major engines (CNAME rewrites).
      */
     var `safeSearch`: kotlin.Boolean
+    , 
+    /**
+     * Group the request log by domain for the services breakdown. Off by
+     * default: it is a `GROUP BY` over the whole window on every statistics
+     * refresh, and the labels need the services table read from disk.
+     */
+    var `showServicesBreakdown`: kotlin.Boolean
+    , 
+    /**
+     * Optional subscription for the services table, fetched with the filter
+     * lists. Empty keeps the table this build ships: no extra request.
+     */
+    var `servicesTableUrl`: kotlin.String
     
 ){
     
@@ -4094,6 +4203,8 @@ public object FfiConverterTypeProtectionState: FfiConverterRustBuffer<Protection
             FfiConverterBoolean.read(buf),
             FfiConverterBoolean.read(buf),
             FfiConverterBoolean.read(buf),
+            FfiConverterBoolean.read(buf),
+            FfiConverterString.read(buf),
         )
     }
 
@@ -4146,7 +4257,9 @@ public object FfiConverterTypeProtectionState: FfiConverterRustBuffer<Protection
             FfiConverterTypeThemeMode.allocationSize(value.`themeMode`) +
             FfiConverterBoolean.allocationSize(value.`autoStart`) +
             FfiConverterBoolean.allocationSize(value.`cosmeticFiltering`) +
-            FfiConverterBoolean.allocationSize(value.`safeSearch`)
+            FfiConverterBoolean.allocationSize(value.`safeSearch`) +
+            FfiConverterBoolean.allocationSize(value.`showServicesBreakdown`) +
+            FfiConverterString.allocationSize(value.`servicesTableUrl`)
     )
 
     override fun write(value: ProtectionState, buf: ByteBuffer) {
@@ -4199,6 +4312,8 @@ public object FfiConverterTypeProtectionState: FfiConverterRustBuffer<Protection
             FfiConverterBoolean.write(value.`autoStart`, buf)
             FfiConverterBoolean.write(value.`cosmeticFiltering`, buf)
             FfiConverterBoolean.write(value.`safeSearch`, buf)
+            FfiConverterBoolean.write(value.`showServicesBreakdown`, buf)
+            FfiConverterString.write(value.`servicesTableUrl`, buf)
     }
 }
 
@@ -5786,6 +5901,34 @@ public object FfiConverterSequenceTypeDnsRewrite: FfiConverterRustBuffer<List<Dn
 /**
  * @suppress
  */
+public object FfiConverterSequenceTypeDomainUsage: FfiConverterRustBuffer<List<DomainUsage>> {
+    override fun read(buf: ByteBuffer): List<DomainUsage> {
+        val len = buf.getInt()
+        return List<DomainUsage>(len) {
+            FfiConverterTypeDomainUsage.read(buf)
+        }
+    }
+
+    override fun allocationSize(value: List<DomainUsage>): ULong {
+        val sizeForLength = 4UL
+        val sizeForItems = value.map { FfiConverterTypeDomainUsage.allocationSize(it) }.sum()
+        return sizeForLength + sizeForItems
+    }
+
+    override fun write(value: List<DomainUsage>, buf: ByteBuffer) {
+        buf.putInt(value.size)
+        value.iterator().forEach {
+            FfiConverterTypeDomainUsage.write(it, buf)
+        }
+    }
+}
+
+
+
+
+/**
+ * @suppress
+ */
 public object FfiConverterSequenceTypeFilterBuildError: FfiConverterRustBuffer<List<FilterBuildError>> {
     override fun read(buf: ByteBuffer): List<FilterBuildError> {
         val len = buf.getInt()
@@ -6136,6 +6279,27 @@ public object FfiConverterSequenceTypeUidApps: FfiConverterRustBuffer<List<UidAp
     
         
         FfiConverterTypeDnsState.lower(`value`),_status)
+}
+    )
+    }
+    
+
+        /**
+         * The log grouped by domain since `since_ms`, biggest blocked count first, at
+         * most 200 groups. `transport` selects one network (`-1` all, `0` unknown,
+         * `1` Wi-Fi, `2` cellular).
+         *
+         * The services breakdown is the only caller, and it is behind a switch that
+         * ships off: this is a `GROUP BY` over the window, so a user who never opened
+         * the section should not pay for it on every statistics refresh.
+         */ fun `coreDomainUsageSince`(`sinceMs`: kotlin.Long, `transport`: kotlin.Int): List<DomainUsage> {
+            return FfiConverterSequenceTypeDomainUsage.lift(
+    uniffiRustCall() { _status ->
+    UniffiLib.uniffi_adfree_core_fn_func_core_domain_usage_since(
+    
+        
+        FfiConverterLong.lower(`sinceMs`),
+        FfiConverterInt.lower(`transport`),_status)
 }
     )
     }
@@ -6662,6 +6826,54 @@ public object FfiConverterSequenceTypeUidApps: FfiConverterRustBuffer<List<UidAp
     
         
         FfiConverterTypeScriptState.lower(`value`),_status)
+}
+    )
+    }
+    
+
+        /**
+         * Downloads a services table (domain, company) into `filters/services.tsv`,
+         * replacing the one this build ships.
+         *
+         * The body is checked before it is kept: the lookup binary searches, so a
+         * table that is not byte-sorted on the domain column would answer with
+         * silent misses, and a file with no rows at all is not a table. Either way
+         * the previous copy survives.
+         */ fun `coreServicesFetch`(`url`: kotlin.String): DownloadOutcome {
+            return FfiConverterTypeDownloadOutcome.lift(
+    uniffiRustCall() { _status ->
+    UniffiLib.uniffi_adfree_core_fn_func_core_services_fetch(
+    
+        
+        FfiConverterString.lower(`url`),_status)
+}
+    )
+    }
+    
+
+        /**
+         * Backs the labels with the table this build ships. False when there was
+         * nothing downloaded to delete.
+         */ fun `coreServicesRemove`(): kotlin.Boolean {
+            return FfiConverterBoolean.lift(
+    uniffiRustCall() { _status ->
+    UniffiLib.uniffi_adfree_core_fn_func_core_services_remove(
+    
+        _status)
+}
+    )
+    }
+    
+
+        /**
+         * The downloaded services table, if the user subscribes to one. `None` means
+         * the shipped table is in charge.
+         */ fun `coreServicesState`(): AssetState? {
+            return FfiConverterOptionalTypeAssetState.lift(
+    uniffiRustCall() { _status ->
+    UniffiLib.uniffi_adfree_core_fn_func_core_services_state(
+    
+        _status)
 }
     )
     }

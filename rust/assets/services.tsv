@@ -1,0 +1,139 @@
+# AdFree services table: one registrable domain per line, the company that
+# owns it, separated by a TAB. # starts a comment; blank lines are ignored.
+#
+# Provenance and licence: authored for AdFree from the network names the app
+# already curates in ThreatAnalyzer.kt plus the sections of the filter lists it
+# subscribes to. A company owning a domain is a fact, and this file is ours to
+# redistribute. Rows are kept only where the ownership is not in doubt; a
+# domain missing here is shown by name, never by a guess.
+#
+# Scale-up path (not built): a build-time Wikidata P856 (official website)
+# query, CC0, merged into this same file.
+#
+# Sorted by LC_ALL=C sort on the first field: the lookup binary searches.
+adcolony.com	AdColony
+adform.net	Adform
+adjust.com	Adjust
+adnxs.com	Microsoft Advertising (AppNexus)
+adobe.com	Adobe
+adobedtm.com	Adobe
+adsafeprotected.com	DoubleVerify
+adsrvr.org	The Trade Desk
+airbridge.io	Airbridge
+amazon-adsystem.com	Amazon
+amazon.com	Amazon
+amazonaws.com	Amazon Web Services
+amplitude.com	Amplitude
+app-measurement.com	Google
+appdynamics.com	AppDynamics
+apple.com	Apple
+applovin.com	AppLovin
+appsflyer.com	AppsFlyer
+branch.io	Branch Metrics
+braze.com	Braze
+chartbeat.com	Chartbeat
+chartboost.com	Chartboost
+clarity.ms	Microsoft
+clicktale.net	ClickTale
+comscore.com	comScore
+crashlytics.com	Google
+criteo.com	Criteo
+criteo.net	Criteo
+datadoghq.com	Datadog
+demdex.net	Adobe
+digitalturbine.com	Digital Turbine
+discord.com	Discord
+districtm.io	The Trade Desk
+doubleclick.net	Google
+doubleverify.com	DoubleVerify
+dynatrace.com	Dynatrace
+exoclick.com	ExoClick
+facebook.com	Meta
+facebook.net	Meta
+firebaseio.com	Google
+flashtalking.com	Flashtalking
+fullstory.com	FullStory
+gemius.com	Gemius
+google-analytics.com	Google
+google.com	Google
+googleadservices.com	Google
+googlesyndication.com	Google
+googletagmanager.com	Google
+heap.io	Heap (Contentsquare)
+hicloud.com	Huawei
+histats.com	Histats
+hotjar.com	Hotjar (Contentsquare)
+huawei.com	Huawei
+ibyteimg.com	ByteDance
+icloud.com	Apple
+inmobi.com	InMobi
+innity.com	Innity
+innovid.com	Innovid
+instagram.com	Meta
+integralads.com	Integral Ad Science
+intercom.io	Intercom
+ironsrc.com	ironSource
+kakao.com	Kakao
+kargo.com	Kargo
+kochava.com	Kochava
+line.me	LINE
+linkedin.com	LinkedIn (Microsoft)
+logrocket.com	LogRocket
+mail.ru	VK
+matomo.cloud	Matomo
+media.net	Media.net
+mgid.com	MGID
+mi.com	Xiaomi
+microsoft.com	Microsoft
+mixpanel.com	Mixpanel
+moatads.com	Moat (Oracle)
+mouseflow.com	Mouseflow
+netflix.com	Netflix
+newrelic.com	New Relic
+omtrdc.net	Adobe
+openx.com	OpenX
+outbrain.com	Outbrain
+parsely.com	Parse.ly
+pinimg.com	Pinterest
+pinterest.com	Pinterest
+plausible.io	Plausible
+plista.com	plista
+pubmatic.com	PubMatic
+quantserve.com	Quantcast
+reddit.com	Reddit
+rubiconproject.com	Rubicon Project (Magnite)
+scorecardresearch.com	comScore
+segment.com	Segment (Twilio)
+segment.io	Segment (Twilio)
+sentry.io	Sentry
+sharethis.com	ShareThis
+sharethrough.com	Sharethrough
+singular.net	Singular
+smartadserver.com	Smart AdServer
+snssdk.com	ByteDance
+sovrn.com	Sovrn
+spotify.com	Spotify
+spotxchange.com	SpotX
+statcounter.com	Statcounter
+supersonicads.com	Supersonic Ads
+taboola.com	Taboola
+tapjoy.com	Tapjoy
+telegram.org	Telegram
+tiktok.com	ByteDance
+triplelift.com	TripleLift
+twitter.com	X (Twitter)
+unity3d.com	Unity Technologies
+unrulymedia.com	unruly
+visualwebsiteoptimizer.com	Wingify
+vk.com	VK
+vungle.com	Vungle (Amazon)
+vwo.com	Wingify
+whatsapp.net	Meta
+windows.net	Microsoft
+x.com	X
+xiaomi.com	Xiaomi
+yandex.com	Yandex
+yandex.net	Yandex
+yandex.ru	Yandex
+youtube.com	Google
+zoom.us	Zoom

@@ -384,6 +384,38 @@ class CoreEngine {
     fun filterRemove(id: String): Boolean =
         runCatching { git.shin.adfree.core.coreFilterRemove(id) }.getOrDefault(false)
 
+    /**
+     * Downloads a services table (domain, company) into `filters/services.tsv`,
+     * which then replaces the table this build ships. The core refuses a body it
+     * cannot binary search, so a bad subscription leaves the previous one in
+     * place. Blocking: call it off the main thread.
+     */
+    fun downloadServicesTable(url: String): DownloadResult {
+        val outcome = runCatching { git.shin.adfree.core.coreServicesFetch(url) }
+            .getOrElse {
+                return DownloadResult(
+                    false,
+                    git.shin.adfree.core.DownloadError.NETWORK,
+                    it.javaClass.simpleName,
+                )
+            }
+        if (!outcome.ok) return DownloadResult(false, outcome.error, outcome.message)
+        return DownloadResult(
+            ok = true,
+            error = git.shin.adfree.core.DownloadError.NONE,
+            sizeBytes = outcome.sizeBytes,
+            modifiedMs = outcome.modifiedMs,
+        )
+    }
+
+    /** The downloaded table, or null when the shipped one is in charge. */
+    fun servicesState(): git.shin.adfree.core.AssetState? =
+        runCatching { git.shin.adfree.core.coreServicesState() }.getOrNull()
+
+    /** Backs the labels with the shipped table. False when nothing was downloaded. */
+    fun servicesRemove(): Boolean =
+        runCatching { git.shin.adfree.core.coreServicesRemove() }.getOrDefault(false)
+
     /** Downloads one userscript body into the store (`scripts/<id>.js`). */
     fun scriptFetch(id: String, url: String): git.shin.adfree.core.DownloadOutcome =
         runCatching { git.shin.adfree.core.coreScriptFetch(id, url) }
@@ -682,6 +714,18 @@ class CoreEngine {
     /** Blocked counts, requests and bytes saved per package since [sinceMs]. */
     fun appUsageSince(sinceMs: Long, transport: Int = -1): List<git.shin.adfree.core.AppUsage> =
         runCatching { git.shin.adfree.core.coreAppUsageSinceTransport(sinceMs, transport) }
+            .getOrDefault(emptyList())
+
+    /**
+     * Blocked counts and requests per domain since [sinceMs], each already
+     * labelled by the core's services table. Empty when the store is not open;
+     * a row whose company is unknown comes back with an empty label.
+     */
+    fun domainUsageSince(
+        sinceMs: Long,
+        transport: Int = -1,
+    ): List<git.shin.adfree.core.DomainUsage> =
+        runCatching { git.shin.adfree.core.coreDomainUsageSince(sinceMs, transport) }
             .getOrDefault(emptyList())
 
     /** Whole-window totals for the Statistics header. */

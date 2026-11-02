@@ -644,6 +644,15 @@
     <string name="filters_dns_add_body">Dán địa chỉ của danh sách hosts hoặc dnsmasq. Quy tắc của nó được kiểm tra ở mọi truy vấn tên miền; URL và SNI không bao giờ bị đối chiếu với danh sách này.</string>
     <string name="filters_user_rules_title">Quy tắc của bạn</string>
     <string name="filters_user_rules_meta">%1$d quy tắc • %2$d ngoại lệ</string>
+    <string name="services_table_title">Bảng dịch vụ</string>
+    <string name="services_table_subtitle">Ghi tên công ty đứng sau mỗi tên miền ở phần Thống kê. Gom nhóm nhật ký phải quét toàn bộ khung thời gian nên bật tắt này mặc định tắt.</string>
+    <string name="services_table_url_label">URL đăng ký (tuỳ chọn)</string>
+    <string name="services_table_reset">Bảng tích hợp</string>
+    <string name="services_table_downloaded">Bảng đã tải: %1$s</string>
+    <string name="services_table_shipped">Đang dùng bảng tích hợp sẵn trong bản cài đặt này.</string>
+    <string name="services_table_updated">Đã cập nhật bảng dịch vụ</string>
+    <string name="services_table_failed">Cập nhật bảng dịch vụ thất bại: %1$s</string>
+    <string name="services_using_shipped_table">Đã xoá URL đăng ký, quay lại dùng bảng tích hợp sẵn.</string>
     <string name="filters_add_title">Thêm bộ lọc tùy chỉnh</string>
     <string name="filters_add_body">Dán đường dẫn danh sách lọc (AdGuard, EasyList, hosts…) hoặc chọn tệp có sẵn trong máy.</string>
     <string name="filters_add_suggestions">Gợi ý phổ biến (chạm để điền nhanh):</string>
@@ -763,6 +772,11 @@
     <string name="stats_view_all_apps">Xem tất cả ứng dụng</string>
     <string name="stats_no_activity">Chưa có hoạt động nào</string>
     <string name="stats_app_counts">%1$s / %2$s / %3$s</string>
+    <string name="stats_services_title">Dịch vụ</string>
+    <string name="stats_domains_title">Tên miền đã liên lạc</string>
+    <string name="stats_services_note">Gom theo tên miền và dán nhãn từ bảng dịch vụ; tên miền không có trong bảng sẽ hiển thị theo tên.</string>
+    <string name="stats_domains_note">Bảng dịch vụ không có dòng nào cho các tên miền này nên chúng chỉ được liệt kê theo tên.</string>
+    <string name="stats_service_counts">%1$s chặn / %2$s gửi</string>
     <string name="apps_cat_browser">Trình duyệt</string>
     <string name="apps_cat_social">Mạng xã hội</string>
     <string name="apps_cat_media">Đa phương tiện</string>

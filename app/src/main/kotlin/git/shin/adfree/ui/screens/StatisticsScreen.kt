@@ -49,9 +49,11 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import git.shin.adfree.R
+import git.shin.adfree.data.servicesKnownByCompany
 import git.shin.adfree.model.AppFirewallRule
 import git.shin.adfree.model.AppUsageRange
 import git.shin.adfree.model.AppUsageTransport
+import git.shin.adfree.model.ServiceUsage
 import git.shin.adfree.ui.AdGuardIntent
 import git.shin.adfree.ui.AdGuardTab
 import git.shin.adfree.ui.AdGuardViewModel
@@ -336,6 +338,37 @@ fun StatisticsScreen(
                 onClick = { viewModel.onIntent(AdGuardIntent.SelectTab(AdGuardTab.APPS)) },
             )
 
+            // The services breakdown ships off: it is a second aggregation over
+            // the window, so the section appears only for a user who turned it
+            // on and the log has something to group.
+            if (state.settings.showServicesBreakdown && state.serviceUsage.isNotEmpty()) {
+                Spacer(modifier = Modifier.height(16.dp))
+                val known = servicesKnownByCompany(state.serviceUsage)
+                Text(
+                    text = stringResource(
+                        if (known) R.string.stats_services_title else R.string.stats_domains_title,
+                    ),
+                    fontSize = 13.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = AdGuardTextPrimary,
+                )
+                Spacer(modifier = Modifier.height(6.dp))
+                // Ten names on screen and the rest behind a tap, as AdGuard's
+                // breakdown does; here the tab is already a scroll, so ten rows
+                // is the same figure without a second route.
+                state.serviceUsage.take(10).forEach { row ->
+                    ServiceStatRow(row = row)
+                }
+                Text(
+                    text = stringResource(
+                        if (known) R.string.stats_services_note else R.string.stats_domains_note,
+                    ),
+                    fontSize = 11.sp,
+                    color = AdGuardTextMuted,
+                    modifier = Modifier.padding(top = 6.dp),
+                )
+            }
+
             Spacer(modifier = Modifier.height(16.dp))
         }
     }
@@ -527,6 +560,67 @@ private fun AppStatRow(app: AppFirewallRule, onClick: () -> Unit) {
                 compactCount(app.blockedAdsToday.toLong()),
                 compactCount(app.blockedTrackersToday.toLong()),
                 compactCount(app.requestsToday.toLong()),
+            ),
+            fontSize = 11.sp,
+            fontFamily = FontFamily.Monospace,
+            color = AdGuardTextMuted,
+            maxLines = 1,
+        )
+    }
+}
+
+/**
+ * One domain in the services breakdown. AdGuard's rows read "company" over
+ * "domain"; the name is kept under it whenever the table supplied a company, so
+ * a row the table does not know shows only the name and claims nothing else.
+ */
+@Composable
+private fun ServiceStatRow(row: ServiceUsage) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .testTag("stats_service_${row.domain}")
+            .padding(vertical = 7.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Box(
+            modifier = Modifier
+                .size(28.dp)
+                .clip(RoundedCornerShape(8.dp))
+                .background(AdGuardDarkSurfaceVariant),
+            contentAlignment = Alignment.Center,
+        ) {
+            Icon(
+                imageVector = Icons.AutoMirrored.Filled.ListAlt,
+                contentDescription = null,
+                tint = AdGuardGreenPrimary,
+                modifier = Modifier.size(16.dp),
+            )
+        }
+        Spacer(modifier = Modifier.width(10.dp))
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                text = row.label,
+                fontSize = 13.sp,
+                color = AdGuardTextPrimary,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            if (row.company.isNotBlank()) {
+                Text(
+                    text = row.domain,
+                    fontSize = 11.sp,
+                    color = AdGuardTextMuted,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+        }
+        Text(
+            text = stringResource(
+                R.string.stats_service_counts,
+                compactCount(row.blocked.toLong()),
+                compactCount(row.requests.toLong()),
             ),
             fontSize = 11.sp,
             fontFamily = FontFamily.Monospace,

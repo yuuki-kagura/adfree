@@ -19,7 +19,7 @@
 
 mod log;
 
-pub use log::{FlowTraffic, LogRow, UsageRow, WindowTotalsRow};
+pub use log::{DomainUsageRow, FlowTraffic, LogRow, UsageRow, WindowTotalsRow};
 
 use rusqlite::Connection;
 use std::path::{Path, PathBuf};
@@ -192,6 +192,27 @@ impl Store {
             }
             Err(e) => {
                 crate::logbuf::push(&format!("store: app usage: {e}"));
+                Vec::new()
+            }
+        }
+    }
+
+    /// The log grouped by domain since `since_ms`, biggest blocked count first,
+    /// capped at 200 groups. Gated by the `services breakdown` switch upstream:
+    /// this is a `GROUP BY` over the whole window, and a user who never opened
+    /// the section should not pay for it.
+    pub fn log_usage_by_domain(&self, since_ms: i64, transport: i64) -> Vec<DomainUsageRow> {
+        match log::usage_by_domain(&self.db, since_ms, transport) {
+            Ok(mut rows) => {
+                for row in &mut rows {
+                    row.blocked = row.blocked.max(0);
+                    row.requests = row.requests.max(0);
+                    row.bytes_saved = row.bytes_saved.max(0);
+                }
+                rows
+            }
+            Err(e) => {
+                crate::logbuf::push(&format!("store: domain usage: {e}"));
                 Vec::new()
             }
         }
@@ -490,6 +511,21 @@ fn migrate(conn: &Connection) -> Result<(), String> {
         )
         .map_err(|e| format!("migrate schema to v7: {e}"))?;
     }
+    if version < 8 {
+        // v8: the services breakdown groups the window by domain. The window
+        // predicate stays the leading column, because the log is bounded by
+        // time and the grouping only reorders what the window already cut;
+        // carrying `domain` in the index keeps that cut from touching the table
+        // to drop empty domains.
+        conn.execute_batch(
+            "BEGIN;
+             CREATE INDEX IF NOT EXISTS log_events_ts_domain
+                 ON log_events(ts_ms, domain);
+             PRAGMA user_version = 8;
+             COMMIT;",
+        )
+        .map_err(|e| format!("migrate schema to v8: {e}"))?;
+    }
     Ok(())
 }
 
@@ -693,6 +729,104 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// A v7 database has the whole current schema except the domain index.
+    /// Opening it must add the index and keep the rows queryable by domain,
+    /// because the services breakdown is the first reader that groups on it.
+    #[test]
+    fn a_v7_database_gains_the_domain_index() {
+        let dir = std::env::temp_dir().join(format!("adfree-store-{}-v7", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        {
+            let conn = Connection::open(dir.join("adfree.db")).unwrap();
+            conn.execute_batch(
+                "CREATE TABLE settings (
+                     id         INTEGER PRIMARY KEY,
+                     json       TEXT NOT NULL,
+                     updated_ms INTEGER NOT NULL
+                 );
+                 CREATE TABLE state (
+                     key        TEXT PRIMARY KEY,
+                     json       TEXT NOT NULL,
+                     updated_ms INTEGER NOT NULL
+                 );
+                 CREATE TABLE state_meta (
+                     key   TEXT PRIMARY KEY,
+                     value TEXT NOT NULL
+                 );
+                 CREATE TABLE log_events (
+                     id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                     ts_ms       INTEGER NOT NULL,
+                     action      INTEGER NOT NULL,
+                     category    INTEGER NOT NULL,
+                     domain      TEXT NOT NULL,
+                     ip          TEXT NOT NULL,
+                     rule        TEXT NOT NULL,
+                     list_name   TEXT NOT NULL,
+                     latency_ns  INTEGER NOT NULL DEFAULT 0,
+                     bytes_saved INTEGER NOT NULL DEFAULT 0,
+                     ipv6        INTEGER NOT NULL DEFAULT 0,
+                     app         TEXT NOT NULL DEFAULT '',
+                     transport   INTEGER NOT NULL DEFAULT 0,
+                     roaming     INTEGER NOT NULL DEFAULT 0,
+                     flow_id     INTEGER NOT NULL DEFAULT 0,
+                     url         TEXT NOT NULL DEFAULT '',
+                     dns_answer  TEXT NOT NULL DEFAULT '',
+                     bytes_sent  INTEGER NOT NULL DEFAULT 0,
+                     bytes_recv  INTEGER NOT NULL DEFAULT 0
+                 );
+                 CREATE INDEX log_events_ts ON log_events(ts_ms);
+                 CREATE INDEX log_events_action ON log_events(action);
+                 CREATE INDEX log_events_transport_action ON log_events(transport, action);
+                 CREATE TABLE flow_traffic (
+                     ts_ms     INTEGER NOT NULL,
+                     app       TEXT NOT NULL,
+                     transport INTEGER NOT NULL,
+                     roaming   INTEGER NOT NULL,
+                     sent      INTEGER NOT NULL,
+                     recv      INTEGER NOT NULL
+                 );
+                 CREATE INDEX flow_traffic_ts ON flow_traffic(ts_ms);
+                 CREATE INDEX flow_traffic_app ON flow_traffic(app, ts_ms);
+                 INSERT INTO log_events
+                     (ts_ms, action, category, domain, ip, rule, list_name, bytes_saved)
+                     VALUES (1234, 1, 1, 'old.example', '', '||old.example^', 'Old list', 40);
+                 PRAGMA user_version = 7;",
+            )
+            .unwrap();
+        }
+
+        let store = Store::open(&dir).expect("v7 store opens");
+        {
+            let conn = store.db.lock();
+            let named: i64 = conn
+                .query_row(
+                    "SELECT COUNT(*) FROM sqlite_master \
+                     WHERE type = 'index' AND name = 'log_events_ts_domain'",
+                    [],
+                    |r| r.get(0),
+                )
+                .expect("index lookup");
+            assert_eq!(named, 1, "the v8 step ran on a v7 file");
+            let version: i64 = conn
+                .query_row("PRAGMA user_version", [], |r| r.get(0))
+                .expect("version read");
+            assert_eq!(version, 8);
+        }
+        assert_eq!(
+            store.log_usage_by_domain(1_000, -1),
+            vec![DomainUsageRow {
+                domain: "old.example".to_string(),
+                blocked: 1,
+                requests: 1,
+                bytes_saved: 40,
+            }],
+            "the row written before the migration is still grouped by domain"
+        );
+        drop(store);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     #[test]
     fn log_pages_and_counts() {        let (store, _) = temp_store("pages");
         for i in 0..700u64 {
@@ -812,6 +946,96 @@ mod tests {
         assert_eq!(totals.bytes_sent, 1_300, "both connections counted");
         assert_eq!(totals.bytes_recv, 4_600);
         assert_eq!(store.log_window_totals(1_000, 1), WindowTotalsRow::default());
+    }
+
+    #[test]
+    fn a_window_query_groups_the_log_by_domain() {
+        let (store, _) = temp_store("domain-usage");
+        // Two blocks of one domain owned by two different apps: the grouping is
+        // by domain, so the app must not split the group.
+        let mut first = with_app(
+            block_event(
+                ACTION_BLOCK,
+                "doubleclick.net",
+                "",
+                "||doubleclick.net^",
+                "Ads",
+                1,
+                10,
+                10,
+                false,
+            ),
+            "com.example.browser",
+        );
+        first.ts_ms = 3_000;
+        store.log_enqueue(&first);
+        let mut second = with_app(
+            block_event(
+                ACTION_BLOCK,
+                "doubleclick.net",
+                "",
+                "||doubleclick.net^",
+                "Ads",
+                1,
+                10,
+                20,
+                false,
+            ),
+            "com.example.game",
+        );
+        second.ts_ms = 3_100;
+        store.log_enqueue(&second);
+        let mut single = block_event(
+            ACTION_BLOCK,
+            "telemetry.io",
+            "",
+            "||telemetry.io^",
+            "Ads",
+            1,
+            10,
+            5,
+            false,
+        );
+        single.ts_ms = 3_200;
+        store.log_enqueue(&single);
+        // An allowed domain still gets a group, with nothing blocked in it.
+        let mut allowed = allow_event("ok.test", "10.0.0.2", 5);
+        allowed.ts_ms = 3_300;
+        store.log_enqueue(&allowed);
+        // Before the window: not this query's business.
+        let mut stale = block_event(ACTION_BLOCK, "old.test", "", "", "Ads", 1, 10, 999, false);
+        stale.ts_ms = 500;
+        store.log_enqueue(&stale);
+        store.log_flush();
+
+        assert_eq!(
+            store.log_usage_by_domain(1_000, -1),
+            vec![
+                DomainUsageRow {
+                    domain: "doubleclick.net".to_string(),
+                    blocked: 2,
+                    requests: 2,
+                    bytes_saved: 30,
+                },
+                DomainUsageRow {
+                    domain: "telemetry.io".to_string(),
+                    blocked: 1,
+                    requests: 1,
+                    bytes_saved: 5,
+                },
+                DomainUsageRow {
+                    domain: "ok.test".to_string(),
+                    blocked: 0,
+                    requests: 1,
+                    bytes_saved: 0,
+                },
+            ],
+            "biggest blocked first, the allow last, the stale window left out"
+        );
+        assert!(
+            store.log_usage_by_domain(1_000, 1).is_empty(),
+            "the transport filter excludes rows stamped as unknown"
+        );
     }
 
     /// Connection rows are pruned and cleared with the log they describe.
