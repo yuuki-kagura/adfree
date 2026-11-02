@@ -425,10 +425,13 @@ sheet was skipped.
 - Bindings: `./gradlew :app:verifyBindings` with `ADFREE_RUST_TARGET_DIR`
   and `ANDROID_NDK_HOME`, rebuild the four ABIs with `cargo ndk`, then
   `./gradlew :app:testDebugUnitTest :app:assembleRelease -PskipNative`.
-- Device (deferred from Phases 3–5): install on the Redmi, verify roaming
-  with Wi-Fi off/mobile on, screen-off per transport, log detail fields,
-  mobile/Wi-Fi statistics, per-app proxy routing and the DNS filter sheet;
-  capture screenshots at 800×1340 for `52`–`59`, `69`, `73`–`79`.
+- Device (deferred from Phases 3–5): most of it was verified on the connected
+  Sony instead of the Redmi — see the two records below. What still needs the
+  Redmi: roaming with Wi-Fi off and mobile on (positive enforcement, not
+  reachable without root on the Sony), and the per-flow memory probe in
+  `BENCHMARK.md`. Screenshots `52`–`59`, `69`, `73`–`79` are captured except
+  `55` and `58`, which the on-device mask app blocks (noted in the 2026-11-02
+  record).
 - Device verification record (2026-11-01, Sony 802SO / Android 10, the
   connected device in place of the unavailable Redmi; VPN up on Wi-Fi,
   per-app evidence read from the on-device `adfree.db`):
@@ -458,15 +461,31 @@ sheet was skipped.
     back ON, VPN running with the default config.
 - Device verification record (2026-11-02, Sony 802SO / Android 10, release
   build versionName 1.1.1):
+  - Numbering: the `adfree/` captures carry the AdGuard screen id they
+    correspond to. The three below show AdFree behaviour with no AdGuard
+    screen behind them, so they continue the sequence at `80`–`82` rather than
+    reuse `77`–`79`, which already name the log overflow, blocked-request
+    detail and allow-rule dialog.
+  - Statistics range and data-type chips: `Hôm nay / 7 ngày / 30 ngày / Mọi
+    lúc` over `Mọi mạng / Dữ liệu di động / Wi-Fi` — the §6.2 transport filter
+    and the existing ranges in one frame (`adfree/adfree-53-stats-time-range.png`).
+  - Rule-from-log sheet: opening a blocked row's whitelist action raises
+    "Thêm quy tắc chặn" with `||msdk.shopee.vn^` pre-filled, the `||shopee.vn^`
+    wider alternative and the priority option; cancelled without writing, so
+    the custom list is unchanged (`adfree/adfree-75-dialog-rule-from-log.png`).
   - Log retention line: renders where §6.1 put it — under "Truy vấn mạng gần
     đây" the header reads "Cơ sở dữ liệu giữ 200000 dòng gần nhất trong 7
     ngày" with 15048 rows loaded, so a short visible list no longer reads as
-    a short history (`adfree/adfree-77-log-retention.png`).
+    a short history (`adfree/adfree-80-log-retention.png`).
   - Statistics byte totals: "Dữ liệu sử dụng 126,2 MB đã lưu / 21,6 MB đã tải
     lên / 118,4 MB đã tải xuống" with the segmented bar, from
-    `log_window_totals` (`adfree/adfree-78-stats-byte-totals.png`).
+    `log_window_totals` (`adfree/adfree-81-stats-byte-totals.png`).
   - Filter group enabled count: "Đã bật: 1 trên 4" on the Riêng tư group
-    (`adfree/adfree-79-filters-group-enabled.png`).
+    (`adfree/adfree-82-filters-group-enabled.png`).
+  - Still not captured on this device: `55` and `58` (per-app statistics and
+    the all-apps list scrolled). AdFree's equivalent list is the Ứng dụng
+    screen, whose rows run straight through the mask window, so every row in
+    the middle of the frame is blacked out; these need the mask app closed.
   - Datagram counting: corroborated, not proved. Switching "Chặn QUIC /
     UDP 443" off and browsing Chrome, Facebook and Messenger for ~75 s made
     UDP rows appear (b-graph.facebook.com · Facebook, www.messenger.com ·
