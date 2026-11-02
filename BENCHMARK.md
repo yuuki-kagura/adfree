@@ -321,6 +321,14 @@ RAM comes from `dumpsys meminfo <pkg> | grep 'TOTAL PSS'`, battery from
 Remove the marker and restart protection when the measurement is done: with it
 in place, adb's own traffic goes through the tunnel.
 
+Two things this harness does not control, learned the hard way (see
+`Re-run — on the Sony 802SO`): idle-CPU and RAM rows must be taken with the
+release APK, since a debug build of AdFree nearly doubles its own resident set,
+and with `Display Power: state=ON` plus `svc power stayon true` pinned before
+the foreground window, otherwise screen state and launch transitions dominate
+the sample. Only one VPN can run, so each app's pass has to assert its own
+`tun0` address before trusting any number.
+
 ## Caveats
 
 - Wall times include the probe host's scheduling and Wi-Fi, so run all rounds
@@ -554,3 +562,153 @@ words added, so it is stated as arithmetic):
   (`flare`), still not connected this session. The Sony can only show that the
   totals are non-zero, which they do (160 KB up / 29.1 MB down after a browser
   download, 151 KB on one app).
+
+## Re-run — on the Sony 802SO, release against release (2026-11-02, evening)
+
+Every table above this one was measured on the Redmi `flare`, which is not
+connected. This run is on the Sony 802SO (Android 10, `msmnile`, 8 cores,
+5,492 MB RAM, Wi-Fi "Tachibana Shin (ZTE)" at −64 dBm, on the charger). **None
+of its absolute figures are comparable with the rows above** — different SoC,
+different Android, different radio. Only the AdFree/AdGuard pairs within this
+section mean anything.
+
+- AdFree `8ea0c8c`. The latency and probe-CPU rows use the debug APK, because
+  routing adb's traffic into the tunnel needs the debug-only
+  `files/capture-shell` marker; the idle-CPU and RAM rows use the release APK,
+  because AdGuard is a release app. Both were measured, and the difference is
+  large enough that mixing them would have been a mistake — see Memory below.
+- AdGuard **4.14.0** release, not the nightly 4.14.68 the Redmi rows used.
+- No battery rows. The device sat at 100% on AC, which `Caveats` already calls
+  noise.
+- Two passes per app, interleaved (AdFree, AdGuard, AdFree, AdGuard), same
+  network throughout.
+
+| Metric | AdFree | AdGuard | Verdict |
+| --- | --- | --- | --- |
+| Blocked-host latency (per round, warm) | 1.6–11.4 ms (NXDOMAIN 6–16 ms, then cached) | 10.0–20.0 ms | AdFree 3–8× faster, but see *Blocking* below |
+| Allowed-host latency (per round, warm) | 1.9–5.0 ms | 6.3–11.7 ms | AdFree ~2–4× faster |
+| Allowed-host first round (cold cache) | 177.3 / 182.1 ms | 90.3 / 181.1 ms | parity |
+| Allowed-host mean (per round) | 2.1–3.5 ms (outliers 118.6 / 205.7 / 279.2) | 6.5–11.8 ms | AdFree lower, no timeouts |
+| CPU for the same 108 probes | 0.81 / 0.79 s | 1.82 / 1.68 s | AdFree ~2.2× lower |
+| Background idle CPU (60 s windows) | 0.98 / 0.90 % | 0.52 / 1.97 % | parity on this device |
+| Foreground idle CPU (20 s, screen on, app open) | 6.60 / 5.90 % | 24.40 / 25.05 % | AdFree ~4× lower |
+| RAM background PSS (release, settled) | 89.1 MB (+0.1 MB swap) | 274.6 MB (+31.3 MB swap) | AdFree ~68 % lighter |
+| RAM foreground PSS (release, app open) | 101.2 MB (+0.05 MB swap) | 275.9 MB (+31.3 MB swap) | AdFree ~63 % lighter |
+| Cold lookups (median of 8 per round) | 81.5 / 97.5 ms | 84.5 / 88.5 ms | parity |
+
+### Latency per round (probe totals, ms, 6 rounds × 18 names)
+
+| Pass | Allowed median | Allowed mean | Blocked median | Blocked mean |
+| --- | --- | --- | --- | --- |
+| AdFree 1 | 182.1 / 2.2 / 2.9 / 3.3 / 2.3 / 2.5 | 195.5 / 2.5 / 3.0 / 3.5 / 2.7 / 2.6 | 16.1 / 6.9 / 204.5 / 1.8 / 1.9 / 1.6 | 74.4 / 6.1 / 279.2 / 1.8 / 2.0 / 1.8 |
+| AdFree 2 | 177.3 / 2.2 / 1.9 / 5.0 / 2.3 / 2.0 | 197.5 / 2.4 / 2.1 / 205.7 / 2.1 / 2.1 | 11.4 / 6.3 / 6.2 / 1.9 / 1.9 / 1.8 | 33.6 / 5.3 / 118.6 / 1.9 / 1.7 / 1.6 |
+| AdGuard 1 | 181.1 / 6.3 / 9.6 / 11.5 / 11.2 / 11.4 | 177.9 / 6.6 / 9.1 / 11.8 / 11.1 / 11.4 | 16.1 / 12.0 / 15.4 / 15.8 / 15.6 / 15.3 | 36.0 / 10.6 / 13.0 / 14.3 / 15.4 / 14.7 |
+| AdGuard 2 | 90.3 / 10.4 / 10.1 / 11.7 / 6.3 / 6.8 | 105.3 / 10.4 / 10.2 / 11.8 / 6.5 / 6.6 | 20.0 / 10.8 / 15.8 / 16.4 / 7.2 / 10.0 | 25.1 / 9.1 / 14.5 / 14.9 / 6.7 / 9.2 |
+
+Round 1 is the cold cache for both apps and both settle to steady values by
+round 3. AdFree's warm figures are 2–3 ms because the answer comes from its DNS
+cache; AdGuard's are 6–12 ms, which is a per-query round trip through its own
+stack rather than a cache hit. AdFree's blocked-host rounds 3–5 are ~1.8 ms for
+the same reason — those are cached `0.0.0.0` answers, not the 6–16 ms NXDOMAIN
+path.
+
+### Blocking under a repeated-name burst
+
+Of the 48 blocked probes, AdGuard returned NXDOMAIN for **48/48**. AdFree
+returned NXDOMAIN for 24/48, `0.0.0.0`/`::` for 20/48 (the client fails with
+`ECONNREFUSED`, so the request still dies), and let **4/48 connect** — all four
+`zq8f8.adnxs.com`, the same retry-loop name the 2026-10-29 notes describe. This
+is the smart filter (5 blocks in 10 s → allow for 60 s) doing what it is
+configured to do against a harness that asks for the identical name twelve times
+in a minute; `smartFiltering` is on in the settings that produced these rows.
+AdGuard has no equivalent window, so on a repeated-name probe it blocks more
+consistently than AdFree. Latency comparisons above should be read with that:
+AdFree's fastest blocked rounds are the ones where it had stopped answering
+NXDOMAIN.
+
+### Memory, and why the build type mattered
+
+| Build | Background PSS | swap PSS | Foreground PSS | swap PSS |
+| --- | --- | --- | --- | --- |
+| AdFree release | 89.1 MB | 0.1 MB | 101.2 MB | 0.05 MB |
+| AdFree debug | 155.7–157.3 MB | 0–94.6 MB | 166.2–170.3 MB | 0.05–94.6 MB |
+| AdGuard 4.14.0 | 254.8–289.1 MB | 0.01–31.3 MB | 264.8–292.8 MB | 0.01–31.3 MB |
+
+The debug build nearly doubles AdFree's resident set (`.dex`/`.oat` `Code` alone
+is 74.2 MB against AdGuard's 49.5 MB) and gets 83–97 MB of itself swapped out on
+this device, which would have made the release-versus-release comparison a coin
+flip. Composition at rest with protection on, release AdFree against AdGuard:
+
+| | AdFree | AdGuard |
+| --- | --- | --- |
+| Native heap | 14.7 MB PSS (69.6 MB heap) | 164.1 MB PSS (178.0 MB heap) |
+| Java/Dalvik heap | 6.4–8.2 MB | 63.3–69.1 MB |
+| Code (dex + so mmap) | 68.5–74.2 MB | 38.0–49.5 MB |
+| Graphics | 1.9–16.0 MB | 2.5–17.0 MB |
+
+AdFree's engine holds the same seven lists (ag-base, ag-mobile-ads, ag-tracking,
+ag-dns, oisd, abpvn plus user rules) on the same resolver
+(`dnsProvider: adguard_default`, backup `8.8.8.8`, `blockMode: NXDOMAIN`,
+`https: true`) as the Redmi runs, so the difference is the app, not the setup.
+
+AdGuard with its protection switched off still sits at 145.0 MB PSS plus 63.3 MB
+swapped — its at-rest footprint alone is close to AdFree's footprint with the
+tunnel running.
+
+### Cold lookups
+
+`nc -z -w 5 <unique>.127.0.0.1.nip.io 443`, eight fresh names per round, three
+rounds per pass. The method still carries the ~50 ms fork/exec cost `Notes`
+describes, so subtract it before reading these as resolver latency.
+
+| | AdFree | AdGuard |
+| --- | --- | --- |
+| Median (pass 1 / pass 2) | 81.5 / 97.5 ms | 84.5 / 88.5 ms |
+| Range | 68–179 ms | 74–121 ms |
+
+The 2026-10-29 Redmi run had AdFree at ~220 ms against AdGuard's ~140 ms, which
+it attributed to the 100 ms hedge firing because `94.140.14.14` took 350 ms+ on
+a cold name. From this network the primary answers inside the hedge window, so
+the hedge never fires and the two apps are at parity. The Redmi observation about
+the hedge stands; it is a property of that uplink, not of the code.
+
+### What this run changes
+
+- **Foreground idle CPU is a UI cost, not an engine cost.** With the screen
+  pinned on, AdFree's home screen uses ~6 % of one core and AdGuard's ~25 %.
+  On the Redmi both apps measured ~10 %. The figure ranks the toolkits on this
+  device and should not be quoted as a protection-engine number.
+- **Background idle is parity here**, 0.9–1.0 % against 0.5–2.0 %, whereas the
+  Redmi rows had AdFree 3–10× below AdGuard. AdGuard's background cost varies
+  more between windows than AdFree's does, so the honest read is "same order"
+  rather than a win for either side.
+- **The probe latency rows now measure the cache**, which they did not on the
+  Redmi. Warm allowed lookups cost 2–3 ms in AdFree and 6–12 ms in AdGuard
+  because AdFree answers from its DNS cache inside one round trip.
+- Battery remains unmeasured on a charging device, and the per-flow on-device
+  memory probe from the section above still needs the Redmi.
+
+### Measurement traps found while doing this
+
+- **Pin the screen state for foreground idle.** The first three foreground
+  windows in this session read 43.9 %, 89.8 % and 213.9 % of a core, which is
+  not what either app does: the display had been turned off by a
+  `KEYCODE_SLEEP` left in a helper, and `monkey` launch transitions were being
+  sampled as "idle". Re-measured with `Display Power: state=ON` and
+  `svc power stayon true`, the same window gives 6 % and 25 %.
+- **Verify the tunnel, then verify it again after every handover.** Only one
+  VPN can run, so switching apps silently leaves the second app's protection
+  off. Each pass starts by asserting `tun0` carries that app's address
+  (AdFree `10.111.42.1`, AdGuard `172.18.11.218`) and that a real, publicly
+  resolvable ad host (`pagead2.googlesyndication.com`) comes back `gai=7` in
+  11–18 ms. One AdGuard idle pass was thrown away because its switch tap did
+  nothing and it measured the app at rest.
+- **`/proc/<pid>/stat` needs the comm prefix stripped** (`sed 's/.*) //'`)
+  before picking fields 12 and 13 — AdGuard's comm is `adguard.android` and a
+  quoted path with an unquoted pid expands to `cat /proc/24660 /stat`, which
+  reads as zero ticks and looks like an idle app rather than a broken parser.
+- **Android 10 has no `TOTAL PSS:` label.** `dumpsys meminfo <pkg>` prints the
+  per-process details table row `TOTAL <pss> <privateDirty> <privateClean>
+  <swapPssDirty>`; the `App Summary` row is `TOTAL:` with a colon. Grepping the
+  historical `TOTAL PSS` string silently returns nothing.
+
