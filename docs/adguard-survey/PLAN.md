@@ -632,9 +632,39 @@ sheet was skipped.
     already loaded — rather than a fresh query (`AdGuardRepository.kt:1581`),
     so an export taken without scrolling the log list off the top and back
     exports a stale snapshot. The blocked and saved-data counters are
-    runtime-only and restart near zero with the process. And uiautomator
-    bounds are in the 800×1316 space while `screencap` returns 1080×1812:
-    taps must use the dump coordinates, not the screenshot.
+    runtime-only and restart near zero with the process. And the screenshot
+    space is not the dump space: `screencap` returns 800×1340 here while
+    uiautomator bounds stop at 1316 (the bottom gesture area), and any crop
+    that was resized for reading multiplies the error again — taps must use the
+    dump coordinates.
+  - English locale, the last open item of the group-2 set, done through the
+    app's own `Ngôn ngữ ứng dụng` → English switch, so no system locale change
+    and no reboot. The status notification reposted in English and was read
+    from the shade: `Blocking ads and trackers` / `Blocked: 190 Data saved:
+    5 MB`, with `Disable` and `Assistant` as its two actions, and its channel
+    renamed to `AdFree protection status`. The firewall notification needed a
+    re-trigger: the dedupe window is one notice per app per hour
+    (`FIREWALL_NOTICE_WINDOW_MS`, `AdGuardRepository.kt:97`), so blocking
+    Chrome again produced the `ERR_NAME_NOT_RESOLVED` page but no new record
+    until AdFree was force-stopped and the in-memory `firewallNoticeAt` map
+    cleared. It then posted `Chrome blocked` / `The firewall stopped this app
+    from using the Internet` with the channel renamed to `Firewall blocks`.
+  - Two consequences of that, both accepted rather than fixed. A notification
+    keeps the language it was posted in: after the app went back to Vietnamese
+    the English firewall row stayed in the shade, because only a new post
+    re-renders it. And a channel name only refreshes when that channel next
+    posts, so `adfree_firewall` still read `Firewall blocks` in the system
+    settings until the notifier ran again — the status channel had already
+    reverted to `Trạng thái bảo vệ AdFree`.
+  - Capture note for the status row: pulled down over another app, the
+    foreground-service row is not in the list at all (the silent section
+    showed only the firewall row); opened from the home screen it is the first
+    row. Also, the device does re-lock to the PIN keyguard after its timeout
+    and `wm dismiss-keyguard` does not clear it — the PIN the user supplied is
+    what unlocked it this pass.
+  - Device left restored: Chrome's `Sử dụng Wi-Fi` back to `Kế thừa` (page
+    verified loading again), app language back to `Tiếng Việt`, status
+    notification reposting with `Vô hiệu` / `Trợ lý`.
 
 ### Risks
 
