@@ -764,14 +764,15 @@ private fun FilterGroupCard(
                         color = AdGuardTextPrimary,
                     )
                     Text(stringResource(group.subtitleRes), fontSize = 11.sp, color = AdGuardTextMuted)
+                    // AdGuard names the configuration state in words rather
+                    // than as a bare ratio on the right of the row.
+                    Text(
+                        stringResource(R.string.filters_group_enabled, enabled, lists.size),
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        color = if (enabled > 0) AdGuardGreenPrimary else AdGuardTextMuted,
+                    )
                 }
-                Text(
-                    text = "$enabled/${lists.size}",
-                    fontSize = 11.sp,
-                    fontWeight = FontWeight.SemiBold,
-                    color = if (enabled > 0) AdGuardGreenPrimary else AdGuardTextMuted,
-                )
-                Spacer(modifier = Modifier.width(4.dp))
                 Icon(
                     imageVector = if (expanded) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
                     contentDescription = null,

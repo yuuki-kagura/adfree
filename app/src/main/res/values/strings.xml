@@ -625,6 +625,7 @@
     <string name="filters_inactive_title">Inactive</string>
     <string name="filters_inactive_body">“%1$s” has enabled filters but the “%2$s” module is off — requests from this group are not filtered</string>
     <string name="filters_enable_module">Turn on</string>
+    <string name="filters_group_enabled">Enabled: %1$d of %2$d</string>
     <string name="filters_row_meta">%1$s rules • %2$s</string>
     <string name="filters_row_version">Version %1$s</string>
     <string name="filters_row_error">Error: %1$s</string>
@@ -803,6 +804,7 @@
     <string name="proxy_access_through">Through proxy</string>
     <string name="proxy_access_direct">Direct</string>
     <string name="apps_detail_data_today">Data saved</string>
+    <string name="apps_detail_data_used">Data used</string>
     <string name="apps_detail_data_value">%1$d MB</string>
     <string name="apps_detail_blocked_queries">Blocked queries</string>
     <string name="apps_detail_view_logs">View filtering log for %1$s</string>
