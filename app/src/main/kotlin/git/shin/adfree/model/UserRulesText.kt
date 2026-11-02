@@ -60,6 +60,31 @@ fun userBlockRule(input: String): String? {
     return typedHost(trimmed)?.let { "||$it^" }
 }
 
+/**
+ * The exception rules in a user-rules list, narrowed by a search box.
+ *
+ * Only `@@` lines belong here: a blocking rule shown in an allowlist screen
+ * would be deleted by a user who thinks it is an exception, and the screen has
+ * no way to tell the two apart afterwards. The query matches against the rule's
+ * host as well as its raw text, so `example` finds `@@||example.com^`.
+ */
+fun allowlistRules(rules: List<String>, query: String): List<String> {
+    val exceptions = rules.filter { it.startsWith("@@") }
+    val needle = query.trim().lowercase()
+    if (needle.isEmpty()) return exceptions
+    return exceptions.filter { it.lowercase().contains(needle) || allowlistHost(it).contains(needle) }
+}
+
+/** The host an exception rule is about, for display and for search. */
+fun allowlistHost(rule: String): String =
+    rule.removePrefix("@@")
+        .removePrefix("||")
+        .substringBefore('^')
+        .substringBefore('#')
+        .substringBefore('$')
+        .trim()
+        .lowercase()
+
 private fun hasExplicitRuleSyntax(input: String): Boolean =
     input.startsWith("||") ||
         input.startsWith("/") ||

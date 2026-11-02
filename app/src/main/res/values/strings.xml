@@ -708,6 +708,15 @@
     <string name="rules_allow_note">@@ rules let a domain bypass every filter. Add a domain above or edit the raw text tab.</string>
     <string name="rules_allow_empty">No exceptions yet</string>
 
+    <!-- Website allowlist: the @@ rules shown as domains -->
+    <string name="allowlist_title">Website exceptions</string>
+    <string name="allowlist_subtitle">%1$d domains bypass every filter</string>
+    <string name="allowlist_search_hint">Search exceptions</string>
+    <string name="allowlist_add_action">Add exception</string>
+    <string name="allowlist_delete_action">Delete exception</string>
+    <string name="allowlist_no_match">No exception matches that search</string>
+    <string name="allowlist_https_note">Exceptions are stored as @@ rules in Your rules. Hosts left out of HTTPS decryption are set on the HTTPS screen.</string>
+
     <!-- Apps (per-app firewall) -->
     <string name="apps_title">Apps</string>
     <string name="apps_subtitle">%1$d apps • choose which ones get filtered</string>

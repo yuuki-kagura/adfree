@@ -31,6 +31,7 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Apps
 import androidx.compose.material.icons.filled.BatteryChargingFull
 import androidx.compose.material.icons.filled.Block
+import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material.icons.filled.Dns
 import androidx.compose.material.icons.filled.Extension
@@ -98,7 +99,7 @@ import git.shin.adfree.ui.theme.AdGuardOnAccent
  * else is one module's options, the way the reference client nests them.
  */
 private enum class ProtectionRoute {
-    LIST, AD_BLOCKING, ANNOYANCES, TRACKING, DNS, HTTPS, FIREWALL, FIREWALL_GLOBAL, FIREWALL_CUSTOM,
+    LIST, AD_BLOCKING, WEBSITE_ALLOWLIST, ANNOYANCES, TRACKING, DNS, HTTPS, FIREWALL, FIREWALL_GLOBAL, FIREWALL_CUSTOM,
     FIREWALL_APP, FIREWALL_QUICK, FIREWALL_NOTIFICATIONS, BROWSING_SECURITY, ECO, FILTERS, EXTENSIONS
 }
 
@@ -181,7 +182,13 @@ fun ProtectionScreen(
                 viewModel = viewModel,
                 onBack = ::back,
                 onFilters = { navigate(ProtectionRoute.FILTERS) },
+                onAllowlist = { navigate(ProtectionRoute.WEBSITE_ALLOWLIST) },
                 onExtensions = { navigate(ProtectionRoute.EXTENSIONS) },
+                modifier = modifier,
+            )
+            ProtectionRoute.WEBSITE_ALLOWLIST -> WebsiteAllowlistScreen(
+                viewModel = viewModel,
+                onBack = ::back,
                 modifier = modifier,
             )
             ProtectionRoute.ANNOYANCES -> AnnoyancesDetail(
@@ -417,6 +424,7 @@ private fun AdBlockingDetail(
     viewModel: AdGuardViewModel,
     onBack: () -> Unit,
     onFilters: () -> Unit,
+    onAllowlist: () -> Unit,
     onExtensions: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -426,6 +434,11 @@ private fun AdBlockingDetail(
     val enabledRules = state.filterLists
         .filter { it.isEnabled && !it.isCustom && !it.isDnsOnly }
         .sumOf { it.ruleCount }
+    val exceptionCount = state.filterLists
+        .firstOrNull { it.isCustom }
+        ?.customRules
+        ?.count { it.startsWith("@@") }
+        ?: 0
     val scriptsOn = state.userscripts.count { it.isEnabled }
 
     DetailScaffold(onBack = onBack, modifier = modifier) {
@@ -460,6 +473,16 @@ private fun AdBlockingDetail(
                 )
             },
             onClick = onFilters,
+        )
+
+        Spacer(modifier = Modifier.height(10.dp))
+
+        NavigationRow(
+            icon = Icons.Default.CheckCircle,
+            accent = AdGuardGreenLight,
+            title = stringResource(R.string.allowlist_title),
+            subtitle = stringResource(R.string.allowlist_subtitle, exceptionCount),
+            onClick = onAllowlist,
         )
 
         Spacer(modifier = Modifier.height(10.dp))

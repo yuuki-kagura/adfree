@@ -708,6 +708,15 @@
     <string name="rules_allow_note">Quy tắc @@ cho phép domain bỏ qua mọi bộ lọc. Thêm domain ở trên hoặc sửa trực tiếp trong tab Toàn văn.</string>
     <string name="rules_allow_empty">Chưa có ngoại lệ nào</string>
 
+    <!-- Website allowlist: the @@ rules shown as domains -->
+    <string name="allowlist_title">Ngoại lệ trang web</string>
+    <string name="allowlist_subtitle">%1$d domain bỏ qua mọi bộ lọc</string>
+    <string name="allowlist_search_hint">Tìm ngoại lệ</string>
+    <string name="allowlist_add_action">Thêm ngoại lệ</string>
+    <string name="allowlist_delete_action">Xoá ngoại lệ</string>
+    <string name="allowlist_no_match">Không có ngoại lệ nào khớp tìm kiếm</string>
+    <string name="allowlist_https_note">Ngoại lệ được lưu dưới dạng quy tắc @@ trong mục Quy tắc của bạn. Domain miễn giải mã HTTPS được đặt ở màn Lọc HTTPS.</string>
+
     <!-- Apps (per-app firewall) -->
     <string name="apps_title">Ứng dụng</string>
     <string name="apps_subtitle">%1$d ứng dụng • chọn app nào được lọc</string>
