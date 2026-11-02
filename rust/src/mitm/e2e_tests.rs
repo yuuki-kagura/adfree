@@ -332,9 +332,14 @@ fn start_origin_mode(html: &'static str, mode: OriginBody) -> Origin {
                 b"HTTP/1.1 302 Found\r\nLocation: https://track.test/next\r\n\
                   Content-Length: 0\r\nConnection: keep-alive\r\n\r\n"
                     .to_vec()
-            } else if line.starts_with("GET /cookies ") || line.starts_with("HEAD /cookies ") {
+            } else if line.starts_with("GET /cookies ")
+                || line.starts_with("HEAD /cookies ")
+                || line.starts_with("GET /cookies?")
+            {
                 // The cookies a `$cookie` rule may take off both halves of the
-                // exchange: the request carries some, the answer sets some.
+                // exchange: the request carries some, the answer sets some. The
+                // `?` form is the same resource with a query the stealth edits
+                // are asked to keep or drop.
                 let body = if line.starts_with("HEAD") { "" } else { "ok" };
                 format!(
                     "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\n\
@@ -343,6 +348,14 @@ fn start_origin_mode(html: &'static str, mode: OriginBody) -> Origin {
                      Content-Length: 2\r\nConnection: keep-alive\r\n\r\n{body}"
                 )
                 .into_bytes()
+            } else if line.starts_with("GET /etag ") {
+                // A cached resource: the answer carries the tag and a
+                // revalidation asks with it, which is the pair the stealth
+                // switch separates.
+                b"HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\n\
+                  ETag: \"abc123\"\r\nContent-Length: 2\r\n\
+                  Connection: keep-alive\r\n\r\nok"
+                    .to_vec()
             } else if line.starts_with("GET /jsonprune ") || line.starts_with("POST /jsonprune ") {
                 // A JSON API answer a `$jsonprune` rule takes items out of.
                 let body = r#"{"ads": [1, 2], "keep": 3}"#;
@@ -1706,6 +1719,7 @@ fn stealth_edits_both_halves_of_the_https_exchange() {
             block_web_rtc: false,
             disguise_user_agent: true,
             block_third_party_cookies: true,
+            ..StealthConfig::default()
         },
         ..core.config()
     });
@@ -1747,6 +1761,253 @@ fn stealth_edits_both_halves_of_the_https_exchange() {
     assert!(
         !head.to_lowercase().contains("set-cookie:"),
         "a cross-site answer may not set cookies: {head}"
+    );
+
+    tcp.close();
+}
+
+/// The identifying headers a cross-site request has no business carrying: the
+/// bearer token, the referring page, and the entity tag the last answer stored
+/// for this client's cache.
+#[test]
+fn stealth_takes_the_identifying_headers_off_a_cross_site_request() {
+    let origin = start_origin(HTML);
+    let (core, ca_der) = setup_core_with_list(&origin, "stealth-headers", "");
+    core.set_config(Config {
+        mitm_enabled: true,
+        stealth: StealthConfig {
+            enabled: true,
+            strip_third_party_authorization: true,
+            hide_third_party_referer: true,
+            strip_etag: true,
+            ..StealthConfig::default()
+        },
+        ..core.config()
+    });
+
+    let mut tcp = Client::connect(core.clone(), origin.port);
+    let mut conn = handshake(&mut tcp, client_config(ca_der));
+    assert!(!conn.is_handshaking(), "the MITM handshake must complete");
+
+    let (head, body) = request_with(
+        &mut tcp,
+        &mut conn,
+        "/etag",
+        "Sec-Fetch-Dest: empty\r\nSec-Fetch-Site: cross-site\r\n\
+         Authorization: Bearer secret-token\r\n\
+         Referer: https://shop.test/page\r\n\
+         If-None-Match: \"abc123\"\r\nCookie: sid=1\r\n",
+    );
+    assert!(head.starts_with("HTTP/1.1 200"), "{head}");
+    assert_eq!(body, b"ok", "the body is none of the headers' business");
+    {
+        let seen = origin.requests.lock().expect("requests");
+        let sent = seen.last().expect("the request reached the origin");
+        let lower = sent.to_lowercase();
+        assert!(
+            !lower.contains("authorization:"),
+            "a token must not travel to another site: {sent:?}"
+        );
+        assert!(
+            !lower.contains("referer:"),
+            "the referring page must not travel either: {sent:?}"
+        );
+        assert!(
+            !lower.contains("if-none-match"),
+            "the stored tag must not be handed back: {sent:?}"
+        );
+        assert!(
+            lower.contains("cookie: sid=1"),
+            "the cookie jar is a different switch: {sent:?}"
+        );
+    }
+    assert!(
+        !head.to_lowercase().contains("etag:"),
+        "and no new tag may be stored for this client: {head}"
+    );
+
+    tcp.close();
+}
+
+/// The first-party half of the cookie switch: it does not ask who the request
+/// is for, so the site's own jar is closed on both halves of the exchange.
+#[test]
+fn blocking_every_cookie_closes_the_sites_own_jar() {
+    let origin = start_origin(HTML);
+    let (core, ca_der) = setup_core_with_list(&origin, "stealth-all-cookies", "");
+    core.set_config(Config {
+        mitm_enabled: true,
+        stealth: StealthConfig {
+            enabled: true,
+            block_all_cookies: true,
+            ..StealthConfig::default()
+        },
+        ..core.config()
+    });
+
+    let mut tcp = Client::connect(core.clone(), origin.port);
+    let mut conn = handshake(&mut tcp, client_config(ca_der));
+    assert!(!conn.is_handshaking(), "the MITM handshake must complete");
+
+    let (head, body) = request_with(
+        &mut tcp,
+        &mut conn,
+        "/cookies",
+        "Sec-Fetch-Dest: document\r\nCookie: sid=1\r\n",
+    );
+    assert!(head.starts_with("HTTP/1.1 200"), "{head}");
+    assert_eq!(body, b"ok");
+    {
+        let seen = origin.requests.lock().expect("requests");
+        let sent = seen.last().expect("the request reached the origin");
+        assert!(
+            !sent.to_lowercase().contains("cookie:"),
+            "a first-party request loses its cookies too: {sent:?}"
+        );
+    }
+    let lower = head.to_lowercase();
+    assert!(
+        !lower.contains("set-cookie:"),
+        "and the answer may not open the jar again: {head}"
+    );
+
+    tcp.close();
+}
+
+/// `Yêu cầu các trang web không theo dõi tôi` and `Ẩn truy vấn tìm kiếm`: the
+/// signals go out, and the words the user typed stay on the results page.
+#[test]
+fn the_privacy_signals_go_out_and_the_search_query_stays_home() {
+    let origin = start_origin(HTML);
+    let (core, ca_der) = setup_core_with_list(&origin, "stealth-signals", "");
+    core.set_config(Config {
+        mitm_enabled: true,
+        stealth: StealthConfig {
+            enabled: true,
+            inject_gpc_dnt: true,
+            hide_search_query: true,
+            ..StealthConfig::default()
+        },
+        ..core.config()
+    });
+
+    let mut tcp = Client::connect(core.clone(), origin.port);
+    let mut conn = handshake(&mut tcp, client_config(ca_der));
+    assert!(!conn.is_handshaking(), "the MITM handshake must complete");
+
+    let (head, _) = request_with(
+        &mut tcp,
+        &mut conn,
+        "/cookies",
+        "Sec-Fetch-Dest: document\r\n\
+         Referer: https://www.google.com/search?q=cats&num=10\r\n",
+    );
+    assert!(head.starts_with("HTTP/1.1 200"), "{head}");
+    {
+        let seen = origin.requests.lock().expect("requests");
+        let sent = seen.last().expect("the request reached the origin");
+        assert!(sent.contains("Sec-GPC: 1"), "GPC must go out: {sent:?}");
+        assert!(sent.contains("DNT: 1"), "and DNT with it: {sent:?}");
+        assert!(
+            sent.contains("Referer: https://www.google.com/search?num=10"),
+            "the referer keeps its page and loses the words: {sent:?}"
+        );
+        assert!(
+            !sent.contains("q=cats"),
+            "the query must not leave the results page: {sent:?}"
+        );
+    }
+
+    tcp.close();
+}
+
+/// A page gets the scriptlets the browser-API switches ask for, inline and with
+/// the nonce the policy was taught: the guard has to run before the page's own
+/// scripts do.
+#[test]
+fn an_injected_guard_silences_the_push_and_geolocation_apis() {
+    let origin = start_origin(HTML);
+    let (core, ca_der) = setup_core_with_list(&origin, "stealth-guards", "");
+    core.set_config(Config {
+        mitm_enabled: true,
+        stealth: StealthConfig {
+            enabled: true,
+            block_push_api: true,
+            block_geolocation_api: true,
+            ..StealthConfig::default()
+        },
+        ..core.config()
+    });
+
+    let mut tcp = Client::connect(core.clone(), origin.port);
+    let mut conn = handshake(&mut tcp, client_config(ca_der));
+    assert!(!conn.is_handshaking(), "the MITM handshake must complete");
+
+    let (head, body) = request_with(&mut tcp, &mut conn, "/", "Accept: text/html\r\n");
+    assert!(head.starts_with("HTTP/1.1 200"), "{head}");
+    let nonce = nonce_of(&head);
+    let page = String::from_utf8_lossy(&body);
+    assert!(
+        page.contains(&format!("<script nonce=\"{nonce}\">")),
+        "the guards are inline and carry the nonce: {page}"
+    );
+    assert!(
+        page.contains("PushManager"),
+        "the push API must be closed in the page: {page}"
+    );
+    assert!(
+        page.contains("getCurrentPosition"),
+        "and the geolocation API with it: {page}"
+    );
+
+    tcp.close();
+}
+
+/// With nothing switched on, the stealth path must not touch a request at all:
+/// the head the origin sees is the head the client wrote.
+#[test]
+fn stealth_leaves_a_request_it_has_no_edit_for_alone() {
+    let origin = start_origin(HTML);
+    let (core, ca_der) = setup_core_with_list(&origin, "stealth-off", "");
+    core.set_config(Config {
+        mitm_enabled: true,
+        // The master is on and every sub-switch is off: nothing applies.
+        stealth: StealthConfig {
+            enabled: true,
+            ..StealthConfig::default()
+        },
+        ..core.config()
+    });
+
+    let mut tcp = Client::connect(core.clone(), origin.port);
+    let mut conn = handshake(&mut tcp, client_config(ca_der));
+    assert!(!conn.is_handshaking(), "the MITM handshake must complete");
+
+    let (head, body) = request_with(
+        &mut tcp,
+        &mut conn,
+        "/cookies?utm_source=news",
+        "Sec-Fetch-Site: cross-site\r\nAuthorization: Bearer keep-me\r\n\
+         Referer: https://www.google.com/search?q=cats\r\nCookie: sid=1\r\n\
+         If-None-Match: \"abc123\"\r\n",
+    );
+    assert!(head.starts_with("HTTP/1.1 200"), "{head}");
+    assert_eq!(body, b"ok");
+    {
+        let seen = origin.requests.lock().expect("requests");
+        let sent = seen.last().expect("the request reached the origin");
+        assert!(
+            sent.contains("GET /cookies?utm_source=news HTTP/1.1"),
+            "the URL keeps every parameter: {sent:?}"
+        );
+        assert!(sent.contains("Cookie: sid=1"), "{sent:?}");
+        assert!(sent.contains("Authorization: Bearer keep-me"), "{sent:?}");
+        assert!(sent.contains("q=cats"), "{sent:?}");
+        assert!(sent.contains("If-None-Match"), "{sent:?}");
+    }
+    assert!(
+        head.to_lowercase().contains("set-cookie:"),
+        "the jar stays open: {head}"
     );
 
     tcp.close();

@@ -614,6 +614,19 @@ data class ProtectionSettings(
     val blockWebRtcLeaks: Boolean = false,
     val disguiseUserAgent: Boolean = false,
     val blockThirdPartyCookies: Boolean = true,
+    /**
+     * The switches the tracking-protection list documents, all off until the
+     * user asks: each one is a site that stops working in some way, and the
+     * privacy levels are what turns them on as a set.
+     */
+    val blockAllCookies: Boolean = false,
+    val stripEtag: Boolean = false,
+    val stripThirdPartyAuthorization: Boolean = false,
+    val hideThirdPartyReferer: Boolean = false,
+    val injectGpcDnt: Boolean = false,
+    val hideSearchQuery: Boolean = false,
+    val blockPushApi: Boolean = false,
+    val blockGeolocationApi: Boolean = false,
     val selectedDnsProviderId: String = "adguard_default",
     /** HTTPS allowlist: hosts never decrypted (banking, client-cert sites). */
     val httpsSkipHosts: List<String> = emptyList(),

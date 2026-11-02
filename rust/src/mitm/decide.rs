@@ -32,6 +32,10 @@ pub(crate) struct RequestPlan {
     /// Stealth mode: the request is cross-site, so its `Cookie` header went
     /// away and the answer may not set new ones.
     pub(crate) block_cookies: bool,
+    /// Stealth mode: `ETag` is a stable identifier for this client's cache, so
+    /// the request lost its conditional headers and the answer may not set a
+    /// new tag either.
+    pub(crate) drop_etag: bool,
     /// The `$jsonprune` rules the request matched: held until the response
     /// body arrives.
     pub(crate) jsonprune: Option<Arc<JsonprunePlan>>,
@@ -531,8 +535,9 @@ impl Injector<'_> {
     /// Whether any of the three injection sources is in play; a connection
     /// that is here for header edits alone must not hold bodies back.
     pub(crate) fn active(&self) -> bool {
-        !self.script_src.is_empty() || self.cosmetic.is_some() || self.stealth.blocks_web_rtc()
+        !self.script_src.is_empty() || self.cosmetic.is_some() || self.stealth.injects_guards()
     }
+
 
     /// The HTML snippet injected early in `<head>`: the hiding stylesheet, the
     /// cosmetic payload (rule data inline, runtime fetched from the app's own
@@ -605,19 +610,25 @@ impl Injector<'_> {
                 );
             }
         }
-        if self.stealth.blocks_web_rtc() {
+        for (on, guard) in [
+            (self.stealth.blocks_web_rtc(), crate::mitm::stealth::WEBRTC_GUARD),
+            (self.stealth.blocks_push_api(), crate::mitm::stealth::PUSH_GUARD),
+            (
+                self.stealth.blocks_geolocation_api(),
+                crate::mitm::stealth::GEOLOCATION_GUARD,
+            ),
+        ] {
+            if !on {
+                continue;
+            }
             // Inline rather than served: the guard is tiny and has to run
             // before the page's own scripts. The nonce keeps a strict
             // `script-src` from dropping it.
             out.extend_from_slice(
-                format!(
-                    "<script{}>{}</script>",
-                    http::nonce_attr(nonce),
-                    crate::mitm::stealth::WEBRTC_GUARD
-                )
-                .as_bytes(),
+                format!("<script{}>{}</script>", http::nonce_attr(nonce), guard).as_bytes(),
             );
         }
+
         if !self.script_src.is_empty() {
             // Not deferred: `@run-at document-start` only means anything if
             // the tag is fetched and executed while the parser is still in the

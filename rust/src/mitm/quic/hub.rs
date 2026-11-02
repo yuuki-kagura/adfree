@@ -289,6 +289,7 @@ async fn handle_request(
     // A cross-site request went out without its cookies; the answer may not
     // hand it new ones either.
     plan.block_cookies |= stealth_plan.block_cookies;
+    plan.drop_etag |= stealth_plan.drop_etag;
     if let Some(answer) = decision.answer {
         if let Some(sink) = config.sink {
             sink(&MitmBlock {
@@ -710,6 +711,12 @@ fn apply_response_plan(wire: &mut Vec<u8>, plan: &RequestPlan, host: &str) {
         if let Some(fixed) = crate::mitm::http::drop_headers(wire, &["set-cookie".to_string()]) {
             *wire = fixed;
             crate::logbuf::push(&format!("quic {host}: third-party set-cookie dropped"));
+        }
+    }
+    if plan.drop_etag {
+        if let Some(fixed) = crate::mitm::http::drop_headers(wire, &["etag".to_string()]) {
+            *wire = fixed;
+            crate::logbuf::push(&format!("quic {host}: etag dropped"));
         }
     }
 }

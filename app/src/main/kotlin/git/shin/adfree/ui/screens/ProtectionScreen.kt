@@ -651,6 +651,111 @@ private fun TrackingDetail(
                 )
             }
         }
+
+        Spacer(modifier = Modifier.height(16.dp))
+
+        Text(
+            text = stringResource(R.string.settings_stealth_advanced_title),
+            fontSize = 12.sp,
+            fontWeight = FontWeight.Bold,
+            color = AdGuardTextSecondary,
+        )
+        Text(
+            text = stringResource(R.string.settings_stealth_advanced_subtitle),
+            fontSize = 11.sp,
+            color = AdGuardTextMuted,
+            modifier = Modifier.padding(top = 2.dp, bottom = 8.dp),
+        )
+
+        Card(
+            modifier = Modifier.fillMaxWidth(),
+            shape = RoundedCornerShape(12.dp),
+            colors = CardDefaults.cardColors(containerColor = AdGuardDarkSurface),
+        ) {
+            Column(modifier = Modifier.padding(14.dp)) {
+                StealthToggleRow(
+                    title = stringResource(R.string.settings_stealth_all_cookies_title),
+                    subtitle = stringResource(R.string.settings_stealth_all_cookies_subtitle),
+                    isChecked = settings.blockAllCookies,
+                    enabled = settings.isStealthModeEnabled,
+                    onCheckedChange = {
+                        viewModel.onIntent(AdGuardIntent.UpdateStealth(blockAllCookies = it))
+                    },
+                )
+                Spacer(modifier = Modifier.height(12.dp))
+                StealthToggleRow(
+                    title = stringResource(R.string.settings_stealth_etag_title),
+                    subtitle = stringResource(R.string.settings_stealth_etag_subtitle),
+                    isChecked = settings.stripEtag,
+                    enabled = settings.isStealthModeEnabled,
+                    onCheckedChange = {
+                        viewModel.onIntent(AdGuardIntent.UpdateStealth(stripEtag = it))
+                    },
+                )
+                Spacer(modifier = Modifier.height(12.dp))
+                StealthToggleRow(
+                    title = stringResource(R.string.settings_stealth_auth_title),
+                    subtitle = stringResource(R.string.settings_stealth_auth_subtitle),
+                    isChecked = settings.stripThirdPartyAuthorization,
+                    enabled = settings.isStealthModeEnabled,
+                    onCheckedChange = {
+                        viewModel.onIntent(
+                            AdGuardIntent.UpdateStealth(stripThirdPartyAuthorization = it),
+                        )
+                    },
+                )
+                Spacer(modifier = Modifier.height(12.dp))
+                StealthToggleRow(
+                    title = stringResource(R.string.settings_stealth_referer_title),
+                    subtitle = stringResource(R.string.settings_stealth_referer_subtitle),
+                    isChecked = settings.hideThirdPartyReferer,
+                    enabled = settings.isStealthModeEnabled,
+                    onCheckedChange = {
+                        viewModel.onIntent(AdGuardIntent.UpdateStealth(hideThirdPartyReferer = it))
+                    },
+                )
+                Spacer(modifier = Modifier.height(12.dp))
+                StealthToggleRow(
+                    title = stringResource(R.string.settings_stealth_gpc_title),
+                    subtitle = stringResource(R.string.settings_stealth_gpc_subtitle),
+                    isChecked = settings.injectGpcDnt,
+                    enabled = settings.isStealthModeEnabled,
+                    onCheckedChange = {
+                        viewModel.onIntent(AdGuardIntent.UpdateStealth(injectGpcDnt = it))
+                    },
+                )
+                Spacer(modifier = Modifier.height(12.dp))
+                StealthToggleRow(
+                    title = stringResource(R.string.settings_stealth_search_title),
+                    subtitle = stringResource(R.string.settings_stealth_search_subtitle),
+                    isChecked = settings.hideSearchQuery,
+                    enabled = settings.isStealthModeEnabled,
+                    onCheckedChange = {
+                        viewModel.onIntent(AdGuardIntent.UpdateStealth(hideSearchQuery = it))
+                    },
+                )
+                Spacer(modifier = Modifier.height(12.dp))
+                StealthToggleRow(
+                    title = stringResource(R.string.settings_stealth_push_title),
+                    subtitle = stringResource(R.string.settings_stealth_push_subtitle),
+                    isChecked = settings.blockPushApi,
+                    enabled = settings.isStealthModeEnabled,
+                    onCheckedChange = {
+                        viewModel.onIntent(AdGuardIntent.UpdateStealth(blockPushApi = it))
+                    },
+                )
+                Spacer(modifier = Modifier.height(12.dp))
+                StealthToggleRow(
+                    title = stringResource(R.string.settings_stealth_geo_title),
+                    subtitle = stringResource(R.string.settings_stealth_geo_subtitle),
+                    isChecked = settings.blockGeolocationApi,
+                    enabled = settings.isStealthModeEnabled,
+                    onCheckedChange = {
+                        viewModel.onIntent(AdGuardIntent.UpdateStealth(blockGeolocationApi = it))
+                    },
+                )
+            }
+        }
     }
 }
 

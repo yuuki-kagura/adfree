@@ -3899,6 +3899,10 @@ data class ProtectionState (
     , 
     var `isDnsProtectionEnabled`: kotlin.Boolean
     , 
+    /**
+     * Spare one app that keeps retrying a host the lists refuse (see
+     * [`crate::smart`]). Opt-in: the cooldown lets a blocked host connect.
+     */
     var `isSmartFilteringEnabled`: kotlin.Boolean
     , 
     var `isHttpsFilteringEnabled`: kotlin.Boolean
@@ -3967,6 +3971,32 @@ data class ProtectionState (
     var `disguiseUserAgent`: kotlin.Boolean
     , 
     var `blockThirdPartyCookies`: kotlin.Boolean
+    , 
+    /**
+     * Every cookie, the site's own included: the visitor is forgotten between
+     * requests, so a login has to be typed again.
+     */
+    var `blockAllCookies`: kotlin.Boolean
+    , 
+    /**
+     * `ETag` in and `If-None-Match`/`If-Match` out.
+     */
+    var `stripEtag`: kotlin.Boolean
+    , 
+    var `stripThirdPartyAuthorization`: kotlin.Boolean
+    , 
+    var `hideThirdPartyReferer`: kotlin.Boolean
+    , 
+    /**
+     * `Sec-GPC: 1` and `DNT: 1` on every request.
+     */
+    var `injectGpcDnt`: kotlin.Boolean
+    , 
+    var `hideSearchQuery`: kotlin.Boolean
+    , 
+    var `blockPushApi`: kotlin.Boolean
+    , 
+    var `blockGeolocationApi`: kotlin.Boolean
     , 
     var `selectedDnsProviderId`: kotlin.String
     , 
@@ -4046,6 +4076,14 @@ public object FfiConverterTypeProtectionState: FfiConverterRustBuffer<Protection
             FfiConverterBoolean.read(buf),
             FfiConverterBoolean.read(buf),
             FfiConverterBoolean.read(buf),
+            FfiConverterBoolean.read(buf),
+            FfiConverterBoolean.read(buf),
+            FfiConverterBoolean.read(buf),
+            FfiConverterBoolean.read(buf),
+            FfiConverterBoolean.read(buf),
+            FfiConverterBoolean.read(buf),
+            FfiConverterBoolean.read(buf),
+            FfiConverterBoolean.read(buf),
             FfiConverterString.read(buf),
             FfiConverterSequenceString.read(buf),
             FfiConverterSequenceString.read(buf),
@@ -4091,6 +4129,14 @@ public object FfiConverterTypeProtectionState: FfiConverterRustBuffer<Protection
             FfiConverterBoolean.allocationSize(value.`blockWebRtcLeaks`) +
             FfiConverterBoolean.allocationSize(value.`disguiseUserAgent`) +
             FfiConverterBoolean.allocationSize(value.`blockThirdPartyCookies`) +
+            FfiConverterBoolean.allocationSize(value.`blockAllCookies`) +
+            FfiConverterBoolean.allocationSize(value.`stripEtag`) +
+            FfiConverterBoolean.allocationSize(value.`stripThirdPartyAuthorization`) +
+            FfiConverterBoolean.allocationSize(value.`hideThirdPartyReferer`) +
+            FfiConverterBoolean.allocationSize(value.`injectGpcDnt`) +
+            FfiConverterBoolean.allocationSize(value.`hideSearchQuery`) +
+            FfiConverterBoolean.allocationSize(value.`blockPushApi`) +
+            FfiConverterBoolean.allocationSize(value.`blockGeolocationApi`) +
             FfiConverterString.allocationSize(value.`selectedDnsProviderId`) +
             FfiConverterSequenceString.allocationSize(value.`httpsSkipHosts`) +
             FfiConverterSequenceString.allocationSize(value.`httpsOnlyHosts`) +
@@ -4135,6 +4181,14 @@ public object FfiConverterTypeProtectionState: FfiConverterRustBuffer<Protection
             FfiConverterBoolean.write(value.`blockWebRtcLeaks`, buf)
             FfiConverterBoolean.write(value.`disguiseUserAgent`, buf)
             FfiConverterBoolean.write(value.`blockThirdPartyCookies`, buf)
+            FfiConverterBoolean.write(value.`blockAllCookies`, buf)
+            FfiConverterBoolean.write(value.`stripEtag`, buf)
+            FfiConverterBoolean.write(value.`stripThirdPartyAuthorization`, buf)
+            FfiConverterBoolean.write(value.`hideThirdPartyReferer`, buf)
+            FfiConverterBoolean.write(value.`injectGpcDnt`, buf)
+            FfiConverterBoolean.write(value.`hideSearchQuery`, buf)
+            FfiConverterBoolean.write(value.`blockPushApi`, buf)
+            FfiConverterBoolean.write(value.`blockGeolocationApi`, buf)
             FfiConverterString.write(value.`selectedDnsProviderId`, buf)
             FfiConverterSequenceString.write(value.`httpsSkipHosts`, buf)
             FfiConverterSequenceString.write(value.`httpsOnlyHosts`, buf)

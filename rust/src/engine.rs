@@ -198,6 +198,33 @@ pub struct StealthConfig {
     pub disguise_user_agent: bool,
     /// Drop cookies that belong to another site than the one being visited.
     pub block_third_party_cookies: bool,
+    /// Drop every `Cookie`, first-party included, and let no `Set-Cookie`
+    /// answer come back. The site forgets the visitor between requests, which
+    /// is why it is a separate switch from the third-party one.
+    pub block_all_cookies: bool,
+    /// Drop `ETag` on the way in and `If-Match`/`If-None-Match` on the way
+    /// out: an entity tag is a stable identifier the server chose for this
+    /// client's cache, and a conditional request hands it back.
+    pub strip_etag: bool,
+    /// Drop `Authorization` on a cross-site request. A bearer token in it is
+    /// the visitor's name, and an embedded third party has no business with it.
+    pub strip_third_party_authorization: bool,
+    /// Drop `Referer` on a cross-site request. It tells the site which page
+    /// the user came from.
+    pub hide_third_party_referer: bool,
+    /// Send `Sec-GPC: 1` and `DNT: 1`: the two headers by which a site can be
+    /// told not to sell the visit.
+    pub inject_gpc_dnt: bool,
+    /// Take the words out of a search engine's URL where the leak is: the
+    /// `Referer` leaving a results page and the sub-resource requests that
+    /// repeat the whole search URL.
+    pub hide_search_query: bool,
+    /// Close the Push API in pages: no service worker registration, no
+    /// subscription, and a permission a page can never be granted.
+    pub block_push_api: bool,
+    /// Close the Geolocation API in pages: every position request fails with
+    /// the same answer the user gives when they turn the prompt down.
+    pub block_geolocation_api: bool,
 }
 impl StealthConfig {
     pub fn strips_utm(self) -> bool {
@@ -214,6 +241,61 @@ impl StealthConfig {
 
     pub fn blocks_third_party_cookies(self) -> bool {
         self.enabled && self.block_third_party_cookies
+    }
+
+    pub fn blocks_all_cookies(self) -> bool {
+        self.enabled && self.block_all_cookies
+    }
+
+    pub fn strips_etag(self) -> bool {
+        self.enabled && self.strip_etag
+    }
+
+    pub fn strips_third_party_authorization(self) -> bool {
+        self.enabled && self.strip_third_party_authorization
+    }
+
+    pub fn hides_third_party_referer(self) -> bool {
+        self.enabled && self.hide_third_party_referer
+    }
+
+    pub fn injects_privacy_signals(self) -> bool {
+        self.enabled && self.inject_gpc_dnt
+    }
+
+    pub fn hides_search_query(self) -> bool {
+        self.enabled && self.hide_search_query
+    }
+
+    pub fn blocks_push_api(self) -> bool {
+        self.enabled && self.block_push_api
+    }
+
+    pub fn blocks_geolocation_api(self) -> bool {
+        self.enabled && self.block_geolocation_api
+    }
+
+    /// Whether any of the switches edits a request head. `apply_stealth` is on
+    /// the relay path of every decrypted request, so it leaves the bytes alone
+    /// as soon as this says no; the packet-level and scriptlet switches are
+    /// not request edits and stay out of it.
+    pub fn has_request_edits(self) -> bool {
+        self.strips_utm()
+            || self.blocks_third_party_cookies()
+            || self.blocks_all_cookies()
+            || self.disguises_user_agent()
+            || self.strips_etag()
+            || self.strips_third_party_authorization()
+            || self.hides_third_party_referer()
+            || self.injects_privacy_signals()
+            || self.hides_search_query()
+    }
+
+    /// Whether a page needs a stealth scriptlet. The injection holds bodies
+    /// back until the head is known, so only the switches that really add a
+    /// tag count.
+    pub fn injects_guards(self) -> bool {
+        self.blocks_web_rtc() || self.blocks_push_api() || self.blocks_geolocation_api()
     }
 }
 

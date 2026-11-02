@@ -228,11 +228,24 @@ sealed interface AdGuardIntent {
     data class SetFilterTrusted(val id: String, val trusted: Boolean) : AdGuardIntent
     data class RunThreatScan(val domain: String) : AdGuardIntent
     data object ResetAiLab : AdGuardIntent
+    /**
+     * Writes one or more stealth sub-switches. A `null` means "not this row's
+     * business" and keeps the stored value, so a toggle cannot reset its
+     * neighbours and a privacy level can write a whole set in one intent.
+     */
     data class UpdateStealth(
         val stripUtm: Boolean? = null,
         val blockWebRtc: Boolean? = null,
         val disguiseUa: Boolean? = null,
         val blockCookies: Boolean? = null,
+        val blockAllCookies: Boolean? = null,
+        val stripEtag: Boolean? = null,
+        val stripThirdPartyAuthorization: Boolean? = null,
+        val hideThirdPartyReferer: Boolean? = null,
+        val injectGpcDnt: Boolean? = null,
+        val hideSearchQuery: Boolean? = null,
+        val blockPushApi: Boolean? = null,
+        val blockGeolocationApi: Boolean? = null,
     ) : AdGuardIntent
 
     data object DismissLoading : AdGuardIntent

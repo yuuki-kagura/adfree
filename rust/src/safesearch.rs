@@ -49,7 +49,9 @@ pub fn safe_host(host: &str) -> Option<&'static str> {
 
 /// Whether the last-but-one or last-but-two label of `host` is `engine`, i.e.
 /// the host is `engine.<suffix>`, `engine.<sld>.<cc>` or a subdomain of one.
-fn engine_at(host: &str, engine: &str) -> bool {
+/// `pub(crate)`: the stealth switch that hides search queries picks engines the
+/// same way and must not re-derive the lookalike rule.
+pub(crate) fn engine_at(host: &str, engine: &str) -> bool {
     let labels: Vec<&str> = host.split('.').collect();
     let len = labels.len();
     if len < 2 || !labels[len - 1].chars().all(|c| c.is_ascii_alphabetic()) {

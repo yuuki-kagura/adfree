@@ -640,7 +640,18 @@ class AdGuardViewModel(
             is AdGuardIntent.RunThreatScan -> handleThreatScan(intent.domain)
             is AdGuardIntent.ResetAiLab -> _aiLabState.value = AiLabUiState.Idle
             is AdGuardIntent.UpdateStealth -> repository.updateStealthSetting(
-                intent.stripUtm, intent.blockWebRtc, intent.disguiseUa, intent.blockCookies,
+                stripUtm = intent.stripUtm,
+                blockWebRtc = intent.blockWebRtc,
+                disguiseUa = intent.disguiseUa,
+                blockCookies = intent.blockCookies,
+                blockAllCookies = intent.blockAllCookies,
+                stripEtag = intent.stripEtag,
+                stripThirdPartyAuthorization = intent.stripThirdPartyAuthorization,
+                hideThirdPartyReferer = intent.hideThirdPartyReferer,
+                injectGpcDnt = intent.injectGpcDnt,
+                hideSearchQuery = intent.hideSearchQuery,
+                blockPushApi = intent.blockPushApi,
+                blockGeolocationApi = intent.blockGeolocationApi,
             )
 
             is AdGuardIntent.DismissLoading -> repository.dismissLoading()

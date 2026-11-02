@@ -332,6 +332,9 @@ struct ResponseEdit {
     /// Stealth mode: the request was cross-site, so every `set-cookie` on the
     /// answer is third-party and must not reach the cookie jar.
     block_cookies: bool,
+    /// Stealth mode: the request lost its conditional headers, so the answer
+    /// may not hand back a tag that identifies this client's cache.
+    drop_etag: bool,
     /// The `$jsonprune` rules the request matched: the response body loses
     /// the JSON items they name.
     jsonprune: Option<Arc<JsonprunePlan>>,
@@ -1230,6 +1233,7 @@ impl ProxySession {
                 headers: plan.headers,
                 cookies: plan.cookies,
                 block_cookies: plan.block_cookies,
+                drop_etag: plan.drop_etag,
                 jsonprune: plan.jsonprune,
                 hls: plan.hls,
                 html: plan.html,
@@ -1257,17 +1261,18 @@ impl ProxySession {
     /// answered or redirected here has no head left, and one the rules
     /// rewrote is stripped on top of its new URL. Only HTTPS flows reach this
     /// point (the engine terminates nothing else), which is why the UI says
-    /// the three request edits need HTTPS filtering.
+    /// the request edits need HTTPS filtering.
+    ///
+    /// Every edit below is a no-op when the head does not carry the header or
+    /// the parameter in question: a request nothing applies to leaves byte for
+    /// byte as it arrived.
     pub(super) fn apply_stealth(
         buffer: &mut Vec<u8>,
         plan: &mut RequestPlan,
         session_host: Option<&str>,
         stealth: StealthConfig,
     ) {
-        if !(stealth.strips_utm()
-            || stealth.blocks_third_party_cookies()
-            || stealth.disguises_user_agent())
-        {
+        if !stealth.has_request_edits() {
             return;
         }
         let Some(mut head_end) = header_end(buffer) else {
@@ -1290,12 +1295,20 @@ impl ProxySession {
             return;
         };
         // Everything below edits the buffer, so the parsed facts have to be
-        // copied out first.
-        let url = request_url(&facts, &host);
+        // copied out first. `url` and `target` move with the two URL edits, so
+        // a second edit never rebuilds the head from what the first removed.
+        let mut url = request_url(&facts, &host);
         let method = facts.method.to_string();
-        let target = facts.target.to_string();
+        let mut target = facts.target.to_string();
         let referer = facts.referer.map(str::to_string);
         let site = facts.site.map(str::to_string);
+        let dest = facts.dest.map(str::to_string);
+        // The switches that ask "is this from another site" share one answer,
+        // taken before any of the headers it reads has been dropped.
+        let cross_site = (stealth.blocks_third_party_cookies()
+            || stealth.strips_third_party_authorization()
+            || stealth.hides_third_party_referer())
+            && crate::mitm::stealth::is_third_party(&host, referer.as_deref(), site.as_deref());
 
         if stealth.strips_utm() && rewritable(&method) {
             if let Some(stripped) = crate::mitm::stealth::strip_tracking_params(&url) {
@@ -1305,19 +1318,23 @@ impl ProxySession {
                         let old_end = head_end;
                         head_end = rebuilt.len();
                         buffer.splice(..old_end, rebuilt);
+                        url = stripped;
+                        target = new_target;
                         crate::logbuf::push(&format!("mitm {host}: tracking parameters stripped"));
                     }
                 }
             }
         }
 
-        if stealth.blocks_third_party_cookies()
-            && crate::mitm::stealth::is_third_party(&host, referer.as_deref(), site.as_deref())
-        {
-            if let Some(fixed) = http::drop_headers(&buffer[..head_end], &["cookie".to_string()]) {
-                let old_end = head_end;
-                head_end = fixed.len();
-                buffer.splice(..old_end, fixed);
+        // The all-cookies switch is the stronger one: it does not ask who the
+        // request is for, and its answer may not set a cookie either.
+        if stealth.blocks_all_cookies() {
+            if drop_request_headers(buffer, &mut head_end, &["cookie".to_string()]) {
+                crate::logbuf::push(&format!("mitm {host}: cookies stripped"));
+            }
+            plan.block_cookies = true;
+        } else if stealth.blocks_third_party_cookies() && cross_site {
+            if drop_request_headers(buffer, &mut head_end, &["cookie".to_string()]) {
                 crate::logbuf::push(&format!("mitm {host}: third-party cookies stripped"));
             }
             // Even when the request carried none, the answer must not hand
@@ -1325,16 +1342,78 @@ impl ProxySession {
             plan.block_cookies = true;
         }
 
+        if stealth.strips_etag() {
+            // `If-Match` asks the origin to act only while its tag still holds
+            // and `If-None-Match` asks whether the copy is new: both hand back
+            // the identifier the last answer set for this client's cache.
+            if drop_request_headers(
+                buffer,
+                &mut head_end,
+                &["if-match".to_string(), "if-none-match".to_string()],
+            ) {
+                crate::logbuf::push(&format!("mitm {host}: conditional headers stripped"));
+            }
+            // And no new tag is stored, whichever way the request went out.
+            plan.drop_etag = true;
+        }
+
+        if stealth.strips_third_party_authorization() && cross_site {
+            if drop_request_headers(buffer, &mut head_end, &["authorization".to_string()]) {
+                crate::logbuf::push(&format!("mitm {host}: third-party authorization stripped"));
+            }
+        }
+
+        if stealth.hides_third_party_referer() && cross_site {
+            if drop_request_headers(buffer, &mut head_end, &["referer".to_string()]) {
+                crate::logbuf::push(&format!("mitm {host}: third-party referer stripped"));
+            }
+        }
+
+        if stealth.injects_privacy_signals() {
+            // Two generations of the same request: a site reading either
+            // header gets the answer, and one that reads both gets it twice.
+            let mut said = false;
+            said |= set_request_header(buffer, &mut head_end, "Sec-GPC", "1");
+            said |= set_request_header(buffer, &mut head_end, "DNT", "1");
+            if said {
+                crate::logbuf::push(&format!("mitm {host}: privacy signals added"));
+            }
+        }
+
+        if stealth.hides_search_query() {
+            // The leak is a results page's URL travelling on: as the referer of
+            // whatever the user clicks, and as the target of the images and
+            // pings the results page itself asks for. The page the user opened
+            // keeps its query, because the search has to work.
+            if let Some(referer) = referer.as_deref() {
+                if let Some(cleaned) = crate::mitm::stealth::strip_search_query(referer) {
+                    if set_request_header(buffer, &mut head_end, "Referer", &cleaned) {
+                        crate::logbuf::push(&format!("mitm {host}: search query hidden in referer"));
+                    }
+                }
+            }
+            if rewritable(&method) && sub_resource(dest.as_deref()) {
+                if let Some(stripped) = crate::mitm::stealth::strip_search_query(&url) {
+                    if let Some(new_target) = origin_form(&stripped) {
+                        if new_target != target {
+                            let rebuilt = rebuilt_head(&buffer[..head_end], &new_target);
+                            let old_end = head_end;
+                            head_end = rebuilt.len();
+                            buffer.splice(..old_end, rebuilt);
+                            crate::logbuf::push(&format!("mitm {host}: search query hidden"));
+                        }
+                    }
+                }
+            }
+        }
+
         if stealth.disguises_user_agent() {
-            if let Some(fixed) = http::set_header_value(
-                &buffer[..head_end],
+            set_request_header(
+                buffer,
+                &mut head_end,
                 "User-Agent",
                 crate::mitm::stealth::DISGUISED_USER_AGENT,
-            ) {
-                let old_end = head_end;
-                head_end = fixed.len();
-                buffer.splice(..old_end, fixed);
-            }
+            );
             let hints: Vec<String> = [
                 "sec-ch-ua",
                 "sec-ch-ua-mobile",
@@ -1350,11 +1429,10 @@ impl ProxySession {
             .iter()
             .map(|name| (*name).to_string())
             .collect();
-            if let Some(fixed) = http::drop_headers(&buffer[..head_end], &hints) {
-                buffer.splice(..head_end, fixed);
-            }
+            drop_request_headers(buffer, &mut head_end, &hints);
         }
     }
+
 
     /// Applies the URL-level network rules to the request head at the front of
     /// `buffer`.
@@ -1826,6 +1904,16 @@ impl ProxySession {
                             ));
                         }
                     }
+                    // Stealth mode: the request went out without its
+                    // conditional headers, so the answer may not store a tag
+                    // that names this client's cache for the next one.
+                    if req.drop_etag {
+                        if let Some(fixed) = http::drop_headers(&head, &["etag".to_string()]) {
+                            head = fixed;
+                            let host = self.captured.as_deref().unwrap_or("?");
+                            crate::logbuf::push(&format!("mitm {host}: etag dropped"));
+                        }
+                    }
                     // A response to HEAD advertises the length of the body it
                     // would have carried, and then carries no body at all.
                     if info.bodyless() || req.info.head {
@@ -1849,9 +1937,9 @@ impl ProxySession {
                     );
                     let editable = decodable && framing.is_some() && !req.info.http10;
                     // Injection has something to do only when the page runtime,
-                    // the cosmetic rules or the WebRTC guard are in play; a
-                    // connection that is here for header edits alone must not
-                    // hold bodies back.
+                    // the cosmetic rules or one of the browser-API guards is in
+                    // play; a connection that is here for header edits alone
+                    // must not hold bodies back.
                     let can_inject = self.injector().active();
                     let html_edit = can_inject && info.html && renderable && editable;
                     // `$replace`, `$jsonprune` and `$hls` only ever look at
@@ -2890,6 +2978,50 @@ pub(super) fn rebuilt_head(head: &[u8], target: &str) -> Vec<u8> {
 /// have its query rewritten; anything else keeps it untouched. `$urltransform`
 /// changes of origin are gated separately — they need a redirect, and only a
 /// request-line method may be answered with one.
+/// Takes the named headers out of the request head at the front of `buffer` and
+/// moves `head_end` onto the bytes that are left. `false` when none of them was
+/// there: the caller leaves the head exactly as it arrived.
+fn drop_request_headers(buffer: &mut Vec<u8>, head_end: &mut usize, names: &[String]) -> bool {
+    let Some(fixed) = http::drop_headers(&buffer[..*head_end], names) else {
+        return false;
+    };
+    let old_end = *head_end;
+    *head_end = fixed.len();
+    buffer.splice(..old_end, fixed);
+    true
+}
+
+/// Sets one header on the request head at the front of `buffer`, the same way
+/// [`drop_request_headers`] keeps `head_end` in step. `false` when the head
+/// already carried exactly this value.
+fn set_request_header(
+    buffer: &mut Vec<u8>,
+    head_end: &mut usize,
+    name: &str,
+    value: &str,
+) -> bool {
+    let Some(fixed) = http::set_header_value(&buffer[..*head_end], name, value) else {
+        return false;
+    };
+    let old_end = *head_end;
+    *head_end = fixed.len();
+    buffer.splice(..old_end, fixed);
+    true
+}
+
+/// Whether the request is a resource a page asked for rather than the page the
+/// user opened. Without `Sec-Fetch-Dest` nothing is guessed at: the URL keeps
+/// the query it carries.
+fn sub_resource(dest: Option<&str>) -> bool {
+    match dest.map(str::to_ascii_lowercase) {
+        Some(dest) => !matches!(
+            dest.as_str(),
+            "document" | "iframe" | "frame" | "fencedframe"
+        ),
+        None => false,
+    }
+}
+
 pub(super) fn rewritable(method: &str) -> bool {
     matches!(method, "GET" | "HEAD" | "OPTIONS" | "POST")
 }
@@ -3066,6 +3198,7 @@ mod tests {
             headers: None,
             cookies: None,
             block_cookies: false,
+            drop_etag: false,
             jsonprune: Some(plan),
             hls: None,
             html: None,
@@ -3138,6 +3271,7 @@ mod tests {
             headers: None,
             cookies: None,
             block_cookies: false,
+            drop_etag: false,
             jsonprune: None,
             hls: Some(plan),
             html: None,
@@ -3188,6 +3322,7 @@ mod tests {
             headers: None,
             cookies: Some(plan),
             block_cookies: false,
+            drop_etag: false,
             jsonprune: None,
             hls: None,
             html: None,
@@ -3243,6 +3378,7 @@ mod tests {
                 headers: None,
                 cookies: Some(Arc::clone(&plan)),
                 block_cookies: false,
+                drop_etag: false,
                 jsonprune: None,
                 hls: None,
                 html: None,
@@ -3297,6 +3433,7 @@ mod tests {
                 headers: None,
                 cookies: Some(Arc::clone(&plan)),
                 block_cookies: false,
+                drop_etag: false,
                 jsonprune: None,
                 hls: None,
                 html: None,

@@ -659,17 +659,40 @@ class AdGuardRepository(
     fun toggleStealthMode(enabled: Boolean) =
         updateSettings { it.copy(isStealthModeEnabled = enabled) }
 
+    /**
+     * Writes the stealth sub-switches. Every argument is optional: `null`
+     * leaves that switch alone, so the row that only knows about its own toggle
+     * cannot reset its neighbours, and the privacy levels can write a whole set
+     * in one save.
+     */
     fun updateStealthSetting(
         stripUtm: Boolean? = null,
         blockWebRtc: Boolean? = null,
         disguiseUa: Boolean? = null,
         blockCookies: Boolean? = null,
+        blockAllCookies: Boolean? = null,
+        stripEtag: Boolean? = null,
+        stripThirdPartyAuthorization: Boolean? = null,
+        hideThirdPartyReferer: Boolean? = null,
+        injectGpcDnt: Boolean? = null,
+        hideSearchQuery: Boolean? = null,
+        blockPushApi: Boolean? = null,
+        blockGeolocationApi: Boolean? = null,
     ) = updateSettings { cur ->
         cur.copy(
             stripUtmTracking = stripUtm ?: cur.stripUtmTracking,
             blockWebRtcLeaks = blockWebRtc ?: cur.blockWebRtcLeaks,
             disguiseUserAgent = disguiseUa ?: cur.disguiseUserAgent,
             blockThirdPartyCookies = blockCookies ?: cur.blockThirdPartyCookies,
+            blockAllCookies = blockAllCookies ?: cur.blockAllCookies,
+            stripEtag = stripEtag ?: cur.stripEtag,
+            stripThirdPartyAuthorization =
+                stripThirdPartyAuthorization ?: cur.stripThirdPartyAuthorization,
+            hideThirdPartyReferer = hideThirdPartyReferer ?: cur.hideThirdPartyReferer,
+            injectGpcDnt = injectGpcDnt ?: cur.injectGpcDnt,
+            hideSearchQuery = hideSearchQuery ?: cur.hideSearchQuery,
+            blockPushApi = blockPushApi ?: cur.blockPushApi,
+            blockGeolocationApi = blockGeolocationApi ?: cur.blockGeolocationApi,
         )
     }
 

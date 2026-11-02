@@ -147,6 +147,18 @@ pub struct ProtectionState {
     pub block_web_rtc_leaks: bool,
     pub disguise_user_agent: bool,
     pub block_third_party_cookies: bool,
+    /// Every cookie, the site's own included: the visitor is forgotten between
+    /// requests, so a login has to be typed again.
+    pub block_all_cookies: bool,
+    /// `ETag` in and `If-None-Match`/`If-Match` out.
+    pub strip_etag: bool,
+    pub strip_third_party_authorization: bool,
+    pub hide_third_party_referer: bool,
+    /// `Sec-GPC: 1` and `DNT: 1` on every request.
+    pub inject_gpc_dnt: bool,
+    pub hide_search_query: bool,
+    pub block_push_api: bool,
+    pub block_geolocation_api: bool,
     pub selected_dns_provider_id: String,
     pub https_skip_hosts: Vec<String>,
     pub https_only_hosts: Vec<String>,
@@ -210,6 +222,17 @@ impl Default for ProtectionState {
             block_web_rtc_leaks: false,
             disguise_user_agent: false,
             block_third_party_cookies: true,
+            // Every one of the newer stealth switches starts off: the shipped
+            // behaviour is exactly what it was before they existed, and the
+            // privacy levels are what turns them on as a set.
+            block_all_cookies: false,
+            strip_etag: false,
+            strip_third_party_authorization: false,
+            hide_third_party_referer: false,
+            inject_gpc_dnt: false,
+            hide_search_query: false,
+            block_push_api: false,
+            block_geolocation_api: false,
             selected_dns_provider_id: "adguard_default".to_string(),
             https_skip_hosts: Vec::new(),
             https_only_hosts: Vec::new(),

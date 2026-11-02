@@ -1,8 +1,9 @@
 //! Stealth-mode helpers: the request bits AdGuard hides from sites.
 //!
 //! Everything here is pure so the rules can be tested without a socket:
-//! tracking parameters, third-party classification, STUN detection and the
-//! fixed user agent the disguise replaces the client's own with.
+//! tracking and search-query parameters, third-party classification, STUN
+//! detection, the fixed user agent the disguise replaces the client's own with,
+//! and the browser-API guards a page is given before its own scripts run.
 
 use crate::filter::url_host;
 
@@ -83,6 +84,98 @@ pub const WEBRTC_GUARD: &str = r#"
 })();
 "#;
 
+/// The scriptlet injected into pages when the Push API is blocked.
+///
+/// A subscription needs three things: a service worker, a permission the user
+/// grants, and `PushManager.subscribe`. Denying any one of them is enough to
+/// stop the subscription, so all three are closed here — the register call
+/// rejects, the permission reads `denied` and never prompts, and `subscribe`
+/// rejects. A page that only wants notifications sees the same answer it would
+/// have seen after the user tapped "block".
+pub const PUSH_GUARD: &str = r#"
+(() => {
+  'use strict';
+  const deny = () => Promise.reject(new DOMException('Blocked by AdFree', 'NotAllowedError'));
+  try {
+    const push = window.PushManager && window.PushManager.prototype;
+    if (push) {
+      push.subscribe = deny;
+      push.getSubscription = () => Promise.resolve(null);
+    }
+    if (window.Notification) {
+      Object.defineProperty(window.Notification, 'permission', {
+        configurable: true,
+        get: () => 'denied',
+      });
+      window.Notification.requestPermission = () => Promise.resolve('denied');
+    }
+    const container = navigator.serviceWorker && Object.getPrototypeOf(navigator.serviceWorker);
+    if (container) {
+      container.register = deny;
+    }
+  } catch { /* a frozen prototype: nothing more to close */ }
+})();
+"#;
+
+/// The scriptlet injected into pages when the Geolocation API is blocked.
+///
+/// `GeolocationPositionError` cannot be constructed by a page, so the error
+/// handed to the callback is an object shaped like one: every site that reads
+/// `code` or `message` sees `PERMISSION_DENIED` exactly as it would after the
+/// user turned the prompt down. `watchPosition` reports the failure once and
+/// never fires again.
+pub const GEOLOCATION_GUARD: &str = r#"
+(() => {
+  'use strict';
+  try {
+    const geo = navigator.geolocation;
+    if (!geo) return;
+    const proto = Object.getPrototypeOf(geo);
+    if (!proto) return;
+    const denial = () => ({
+      code: 1,
+      message: 'User denied Geolocation',
+      PERMISSION_DENIED: 1,
+      POSITION_UNAVAILABLE: 2,
+      TIMEOUT: 3,
+      time: null,
+      coords: null,
+    });
+    const fail = (error) => {
+      setTimeout(() => {
+        if (typeof error === 'function') {
+          try { error(denial()); } catch { /* the page's own callback */ }
+        }
+      }, 0);
+    };
+    proto.getCurrentPosition = function (_success, error) { fail(error); };
+    proto.watchPosition = function (_success, error) {
+      fail(error);
+      return 0;
+    };
+    proto.clearWatch = function () {};
+    const permissions = navigator.permissions;
+    if (permissions) {
+      const query = Object.getPrototypeOf(permissions).query;
+      if (query) {
+        Object.getPrototypeOf(permissions).query = function (description) {
+          if (description && description.name === 'geolocation') {
+            return Promise.resolve({
+              state: 'denied',
+              name: 'geolocation',
+              onchange: null,
+              addEventListener() {},
+              removeEventListener() {},
+            });
+          }
+          return query.call(this, description);
+        };
+      }
+    }
+  } catch { /* a frozen prototype: nothing more to close */ }
+})();
+"#;
+
 /// Query parameters whose only job is to name the campaign that sent a
 /// visitor. `utm_*` is matched by prefix; the rest are the one-off click ids
 /// the big ad networks add.
@@ -133,6 +226,61 @@ fn is_tracking_param(name: &str) -> bool {
 /// there is no query or nothing to remove, so a caller can leave the request
 /// head alone.
 pub fn strip_tracking_params(url: &str) -> Option<String> {
+    strip_query(url, is_tracking_param)
+}
+
+/// The engines whose results URL carries the user's own words in the open, so
+/// that a `Referer` out of a results page is a copy of the search. The label
+/// is matched where the engine name sits (`google.com`, `search.brave.com`,
+/// `google.co.uk`), which keeps `google.com.evil.test` out.
+const SEARCH_ENGINES: &[&str] = &[
+    "google",
+    "bing",
+    "duckduckgo",
+    "yandex",
+    "brave",
+    "ecosia",
+    "startpage",
+    "mojeek",
+    "qwant",
+];
+
+/// The parameter each engine puts the words in: `q` is the common one, the
+/// rest are the engines that name it differently.
+const SEARCH_QUERY_PARAMS: &[&str] = &["q", "query", "text", "search_query", "p"];
+
+/// Whether `host` belongs to a search engine the switch knows.
+pub fn is_search_engine(host: &str) -> bool {
+    let host = host.trim_end_matches('.').to_ascii_lowercase();
+    if host.is_empty() {
+        return false;
+    }
+    SEARCH_ENGINES
+        .iter()
+        .any(|engine| crate::safesearch::engine_at(&host, engine))
+}
+
+/// Takes the search query out of an engine's URL.
+///
+/// Only an engine host is touched and only the parameter holding the words
+/// goes: the results page the user asked for still has to load, so this is for
+/// what leaves the page — the `Referer` on the link the user clicks and the
+/// sub-resource requests that repeat the whole search URL. `None` for anything
+/// else, so a caller leaves the head alone.
+pub fn strip_search_query(url: &str) -> Option<String> {
+    if !is_search_engine(crate::filter::url_host(url)) {
+        return None;
+    }
+    strip_query(url, |name| {
+        let lower = name.to_ascii_lowercase();
+        SEARCH_QUERY_PARAMS.contains(&lower.as_str())
+    })
+}
+
+/// The walk both strips share: the query is split on `&`, the pairs the
+/// predicate names are dropped, and everything else keeps its bytes and its
+/// order. `None` when nothing was dropped.
+fn strip_query(url: &str, drop: impl Fn(&str) -> bool) -> Option<String> {
     let (without_fragment, fragment) = match url.find('#') {
         Some(index) => (&url[..index], &url[index..]),
         None => (url, ""),
@@ -148,7 +296,7 @@ pub fn strip_tracking_params(url: &str) -> Option<String> {
             continue;
         }
         let name = pair.split_once('=').map_or(pair, |(name, _)| name);
-        if is_tracking_param(name) {
+        if drop(name) {
             removed = true;
         } else {
             kept.push(pair);
@@ -340,5 +488,54 @@ mod tests {
         assert!(WEBRTC_GUARD.contains("icecandidate"));
         assert!(WEBRTC_GUARD.contains("onicecandidate"));
         assert!(WEBRTC_GUARD.contains("typ host"));
+    }
+
+    #[test]
+    fn a_search_engines_query_is_the_only_thing_that_leaves() {
+        assert_eq!(
+            strip_search_query("https://www.google.com/search?q=cats&num=10").as_deref(),
+            Some("https://www.google.com/search?num=10")
+        );
+        assert_eq!(
+            strip_search_query("https://yandex.ru/?text=cats&lr=0").as_deref(),
+            Some("https://yandex.ru/?lr=0")
+        );
+        assert_eq!(
+            strip_search_query("https://html.duckduckgo.com/?q=cats&t=xyz").as_deref(),
+            Some("https://html.duckduckgo.com/?t=xyz")
+        );
+    }
+
+    #[test]
+    fn any_other_host_keeps_its_query() {
+        assert!(strip_search_query("https://shop.test/search?q=shoes").is_none());
+        assert!(strip_search_query("https://google.com.evil.test/search?q=cats").is_none());
+        assert!(strip_search_query("https://shop.test/path").is_none());
+    }
+
+    #[test]
+    fn the_engine_table_follows_the_label_not_the_suffix() {
+        assert!(is_search_engine("www.google.co.uk"));
+        assert!(is_search_engine("search.brave.com"));
+        assert!(is_search_engine("html.duckduckgo.com"));
+        assert!(!is_search_engine("google.com.evil.test"));
+        assert!(!is_search_engine("notgoogle.com"));
+        assert!(!is_search_engine(""));
+    }
+
+    #[test]
+    fn the_push_guard_closes_every_way_to_subscribe() {
+        assert!(PUSH_GUARD.contains("PushManager"));
+        assert!(PUSH_GUARD.contains("subscribe"));
+        assert!(PUSH_GUARD.contains("requestPermission"));
+        assert!(PUSH_GUARD.contains("register"));
+    }
+
+    #[test]
+    fn the_geolocation_guard_answers_both_position_calls() {
+        assert!(GEOLOCATION_GUARD.contains("getCurrentPosition"));
+        assert!(GEOLOCATION_GUARD.contains("watchPosition"));
+        assert!(GEOLOCATION_GUARD.contains("clearWatch"));
+        assert!(GEOLOCATION_GUARD.contains("User denied Geolocation"));
     }
 }
