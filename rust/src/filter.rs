@@ -6791,7 +6791,7 @@ mod tests {
     use super::*;
 
     fn temp_list(name: &str, body: &str, format: ListFormat, id: u16) -> FilterListInfo {
-        let dir = std::env::temp_dir().join("adfree-filter-test");
+        let dir = std::env::temp_dir().join("adfree-filter-test").join(test_scope());
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join(name);
         std::fs::write(&path, body).unwrap();
@@ -6808,6 +6808,16 @@ mod tests {
             last_error: None,
             dns_only: false,
         }
+    }
+
+    // Each test writes its own copy of `base.txt` and friends, and the engine
+    // reads rule text back from the file when a lookup resolves, so a shared
+    // directory lets a parallel test replace the body another one is reading.
+    fn test_scope() -> String {
+        std::thread::current()
+            .name()
+            .unwrap_or("unscoped")
+            .replace(':', "_")
     }
 
     fn default_lists() -> Vec<FilterListInfo> {
