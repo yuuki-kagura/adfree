@@ -517,9 +517,14 @@ sheet was skipped.
     this list when it starts inside it (y≳420). A swipe begun over the sticky
     header does nothing, which first read as the sort chips not applying —
     they do.
-- Benchmarks: the event enrichment sits on the packet hot path; run
-  `BENCHMARK.md` and confirm ring memory growth stays under ~3 MB and
-  per-flow cost is unchanged within noise.
+- Benchmarks: done host-side. The event enrichment sits on the packet hot path;
+  the ring grew 352 B → 560 B per event (176 KB → 280 KB for 512 slots) against
+  the ~3 MB budget, and each flow owner grew by the three words the traffic
+  counters cost (Relay 928 B, `UdpFlow` 176 B, `H3Flow` 96 B; 94 KB worst case
+  across both datagram tables). Both are pinned by tests —
+  `the_live_ring_stays_within_its_memory_budget` and
+  `a_live_flow_carries_a_known_cost`. The on-device probe half still needs the
+  Redmi; see the two dated sections in `BENCHMARK.md`.
 
 ### Risks
 
