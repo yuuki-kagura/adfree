@@ -46,8 +46,12 @@ class AutomationReceiver : BroadcastReceiver() {
     }
 
     companion object {
-        const val ACTION_ENABLE = "git.shin.adfree.action.ENABLE_PROTECTION"
-        const val ACTION_DISABLE = "git.shin.adfree.action.DISABLE_PROTECTION"
+        // Its own namespace, not MainActivity.ACTION_ENABLE_PROTECTION: that one
+        // is the *activity* action the tile and the notification use, and one
+        // string serving two components with different trust levels makes the
+        // exported surface unreadable straight from the manifest.
+        const val ACTION_ENABLE = "git.shin.adfree.automation.ENABLE_PROTECTION"
+        const val ACTION_DISABLE = "git.shin.adfree.automation.DISABLE_PROTECTION"
 
         /** Extra carrying the token from the Settings row. */
         const val EXTRA_TOKEN = "token"
