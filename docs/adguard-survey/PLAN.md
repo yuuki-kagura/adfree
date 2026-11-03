@@ -556,15 +556,16 @@ section recommended.
     The ongoing status notification stays on the LOW channel it has always
     used: it redraws every ten seconds, and a DEFAULT channel would make that
     a sound.
-  Owed on device: the anti-DPI
-  switch against a real page load — with a time-to-first-byte comparison
-  against the switch off, so the cost of the split lands in `BENCHMARK.md` as a
-  measured number rather than a claim. The other four were settled by the
-  2026-11-03 passes in §6.5: the consent-lost alert fires and sounds on the
+  Owed on device: the services table accepting a tracker dataset over both
+  update paths — a `trackers.json` URL and a DuckDuckGo region file through the
+  picker — and refusing a body that is neither. The other five were settled by
+  the 2026-11-03 passes in §6.5: the consent-lost alert fires and sounds on the
   DEFAULT channel after a system revoke, a witness origin read the mask
   header, a parked `!@@` rule was proven against live traffic and across a
-  process death, and an armed always-on VPN came back after a reboot with no tap
-  and no alert while an unarmed revoke alerted and stayed down.
+  process death, an armed always-on VPN came back after a reboot with no tap
+  and no alert while an unarmed revoke alerted and stayed down, and the
+  anti-DPI handshake split measured +1.2 ms against a ~130 ms first byte in
+  `BENCHMARK.md`.
 - Rust tests: v5→v6 migration keeps row counts and old rows read with
   defaults; `flags` transport/roaming round-trip; `GROUP BY app, category`
   counts; per-app routing override; DNS-only lists do not match HTTP rules.
@@ -1118,13 +1119,12 @@ section recommended.
     `run-as` and identical to the copy taken before the pass,
     `stay_on_while_plugged_in` back to 0, Chrome force-stopped, screen left
     unlocked on the launcher.
-  - Still owed on this device: the anti-DPI switch with a
-    time-to-first-byte comparison against it off so the cost lands in
-    `BENCHMARK.md` as a number, and the services table accepting a tracker dataset
+  - Still owed on this device: the services table accepting a tracker dataset
     over both update paths — a `trackers.json` URL and a DuckDuckGo region file
     through the picker — and refusing a body that is neither. The parked
-    allowlist rule and the always-on restart are no longer on this list; the
-    passes below settled them.
+    allowlist rule, the always-on restart and the anti-DPI cost are no longer on
+    this list; the passes below settled them, the last one as +1.2 ms on the TLS
+    handshake against ~130 ms to first byte in `BENCHMARK.md`.
     The two Redmi-only items (positive roaming enforcement, the per-flow memory
     probe) stay blocked until that device is back.
   - The Manual and Visual checklist lines at the end of this file, run on the
@@ -1298,6 +1298,46 @@ section recommended.
       and byte-identical to the copy taken before the pass, tunnel up at
       10.111.42.1/32, Wi-Fi enabled, `stay_on_while_plugged_in` back to 0,
       Chrome untouched, screen on the launcher.
+  - The anti-DPI split against a measured first byte, run 2026-11-03
+    (22:40–22:52) — the last number this device owed. `BENCHMARK.md` carries the
+    table; what belongs here is how it was produced and what the harness could
+    not rule out.
+    - Getting the request inside the tunnel at all. The VPN builder calls
+      `addDisallowedApplication(packageName)` for AdFree itself and, unless the
+      debug marker `files/capture-shell` exists, for `com.android.shell` too
+      (`AdGuardVpnService.kt:333-348`), so a plain `run-as … curl` was bypassing
+      the engine. The marker was written and the tunnel rebuilt; the proof is in
+      `dumpsys connectivity` — `Uids: <{0-1999, 2001-10343, 10345-99999}>` with
+      shell excluded, `Uids: <{0-10343, 10345-99999}>` with it routed. The
+      marker only takes effect on the next tunnel build, so the exclude cannot be
+      changed under a live session.
+    - What the tunnel then did to the flow. Shell traffic is relayed but not
+      decrypted — the log rows for these rounds read `app=com.android.shell` with
+      an empty `url` — which is exactly what the measurement needs: TLS ends at
+      google.com, so `time_appconnect − time_connect` is the genuine handshake
+      the split acts on, not a local re-encryption.
+    - A/B/A/B, twelve rounds per block, 0.4 s apart, `generate_204`, every round
+      `204`. Stealth master ON in both arms so `anti_dpi` is the only field that
+      differs. Handshake came back +1.2 ms and held across both repeats (10.6 /
+      10.5 off, 11.6 / 11.7 on); TTFB did not move, because the 7.8 ms pooled
+      gap is smaller than the 11.2 ms between the two identical off blocks.
+    - The sub-RTT size is not luck: every peer socket sets `TCP_NODELAY`
+      (`rust/src/engine.rs:3188-3202`), so the 24-byte head is sent immediately
+      rather than waiting on an acknowledgement — without it this measurement
+      would have been an RTT, not a millisecond and a half.
+    - Harness notes. `/system/bin/curl` is the binary that exists on this build;
+      `/usr/bin/curl` is not reachable under `run-as`. `svc wifi disable` does
+      not tear down an established `tun0`, so it is not a lever here either. The
+      keyguard kept stealing focus mid-pass and silently ate a whole toggle
+      cycle (netId stayed 102, so nothing had actually changed), which is why
+      `stay_on_while_plugged_in` was set to 7 for the pass and every tap was
+      preceded by WAKEUP, `wm dismiss-keyguard`, a re-`am start` and a focus
+      read.
+    - Device left as found: `capture-shell` removed and the tunnel rebuilt
+      without it (netId 104, shell excluded again), stealth master and
+      `anti_dpi` back to off with `mask_ip` empty, `stay_on_while_plugged_in`
+      back to 0, the whole `state` + `settings` set re-read through `run-as` and
+      byte-identical to the copy taken before the pass, screen on the launcher.
 
 ### Risks
 

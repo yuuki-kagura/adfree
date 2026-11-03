@@ -931,3 +931,65 @@ AdGuard carries 37 MB of `System` that AdFree does not. AdFree's native heap is
   different process, so its "CPU" came back as −2,565 ticks. A negative delta is
   pid reuse, not an idle app. `win.sh` now refuses a window whose pid changed
   under it instead of reporting a number.
+
+## Anti-DPI hello splitting — cost per connection (2026-11-03, Sony 802SO)
+
+The stealth feature that had no number was `anti_dpi`: it writes the TLS
+ClientHello into two segments (24 bytes, then the rest) so a DPI box cannot see
+a handshake in one packet. The split is `rust/src/mitm/relay.rs:55,241-249` and
+the two-send flush is `rust/src/engine.rs:3310-3345`; the gate is
+`StealthFlags::fragments_hello()` (`rust/src/engine.rs:288-290`), published per
+config apply at `rust/src/engine.rs:1181-1182`. It was switched on and off on the
+device with the rest of stealth left identical, and each state measured through
+the tunnel.
+
+Harness: the debug `capture-shell` marker (`app/src/main/kotlin/git/shin/
+adfree/vpn/AdGuardVpnService.kt:343-348`) routes the shell uid through the VPN so
+`curl` runs inside a relay, and the flow is a passthrough — TLS ends at
+google.com, so `time_appconnect − time_connect` is the real handshake, not a
+local re-encryption. Command per round:
+`curl -k -s -o /dev/null -w '%{time_namelookup} %{time_connect} %{time_appconnect} %{time_starttransfer} %{time_total} %{http_code}\n' https://www.google.com/generate_204`,
+12 rounds per block, 0.4 s apart, run A/B/A/B so a drift in the radio or the
+upstream cannot masquerade as a feature effect. All rows returned `204`.
+Medians, milliseconds:
+
+| Block | anti-DPI | n | DNS | connect | TLS done | handshake | TTFB |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| A | off | 12 | 7.3 | 9.3 | 21.2 | 10.6 | 126.6 |
+| B | on | 12 | 5.4 | 7.0 | 19.0 | 11.6 | 136.3 |
+| A2 | off | 12 | 8.0 | 9.9 | 20.6 | 10.5 | 137.8 |
+| B2 | on | 12 | 5.4 | 7.0 | 18.8 | 11.7 | 138.5 |
+| pooled | off | 24 | 7.8 | 9.8 | 20.9 | **10.5** | **130.5** |
+| pooled | on | 24 | 5.4 | 7.0 | 18.9 | **11.7** | **138.3** |
+
+- The handshake column is the only one this feature can move, and it moves by
+  **+1.2 ms**. That is reproducible rather than a fluke: the two off blocks agree
+  to 0.1 ms (10.6 / 10.5) and the two on blocks agree to 0.1 ms (11.6 / 11.7),
+  so the gap holds across both repeats.
+- End-to-end TTFB is **not** a cost. The pooled on−off difference is 7.8 ms,
+  which is smaller than the 11.2 ms difference between the two identical off
+  blocks (126.6 vs 137.8) and far inside the per-round spread (108 ms to
+  604 ms across 48 rounds). Read the TTFB row as unchanged.
+- The reason it is 1.2 ms and not a retransmit or a full RTT is that every peer
+  socket gets `TCP_NODELAY` (`rust/src/engine.rs:3188-3202`), so the 24-byte
+  head leaves immediately and the two segments are one small packet of extra
+  work, not a Nagle wait.
+- DNS and connect are lower in both on-blocks (5.4 / 7.0 vs 7.3–8.0 / 9.3–9.9).
+  anti-DPI cannot make DNS faster — it only touches a ClientHello — so that pair
+  is block ordering, not an effect, and it is the honest counter-evidence to
+  reading a 12-round median as a precision instrument. It is why the conclusion
+  rests on the two repeats agreeing, not on the pooled direction.
+
+So: 1.2 ms per connection, once per connection, invisible against a 130 ms first
+byte. Nothing here argues either way about the default — `anti_dpi` ships off
+(`ProtectionSettings().antiDpi` is false, asserted at
+`app/src/test/kotlin/git/shin/adfree/data/ProtectionStateMappingTest.kt:44`) and
+no privacy level writes it, by design
+(`app/src/main/kotlin/git/shin/adfree/model/StealthPreset.kt:107-110`: a level
+promises what a site sees, and splitting the handshake changes only what a
+middlebox sees). A user who turns it on pays 1.2 ms to look at and nothing
+measurable to wait for.
+
+Device restored: marker removed and the tunnel rebuilt without it (`Uids:` range
+excludes uid 2000 again), stealth master and `anti_dpi` back to off, store
+byte-identical to the pre-pass snapshot, `stay_on_while_plugged_in` back to 0.
