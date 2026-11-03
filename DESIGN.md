@@ -108,13 +108,19 @@ with `default-features = false` plus `full-regex-handling`, and **without**
   the UI also routes or excludes whole apps from the tunnel.
 - **Cosmetic filtering and userscripts** — a script is injected into filtered
   pages; user scripts may use `@require` and a safe subset of the GM APIs.
-- **Stealth mode** — one master switch over tracking-parameter stripping,
-  third-party cookie blocking, User-Agent disguise and WebRTC leak blocking;
-  see "Stealth mode" for what each effect does and when it can run.
-- **Smart filtering** — if one host is blocked five times within ten seconds,
-  the app is assumed to require it and the host is allowed for a minute.
-  A host keeps its pass only while it keeps hammering, and the switch clears
-  every window at once. On by default.
+- **Stealth mode** — one master switch over twelve effects, with a privacy level
+  (Standard / High / Ultra) above the switches that writes a documented set of
+  them in one tap; see "Stealth mode" for what each effect does and when it can
+  run.
+- **Smart filtering** — off by default. When on, a host the same app has been
+  blocked on seven times within ten seconds is allowed for a minute, on the
+  assumption that the app needs it. The window is keyed on `(host, uid)` rather
+  than on the host alone, so one app's retry loop cannot open a pass for every
+  other app on the device. A host keeps its pass only while it keeps hammering,
+  and the switch clears every window at once. The default flipped to off because
+  the pass is a reachability hole for a minute, and the benchmark harness that
+  asks for the identical name twelve times a minute used to walk straight
+  through it.
 - **Module switches** — ad blocking (ads + annoyances), tracking protection
   (trackers + analytics + social) and DNS protection are read on every
   decision, so toggling one takes effect without a rebuild. Cosmetics of a
@@ -231,8 +237,15 @@ from the core, not from placeholders.
 
 ### Stealth mode
 
-A master switch gates all four effects; each sub-flag is stored separately, so
-a user can choose which to use.
+A master switch gates twelve effects; each sub-flag is stored separately, so a
+user can choose which to use. Above the switches sits a privacy level —
+Standard, High, Ultra — that writes a documented set of them in one tap. The
+level is deliberately not stored: it is read back from the switches it would
+have written (`StealthPreset.of`), so the radio cannot claim a level the traffic
+is not getting after a restore, a backup from another device, or an older build
+that wrote one switch differently. A combination no level writes reads as Custom
+and rewrites nothing. Picking a level also turns the master switch on, because a
+level the master leaves off is a level no packet sees.
 
 - **Tracking parameters** — `utm_*` and the other known tracking keys are
   removed from HTTPS request URLs before they leave the proxy. Only the MITM
@@ -254,6 +267,35 @@ a user can choose which to use.
   a page cannot read the private address the browser would otherwise expose.
   Packet drops can also break legitimate WebRTC calls; that is the cost of the
   switch.
+- **All cookies** — drops `Cookie` on every filtered request and `Set-Cookie` on
+  every response, which logs the user out of anything that authenticates by
+  cookie. It is a separate switch from third-party blocking for exactly that
+  reason, and it is off until asked for.
+- **ETag identification** — strips `ETag` from responses and `If-None-Match`
+  from requests. The tag is a stable per-browser identifier when the cache
+  validates with it, so this costs revalidation traffic on every repeat visit.
+- **Third-party `Authorization` and `Referer`** — a cross-site request loses its
+  `Authorization` header (the same same-site suffix rule the cookie block uses),
+  and a cross-site navigation sends no `Referer`.
+- **Search query in the referer** — the query is scrubbed from the referer
+  leaving a results page and from the sub-resources that page loads, using the
+  safe-search host table so a lookalike domain cannot match. It does not touch
+  the navigation the user just performed: stripping `q` from that breaks the
+  search the user asked for.
+- **Do Not Track / Global Privacy Control** — injects `DNT: 1` and
+  `Sec-GPC: 1` on requests. These are signals a site can ignore, and they are a
+  fingerprint in their own right if a browser sends them inconsistently; the
+  switch is off by default for that reason.
+- **Push and Geolocation API guards** — injected scriptlets that make
+  `PushManager.subscribe` and `navigator.geolocation` fail on filtered pages.
+  They ride the WebRTC scriptlet injection path rather than
+  `rust/assets/scriptlets.json`, because that asset feeds the `$scriptlet` rule
+  pipeline and these guards are not rule-addressable.
+
+Every one of these defaults to off, so an install that never opens the screen
+behaves byte-for-byte as before the switches existed, and the request hot path
+asks `has_request_edits()` once instead of short-circuiting a growing list of
+predicates.
 
 ## Module layout
 
@@ -296,6 +338,8 @@ opens the SQLite database.
 | Userscript bodies + metadata | **Rust** | bodies stay `.js`; metadata lives in SQLite |
 | CA certificate and key | **Rust** | `core/ca.pem`, `core/ca-key.pem`; Kotlin only asks for the PEM to install |
 | Settings | **Rust** | one JSON blob in SQLite; Kotlin keeps a snapshot for the UI |
+| Diagnostics level | **Rust** | `ProtectionState.log_level`; the ring it governs is drained to logcat by Android, which is its only reader |
+| Automation gate + token | Kotlin | device-local `SharedPreferences`, kept out of `ProtectionState` and out of OS backup |
 | Request log | **Rust** | SQLite, retention 7 days / 200k rows |
 | VpnService lifecycle, notification, consent, screen-off, connectivity | Kotlin | the parts that cannot move |
 | *When* to download lists (Wi-Fi/charging/battery), WorkManager | Kotlin | Rust offers a "download now" call |
@@ -856,16 +900,20 @@ the absence of transaction-id races between workers.
 
 The platform layer owns lifecycle and presentation, not filtering decisions.
 
-- **Tabs and module details** — five tabs mirror the reference client. **Home**
+- **Tabs and module details** — six tabs mirror the reference client. **Home**
   is a dashboard: the power switch, one tap per module (the icon carries its
   state), then the counters. **Protection** is the control panel: each module
   row has its own switch and opens a detail screen with that module's options —
-  Ad blocking → filter lists, userscripts, cosmetic filtering, smart filtering
-  and the update interval; DNS → resolver, block mode, DoH/DoT/QUIC switches,
-  Safe Search, rewrites and the SOCKS5 proxy; HTTPS → certificate, site lists
-  and HTTP/3; Anti-tracking → stealth options; Firewall → per-app rules;
-  Battery saving. **Activity**, **Apps** and **Settings** keep the log, the app
-  rules and app-level choices; the Security Lab is reachable from Settings.
+  Ad blocking → filter lists, website exceptions, userscripts, cosmetic
+  filtering, smart filtering and the update interval; DNS → resolver, block
+  mode, DoH/DoT/QUIC switches, Safe Search, rewrites and the SOCKS5 proxy;
+  HTTPS → certificate, site lists and HTTP/3; Anti-tracking → the privacy level
+  and the stealth switches; Firewall → per-app rules; Battery saving.
+  **Apps** holds the app rules, **Activity** the request log, **Statistics** the
+  per-app and per-domain (company) breakdowns, and **Settings** the app-level
+  choices — language, theme, what the log records, how loud the core's own
+  diagnostics are, the automation gate and the backup pair; the Security Lab is
+  reachable from Settings.
 - **Theme** — `Theme.kt` has a real light scheme beside the dark one;
   `MainActivity` follows `ThemeMode` (System reads `isSystemInDarkTheme()`) and
   adjusts status/navigation icon brightness. The choice is stored in
@@ -899,6 +947,35 @@ The platform layer owns lifecycle and presentation, not filtering decisions.
   installs the certificate; it is cancelled once the store contains the CA
   (re-checked on resume, screen-on, tunnel start and settings changes). AdGuard
   keeps the equivalent reminder until the certificate is installed.
+- **Dropped protection** — when the tunnel dies while the user still expects it
+  (`onDestroy` or `onRevoke` with the flag still set), one silent low-priority
+  notification says so and taps back into enable through
+  `ACTION_ENABLE_PROTECTION`, which raises the system consent dialog. There is
+  no alarm and no restart attempt: Android 10+ needs the user's `prepareVpn`
+  confirmation, so a silent relaunch would be a lie either way. A stop the user
+  made themselves — the switch, the tile, the notification action — is never
+  reported, which is why the decision is a pure function of the state captured
+  before the teardown.
+- **Automation** — `AutomationReceiver` is exported and takes two actions,
+  `git.shin.adfree.automation.ENABLE_PROTECTION` and
+  `…DISABLE_PROTECTION`, so Tasker's "Send Intent" can drive protection. They
+  live in their own namespace because `git.shin.adfree.action.ENABLE_PROTECTION`
+  is the *activity* action the tile and the notification already use, and one
+  string serving two components with different trust levels cannot be audited
+  from the manifest. It obeys nothing until the user turns the gate on in
+  Settings and the broadcast
+  carries that install's token, compared with `MessageDigest.isEqual` so a
+  missing extra and a wrong guess look identical. The gate and the token live in
+  device-local `SharedPreferences`, not in `ProtectionState`: that record is
+  exported verbatim by the JSON backup, and a token inside a file the user can
+  hand to anyone would hand over control of protection with it — the same reason
+  `adfree_automation.xml` is excluded from `backup_rules.xml` and from both
+  `data_extraction_rules.xml` paths. Rotating the token issues a fresh one and
+  switches the gate back off, so a leaked value can be retired without
+  reinstalling. Enabling from a broadcast takes the same background path the boot
+  restore uses, because consent cannot be requested from a receiver; a refused
+  foreground start becomes a "tap to open" notification. The log line names the
+  action it refused, never the token.
 
 ## Threading and resource use
 
@@ -1063,6 +1140,32 @@ issue tracker, release notes and measured behavior rather than from code.
   on DNS filtering; its client↔proxy leg remains plain under HTTPS filtering
   (issue #6249 above), and no full-ECH mode is documented. The detailed
   comparison is in "Encrypted ClientHello (ECH)".
+- **Blocking consistency under a repeated-name burst.** This was the one place
+  AdFree blocked *less* than AdGuard: the smart filter's allow window let
+  `zq8f8.adnxs.com` connect on 4 of 48 probes while AdGuard answered 48/48. With
+  the filter off by default and its window keyed on `(host, uid)`, the same
+  harness on the same device returns 48/48 NXDOMAIN — see the 2026-11-03 re-run
+  in BENCHMARK.md. AdGuard has no allow window at all, so the parity here is on
+  the shipped default, not on the optional feature.
+- **Website allowlist.** AdGuard keeps `Danh sách trắng` as its own screen,
+  separate from user rules, and AdFree now does the same. What it does not copy
+  is a per-rule enable switch: `!`-prefixed lines are stripped before rules
+  reach the core, so a "disabled" exception would be deleted rather than parked.
+- **Company breakdown.** AdGuard labels traffic by service from its own
+  database. AdFree ships a 126-row table authored for this project, because the
+  obvious sources (DuckDuckGo Tracker Radar, Ghostery's DB) are CC BY-NC-SA 4.0
+  and an app we distribute cannot carry NonCommercial. A domain with no row
+  shows as itself, and the grouping switch defaults off since it costs a second
+  query over the whole window on every refresh.
+- **Automation.** AdGuard exposes an exported receiver for Tasker with nothing
+  to present. AdFree's receiver is stricter on purpose: default-off switch, a
+  per-install token the sender must present, rotation that also closes the gate,
+  and the token excluded from every backup path. The trade is a setup step the
+  AdGuard user does not have.
+- **Privacy level.** AdGuard's Standard/High/Ultra sit above its stealth
+  switches and are stored. AdFree offers the same three sets but reads the level
+  back from the switches it would have written, so the radio can never claim a
+  level the traffic is not getting after a restore or a foreign backup.
 
 ## Current limitations
 
@@ -1087,6 +1190,16 @@ issue tracker, release notes and measured behavior rather than from code.
   the app-private database.
 - Per-app firewall does not retroactively evaluate flows opened before the
   first policy arrived.
+- The company table is 126 hand-authored rows, so most domains still show as
+  themselves; the planned scale-up is a build-time Wikidata (CC0) merge into the
+  same file rather than a licensed third-party dataset.
+- The automation gate is all-or-nothing: whoever holds the token can switch
+  protection both ways, for every app. There is no per-action or per-sender
+  scoping, and the token is only ever shown on the Settings screen — a shoulder
+  or a cloud-synced Tasker profile can capture it. Rotation retires it.
+- A dropped tunnel is reported, never restarted: Android 10+ requires the user's
+  `prepareVpn` confirmation, so the notification is the strongest thing the app
+  may do on its own.
 - **Open (relay/ECH).** One intermittent `dantri.com.vn` connection reached the
   origin IP without being intercepted while the ECH handshake was answered with
   a normal certificate (`CertificateUnknown` /

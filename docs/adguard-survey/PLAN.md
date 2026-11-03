@@ -62,8 +62,10 @@ Assistant (start minimal, grow later):
 Verification: `dumpsys notification` must show two actions and the stats
 lines; expand/collapse both states, toggle disable/enable, confirm AdFree VPN
 re-registers and the assistant opens over any app. Done on the Sony 2026-11-02
-— see the group-2 device verification record in §6.5, which also lists the one
-open item there: the assistant's per-app panel cannot be scrolled back out.
+— see the group-2 device verification record in §6.5. The open item it listed —
+the assistant's per-app panel could not be scrolled back out — is fixed by
+`b0101c8`; the panel is now a scrolling column, and the on-device re-check is
+recorded with the other outstanding checks in §6.5.
 
 ## Phase 2 — Protection rows: annoyances and browsing security
 
@@ -86,9 +88,13 @@ the ad-blocking flag.
      gate for `FilterGroup.SECURITY` or create one grouped filter set.
    - Detail screen mirrors `10-browsing-security.png`: master switch plus a
      short privacy note (hash/domain check, no URLs leave the device).
-   - Decide whether a warning UI is needed when a malicious domain is hit; if
-     yes, reuse the log/blocked path and add a localized notification on the
-     existing alert channel rather than a new channel.
+   - Decided and shipped: a malicious block has to be visible without opening a
+     screen. `974cfed` posts one localized notice per domain per hour on the
+     existing alert channel, gated by the browsing-security switch, and the tap
+     opens the log filtered to that domain. No new channel, no core change —
+     the security lists already tag their blocks with the malware category, and
+     the Kotlin mapping of that number is pinned by a test because a drift
+     would silently stop the notice firing.
    - AdGuard keeps two separate groups (`47`, `49`): `Bộ lọc bảo mật` is
      tracking-gated (spyware, URL tracking, EasyPrivacy, ...) while
      `Bộ lọc bảo vệ` holds the malware/phishing lists and is **not** gated by
@@ -191,9 +197,13 @@ Phase 3 instead of a second sheet.
 
 - Allowlist: give the website allowlist a dedicated screen (search + add) or
   document that HTTPS website rules cover it. AdGuard keeps it separate from
-  user rules. Decided: no dedicated screen — `@@` rules created from the log
-  sheet land in `Quy tắc của bạn` and the `Cho phép` tab of that editor is the
-  allowlist view.
+  user rules. **Reversed** — the earlier "no dedicated screen" decision is
+  dropped. `1b34e10` adds one: the ad-blocking module opens the `@@` rules as a
+  list of domains with search, add by typed host and delete, all through the
+  existing incremental rule intents so the raw rules sheet stays in sync. What
+  it deliberately does not have is a per-rule on/off switch — lines starting
+  with `!` are stripped before the rules reach the core, so a disabled
+  exception would be deleted rather than parked.
 - Log detail (`73`–`79`): **done.** The request-detail sheet shows status, event
   type, domain/URL, DNS server and protocol, timings, connection id, size, the
   applied rule and its filter list. `Chặn tên miền` / `Danh sách trắng` no longer
@@ -233,10 +243,17 @@ Phase 3 instead of a second sheet.
     ads/trackers/requests;
   - per-app screen with request/data counts, `Hoạt động gần đây` and an
     `App management` shortcut.
-  The `Các dịch vụ` company breakdown has no direct AdFree equivalent: it
-  needs a domain→company mapping that AdFree does not ship. Either skip that
-  section or derive a minimal "top domains contacted" list until a company
-  database is added (out of scope for now).
+  The `Các dịch vụ` company breakdown: **shipped**, reversing the earlier
+  "out of scope". `f153ee0` adds a domain breakdown to the Statistics screen,
+  labelled with the company that owns each registrable domain and falling back
+  to the plain domain when the table has no row. The labels come from
+  `rust/assets/services.tsv` (126 rows authored for this project — DuckDuckGo
+  Tracker Radar and Ghostery were rejected because both are CC BY-NC-SA 4.0 and
+  an app we distribute cannot carry NonCommercial). The table is compiled in
+  with `include_str!`, looked up by suffix walk plus binary search over
+  byte-sorted line offsets, and a downloaded override in `filters_dir` wins.
+  `show_services_breakdown` defaults off because the second `GROUP BY` costs a
+  query per refresh; the refresh piggybacks on the existing filter-update loop.
 - `log_events` stores per-app attribution, so these aggregates are a new
   `GROUP BY app` query; add the matching index if the planner does not reuse
   `log_events_action`.
@@ -257,7 +274,7 @@ matching feature:
 
 | Screen | Status | Use for |
 | --- | --- | --- |
-| Per-app statistics and `Xem tất cả ứng dụng` | captured (`55`–`58`; `59` out of scope) | implement from `log_events` as described above |
+| Per-app statistics and `Xem tất cả ứng dụng` | captured (`55`–`59`); `59` shipped by `f153ee0` | implement from `log_events` as described above, plus `services.tsv` for the company labels |
 | Log entry detail + "create rule from request" | implemented | request detail, applied rule, block/allow rule creation |
 | Settings → General → `Thông báo ứng dụng` | captured (`70`–`72`) | OS deep link; six AdGuard channels |
 | `Thêm trang` (allowlist), `Quy tắc người dùng mới`, `Thêm bộ lọc DNS`, `Thêm bộ lọc tuỳ chỉnh` dialogs | captured (`66`–`69`) | add-flow parity |
@@ -347,9 +364,10 @@ Screens `52`–`59` and `73`–`79` need fields the log does not store today.
   key if AdGuard's column is kept.
 - Keep the existing time ranges, search and sort; they already cover `53`,
   `57`.
-- Company breakdown (`59`) stays out of scope: it needs a domain→company
-  database AdFree does not ship. If a fallback is wanted, show "top domains
-  contacted" from the same `GROUP BY domain` instead and label it as such.
+- Company breakdown (`59`): no longer out of scope — see the `Các dịch vụ`
+  entry under the statistics section, closed by `f153ee0` with a project-owned
+  `services.tsv`. The "top domains contacted" fallback this line proposed is
+  what the screen shows when the table has no row for a domain.
 
 ### 6.3 Per-app proxy routing
 
@@ -398,9 +416,9 @@ sheet was skipped.
   page for this how-to, so a second navigation row on the Protection list would
   either duplicate it or point at a third party's site. The private-browser
   link stays out of scope with the rest of that product.
-- Allowlist (`67`): keep the current HTTPS website rules as the answer. If a
-  dedicated search + add screen is still wanted, reuse the user-rule list
-  path; it is cosmetic parity, not engine behavior.
+- Allowlist (`67`): closed by `1b34e10` with the dedicated screen this section
+  called cosmetic parity. The HTTPS website rules stay what they are — the
+  per-module skip/only lists — and the new screen owns the `@@` exceptions.
 - Rust tests: v5→v6 migration keeps row counts and old rows read with
   defaults; `flags` transport/roaming round-trip; `GROUP BY app, category`
   counts; per-app routing override; DNS-only lists do not match HTTP rules.
@@ -452,8 +470,10 @@ sheet was skipped.
   Sony instead of the Redmi — see the two records below. What still needs the
   Redmi: roaming with Wi-Fi off and mobile on (positive enforcement, not
   reachable without root on the Sony), and the per-flow memory probe in
-  `BENCHMARK.md`. Screenshots `52`–`58`, `69`, `73`–`79` are captured; `59`
-  stays out of scope per §6.2.
+  `BENCHMARK.md`. Screenshots `52`–`58`, `69`, `73`–`79` are captured. `59`
+  (AdGuard's all-companies list) still needs an AdFree-side capture: the
+  company breakdown it shows shipped in `f153ee0`, but no side-by-side
+  screenshot of our version exists yet.
 - Device verification record (2026-11-01, Sony 802SO / Android 10, the
   connected device in place of the unavailable Redmi; VPN up on Wi-Fi,
   per-app evidence read from the on-device `adfree.db`):
@@ -666,6 +686,66 @@ sheet was skipped.
     verified loading again), app language back to `Tiếng Việt`, status
     notification reposting with `Vô hiệu` / `Trợ lý`.
 
+- Device verification record (2026-11-03, Sony 802SO / Android 10, debug build
+  versionName 1.1.1 at `e7430ef`, reinstalled once more after the action-namespace
+  rename). Debug rather than release on purpose: the `files/capture-shell` marker
+  that routes the shell's probes through the tunnel is only writable through
+  `run-as`, and this pass is a measurement pass. Captures live under `/tmp` and
+  are not committed.
+  - Smart filtering default, the claim the 2026-10-29 and 2026-11-02 benchmark
+    notes could not make: **48/48 blocked probes returned NXDOMAIN, 0 connected,
+    60/60 allowed probes OK** — see `Re-run — smart filtering off by default` in
+    BENCHMARK.md. The same harness that leaked four `zq8f8.adnxs.com` connects
+    now leaks none.
+  - Upgrade caveat found while setting that up: this install had
+    `smartFiltering: true` persisted from before the default changed, and the
+    stored value wins over the new default — which is correct behaviour for a
+    user's choice, but it means the leak does not disappear by itself on an
+    updated device. The switch was turned off here by hand before the pass, and
+    the row's subtitle now states the window's consequence in both locales.
+  - One-tap activation (Phase 5 gate pinning): the Home button takes the tunnel
+    down (`tun0` gone) and up again (`tun0` = `10.111.42.1`) with no dialog,
+    because consent was already granted; the QS tile and the notification action
+    were left as verified on 2026-11-02.
+  - The automation gate, end to end through `am broadcast` against
+    `.automation.AutomationReceiver` with `tun0` as the observable, every case in
+    its own `logcat -c` window. On the renamed actions: gate off + correct token
+    → `ignored git.shin.adfree.automation.DISABLE_PROTECTION from an unauthorised
+    broadcast`, tunnel untouched; gate on + wrong token → the same refusal; gate
+    on + correct token → `automation: disabling protection` and `tun0` gone, then
+    `automation: enabling protection` and it back; force-stop + correct token → a
+    fresh process (pid 6011) answered the broadcast and raised `tun0` without a
+    "tap to open", because Android 10 does not restrict this background start;
+    after `Đổi mã khác` the retired token was refused, the switch had returned to
+    off by itself, and neither the retired nor the live value appeared anywhere
+    in `logcat -d`. The same matrix had been run earlier the same day against
+    the pre-rename strings and every result carried over; the rename added the one
+    case the collision left ambiguous — `git.shin.adfree.action.DISABLE_PROTECTION`
+    with the gate on and a valid token now produces no log line and no state
+    change, because that action no longer addresses this receiver.
+    The Settings row was checked visually in Vietnamese: switch, hint naming both
+    actions, warning line, the 32-hex token, copy and rotate buttons; `aapt2 dump
+    strings` on the installed APK shows the `automation.*` names in the resources
+    and no `git.shin.adfree.action.ENABLE_PROTECTION` resource string at all.
+  - Device left as found: `files/capture-shell` absent, the tunnel up (last
+    authorised ENABLE, the retired token then refused), the app sent to the
+    home screen, automation switch off with a rotated token that was never
+    transmitted, and the on-device `protection` record read back through `run-as`
+    at the shipped defaults — `is_smart_filtering_enabled: false`,
+    `show_services_breakdown: false`, `log_level: "warn"`. App language
+    `Tiếng Việt`. The two DB copies pulled for that read were deleted after it.
+  - Still owed on this device, none of it claimed above: the assistant panel
+    scroll re-check (`b0101c8`), a full-store log export line count vs the store
+    (`023b835`), add/remove on the allowlist screen (`1b34e10`), a real
+    malicious-list hit posting the notice (`974cfed`, whose one-per-hour dedupe
+    needs a force-stop to re-arm), the stealth switches and privacy-level radio
+    taking effect on live requests (`91dc2dd`, `5858a75`), the services breakdown
+    switch showing no `GROUP BY` and no RSS growth while off (`f153ee0`), the
+    log-level rows actually changing what reaches logcat (`61dcccd`), and a
+    system-initiated revoke posting the dropped-protection alert (`fa79e84`).
+    The two Redmi-only items (positive roaming enforcement, the per-flow memory
+    probe) stay blocked until that device is back.
+
 ### Risks
 
 - The log table grows wider on disk; the retention window (200k rows / 7
@@ -683,14 +763,45 @@ sheet was skipped.
 
 ## Out of scope
 
-- AdGuard VPN and private browser (separate products).
+- AdGuard VPN and private browser (separate products), the high-contrast theme,
+  and the `Cách chặn quảng cáo trên YouTube` how-to row.
+- Tracker Radar / Ghostery as the company database: both are CC BY-NC-SA 4.0,
+  so NonCommercial plus ShareAlike cannot be carried by an app we distribute.
+  `rust/assets/services.tsv` is authored for this project instead; the scale-up
+  its header names is a build-time Wikidata P856 (official website) query, CC0,
+  merged into the same file.
+- Mask-IP and any DPI-resistant transport: both are network-egress features, and
+  this app's rule is no telemetry and no new outbound service.
+- Silent VPN restart. Android 10+ requires the user's `prepareVpn` confirmation,
+  so a dropped tunnel is reported (`fa79e84`), never re-established behind the
+  user's back.
+- Per-rule enable/disable on the allowlist screen: `!`-prefixed lines are
+  stripped before rules reach the core, so a "disabled" exception would be
+  deleted rather than parked.
 - Switching AdFree to a DEFAULT-importance channel.
-- Any network/telemetry feature.
+- Any network/telemetry feature. The automation receiver (`e7430ef`) is the only
+  externally reachable surface added, and it is default-off, token-gated, and
+  excluded from OS backup along with its token.
 
 ## Testing checklist
 
 - Rust: `cargo test` for engine/firewall/new gates; persistence migration.
-- Kotlin: unit tests for stats formatting, relative-time text, module gates.
+- Kotlin: unit tests for stats formatting, relative-time text, module gates, and
+  `AutomationGateTest` for the gate itself — off by default, one token minted and
+  kept stable, only the exact token authorised, off stops everything, rotation
+  invalidates the old value and closes the switch.
+- Exported surface: `aapt2 dump xmltree --file AndroidManifest.xml <apk>` must
+  keep exactly four of our own exported components — the launcher activity,
+  `BootReceiver`, `.automation.AutomationReceiver`, the QS tile — beside the
+  androidx WorkManager/Room/profileinstaller ones those libraries bring (the
+  exported androidx ones are guarded by `BIND_JOB_SERVICE` or `DUMP`). Nothing
+  new may join the first list. The receiver's two actions must also stay in the
+  `git.shin.adfree.automation.*` namespace:
+  `git.shin.adfree.action.ENABLE_PROTECTION` is the *activity* action the
+  notification and tile use, and the two must not be merged. Checked on the
+  2026-11-03 debug and release APKs — the packaged resource strings name only
+  `git.shin.adfree.automation.*`, and no `git.shin.adfree.action.ENABLE_PROTECTION`
+  resource string exists at all.
 - Device: `./gradlew :app:verifyBindings`, rebuild the four ABIs with
   `cargo ndk`, copy the `.so` files manually (cargo-ndk hardlinks), then
   `./gradlew :app:assembleRelease -PskipNative`.

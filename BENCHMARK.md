@@ -222,6 +222,8 @@ hedge stays where it is.
 - Two rounds had `zq8f8.adnxs.com` allowed for the whole round (6 of 48 blocked
   probes connected): the smart filter's 60 s allow window after a burst of
   identical blocks, described above. AdGuard has no equivalent window.
+  Closed on 2026-11-03 — the filter is off by default now and the same harness
+  blocked 48/48; see `Re-run — smart filtering off by default`.
 - The allowed-host gap tracks the Wi-Fi, not the code: connects to a fixed set
   of public IPs measured 66 ms on both apps in one pair of runs and 69 vs 57 ms
   in another, and the DNS step on AdFree — same destination IP, name versus
@@ -328,6 +330,13 @@ and with `Display Power: state=ON` plus `svc power stayon true` pinned before
 the foreground window, otherwise screen state and launch transitions dominate
 the sample. Only one VPN can run, so each app's pass has to assert its own
 `tun0` address before trusting any number.
+
+A third thing to assert before counting blocks: **the smart filter's state**. Its
+60 s allow window turns a repeated-name harness into a leak, and the setting is
+persisted per device, so an install that had it on keeps it on after the shipped
+default changed. The Protection → Ad blocking screen shows the switch; a pass
+that reports fewer than 48/48 blocked probes should check it before anything
+else.
 
 ## Caveats
 
@@ -626,6 +635,11 @@ consistently than AdFree. Latency comparisons above should be read with that:
 AdFree's fastest blocked rounds are the ones where it had stopped answering
 NXDOMAIN.
 
+That asymmetry is gone in the shipped configuration: with smart filtering off by
+default the same harness returns 48/48 NXDOMAIN on the same device, so AdFree
+blocks as consistently as AdGuard here. See
+`Re-run — smart filtering off by default (2026-11-03, Sony 802SO)`.
+
 ### Memory, and why the build type mattered
 
 | Build | Background PSS | swap PSS | Foreground PSS | swap PSS |
@@ -712,3 +726,51 @@ the hedge stands; it is a property of that uplink, not of the code.
   <swapPssDirty>`; the `App Summary` row is `TOTAL:` with a colon. Grepping the
   historical `TOTAL PSS` string silently returns nothing.
 
+
+## Re-run — smart filtering off by default (2026-11-03, Sony 802SO)
+
+AdFree `e7430ef` (debug APK), AdGuard not re-measured in this pass. Same device,
+same network and the same harness as the 2026-11-02 release-vs-release section:
+`bench/probe.c` rebuilt with
+`aarch64-linux-android26-clang -O2`, 6 rounds × (10 allowed + 8 blocked) = 108
+probes, `files/capture-shell` marker in place so the shell's traffic goes
+through the tunnel, protection restarted after the marker, app backgrounded.
+
+The one thing this pass exists to answer is the leak the 2026-10-29 and
+2026-11-02 notes both recorded: `zq8f8.adnxs.com` connecting because the smart
+filter had opened its 60 s allow window. The filter is now off by default and
+its trigger is per `(host, uid)` at 7 blocks in 10 s, so the shipped
+configuration was measured, not a tuned one.
+
+| | This pass | 2026-11-02 pass (smart filtering on) |
+| --- | --- | --- |
+| Blocked probes | **48/48 NXDOMAIN, 0 connected** | 44/48 (4 `zq8f8.adnxs.com` connected) |
+| Allowed probes | 60/60 OK | 60/60 OK |
+| Blocked-host median total | 8.6 ms (max 197.7 in round 1) | 11.4–204.5 ms across rounds |
+| Allowed-host median total | 2.6 ms (max 225.1 in round 1) | 2.0–5.0 ms across rounds |
+
+Every one of the eight names — `doubleclick`, `googlesyndication`,
+`google-analytics`, `scorecardresearch`, `criteo`, `taboola`, `outbrain`,
+`adnxs` — returned `gai=7` in all six rounds, so the tunnel answered NXDOMAIN
+and the connect never started. That is the same consistency AdGuard showed in
+the section above (48/48), which is the parity claim the earlier notes could not
+make.
+
+Round 1 carries the cold cache on both classes, which is why the maxima sit near
+200 ms while rounds 3–6 are the 2–3 ms cache-hit path the previous section
+describes. One pass, no repeat: the blocking count is the result being recorded,
+the latency figures are informational.
+
+Two things this pass does not measure, and why:
+
+- **CPU and RAM.** The rows in the earlier sections are release-APK figures, and
+  the marker file that lets the shell's probes reach the tunnel only exists in a
+  debug build. Re-running the RAM comparison would mean giving up the marker, so
+  this section deliberately quotes neither.
+- **The upgrade path.** `smartFiltering` is persisted per device, so an install
+  that had it on keeps it on after the default changes — this very device had
+  `true` stored and needed the switch turned off by hand before the pass. A fresh
+  install gets off, and only a pre-schema legacy profile is forced off at
+  migration (`rust/src/state/legacy.rs`); a blob already on the current schema
+  keeps exactly what it stored. The row's subtitle states the shipped default in
+  both locales.

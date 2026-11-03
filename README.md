@@ -28,18 +28,39 @@ telemetry.
   can be routed or excluded in the UI.
 - **Cosmetic filtering and userscripts** — injected page runtime with
   `@require` and a safe subset of the GM APIs.
-- **Smart filtering** — an app that hammers a blocked host five times in ten
-  seconds gets a one-minute pass, so retry loops stop burning CPU.
+- **Smart filtering** — off by default. When switched on, a host the same app
+  has been blocked on seven times in ten seconds gets a one-minute pass, so a
+  retry loop stops burning CPU. It is opt-in because the pass makes that host
+  reachable for a minute.
+- **Website exceptions** — the ad-blocking module opens its own allowlist
+  screen: the `@@` rules as domains, with search, add and delete.
+- **Company breakdown** — the Statistics view groups blocked traffic by domain
+  and labels each with the company that owns it, from a `services.tsv` authored
+  for this project. Off by default: the grouping is a second query over the
+  whole window.
+- **Proactive security notice** — when a security list blocks a domain, one
+  localized notification per domain per hour opens the log filtered to it.
 - **Request log** — decisions and statistics persist in SQLite and feed the
-  Activity view.
+  Activity view. The core's own diagnostics have a level (off, errors, warnings,
+  debug) that decides what reaches logcat.
+- **Automation** — Tasker and friends can switch protection through an exported
+  receiver, but only after the user turns the gate on in Settings and the
+  broadcast carries that install's token. Off by default, and the token is kept
+  out of every backup.
 - **Security Lab** — offline threat analysis, no network calls.
 
-The UI is five Compose tabs (Home, Protection, Activity, Apps, Settings) over
-a uniffi bridge to `libadfree_core.so`. Home is a dashboard — one power switch,
-one tap per module, then the counters. Protection lists every module with its
-own switch; opening a row shows that module's options (filter lists, resolver,
-certificate, stealth, per-app firewall rules). The Security Lab is reachable
-from Settings.
+The UI is six Compose tabs (Home, Protection, Apps, Activity, Statistics,
+Settings) over a uniffi bridge to `libadfree_core.so`. Home is a dashboard — one
+power switch, one tap per module, then the counters. Protection lists every
+module with its own switch; opening a row shows that module's options (filter
+lists, website exceptions, resolver, certificate, stealth, per-app firewall
+rules). The Security Lab is reachable from Settings, along with the backup pair,
+the diagnostics level and the automation gate.
+
+If the system drops the tunnel while protection is still expected — a revoke, an
+OEM battery saver, another app taking the VPN — one silent notification says so
+and taps back into enable. AdFree never restarts the tunnel behind the user's
+back: Android 10+ requires the confirmation for that.
 
 ## Build
 
