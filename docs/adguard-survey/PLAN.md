@@ -556,15 +556,15 @@ section recommended.
     The ongoing status notification stays on the LOW channel it has always
     used: it redraws every ten seconds, and a DEFAULT channel would make that
     a sound.
-  Owed on device: the always-on restart (kill the tunnel from Settings while
-  the system keeps the VPN, and confirm no alert fires), and the anti-DPI
+  Owed on device: the anti-DPI
   switch against a real page load — with a time-to-first-byte comparison
   against the switch off, so the cost of the split lands in `BENCHMARK.md` as a
-  measured number rather than a claim. The other three were settled by the
+  measured number rather than a claim. The other four were settled by the
   2026-11-03 passes in §6.5: the consent-lost alert fires and sounds on the
   DEFAULT channel after a system revoke, a witness origin read the mask
-  header, and a parked `!@@` rule was proven against live traffic and across a
-  process death.
+  header, a parked `!@@` rule was proven against live traffic and across a
+  process death, and an armed always-on VPN came back after a reboot with no tap
+  and no alert while an unarmed revoke alerted and stayed down.
 - Rust tests: v5→v6 migration keeps row counts and old rows read with
   defaults; `flags` transport/roaming round-trip; `GROUP BY app, category`
   counts; per-app routing override; DNS-only lists do not match HTTP rules.
@@ -1048,14 +1048,18 @@ section recommended.
     taken down by `stopForeground`, `is_protection_active` read false, and no
     retry ran because `VpnService.prepare` still wanted consent (this device has
     no always-on VPN — `settings get secure always_on_vpn_app` is `null`, so the
-    silent-restart branch is untouched and stays owed).
+    silent-restart branch was not in play; the always-on pass at the end of this
+    record is what reached it).
     Two properties of the alert this pass exposed. Nothing cancels
     `DROPPED_ALERT_ID` — `AdGuardVpnService.kt:764` is the only reference besides
     the constant — so re-enabling protection leaves the row behind until the user
-    swipes it. And the row was not even visible to swipe: this device has
+    swipes it. And the row looked hard to reach: this device has
     rate-limited AdFree's posts (`post_frequency{pkg=git.shin.adfree, …
-    muted=3378/3378}`), so the alert kept only its status-bar icon and never
-    joined the shade list, while the older security row did.
+    muted=3378/3378}`), so the alert appeared to keep only its status-bar icon
+    while the older security row joined the shade list. The always-on pass at the
+    end of this record corrected that reading: with the same counters still
+    reading every post muted, the alert rendered in full in the shade and swiped
+    away normally, so `muted` costs the alerting effects, not the row.
   - Device left as found, read back through `run-as` against the copy taken
     before any of this: `filters` byte-identical (catalog
     `ag-base, ag-mobile-ads, ag-tracking, ag-dns, oisd, abpvn` with `scamblock`
@@ -1114,13 +1118,13 @@ section recommended.
     `run-as` and identical to the copy taken before the pass,
     `stay_on_while_plugged_in` back to 0, Chrome force-stopped, screen left
     unlocked on the launcher.
-  - Still owed on this device: the always-on restart (kill the tunnel while the
-    system keeps the VPN and confirm no alert fires), the anti-DPI switch with a
+  - Still owed on this device: the anti-DPI switch with a
     time-to-first-byte comparison against it off so the cost lands in
     `BENCHMARK.md` as a number, and the services table accepting a tracker dataset
     over both update paths — a `trackers.json` URL and a DuckDuckGo region file
     through the picker — and refusing a body that is neither. The parked
-    allowlist rule is no longer on this list; the pass below settled it.
+    allowlist rule and the always-on restart are no longer on this list; the
+    passes below settled them.
     The two Redmi-only items (positive roaming enforcement, the per-flow memory
     probe) stay blocked until that device is back.
   - The Manual and Visual checklist lines at the end of this file, run on the
@@ -1219,6 +1223,81 @@ section recommended.
       byte-identical to the copy taken before the pass, Chrome force-stopped,
       tunnel up at 10.111.42.1/32, `stay_on_while_plugged_in` 0, screen on the
       launcher.
+  - The always-on restart, run 2026-11-03 (22:05–22:40) — the last of the four
+    parked rows, and the one §6.5 had kept open because no earlier lever could
+    drop a live tunnel. Five levers were tried, and what they produced is the
+    record.
+    - Which key arms it. On this Android 10 build the authoritative one is
+      `secure/always_on_vpn_app`, written by the per-app page Settings → VPN →
+      AdFree → `VPN luôn bật`. `settings put secure always_on_vpn_packages` is
+      accepted and ignored: the switch still read `TẮT` while that key named the
+      package, and the framework never treated the session as always-on. The
+      list row is the readable proof — an armed row says
+      `Đã kết nối, Luôn bật đang hoạt động`, an unarmed one only `Đã kết nối`.
+    - Armed, rebooted, no tap. With always-on armed and the tunnel up, a reboot
+      brought the VPN back by itself: `ActivityManager: Start proc
+      4240:git.shin.adfree/u0a344 for service
+      {git.shin.adfree/git.shin.adfree.vpn.AdGuardVpnService}` — a service start
+      with no activity and no intent from the shell — `tun0` at
+      10.111.42.1/32 within the first 6 s poll after `sys.boot_completed=1`, zero
+      `tunnel retry` lines, zero `VPN revoked` lines, and the ongoing 1001 on
+      `adfree_status` as the only AdFree record in `dumpsys notification`. That
+      is the promise `scheduleTunnelRetry`'s early return rests on
+      (`AdGuardVpnService.kt:421-424`): the platform is the rebuilder, so a
+      second one here really would only race it.
+    - Unarmed, revoked, told. Settings → VPN → AdFree → row → `NGẮT KẾT NỐI`
+      gives `Vpn: Switched from git.shin.adfree to [Legacy VPN]`, then
+      `SettingsProvider: Notifying …/always_on_vpn_app` — the disconnect clears
+      the arming as it revokes — and our own `VPN revoked by user/system`. The
+      alert fired: active `NotificationRecord … id=70000
+      channel=adfree_protection importance=3 category=err`, with
+      `NotificationService: granting content://settings/system/notification_sound`
+      for it, reading `Hệ thống đã dừng bảo vệ` / `Đường hầm VPN đã đóng trong
+      khi AdFree vẫn cần chặn quảng cáo…` (`adfree-93-dropped-alert-vi.png`, a
+      shade crop rather than a table frame, because the full shade carries other
+      apps' content). `tun0` stayed down through 24 s of polling. Correct on
+      both halves: nothing was rebuilding, so the user was told.
+    - Un-arming a live session is itself a system revoke. Tapping `VPN luôn bật`
+      back to `TẮT` while connected ran `onRevoke` in a living process — the
+      closest thing to the guarded combination this device will produce — and
+      again the alert fired and `toggleProtection(false)` took the remembered
+      switch off. The ordering the branch depends on is visible in that result:
+      `isSystemKeepingVpn()` is read after the key is already gone, so it
+      answers false and says so out loud.
+    - Force-stop while armed does not rebuild. `ActivityManager` logged
+      `Scheduling restart of crashed service … in 1000ms` and then
+      `Force stopping service ServiceRecord{…}`; `always_on_vpn_app` kept
+      `git.shin.adfree`, and neither 60 s of polling nor a Wi-Fi flap brought
+      `tun0` back. No alert either — nothing was left running to post one.
+      Reopening `MainActivity` restarted the tunnel from the persisted switch,
+      which is the recovery path a user actually has. `am kill` is not a lever
+      at all: the foreground service is untouched (pid 4240 unchanged over 48 s).
+    - So the honest scope of this pass: the exact combination the guard protects
+      — a revoke delivered to a live process while the platform still holds
+      AdFree as always-on — cannot be produced here, because every lever that
+      revokes a live session also clears `always_on_vpn_app` first, and every
+      lever that leaves it armed takes the process down with the tunnel, so no
+      decision is ever made. What the device did answer is the behaviour the
+      branch exists to produce: with a rebuilder the tunnel returns unasked and
+      silent, without one the loss is announced and sounded. The guard's own
+      true-branch stays covered by the JVM test on
+      `shouldReportDroppedProtection(systemKeepsVpn = true)`.
+    - Harness notes from the same pass: `cmd notification dismiss_all` does not
+      exist on this build (`Unknown command`), so clearing the alert row means
+      expanding the shade and swiping it — the row is at y≈355 in a two-row
+      list, and after the swipe it survives only under `mArchive` in
+      `dumpsys notification`, which is the tell that it is gone rather than
+      hidden. `uiautomator dump` refuses to run while the shade is settling
+      (`ERROR: could not get idle state`), so a `screencap` is the read for shade
+      state.
+    - Device left as found: `always_on_vpn`, `always_on_vpn_app` and
+      `always_on_vpn_packages` all back to null, both switches on the per-app
+      page at `TẮT`, the 70000 alert swiped out of the shade (only 1001 active,
+      the alert left in `mArchive`), protection re-enabled from the home switch
+      (`Đang lọc`), the whole `state` + `settings` set re-read through `run-as`
+      and byte-identical to the copy taken before the pass, tunnel up at
+      10.111.42.1/32, Wi-Fi enabled, `stay_on_while_plugged_in` back to 0,
+      Chrome untouched, screen on the launcher.
 
 ### Risks
 
