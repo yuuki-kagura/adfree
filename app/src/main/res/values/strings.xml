@@ -244,6 +244,8 @@
     <string name="vpn_session_name">AdFree protection</string>
     <string name="vpn_channel_name">AdFree protection status</string>
     <string name="vpn_channel_description">Shows when AdFree is filtering your traffic</string>
+    <string name="vpn_alert_channel_name">Protection problems</string>
+    <string name="vpn_alert_channel_description">Sounds when the tunnel stops without your saying so</string>
     <string name="vpn_conflict_channel_name">Conflicting apps</string>
     <string name="vpn_conflict_channel_description">Notifications about apps that may conflict with AdFree</string>
     <string name="vpn_notification_title">Blocking ads and trackers</string>
@@ -258,6 +260,8 @@
     <string name="vpn_notification_disabled_text">Ads and trackers are not blocked. Tap to enable</string>
     <string name="vpn_notification_dropped_title">Protection stopped by the system</string>
     <string name="vpn_notification_dropped_text">The VPN tunnel closed while AdFree was still meant to be blocking. Android needs your confirmation to open it again - tap to turn protection back on</string>
+    <string name="vpn_notification_failed_title">Protection could not be restarted</string>
+    <string name="vpn_notification_failed_text">AdFree tried to reopen its VPN tunnel and Android refused each time. Tap to try again</string>
     <string name="vpn_start_blocked_title">AdFree could not start</string>
     <string name="vpn_start_blocked_text">Tap to open AdFree and restart protection</string>
     <string name="tile_state_on">Protection on</string>
@@ -729,6 +733,9 @@
     <string name="allowlist_search_hint">Search exceptions</string>
     <string name="allowlist_add_action">Add exception</string>
     <string name="allowlist_delete_action">Delete exception</string>
+    <string name="allowlist_toggle_action">Switch this rule on or off</string>
+    <string name="allowlist_off_badge">Off</string>
+    <string name="allowlist_parked_count">%1$d switched off</string>
     <string name="allowlist_no_match">No exception matches that search</string>
     <string name="allowlist_https_note">Exceptions are stored as @@ rules in Your rules. Hosts left out of HTTPS decryption are set on the HTTPS screen.</string>
 
@@ -988,6 +995,16 @@
     <string name="settings_stealth_push_subtitle">Sites stop asking to send notifications; web push breaks</string>
     <string name="settings_stealth_geo_title">Block the Geolocation API</string>
     <string name="settings_stealth_geo_subtitle">A page gets a denial instead of a location prompt</string>
+    <string name="settings_stealth_dpi_title">Protection against DPI</string>
+    <string name="settings_stealth_dpi_subtitle">Splits the first TLS packet so a middlebox cannot read the site name; one extra write per connection</string>
+    <string name="settings_stealth_mask_title">Mask IP address</string>
+    <string name="settings_stealth_mask_subtitle">The address a site is told made the request. It does not change where the traffic really comes from</string>
+    <string name="settings_stealth_mask_unset">Not set</string>
+    <string name="settings_stealth_mask_set">Advertised as %1$s</string>
+    <string name="settings_stealth_mask_change">Change</string>
+    <string name="settings_stealth_mask_label">IP address</string>
+    <string name="settings_stealth_mask_apply">Apply</string>
+    <string name="settings_stealth_mask_invalid">Not an IP address</string>
     <string name="settings_stealth_preset_title">Privacy level</string>
     <string name="settings_stealth_preset_note">Picking a level writes the switches below and turns stealth mode on</string>
     <string name="settings_stealth_preset_standard_title">Standard</string>

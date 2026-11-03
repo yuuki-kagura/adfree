@@ -56,6 +56,12 @@
             <intent-filter>
                 <action android:name="android.net.VpnService" />
             </intent-filter>
+            <!-- Always-on support: the user can name this VPN in system
+                 Settings, and then the platform — not the app — is the one that
+                 brings the tunnel back after a reboot, a kill, or a crash. -->
+            <meta-data
+                android:name="android.net.VpnService.SUPPORTS_ALWAYS_ON"
+                android:value="true" />
             <property
                 android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
                 android:value="vpn" />

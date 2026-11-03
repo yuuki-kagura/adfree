@@ -29,6 +29,7 @@ import git.shin.adfree.core.CoreEngine
 import git.shin.adfree.ui.Localization
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
@@ -65,6 +66,9 @@ class AdGuardVpnService : VpnService() {
 
     /** Guards the tunnel build itself, not just the running state. */
     private val establishing = java.util.concurrent.atomic.AtomicBoolean(false)
+
+    /** The pending retry of a tunnel that failed to come up. */
+    private var retryJob: Job? = null
 
     /** Whether the ongoing notification currently owns the foreground slot. */
     @Volatile
@@ -253,7 +257,11 @@ class AdGuardVpnService : VpnService() {
         return START_STICKY
     }
 
-    private fun startVpn() {
+    /**
+     * [attempt] counts the retries of one start, so the backoff grows and the
+     * giving-up point is reachable. A start the user asked for begins at zero.
+     */
+    private fun startVpn(attempt: Int = 0) {
         if (isRunning) return
         // A fresh tunnel always starts filtering: pause is a runtime state of
         // one session, never a persisted preference.
@@ -266,6 +274,7 @@ class AdGuardVpnService : VpnService() {
         if (!establishing.compareAndSet(false, true)) return
         try {
             createNotificationChannel()
+            createAlertChannel()
             promoteToForeground(NOTIFICATION_ID, buildStatusNotification())
         } catch (e: Exception) {
             Log.e(TAG, "notification failed: ${e.message}", e)
@@ -279,22 +288,26 @@ class AdGuardVpnService : VpnService() {
         // on the main thread earns the process an ANR. The notification is
         // already up, so nothing else has to happen here.
         serviceScope.launch(Dispatchers.IO) {
-            try {
+            val established = try {
                 establishTunnel()
             } catch (e: Exception) {
                 Log.e(TAG, "establish failed: ${e.message}", e)
-                isRunning = false
-            } finally {
-                establishing.set(false)
+                false
+            }
+            establishing.set(false)
+            if (!established) {
+                teardownTunnel()
+                scheduleTunnelRetry(attempt)
             }
         }
     }
 
     /**
      * Build the tunnel. QUIC/DoT blocking happens in the core; Android only
-     * hands out a route and a DNS server.
+     * hands out a route and a DNS server. False means no tunnel exists, which
+     * [startVpn] answers with a retry.
      */
-    private fun establishTunnel() {
+    private fun establishTunnel(): Boolean {
         // The core resolves the persisted provider (falling back with a
         // warning instead of leaving the device without a tunnel).
         val tunnelDns = container.coreEngine.resolverSnapshot().tunnelDns
@@ -344,8 +357,7 @@ class AdGuardVpnService : VpnService() {
 
         val descriptor = builder.establish() ?: run {
             Log.e(TAG, "establish() returned null — VPN permission was not granted")
-            isRunning = false
-            return
+            return false
         }
         val fd = descriptor.fd
         vpnInterface = descriptor
@@ -377,7 +389,61 @@ class AdGuardVpnService : VpnService() {
         // Protection is up, so the missing-certificate reminder is due.
         container.repository.syncHttpsReminder()
         Log.i(TAG, "TUN up (fd=$fd), dns=$tunnelDns")
+        return true
     }
+
+    /**
+     * Take a tunnel apart that never came up, without ending the service: the
+     * retry below is the reason it is still alive. A descriptor left open under
+     * a flag that says nothing is running is the worst outcome — the system
+     * keeps routing every flow into a TUN nobody reads, so the device loses
+     * connectivity while the app claims protection is off.
+     */
+    private fun teardownTunnel() {
+        isRunning = false
+        container.coreEngine.stop()
+        if (vpnInterface == null) return
+        container.vpnController.onVpnStopped()
+        runCatching { vpnInterface?.close() }.onFailure { Log.w(TAG, "close TUN failed", it) }
+        vpnInterface = null
+    }
+
+    /**
+     * Retry a tunnel the user never switched off. `establish()` failing is
+     * usually transient — a binder call racing a network change, a descriptor
+     * the framework refused once — and Android leaves the session authorized,
+     * so a second attempt needs no dialog and asks permission from nobody.
+     * Where consent really has gone, retrying would mean asking behind the
+     * user's back: that case stops here and says so in the shade.
+     */
+    private fun scheduleTunnelRetry(attempt: Int) {
+        if (!container.coreEngine.wantsStart) return
+        // Named as the system's always-on VPN, this tunnel has a rebuilder
+        // already: the platform restarts it, and a second one here would only
+        // race it and announce a loss the user never sees.
+        if (isSystemKeepingVpn()) return
+        val needsConsent = VpnService.prepare(this) != null
+        if (needsConsent || attempt >= MAX_TUNNEL_RETRIES) {
+            // The switch promised protection and neither of us can deliver it.
+            container.repository.toggleProtection(false)
+            stopVpn()
+            postDroppedAlert(needsConsent = needsConsent)
+            return
+        }
+        retryJob?.cancel()
+        retryJob = serviceScope.launch {
+            delay(RETRY_BASE_MS * (1L shl attempt))
+            if (container.coreEngine.wantsStart && !isRunning && !establishing.get()) {
+                startVpn(attempt + 1)
+            }
+        }
+        Log.i(TAG, "tunnel retry $attempt scheduled")
+    }
+
+    /** Whether system Settings named this VPN always-on, so it is rebuilt there. */
+    private fun isSystemKeepingVpn(): Boolean =
+        Build.VERSION.SDK_INT >= Build.VERSION_CODES.P &&
+            runCatching { isAlwaysOn() }.getOrDefault(false)
 
     /**
      * Whether the physical network under the tunnel has a global IPv6
@@ -402,6 +468,9 @@ class AdGuardVpnService : VpnService() {
      * behind it.
      */
     private fun stopVpn(showDisabledReminder: Boolean = false) {
+        // A stop the user asked for is the end of any retry in flight.
+        retryJob?.cancel()
+        retryJob = null
         isRunning = false
         container.repository.syncHttpsReminder()
         container.coreEngine.stop()
@@ -443,6 +512,7 @@ class AdGuardVpnService : VpnService() {
         val dropped = shouldReportDroppedProtection(
             wasRunning = isRunning,
             protectionExpected = container.repository.settings.value.isProtectionActive,
+            systemKeepsVpn = isSystemKeepingVpn(),
         )
         serviceScope.cancel()
         runCatching { contentResolver.unregisterContentObserver(privateDnsObserver) }
@@ -462,6 +532,7 @@ class AdGuardVpnService : VpnService() {
         val dropped = shouldReportDroppedProtection(
             wasRunning = isRunning,
             protectionExpected = container.repository.settings.value.isProtectionActive,
+            systemKeepsVpn = isSystemKeepingVpn(),
         )
         container.repository.toggleProtection(false)
         stopVpn()
@@ -502,6 +573,25 @@ class AdGuardVpnService : VpnService() {
             }
             getSystemService(NotificationManager::class.java)?.createNotificationChannel(channel)
         }
+    }
+
+    /**
+     * The channel a lost tunnel is announced on. The ongoing status notification
+     * redraws itself every ten seconds, so its channel has to stay silent; an
+     * alert the user needs to hear is therefore a second channel, at default
+     * importance, which is also what AdGuard's own protection channel uses.
+     */
+    private fun createAlertChannel() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
+        val ui = localizedContext()
+        val channel = NotificationChannel(
+            ALERT_CHANNEL_ID,
+            ui.getString(R.string.vpn_alert_channel_name),
+            NotificationManager.IMPORTANCE_DEFAULT,
+        ).apply {
+            description = ui.getString(R.string.vpn_alert_channel_description)
+        }
+        getSystemService(NotificationManager::class.java)?.createNotificationChannel(channel)
     }
 
     /** The counters AdGuard puts in the shade: blocked requests and saved data. */
@@ -628,15 +718,19 @@ class AdGuardVpnService : VpnService() {
     }
 
     /**
-     * One alert for a tunnel the user never stopped: Android will not let the
-     * service put the session back without a fresh consent dialog, so this says
-     * what happened and taps into the enable flow instead of retrying behind the
-     * user's back. A separate id from the ongoing notification, so the shade
-     * still shows it after `stopForeground` took the tunnel's notification away.
+     * One alert for a tunnel the user never stopped.
+     *
+     * [needsConsent] says which kind of loss this was. Android will not let the
+     * service put the session back without a fresh consent dialog, so that case
+     * taps into the enable flow rather than retrying behind the user's back.
+     * When consent survived but `establish()` kept refusing, the retries are
+     * what ran out — the tap then simply asks for another start. A separate id
+     * from the ongoing notification, so the shade still shows it after
+     * `stopForeground` took the tunnel's notification away.
      */
-    private fun postDroppedAlert() {
+    private fun postDroppedAlert(needsConsent: Boolean = true) {
         val ui = localizedContext()
-        createNotificationChannel()
+        createAlertChannel()
         val open = PendingIntent.getActivity(
             this,
             4,
@@ -648,15 +742,24 @@ class AdGuardVpnService : VpnService() {
             },
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
         )
-        val notification = NotificationCompat.Builder(this, NOTIFICATION_CHANNEL_ID)
-            .setContentTitle(ui.getString(R.string.vpn_notification_dropped_title))
-            .setContentText(ui.getString(R.string.vpn_notification_dropped_text))
+        val notification = NotificationCompat.Builder(this, ALERT_CHANNEL_ID)
+            .setContentTitle(
+                ui.getString(
+                    if (needsConsent) R.string.vpn_notification_dropped_title
+                    else R.string.vpn_notification_failed_title,
+                ),
+            )
+            .setContentText(
+                ui.getString(
+                    if (needsConsent) R.string.vpn_notification_dropped_text
+                    else R.string.vpn_notification_failed_text,
+                ),
+            )
             .setSmallIcon(R.drawable.ic_qs_shield)
             .setContentIntent(open)
             .setAutoCancel(true)
-            .setSilent(true)
-            .setPriority(NotificationCompat.PRIORITY_LOW)
-            .setCategory(NotificationCompat.CATEGORY_SERVICE)
+            .setPriority(NotificationCompat.PRIORITY_DEFAULT)
+            .setCategory(Notification.CATEGORY_ERROR)
             .build()
         getSystemService(NotificationManager::class.java)?.notify(DROPPED_ALERT_ID, notification)
     }
@@ -684,6 +787,9 @@ class AdGuardVpnService : VpnService() {
         /** See [onStartCommand]: presence means "capture the shell too". */
         private const val CAPTURE_SHELL_MARKER = "capture-shell"
         const val NOTIFICATION_CHANNEL_ID = "adfree_status"
+
+        /** Loud enough to notice: the channel a lost tunnel is announced on. */
+        const val ALERT_CHANNEL_ID = "adfree_protection"
         private const val NOTIFICATION_ID = 1001
 
         /**
@@ -694,6 +800,14 @@ class AdGuardVpnService : VpnService() {
         private const val DROPPED_ALERT_ID = 70_000
         /** Stats change slowly enough that ten seconds is imperceptible. */
         private const val NOTIFICATION_STATS_INTERVAL_MS = 10_000L
+
+        /**
+         * Three tries, one second then two then four: long enough for a racing
+         * binder call or a network switch to settle, short enough that the user
+         * never waits a minute for the shade to say what happened.
+         */
+        private const val MAX_TUNNEL_RETRIES = 3
+        private const val RETRY_BASE_MS = 1_000L
         private const val TUN_ADDRESS = "10.111.42.1"
         private const val TUN_PREFIX = 32
         private const val ROUTE_IPV4 = "0.0.0.0"

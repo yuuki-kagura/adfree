@@ -44,4 +44,27 @@ class VpnRuntimeStateTest {
         assertFalse(shouldReportDroppedProtection(wasRunning = false, protectionExpected = true))
         assertFalse(shouldReportDroppedProtection(wasRunning = false, protectionExpected = false))
     }
+
+    /**
+     * An always-on VPN is restarted by the platform, so the same loss is already
+     * on its way back. Saying "protection stopped" about it would be a lie the
+     * shade tells for a few seconds.
+     */
+    @Test
+    fun `an always-on tunnel is not announced as dropped`() {
+        assertFalse(
+            shouldReportDroppedProtection(
+                wasRunning = true,
+                protectionExpected = true,
+                systemKeepsVpn = true,
+            ),
+        )
+        assertTrue(
+            shouldReportDroppedProtection(
+                wasRunning = true,
+                protectionExpected = true,
+                systemKeepsVpn = false,
+            ),
+        )
+    }
 }

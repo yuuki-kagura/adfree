@@ -45,6 +45,13 @@ fun vpnToggleAction(paused: Boolean): String =
  * `onDestroy` runs, so neither produces an alert for a tunnel that was meant to
  * come back. A revoke or a system kill leaves the switch on with a live tunnel,
  * and that is the case the user did not choose.
+ *
+ * An always-on VPN has the platform as its rebuilder, so the same loss is on its
+ * way back before the shade could say anything: that alert would promise a
+ * problem the user never gets to see.
  */
-fun shouldReportDroppedProtection(wasRunning: Boolean, protectionExpected: Boolean): Boolean =
-    wasRunning && protectionExpected
+fun shouldReportDroppedProtection(
+    wasRunning: Boolean,
+    protectionExpected: Boolean,
+    systemKeepsVpn: Boolean = false,
+): Boolean = wasRunning && protectionExpected && !systemKeepsVpn
