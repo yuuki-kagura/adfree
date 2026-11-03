@@ -1320,7 +1320,9 @@ impl ProxySession {
                         buffer.splice(..old_end, rebuilt);
                         url = stripped;
                         target = new_target;
-                        crate::logbuf::push(&format!("mitm {host}: tracking parameters stripped"));
+                        crate::logbuf::push_debug(&format!(
+                            "mitm {host}: tracking parameters stripped"
+                        ));
                     }
                 }
             }
@@ -1330,12 +1332,12 @@ impl ProxySession {
         // request is for, and its answer may not set a cookie either.
         if stealth.blocks_all_cookies() {
             if drop_request_headers(buffer, &mut head_end, &["cookie".to_string()]) {
-                crate::logbuf::push(&format!("mitm {host}: cookies stripped"));
+                crate::logbuf::push_debug(&format!("mitm {host}: cookies stripped"));
             }
             plan.block_cookies = true;
         } else if stealth.blocks_third_party_cookies() && cross_site {
             if drop_request_headers(buffer, &mut head_end, &["cookie".to_string()]) {
-                crate::logbuf::push(&format!("mitm {host}: third-party cookies stripped"));
+                crate::logbuf::push_debug(&format!("mitm {host}: third-party cookies stripped"));
             }
             // Even when the request carried none, the answer must not hand
             // one to a third-party context.
@@ -1351,7 +1353,7 @@ impl ProxySession {
                 &mut head_end,
                 &["if-match".to_string(), "if-none-match".to_string()],
             ) {
-                crate::logbuf::push(&format!("mitm {host}: conditional headers stripped"));
+                crate::logbuf::push_debug(&format!("mitm {host}: conditional headers stripped"));
             }
             // And no new tag is stored, whichever way the request went out.
             plan.drop_etag = true;
@@ -1359,13 +1361,15 @@ impl ProxySession {
 
         if stealth.strips_third_party_authorization() && cross_site {
             if drop_request_headers(buffer, &mut head_end, &["authorization".to_string()]) {
-                crate::logbuf::push(&format!("mitm {host}: third-party authorization stripped"));
+                crate::logbuf::push_debug(&format!(
+                    "mitm {host}: third-party authorization stripped"
+                ));
             }
         }
 
         if stealth.hides_third_party_referer() && cross_site {
             if drop_request_headers(buffer, &mut head_end, &["referer".to_string()]) {
-                crate::logbuf::push(&format!("mitm {host}: third-party referer stripped"));
+                crate::logbuf::push_debug(&format!("mitm {host}: third-party referer stripped"));
             }
         }
 
@@ -1376,7 +1380,7 @@ impl ProxySession {
             said |= set_request_header(buffer, &mut head_end, "Sec-GPC", "1");
             said |= set_request_header(buffer, &mut head_end, "DNT", "1");
             if said {
-                crate::logbuf::push(&format!("mitm {host}: privacy signals added"));
+                crate::logbuf::push_debug(&format!("mitm {host}: privacy signals added"));
             }
         }
 
@@ -1388,7 +1392,9 @@ impl ProxySession {
             if let Some(referer) = referer.as_deref() {
                 if let Some(cleaned) = crate::mitm::stealth::strip_search_query(referer) {
                     if set_request_header(buffer, &mut head_end, "Referer", &cleaned) {
-                        crate::logbuf::push(&format!("mitm {host}: search query hidden in referer"));
+                        crate::logbuf::push_debug(&format!(
+                            "mitm {host}: search query hidden in referer"
+                        ));
                     }
                 }
             }
@@ -1400,7 +1406,7 @@ impl ProxySession {
                             let old_end = head_end;
                             head_end = rebuilt.len();
                             buffer.splice(..old_end, rebuilt);
-                            crate::logbuf::push(&format!("mitm {host}: search query hidden"));
+                            crate::logbuf::push_debug(&format!("mitm {host}: search query hidden"));
                         }
                     }
                 }
@@ -1432,7 +1438,6 @@ impl ProxySession {
             drop_request_headers(buffer, &mut head_end, &hints);
         }
     }
-
 
     /// Applies the URL-level network rules to the request head at the front of
     /// `buffer`.
@@ -1911,7 +1916,7 @@ impl ProxySession {
                         if let Some(fixed) = http::drop_headers(&head, &["etag".to_string()]) {
                             head = fixed;
                             let host = self.captured.as_deref().unwrap_or("?");
-                            crate::logbuf::push(&format!("mitm {host}: etag dropped"));
+                            crate::logbuf::push_debug(&format!("mitm {host}: etag dropped"));
                         }
                     }
                     // A response to HEAD advertises the length of the body it

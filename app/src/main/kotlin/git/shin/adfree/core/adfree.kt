@@ -4138,6 +4138,11 @@ data class ProtectionState (
      * lists. Empty keeps the table this build ships: no extra request.
      */
     var `servicesTableUrl`: kotlin.String
+    , 
+    /**
+     * Verbosity of the core's own diagnostics ring, exported with the log.
+     */
+    var `logLevel`: LogLevel
     
 ){
     
@@ -4205,6 +4210,7 @@ public object FfiConverterTypeProtectionState: FfiConverterRustBuffer<Protection
             FfiConverterBoolean.read(buf),
             FfiConverterBoolean.read(buf),
             FfiConverterString.read(buf),
+            FfiConverterTypeLogLevel.read(buf),
         )
     }
 
@@ -4259,7 +4265,8 @@ public object FfiConverterTypeProtectionState: FfiConverterRustBuffer<Protection
             FfiConverterBoolean.allocationSize(value.`cosmeticFiltering`) +
             FfiConverterBoolean.allocationSize(value.`safeSearch`) +
             FfiConverterBoolean.allocationSize(value.`showServicesBreakdown`) +
-            FfiConverterString.allocationSize(value.`servicesTableUrl`)
+            FfiConverterString.allocationSize(value.`servicesTableUrl`) +
+            FfiConverterTypeLogLevel.allocationSize(value.`logLevel`)
     )
 
     override fun write(value: ProtectionState, buf: ByteBuffer) {
@@ -4314,6 +4321,7 @@ public object FfiConverterTypeProtectionState: FfiConverterRustBuffer<Protection
             FfiConverterBoolean.write(value.`safeSearch`, buf)
             FfiConverterBoolean.write(value.`showServicesBreakdown`, buf)
             FfiConverterString.write(value.`servicesTableUrl`, buf)
+            FfiConverterTypeLogLevel.write(value.`logLevel`, buf)
     }
 }
 
@@ -5455,6 +5463,47 @@ public object FfiConverterTypeFirewallAccess: FfiConverterRustBuffer<FirewallAcc
     override fun allocationSize(value: FirewallAccess) = 4UL
 
     override fun write(value: FirewallAccess, buf: ByteBuffer) {
+        buf.putInt(value.ordinal + 1)
+    }
+}
+
+
+
+
+
+/**
+ * How much of the core's own diagnostics the ring keeps for the log export.
+ * `Warn` - failures plus the lines that explain a fallback - is what every
+ * install has always buffered, and it is the default for that reason.
+ */
+
+enum class LogLevel {
+    
+    OFF,
+    ERROR,
+    WARN,
+    DEBUG;
+
+    
+
+
+    companion object
+}
+
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeLogLevel: FfiConverterRustBuffer<LogLevel> {
+    override fun read(buf: ByteBuffer) = try {
+        LogLevel.values()[buf.getInt() - 1]
+    } catch (e: IndexOutOfBoundsException) {
+        throw RuntimeException("invalid enum value, something is very wrong!!", e)
+    }
+
+    override fun allocationSize(value: LogLevel) = 4UL
+
+    override fun write(value: LogLevel, buf: ByteBuffer) {
         buf.putInt(value.ordinal + 1)
     }
 }

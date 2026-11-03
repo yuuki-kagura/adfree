@@ -119,7 +119,7 @@ impl StateStore {
             return;
         }
         if let Err(e) = self.store.meta_set(META_FIREWALL_SCHEMA, FIREWALL_SCHEMA_VERSION) {
-            crate::logbuf::push(&format!("state: firewall schema marker not written: {e}"));
+            crate::logbuf::push_error(&format!("state: firewall schema marker not written: {e}"));
         }
     }
 
@@ -180,7 +180,7 @@ impl StateStore {
         }
         match self.store.state_put_all(&rows) {
             Ok(()) => self.mark_imported(),
-            Err(e) => crate::logbuf::push(&format!(
+            Err(e) => crate::logbuf::push_error(&format!(
                 "state: legacy import not persisted, will retry: {e}"
             )),
         }
@@ -188,7 +188,7 @@ impl StateStore {
 
     fn mark_imported(&self) {
         if let Err(e) = self.store.meta_set(META_LEGACY_IMPORTED, "1") {
-            crate::logbuf::push(&format!("state: migration marker not written: {e}"));
+            crate::logbuf::push_error(&format!("state: migration marker not written: {e}"));
         }
     }
 
@@ -295,7 +295,7 @@ impl StateStore {
             ),
         ];
         if let Err(e) = self.store.state_replace_all(&rows) {
-            crate::logbuf::push(&format!("state: restore write failed: {e}"));
+            crate::logbuf::push_error(&format!("state: restore write failed: {e}"));
             return false;
         }
         *self.snapshot.write().unwrap_or_else(|e| e.into_inner()) = snapshot;
@@ -336,7 +336,7 @@ fn read_json<T: DeserializeOwned>(store: &Store, key: &str) -> Option<T> {
     match serde_json::from_str(&raw) {
         Ok(value) => Some(value),
         Err(e) => {
-            crate::logbuf::push(&format!("state: {key} unreadable, using defaults: {e}"));
+            crate::logbuf::push_error(&format!("state: {key} unreadable, using defaults: {e}"));
             None
         }
     }
@@ -346,7 +346,7 @@ fn encode<T: Serialize>(value: &T) -> Option<String> {
     match serde_json::to_string(value) {
         Ok(json) => Some(json),
         Err(e) => {
-            crate::logbuf::push(&format!("state: serialize failed: {e}"));
+            crate::logbuf::push_error(&format!("state: serialize failed: {e}"));
             None
         }
     }
@@ -365,7 +365,7 @@ fn write_row<T: Serialize>(store: &Store, key: &str, value: &T) -> bool {
     match store.state_set(key, &json) {
         Ok(()) => true,
         Err(e) => {
-            crate::logbuf::push(&format!("state: {key} not saved: {e}"));
+            crate::logbuf::push_error(&format!("state: {key} not saved: {e}"));
             false
         }
     }
@@ -382,6 +382,19 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         let store = Arc::new(Store::open(&dir).expect("store opens"));
         (store, dir)
+    }
+
+    /// Warn is what the ring buffered before levels existed, so neither a fresh
+    /// install nor an older blob changes what lands in an exported log.
+    #[test]
+    fn the_shipped_log_level_is_the_pre_level_behaviour() {
+        assert_eq!(ProtectionState::default().log_level, LogLevel::Warn);
+        assert_eq!(LogLevel::Warn.code(), crate::logbuf::WARN);
+        assert_eq!(LogLevel::Off.code(), crate::logbuf::OFF);
+        assert_eq!(LogLevel::Error.code(), crate::logbuf::ERROR);
+        assert_eq!(LogLevel::Debug.code(), crate::logbuf::DEBUG);
+        let restored: ProtectionState = serde_json::from_str("{}").expect("empty blob loads");
+        assert_eq!(restored.log_level, LogLevel::Warn);
     }
 
     #[test]
@@ -510,7 +523,8 @@ mod tests {
     }
 
     #[test]
-    fn saving_a_collection_only_touches_that_row() {        let (store, dir) = temp("save-one");
+    fn saving_a_collection_only_touches_that_row() {
+        let (store, dir) = temp("save-one");
         let state = StateStore::open(store);
         let mut protection = state.snapshot().protection;
         protection.theme_mode = ThemeMode::Light;

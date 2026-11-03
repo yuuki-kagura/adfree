@@ -12,6 +12,7 @@ import git.shin.adfree.model.DnsRewriteRule
 import git.shin.adfree.model.FilterList
 import git.shin.adfree.model.FilterStatus
 import git.shin.adfree.model.FirewallAccess
+import git.shin.adfree.model.LogLevel
 import git.shin.adfree.model.LogWindowTotals
 import git.shin.adfree.model.NetworkRequestLog
 import git.shin.adfree.model.ProtectionSettings
@@ -121,6 +122,8 @@ sealed interface AdGuardIntent {
     /** Subscription refresh interval in hours; 0 turns it off. */
     data class SetFilterAutoUpdate(val hours: Int) : AdGuardIntent
     data class ToggleLogAllowed(val enabled: Boolean) : AdGuardIntent
+    /** How much of the core's own diagnostics the log ring keeps. */
+    data class SetLogLevel(val level: LogLevel) : AdGuardIntent
     data class SetBlockMode(val mode: DnsBlockMode) : AdGuardIntent
     data class SearchQueryChanged(val query: String) : AdGuardIntent
     data class FilterStatusChanged(val status: FilterStatus?) : AdGuardIntent

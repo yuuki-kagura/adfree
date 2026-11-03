@@ -1341,7 +1341,7 @@ pub fn core_generate_ca() -> String {
         let ca = match crate::mitm::ca::CertificateAuthority::generate() {
             Ok(ca) => ca,
             Err(e) => {
-                crate::logbuf::push(&format!("core_generate_ca: {e}"));
+                crate::logbuf::push_error(&format!("core_generate_ca: {e}"));
                 return String::new();
             }
         };
@@ -1366,7 +1366,7 @@ pub fn core_restore_ca(cert_pem: String, key_pem: String) -> bool {
                 true
             }
             Err(e) => {
-                crate::logbuf::push(&format!("core_restore_ca: {e}"));
+                crate::logbuf::push_error(&format!("core_restore_ca: {e}"));
                 false
             }
         }

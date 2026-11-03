@@ -85,6 +85,7 @@ import git.shin.adfree.core.MitmStatus
 import git.shin.adfree.model.AppLanguage
 import git.shin.adfree.model.DnsProvider
 import git.shin.adfree.model.DnsRewriteRule
+import git.shin.adfree.model.LogLevel
 import git.shin.adfree.model.ProtectionSettings
 import git.shin.adfree.model.ProtocolType
 import git.shin.adfree.model.ThemeMode
@@ -255,6 +256,13 @@ fun SettingsScreen(
                 onCheckedChange = { viewModel.onIntent(AdGuardIntent.ToggleLogAllowed(it)) }
             )
 
+            Spacer(modifier = Modifier.height(14.dp))
+
+            LogLevelSection(
+                selected = state.settings.logLevel,
+                onSelect = { viewModel.onIntent(AdGuardIntent.SetLogLevel(it)) },
+            )
+
             Spacer(modifier = Modifier.height(20.dp))
 
             SettingsGroupHeader(stringResource(R.string.settings_group_data))
@@ -423,7 +431,57 @@ private fun themeModeLabel(mode: ThemeMode): String = stringResource(
     }
 )
 
-/** Export/restore the two core blobs without including device-local scripts. */@Composable
+@Composable
+private fun LogLevelSection(
+    selected: LogLevel,
+    onSelect: (LogLevel) -> Unit,
+) {
+    Text(
+        text = stringResource(R.string.settings_log_level_title),
+        fontSize = 12.sp,
+        fontWeight = FontWeight.Bold,
+        color = AdGuardTextSecondary,
+        modifier = Modifier.padding(bottom = 2.dp),
+    )
+    Text(
+        text = stringResource(R.string.settings_log_level_subtitle),
+        fontSize = 11.sp,
+        color = AdGuardTextMuted,
+        modifier = Modifier.padding(bottom = 6.dp),
+    )
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .horizontalScroll(rememberScrollState())
+            .testTag("settings_log_level_chips"),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        LogLevel.entries.forEach { level ->
+            FilterChip(
+                selected = selected == level,
+                onClick = { onSelect(level) },
+                label = { Text(logLevelLabel(level), fontSize = 11.sp) },
+                colors = FilterChipDefaults.filterChipColors(
+                    selectedContainerColor = AdGuardGreenPrimary,
+                    selectedLabelColor = AdGuardOnAccent,
+                ),
+            )
+        }
+    }
+}
+
+@Composable
+private fun logLevelLabel(level: LogLevel): String = stringResource(
+    when (level) {
+        LogLevel.OFF -> R.string.settings_log_off
+        LogLevel.ERROR -> R.string.settings_log_error
+        LogLevel.WARN -> R.string.settings_log_warn
+        LogLevel.DEBUG -> R.string.settings_log_debug
+    }
+)
+
+/** Export/restore the two core blobs without including device-local scripts. */
+@Composable
 private fun BackupSection(
     onExport: () -> Unit,
     onImport: () -> Unit,

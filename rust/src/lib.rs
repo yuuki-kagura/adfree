@@ -62,6 +62,7 @@ mod tests {
 
     #[test]
     fn log_buffer_is_wired_up() {
+        let _guard = crate::logbuf::lock();
         crate::logbuf::clear();
         crate::logbuf::push("native core online");
         assert_eq!(

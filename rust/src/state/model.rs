@@ -66,6 +66,31 @@ pub enum ThemeMode {
     Light,
 }
 
+/// How much of the core's own diagnostics the ring keeps for Android to forward
+/// to logcat. `Warn` - failures plus the lines that explain a fallback - is what
+/// every install has always buffered, and it is the default for that reason.
+#[derive(uniffi::Enum, Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LogLevel {
+    Off,
+    Error,
+    #[default]
+    Warn,
+    Debug,
+}
+
+impl LogLevel {
+    /// The severity number [`crate::logbuf`] compares a line against.
+    pub fn code(self) -> u8 {
+        match self {
+            LogLevel::Off => crate::logbuf::OFF,
+            LogLevel::Error => crate::logbuf::ERROR,
+            LogLevel::Warn => crate::logbuf::WARN,
+            LogLevel::Debug => crate::logbuf::DEBUG,
+        }
+    }
+}
+
 /// A SOCKS5 endpoint. `host` must be an IPv4/IPv6 literal: the packet loop
 /// cannot resolve a name without stalling.
 #[derive(uniffi::Record, Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -180,6 +205,8 @@ pub struct ProtectionState {
     /// Optional subscription for the services table, fetched with the filter
     /// lists. Empty keeps the table this build ships: no extra request.
     pub services_table_url: String,
+    /// Verbosity of the core's own diagnostics ring, drained to logcat.
+    pub log_level: LogLevel,
 }
 
 impl Default for ProtectionState {
@@ -253,6 +280,9 @@ impl Default for ProtectionState {
             // The breakdown is a query the user has to ask for.
             show_services_breakdown: false,
             services_table_url: String::new(),
+            // Warn is the pre-level behaviour, so a fresh install logs exactly
+            // what it always did.
+            log_level: LogLevel::default(),
         }
     }
 }

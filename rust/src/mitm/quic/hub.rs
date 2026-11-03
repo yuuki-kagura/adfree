@@ -95,7 +95,7 @@ pub async fn serve_connection(connection: quinn::Connection, config: Arc<HubConf
     {
         Ok(server) => server,
         Err(e) => {
-            crate::logbuf::push(&format!(
+            crate::logbuf::push_error(&format!(
                 "quic {}: h3 setup failed: {e}",
                 config.server_name
             ));
@@ -110,7 +110,10 @@ pub async fn serve_connection(connection: quinn::Connection, config: Arc<HubConf
             Ok(Some(resolver)) => resolver,
             Ok(None) => break,
             Err(e) => {
-                crate::logbuf::push(&format!("quic {}: accept failed: {e}", config.server_name));
+                crate::logbuf::push_error(&format!(
+                    "quic {}: accept failed: {e}",
+                    config.server_name
+                ));
                 break;
             }
         };
@@ -120,7 +123,7 @@ pub async fn serve_connection(connection: quinn::Connection, config: Arc<HubConf
             let (request, stream) = match resolver.resolve_request().await {
                 Ok(pair) => pair,
                 Err(e) => {
-                    crate::logbuf::push(&format!(
+                    crate::logbuf::push_error(&format!(
                         "quic {}: request failed: {e}",
                         config.server_name
                     ));
@@ -128,7 +131,7 @@ pub async fn serve_connection(connection: quinn::Connection, config: Arc<HubConf
                 }
             };
             if let Err(e) = handle_request(request, stream, &config, &upstream).await {
-                crate::logbuf::push(&format!("quic {}: {e}", config.server_name));
+                crate::logbuf::push_error(&format!("quic {}: {e}", config.server_name));
             }
         });
     }
@@ -314,7 +317,7 @@ async fn handle_request(
     let upstream_stream = match upstream.request(config, upstream_request).await {
         Ok(stream) => stream,
         Err(e) => {
-            crate::logbuf::push(&format!("quic {}: {e}", config.server_name));
+            crate::logbuf::push_error(&format!("quic {}: {e}", config.server_name));
             return reply_status(&mut send_back, StatusCode::BAD_GATEWAY).await;
         }
     };
@@ -710,13 +713,13 @@ fn apply_response_plan(wire: &mut Vec<u8>, plan: &RequestPlan, host: &str) {
     if plan.block_cookies {
         if let Some(fixed) = crate::mitm::http::drop_headers(wire, &["set-cookie".to_string()]) {
             *wire = fixed;
-            crate::logbuf::push(&format!("quic {host}: third-party set-cookie dropped"));
+            crate::logbuf::push_debug(&format!("quic {host}: third-party set-cookie dropped"));
         }
     }
     if plan.drop_etag {
         if let Some(fixed) = crate::mitm::http::drop_headers(wire, &["etag".to_string()]) {
             *wire = fixed;
-            crate::logbuf::push(&format!("quic {host}: etag dropped"));
+            crate::logbuf::push_debug(&format!("quic {host}: etag dropped"));
         }
     }
 }

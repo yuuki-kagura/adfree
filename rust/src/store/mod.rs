@@ -132,7 +132,7 @@ impl Store {
         match log::page(&self.db, offset, limit) {
             Ok(rows) => rows,
             Err(e) => {
-                crate::logbuf::push(&format!("store: read log page: {e}"));
+                crate::logbuf::push_error(&format!("store: read log page: {e}"));
                 Vec::new()
             }
         }
@@ -145,7 +145,7 @@ impl Store {
         match log::page_before(&self.db, before_id, limit) {
             Ok(rows) => rows,
             Err(e) => {
-                crate::logbuf::push(&format!("store: read log page before {before_id}: {e}"));
+                crate::logbuf::push_error(&format!("store: read log page before {before_id}: {e}"));
                 Vec::new()
             }
         }
@@ -155,7 +155,7 @@ impl Store {
         match log::count(&self.db) {
             Ok(n) => n.max(0) as u64,
             Err(e) => {
-                crate::logbuf::push(&format!("store: count log: {e}"));
+                crate::logbuf::push_error(&format!("store: count log: {e}"));
                 0
             }
         }
@@ -166,7 +166,7 @@ impl Store {
         match log::status_counts(&self.db) {
             Ok((blocked, allowed)) => (blocked.max(0) as u64, allowed.max(0) as u64),
             Err(e) => {
-                crate::logbuf::push(&format!("store: log status counts: {e}"));
+                crate::logbuf::push_error(&format!("store: log status counts: {e}"));
                 (0, 0)
             }
         }
@@ -191,7 +191,7 @@ impl Store {
                 rows
             }
             Err(e) => {
-                crate::logbuf::push(&format!("store: app usage: {e}"));
+                crate::logbuf::push_error(&format!("store: app usage: {e}"));
                 Vec::new()
             }
         }
@@ -212,7 +212,7 @@ impl Store {
                 rows
             }
             Err(e) => {
-                crate::logbuf::push(&format!("store: domain usage: {e}"));
+                crate::logbuf::push_error(&format!("store: domain usage: {e}"));
                 Vec::new()
             }
         }
@@ -223,7 +223,7 @@ impl Store {
         match log::window_totals(&self.db, since_ms, transport) {
             Ok(row) => row,
             Err(e) => {
-                crate::logbuf::push(&format!("store: window totals: {e}"));
+                crate::logbuf::push_error(&format!("store: window totals: {e}"));
                 WindowTotalsRow::default()
             }
         }
@@ -828,7 +828,8 @@ mod tests {
     }
 
     #[test]
-    fn log_pages_and_counts() {        let (store, _) = temp_store("pages");
+    fn log_pages_and_counts() {
+        let (store, _) = temp_store("pages");
         for i in 0..700u64 {
             let mut ev = allow_event(&format!("h{i}.test"), "10.0.0.9", i as u32);
             ev.ts_ms = 2_000 + i;

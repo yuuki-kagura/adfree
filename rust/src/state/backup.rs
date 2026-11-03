@@ -62,7 +62,7 @@ pub fn import(state: &StateStore, raw: &str) -> BackupOutcome {
             match serde_json::from_value::<StateSnapshot>(decoded.clone()) {
                 Ok(snapshot) => snapshot,
                 Err(e) => {
-                    crate::logbuf::push(&format!("backup: state unreadable: {e}"));
+                    crate::logbuf::push_error(&format!("backup: state unreadable: {e}"));
                     return fail(BackupError::Malformed);
                 }
             }

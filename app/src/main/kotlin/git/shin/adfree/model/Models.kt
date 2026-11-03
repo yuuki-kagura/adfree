@@ -676,6 +676,13 @@ data class ProtectionSettings(
      * lists. Empty means the table this build ships, so no extra request.
      */
     val servicesTableUrl: String = "",
+    /**
+     * How much of the core's own diagnostics is kept for Android to forward to
+     * logcat. `WARN` is what every install has buffered all along: failures plus
+     * the lines that explain a fallback. `DEBUG` adds the chatter that repeats
+     * for every request, and it pushes older lines out of the 200-deep ring.
+     */
+    val logLevel: LogLevel = LogLevel.WARN,
 )
 
 /** In-app language selection. */
@@ -690,6 +697,14 @@ enum class ThemeMode {
     SYSTEM,
     DARK,
     LIGHT,
+}
+
+/** How verbose the core's own diagnostics ring is. */
+enum class LogLevel {
+    OFF,
+    ERROR,
+    WARN,
+    DEBUG,
 }
 
 /** Risk band for a scanned host; the UI localizes the label. */

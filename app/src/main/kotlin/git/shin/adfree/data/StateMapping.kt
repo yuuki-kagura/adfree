@@ -9,6 +9,7 @@ import git.shin.adfree.core.DnsProtocol as CoreDnsProtocol
 import git.shin.adfree.core.DnsProviderRecord as CoreDnsProvider
 import git.shin.adfree.core.DnsRewrite as CoreDnsRewrite
 import git.shin.adfree.core.FirewallAccess as CoreFirewallAccess
+import git.shin.adfree.core.LogLevel as CoreLogLevel
 import git.shin.adfree.core.ProtectionState as CoreProtectionState
 import git.shin.adfree.core.ProxyAccess as CoreProxyAccess
 import git.shin.adfree.core.ProxyState as CoreProxyState
@@ -21,6 +22,7 @@ import git.shin.adfree.model.DnsBlockMode
 import git.shin.adfree.model.DnsProvider
 import git.shin.adfree.model.DnsRewriteRule
 import git.shin.adfree.model.FirewallAccess
+import git.shin.adfree.model.LogLevel
 import git.shin.adfree.model.ProtectionSettings
 import git.shin.adfree.model.ProtocolType
 import git.shin.adfree.model.ProxyAccess
@@ -90,6 +92,7 @@ internal fun ProtectionSettings.toCoreState(): CoreProtectionState = CoreProtect
     safeSearch = safeSearch,
     showServicesBreakdown = showServicesBreakdown,
     servicesTableUrl = servicesTableUrl,
+    logLevel = logLevel.toCore(),
 )
 
 internal fun CoreProtectionState.toModel(): ProtectionSettings = ProtectionSettings(
@@ -144,6 +147,7 @@ internal fun CoreProtectionState.toModel(): ProtectionSettings = ProtectionSetti
     safeSearch = safeSearch,
     showServicesBreakdown = showServicesBreakdown,
     servicesTableUrl = servicesTableUrl,
+    logLevel = logLevel.toModel(),
 )
 
 private fun ProxySettings.toCore(): CoreProxyState = CoreProxyState(
@@ -198,6 +202,20 @@ private fun CoreThemeMode.toModel(): ThemeMode = when (this) {
     CoreThemeMode.SYSTEM -> ThemeMode.SYSTEM
     CoreThemeMode.DARK -> ThemeMode.DARK
     CoreThemeMode.LIGHT -> ThemeMode.LIGHT
+}
+
+private fun LogLevel.toCore(): CoreLogLevel = when (this) {
+    LogLevel.OFF -> CoreLogLevel.OFF
+    LogLevel.ERROR -> CoreLogLevel.ERROR
+    LogLevel.WARN -> CoreLogLevel.WARN
+    LogLevel.DEBUG -> CoreLogLevel.DEBUG
+}
+
+private fun CoreLogLevel.toModel(): LogLevel = when (this) {
+    CoreLogLevel.OFF -> LogLevel.OFF
+    CoreLogLevel.ERROR -> LogLevel.ERROR
+    CoreLogLevel.WARN -> LogLevel.WARN
+    CoreLogLevel.DEBUG -> LogLevel.DEBUG
 }
 
 // ------------------------------------------------------------------ firewall

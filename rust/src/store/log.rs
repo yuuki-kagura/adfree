@@ -203,7 +203,7 @@ fn writer_loop(db: &Db, rx: &Receiver<Msg>) {
                 batch.clear();
                 traffic.clear();
                 if let Err(e) = clear(db) {
-                    crate::logbuf::push(&format!("store: clear log: {e}"));
+                    crate::logbuf::push_error(&format!("store: clear log: {e}"));
                 }
                 let _ = ack.send(());
             }
@@ -216,7 +216,7 @@ fn writer_loop(db: &Db, rx: &Receiver<Msg>) {
         if last_prune.elapsed() >= PRUNE_EVERY {
             last_prune = Instant::now();
             if let Err(e) = prune_db(db, KEEP_MS, MAX_ROWS) {
-                crate::logbuf::push(&format!("store: prune log: {e}"));
+                crate::logbuf::push_error(&format!("store: prune log: {e}"));
             }
         }
     }
@@ -229,7 +229,7 @@ fn insert(db: &Db, batch: &mut Vec<LogRow>, traffic: &mut Vec<FlowTraffic>) {
         return;
     }
     if let Err(e) = write_batch(db, batch, traffic) {
-        crate::logbuf::push(&format!(
+        crate::logbuf::push_error(&format!(
             "store: write {} log rows, {} flows: {e}",
             batch.len(),
             traffic.len()

@@ -356,6 +356,11 @@ pub struct Config {
     /// Send search-engine queries to their family-filtered host and answer the
     /// original name with the filtered addresses (see [`crate::safesearch`]).
     pub safe_search: bool,
+    /// How much of the core's own diagnostics the log ring keeps: 0 nothing,
+    /// 1 failures only, 2 failures and fallbacks, 3 everything including the
+    /// chatter that repeats per request. The shipped value is 2, which is what
+    /// the ring did before levels existed.
+    pub log_level: u8,
 }
 
 impl Default for Config {
@@ -387,6 +392,7 @@ impl Default for Config {
             stealth: StealthConfig::default(),
             cosmetic_filtering: true,
             safe_search: false,
+            log_level: crate::logbuf::DEFAULT_LEVEL,
         }
     }
 }
@@ -1030,7 +1036,7 @@ impl Core {
                 stored && stated
             }
             Err(e) => {
-                crate::logbuf::push(&format!("store open: {e}"));
+                crate::logbuf::push_error(&format!("store open: {e}"));
                 false
             }
         }
@@ -1128,6 +1134,10 @@ impl Core {
             );
         }
         self.smart.lock().unwrap().set_enabled(cfg.smart_filtering);
+        // The diagnostics ring is process-wide, so the level is applied here
+        // rather than at the packet threads: every config path - startup,
+        // save, restore - lands in this function exactly once.
+        crate::logbuf::set_level(cfg.log_level);
         *self.https_hosts.write().unwrap() = HttpsHosts {
             skip: Arc::new(crate::mitm::hosts::HostPatterns::new(
                 cfg.https_skip_hosts.clone(),
@@ -2379,7 +2389,7 @@ impl Core {
             )
         };
         if fd < 0 {
-            crate::logbuf::push("quic: upstream socket() failed");
+            crate::logbuf::push_error("quic: upstream socket() failed");
             return None;
         }
         if !self.protect_socket(fd) {
@@ -2416,7 +2426,7 @@ impl Core {
             }
         };
         if bound != 0 {
-            crate::logbuf::push("quic: upstream bind() failed");
+            crate::logbuf::push_error("quic: upstream bind() failed");
             unsafe { libc::close(fd) };
             return None;
         }
@@ -3134,7 +3144,7 @@ impl Core {
         let fd =
             unsafe { libc::socket(family, kind | libc::SOCK_NONBLOCK | libc::SOCK_CLOEXEC, 0) };
         if fd < 0 {
-            crate::logbuf::push("relay: socket() failed");
+            crate::logbuf::push_error("relay: socket() failed");
             return None;
         }
         if !self.protect_socket(fd) {
@@ -3166,11 +3176,11 @@ impl Core {
             )
         };
         if paired != 0 {
-            crate::logbuf::push("udp relay: socketpair() failed");
+            crate::logbuf::push_error("udp relay: socketpair() failed");
             return None;
         }
         if let Err(error) = crate::udpproxy::spawn(fds[1], proxy, protector, server, server_port) {
-            crate::logbuf::push(&format!(
+            crate::logbuf::push_error(&format!(
                 "udp relay: cannot start the proxy thread: {error}"
             ));
             unsafe {

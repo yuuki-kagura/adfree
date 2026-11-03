@@ -924,6 +924,12 @@
     <string name="settings_theme_dark">Dark</string>
     <string name="settings_log_allowed_title">Log allowed requests too</string>
     <string name="settings_log_allowed_subtitle">Turn off to save CPU: only blocked requests are recorded</string>
+    <string name="settings_log_level_title">Core diagnostics</string>
+    <string name="settings_log_level_subtitle">How much of the engine\'s own notes reaches logcat: failures only, failures plus fallbacks, or everything. The ring forwards the last 200 lines it kept</string>
+    <string name="settings_log_off">Off</string>
+    <string name="settings_log_error">Errors</string>
+    <string name="settings_log_warn">Warnings</string>
+    <string name="settings_log_debug">Debug</string>
     <string name="settings_smart_filtering_title">Smart filtering</string>
     <string name="settings_smart_filtering_subtitle">Off by default. When on, a host blocked 7 times in 10 seconds by the same app is let through for 60 seconds — that host is reachable while the window is open</string>
     <string name="settings_block_mode_title">Block response</string>

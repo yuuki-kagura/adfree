@@ -127,7 +127,7 @@ pub fn settings_from_str(raw: &str) -> LegacySettingsPart {
     match serde_json::from_str::<LegacySettings>(raw) {
         Ok(blob) => settings_from(blob),
         Err(e) => {
-            crate::logbuf::push(&format!("state: legacy settings ignored: {e}"));
+            crate::logbuf::push_error(&format!("state: legacy settings ignored: {e}"));
             LegacySettingsPart {
                 protection: ProtectionState::default(),
                 firewall: Vec::new(),
@@ -141,7 +141,7 @@ pub fn settings_from_value(value: &Value) -> LegacySettingsPart {
     match serde_json::from_value::<LegacySettings>(value.clone()) {
         Ok(blob) => settings_from(blob),
         Err(e) => {
-            crate::logbuf::push(&format!("state: legacy settings ignored: {e}"));
+            crate::logbuf::push_error(&format!("state: legacy settings ignored: {e}"));
             LegacySettingsPart::default()
         }
     }
@@ -152,7 +152,7 @@ pub fn filters_from_str(raw: &str) -> LegacyFiltersPart {
     match serde_json::from_str::<LegacyFilters>(raw) {
         Ok(blob) => filters_from(blob),
         Err(e) => {
-            crate::logbuf::push(&format!("state: legacy filters ignored: {e}"));
+            crate::logbuf::push_error(&format!("state: legacy filters ignored: {e}"));
             LegacyFiltersPart::default()
         }
     }
@@ -162,7 +162,7 @@ pub fn filters_from_value(value: &Value) -> LegacyFiltersPart {
     match serde_json::from_value::<LegacyFilters>(value.clone()) {
         Ok(blob) => filters_from(blob),
         Err(e) => {
-            crate::logbuf::push(&format!("state: legacy filters ignored: {e}"));
+            crate::logbuf::push_error(&format!("state: legacy filters ignored: {e}"));
             LegacyFiltersPart::default()
         }
     }

@@ -760,6 +760,14 @@ class AdGuardRepository(
 
     fun setBlockMode(mode: DnsBlockMode) = updateSettings { it.copy(blockMode = mode) }
 
+    /**
+     * How much of the core's own diagnostics the ring keeps. A level change
+     * reaches the engine through the normal save path, so there is no second
+     * setter that could drift away from the stored value.
+     */
+    fun setLogLevel(level: git.shin.adfree.model.LogLevel) =
+        updateSettings { it.copy(logLevel = level) }
+
     fun selectDnsProvider(id: String) {
         if (_dnsProviders.value.none { it.id == id }) return
         updateSettings { it.copy(selectedDnsProviderId = id) }

@@ -406,6 +406,7 @@ class AdGuardViewModel(
             is AdGuardIntent.ToggleBlockQuic -> repository.toggleBlockQuic(intent.enabled)
             is AdGuardIntent.SetAppLanguage -> repository.setAppLanguage(intent.language)
             is AdGuardIntent.SetThemeMode -> repository.setThemeMode(intent.mode)
+            is AdGuardIntent.SetLogLevel -> repository.setLogLevel(intent.level)
             is AdGuardIntent.ToggleBlockDoh -> repository.toggleBlockDoh(intent.enabled)
             is AdGuardIntent.ToggleBlockDot -> repository.toggleBlockDot(intent.enabled)
             is AdGuardIntent.ToggleSafeSearch -> repository.toggleSafeSearch(intent.enabled)

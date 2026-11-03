@@ -2,6 +2,7 @@ package git.shin.adfree.data
 
 import git.shin.adfree.model.AppFirewallRule
 import git.shin.adfree.model.FirewallAccess
+import git.shin.adfree.model.LogLevel
 import git.shin.adfree.model.ProtectionSettings
 import git.shin.adfree.model.StealthPreset
 import org.junit.Assert.assertEquals
@@ -31,6 +32,16 @@ class ProtectionStateMappingTest {
     fun http3_is_off_by_default() {
         assertFalse(ProtectionSettings().filterHttp3)
         assertEquals(ProtectionSettings(), ProtectionSettings().toCoreState().toModel())
+    }
+
+    @Test
+    fun log_level_survives_the_core_round_trip() {
+        val settings = ProtectionSettings(logLevel = LogLevel.DEBUG)
+
+        assertEquals(LogLevel.DEBUG, settings.toCoreState().toModel().logLevel)
+        // The shipped level is the one that logs what the ring logged before
+        // levels existed, so a fresh install must not fall to Off or Debug.
+        assertEquals(LogLevel.WARN, ProtectionSettings().toCoreState().toModel().logLevel)
     }
 
     @Test

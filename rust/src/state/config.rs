@@ -155,6 +155,7 @@ pub fn build(snapshot: &StateSnapshot, private_dns_strict: bool) -> Plan {
         },
         cosmetic_filtering: protection.cosmetic_filtering,
         safe_search: protection.safe_search,
+        log_level: protection.log_level.code(),
     };
 
     let rewrites = snapshot
