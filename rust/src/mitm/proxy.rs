@@ -1384,6 +1384,16 @@ impl ProxySession {
             }
         }
 
+        if let Some(ip) = stealth.masked_ip() {
+            // Set, not appended: the point is that the page reads this address
+            // and no other. A client has no business sending `X-Forwarded-For`
+            // itself, so any value that came in is one the app is being asked to
+            // take for the visitor's real one.
+            if set_request_header(buffer, &mut head_end, "X-Forwarded-For", &ip.to_string()) {
+                crate::logbuf::push_debug(&format!("mitm {host}: address masked as {ip}"));
+            }
+        }
+
         if stealth.hides_search_query() {
             // The leak is a results page's URL travelling on: as the referer of
             // whatever the user clicks, and as the target of the images and

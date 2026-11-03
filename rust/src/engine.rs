@@ -46,7 +46,7 @@ use crate::uidmap::UidMap;
 use crate::upstream::Upstream;
 use crate::util::{now_ms, now_ns};
 use std::collections::HashSet;
-use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
+use std::net::{IpAddr, Ipv4Addr, SocketAddr, SocketAddrV4};
 use std::os::unix::io::RawFd;
 use std::sync::atomic::{
     AtomicBool, AtomicI32, AtomicU16, AtomicU32, AtomicU64, AtomicU8, AtomicUsize, Ordering,
@@ -225,6 +225,16 @@ pub struct StealthConfig {
     /// Close the Geolocation API in pages: every position request fails with
     /// the same answer the user gives when they turn the prompt down.
     pub block_geolocation_api: bool,
+    /// Split the ClientHello across segments, so a device that reads the server
+    /// name out of the first packet of a connection stops being able to. The
+    /// peer reassembles the bytes; this hides nothing from the site, only from
+    /// whatever is watching the wire.
+    pub anti_dpi: bool,
+    /// The address a site is told the request came through: `X-Forwarded-For`
+    /// is set to it on every filtered request. AdGuard's `Mask IP address`,
+    /// whose own knowledge base is careful to say that tracking protection
+    /// cannot hide the real address — only the one the page is shown.
+    pub mask_ip: Option<IpAddr>,
 }
 impl StealthConfig {
     pub fn strips_utm(self) -> bool {
@@ -275,6 +285,16 @@ impl StealthConfig {
         self.enabled && self.block_geolocation_api
     }
 
+    pub fn fragments_hello(self) -> bool {
+        self.enabled && self.anti_dpi
+    }
+
+    /// The address to advertise, but only while the mode is on: the field keeps
+    /// what the user typed so turning stealth off and on does not lose it.
+    pub fn masked_ip(self) -> Option<IpAddr> {
+        self.enabled.then_some(self.mask_ip).flatten()
+    }
+
     /// Whether any of the switches edits a request head. `apply_stealth` is on
     /// the relay path of every decrypted request, so it leaves the bytes alone
     /// as soon as this says no; the packet-level and scriptlet switches are
@@ -289,6 +309,7 @@ impl StealthConfig {
             || self.hides_third_party_referer()
             || self.injects_privacy_signals()
             || self.hides_search_query()
+            || self.masked_ip().is_some()
     }
 
     /// Whether a page needs a stealth scriptlet. The injection holds bodies
@@ -842,6 +863,9 @@ pub struct Core {
     network_type: AtomicU8,
     /// Whether that cellular network is roaming (`NET_CAPABILITY_NOT_ROAMING`).
     roaming: AtomicBool,
+    /// Anti-DPI for the flows this engine relays. The relay path reads it on
+    /// every writable peer, so it is a flag rather than a read of the config.
+    anti_dpi: AtomicBool,
     /// Packets produced for the tun, collected only in tests: the end-to-end
     /// tests drive the packet loop without a device, and this is where
     /// client-bound segments would land.
@@ -1003,6 +1027,7 @@ impl Core {
             app_network_policy: RwLock::new(Arc::new(AppNetworkPolicy::default())),
             network_type: AtomicU8::new(NETWORK_UNKNOWN),
             roaming: AtomicBool::new(false),
+            anti_dpi: AtomicBool::new(false),
             #[cfg(test)]
             outbox: Mutex::new(Vec::new()),
         }
@@ -1151,6 +1176,10 @@ impl Core {
         // HTTP/3 switch goes away (or a proxy takes the traffic over) the open
         // flows are cut, so the client retries on a path the new config covers.
         let h3_off = !cfg.filter_http3 || !cfg.mitm_enabled || cfg.proxy.is_some();
+        // The relay path reads this per writable peer, so the switch is
+        // published as a flag next to the config it came from.
+        self.anti_dpi
+            .store(cfg.stealth.fragments_hello(), Ordering::Relaxed);
         *self.cfg.write().unwrap() = cfg;
         if h3_off {
             self.close_h3_flows();
@@ -3152,6 +3181,25 @@ impl Core {
             crate::logbuf::push("relay: the app refused to protect a peer socket");
             return None;
         }
+        if kind == libc::SOCK_STREAM {
+            // Nagle holds anything smaller than a segment while an earlier write
+            // is still unacknowledged, and the relay's first flight is exactly
+            // that shape once anti-DPI splits it: 24 bytes out, then the rest of
+            // the hello waiting a whole round trip for an acknowledgement that
+            // tells the sender nothing it does not already know. A client that
+            // writes short bursts pays the same toll, so the option belongs on
+            // every peer socket rather than behind one switch.
+            let mut one: libc::c_int = 1;
+            unsafe {
+                libc::setsockopt(
+                    fd,
+                    libc::IPPROTO_TCP,
+                    libc::TCP_NODELAY,
+                    &mut one as *mut _ as *mut libc::c_void,
+                    std::mem::size_of::<libc::c_int>() as libc::socklen_t,
+                );
+            }
+        }
         Some(fd)
     }
 
@@ -3261,7 +3309,7 @@ impl Core {
     /// byte stream order the client produced is preserved.
     fn flush_peer(&self, client_port: u16) {
         loop {
-            let (fd, chunk, handshake) = {
+            let (fd, chunk, handshake, head) = {
                 let mut guard = self.relays.lock().unwrap();
                 let Some(relay) = guard.get_mut(client_port) else {
                     return;
@@ -3276,28 +3324,48 @@ impl Core {
                             return; // waiting for the proxy's next reply
                         }
                         relay.flushing = true;
-                        (relay.peer_fd, out, true)
+                        (relay.peer_fd, out, true, None)
                     }
                     _ => {
                         if relay.pending_to_peer.is_empty() {
                             return;
                         }
                         relay.flushing = true;
-                        (
-                            relay.peer_fd,
-                            std::mem::take(&mut relay.pending_to_peer),
-                            false,
-                        )
+                        let chunk = std::mem::take(&mut relay.pending_to_peer);
+                        let head =
+                            relay.anti_dpi_head(&chunk, self.anti_dpi.load(Ordering::Relaxed));
+                        (relay.peer_fd, chunk, false, head)
                     }
                 }
             };
-            let written = self.write_some(fd, &chunk);
+            let written = match head {
+                // Two sends, so the hello's opening travels in a segment of its
+                // own and the server name follows in the next one. A short first
+                // send means the socket is full: the remainder stays queued and
+                // goes out with the next writable pass, unsplit.
+                Some(head) => {
+                    let first = self.write_some(fd, &chunk[..head]);
+                    if first < head {
+                        first
+                    } else {
+                        head + self.write_some(fd, &chunk[head..])
+                    }
+                }
+                None => self.write_some(fd, &chunk),
+            };
             let (more, half_close) = {
                 let mut guard = self.relays.lock().unwrap();
                 let Some(relay) = guard.get_mut(client_port) else {
                     return;
                 };
                 relay.flushing = false;
+                if !handshake && written > 0 {
+                    // The opening has begun. Anti-DPI speaks of one flight per
+                    // connection, and only bytes the origin asked for have an
+                    // opening to speak of: the SOCKS5 greeting that preceded
+                    // these went to the proxy and must not spend it.
+                    relay.opening_sent = true;
+                }
                 if written < chunk.len() {
                     // Prepend the unwritten remainder: anything queued while we
                     // were writing came later in the stream.
@@ -7740,6 +7808,108 @@ mod tests {
         assert!(
             !server.join().expect("proxy thread"),
             "application bytes arrived before CONNECT succeeded"
+        );
+    }
+
+    /// A proxied flow writes its SOCKS5 greeting to the peer socket before the
+    /// origin ever sees a byte. Anti-DPI counts that as the connection's
+    /// opening, so the flag must stay unset through the negotiation — otherwise
+    /// every flow behind a proxy loses the split exactly where the server name
+    /// is most exposed.
+    #[test]
+    fn the_socks5_greeting_leaves_the_anti_dpi_opening_for_the_hello() {
+        use std::io::Read;
+        use std::os::fd::IntoRawFd;
+
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("proxy listener");
+        let proxy_port = listener.local_addr().expect("addr").port();
+        let peer = std::net::TcpStream::connect(("127.0.0.1", proxy_port)).expect("connect");
+        let (mut proxy, _) = listener.accept().expect("accept");
+
+        let flow = crate::mitm::tcp::Flow::new(
+            crate::packet::IpKey::V4(u32::from_be_bytes([10, 0, 2, 15])),
+            40000,
+            80,
+            7,
+            7000,
+        );
+        let mut relay = crate::mitm::relay::Relay::new_plain(
+            flow,
+            peer.into_raw_fd(),
+            tcp_syn(40000, [93, 184, 216, 34], 80),
+            crate::mitm::relay::DEFAULT_MSS,
+            false,
+        );
+        relay.handshake = Some(
+            crate::socks5::Socks5Handshake::new(
+                crate::packet::IpKey::V4(u32::from_be_bytes([93, 184, 216, 34])),
+                80,
+                None,
+            )
+            .expect("handshake"),
+        );
+        let core = Core::new();
+        core.relays.lock().unwrap().insert(relay);
+
+        // Nothing from the client: the queue is empty, so only the negotiation
+        // has anything to send.
+        core.push_to_peer(40000, b"");
+
+        let mut greeting = [0u8; 3];
+        proxy.read_exact(&mut greeting).expect("greeting");
+        assert_eq!(greeting, [5, 1, 0], "the greeting went out");
+
+        let hello: Vec<u8> = std::iter::once(0x16u8)
+            .chain((0..1_400u32).map(|i| (i % 250) as u8))
+            .collect();
+        let (opening_spent, splits) = {
+            let guard = core.relays.lock().unwrap();
+            let relay = guard.get(40000).expect("relay");
+            (
+                relay.opening_sent,
+                relay.anti_dpi_head(&hello, true).is_some(),
+            )
+        };
+        assert!(
+            !opening_spent,
+            "bytes sent to a proxy are not the origin's opening"
+        );
+        assert!(
+            splits,
+            "the ClientHello of a proxied flow must still be split"
+        );
+    }
+
+    /// The split only costs a syscall if the socket does not also make it wait.
+    /// With Nagle on, the 24-byte opening of a ClientHello holds the rest of the
+    /// hello for a full round trip of acknowledgement, so every new connection
+    /// would start late — the opposite of what a latency switch should buy.
+    #[test]
+    fn a_peer_socket_is_not_nagle_delayed() {
+        let core = Core::new();
+        core.set_socket_protector(Arc::new(AllowAll));
+        let fd = core
+            .open_peer_socket(
+                crate::packet::IpKey::V4(u32::from_be_bytes([93, 184, 216, 34])),
+                libc::SOCK_STREAM,
+            )
+            .expect("peer socket");
+        let mut value: libc::c_int = 0;
+        let mut len = std::mem::size_of::<libc::c_int>() as libc::socklen_t;
+        let rc = unsafe {
+            libc::getsockopt(
+                fd,
+                libc::IPPROTO_TCP,
+                libc::TCP_NODELAY,
+                &mut value as *mut _ as *mut libc::c_void,
+                &mut len,
+            )
+        };
+        unsafe { libc::close(fd) };
+        assert_eq!(0, rc, "the option is readable on a TCP socket");
+        assert_eq!(
+            1, value,
+            "a peer socket must not wait for an acknowledgement to finish its first flight"
         );
     }
 

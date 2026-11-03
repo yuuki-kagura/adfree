@@ -54,6 +54,8 @@ import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Switch
 import androidx.compose.material3.SwitchDefaults
@@ -79,6 +81,7 @@ import androidx.compose.ui.unit.sp
 import git.shin.adfree.R
 import git.shin.adfree.model.AppFirewallRule
 import git.shin.adfree.model.StealthPreset
+import git.shin.adfree.model.normalizeMaskIp
 import git.shin.adfree.ui.AdGuardIntent
 import git.shin.adfree.ui.AdGuardViewModel
 import git.shin.adfree.ui.ProtectionSection
@@ -91,6 +94,7 @@ import git.shin.adfree.ui.theme.AdGuardGreenLight
 import git.shin.adfree.ui.theme.AdGuardGreenPrimary
 import git.shin.adfree.ui.theme.AdGuardOrangeWarning
 import git.shin.adfree.ui.theme.AdGuardPurpleAI
+import git.shin.adfree.ui.theme.AdGuardRedBlocked
 import git.shin.adfree.ui.theme.AdGuardTextMuted
 import git.shin.adfree.ui.theme.AdGuardTextPrimary
 import git.shin.adfree.ui.theme.AdGuardTextSecondary
@@ -823,6 +827,135 @@ private fun TrackingDetail(
                     onCheckedChange = {
                         viewModel.onIntent(AdGuardIntent.UpdateStealth(blockGeolocationApi = it))
                     },
+                )
+                Spacer(modifier = Modifier.height(12.dp))
+                StealthToggleRow(
+                    title = stringResource(R.string.settings_stealth_dpi_title),
+                    subtitle = stringResource(R.string.settings_stealth_dpi_subtitle),
+                    isChecked = settings.antiDpi,
+                    enabled = settings.isStealthModeEnabled,
+                    onCheckedChange = {
+                        viewModel.onIntent(AdGuardIntent.UpdateStealth(antiDpi = it))
+                    },
+                )
+                Spacer(modifier = Modifier.height(12.dp))
+                StealthMaskIpRow(
+                    value = settings.maskIp,
+                    enabled = settings.isStealthModeEnabled,
+                    onSave = { viewModel.onIntent(AdGuardIntent.UpdateStealth(maskIp = it)) },
+                )
+            }
+        }
+    }
+}
+
+/**
+ * The one entry in AdGuard's tracking-protection list that needs a keyboard.
+ * The address is stored exactly as typed and the core decides whether it is
+ * applied, so clearing the field is the same as turning the switch off and a
+ * value restored from another device stays visible even when it is nonsense.
+ * Save is disabled while the text is neither empty nor an address.
+ */
+@Composable
+private fun StealthMaskIpRow(
+    value: String,
+    enabled: Boolean,
+    onSave: (String) -> Unit,
+) {
+    var editing by rememberSaveable { mutableStateOf(false) }
+    var draft by rememberSaveable { mutableStateOf(value) }
+    // Outside the editor the field shows what is stored, so a save from another
+    // screen or a restore never leaves a stale draft behind the label.
+    LaunchedEffect(value, editing) {
+        if (!editing) draft = value
+    }
+    val candidate = normalizeMaskIp(draft)
+
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                text = stringResource(R.string.settings_stealth_mask_title),
+                fontSize = 13.sp,
+                fontWeight = FontWeight.SemiBold,
+                color = if (enabled) AdGuardTextPrimary else AdGuardTextMuted,
+            )
+            Text(
+                text = stringResource(R.string.settings_stealth_mask_subtitle),
+                fontSize = 11.sp,
+                color = AdGuardTextSecondary,
+            )
+            Text(
+                text = if (value.isEmpty()) {
+                    stringResource(R.string.settings_stealth_mask_unset)
+                } else {
+                    stringResource(R.string.settings_stealth_mask_set, value)
+                },
+                fontSize = 11.sp,
+                color = if (value.isEmpty()) AdGuardTextMuted else AdGuardGreenLight,
+            )
+        }
+        TextButton(onClick = {
+            if (editing) {
+                editing = false
+                draft = value
+            } else {
+                draft = value
+                editing = true
+            }
+        }) {
+            Text(
+                text = stringResource(
+                    if (editing) R.string.common_cancel else R.string.settings_stealth_mask_change
+                ),
+                fontSize = 11.sp,
+                color = AdGuardGreenLight,
+            )
+        }
+    }
+
+    if (editing) {
+        Spacer(modifier = Modifier.height(8.dp))
+        OutlinedTextField(
+            value = draft,
+            onValueChange = { draft = it },
+            label = { Text(stringResource(R.string.settings_stealth_mask_label), fontSize = 12.sp) },
+            placeholder = { Text("203.0.113.9", fontSize = 12.sp, color = AdGuardTextMuted) },
+            singleLine = true,
+            isError = candidate == null,
+            modifier = Modifier.fillMaxWidth(),
+            shape = RoundedCornerShape(10.dp),
+            colors = OutlinedTextFieldDefaults.colors(
+                focusedBorderColor = AdGuardGreenPrimary,
+                unfocusedBorderColor = AdGuardDarkOutline,
+                focusedTextColor = AdGuardTextPrimary,
+                unfocusedTextColor = AdGuardTextPrimary,
+            ),
+        )
+        Spacer(modifier = Modifier.height(8.dp))
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Button(
+                onClick = {
+                    candidate?.let(onSave)
+                    editing = false
+                },
+                enabled = candidate != null,
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = AdGuardGreenPrimary,
+                    contentColor = AdGuardOnAccent,
+                ),
+            ) {
+                Text(stringResource(R.string.settings_stealth_mask_apply), fontSize = 12.sp)
+            }
+            if (candidate == null) {
+                Text(
+                    text = stringResource(R.string.settings_stealth_mask_invalid),
+                    fontSize = 11.sp,
+                    color = AdGuardRedBlocked,
+                    modifier = Modifier.align(Alignment.CenterVertically),
                 )
             }
         }

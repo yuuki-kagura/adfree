@@ -51,6 +51,13 @@ fn default_upstream() -> SocketAddr {
     SocketAddr::new(IpAddr::V4(DEFAULT_IP), DEFAULT_PORT)
 }
 
+/// The address the user asked to be shown to sites, but only if the text really
+/// is one: half-typed input leaves the header off instead of inventing an
+/// address, and the field keeps the text so the next keystroke can finish it.
+fn masked_ip(text: &str) -> Option<IpAddr> {
+    text.trim().parse().ok()
+}
+
 /// The active network's resolver as Android reported it. The core cannot read
 /// `LinkProperties`, and a VPN's `/etc/resolv.conf` is not the device's, so
 /// Kotlin hands this over before every apply.
@@ -152,6 +159,8 @@ pub fn build(snapshot: &StateSnapshot, private_dns_strict: bool) -> Plan {
             hide_search_query: protection.hide_search_query,
             block_push_api: protection.block_push_api,
             block_geolocation_api: protection.block_geolocation_api,
+            anti_dpi: protection.anti_dpi,
+            mask_ip: masked_ip(&protection.mask_ip),
         },
         cosmetic_filtering: protection.cosmetic_filtering,
         safe_search: protection.safe_search,
@@ -353,7 +362,8 @@ pub fn policy(snapshot: &StateSnapshot) -> PolicyPlan {
     // Routing answers are a proxy feature, not a firewall dimension: they
     // keep applying while the firewall switch (or its custom-rule gate) is
     // off, so a user can pin one app to the proxy without enabling the rest.
-    network.proxy_rules = std::sync::Arc::new(        snapshot
+    network.proxy_rules = std::sync::Arc::new(
+        snapshot
             .firewall
             .iter()
             .filter(|rule| rule.proxy != ProxyAccess::Inherit)
@@ -456,16 +466,62 @@ mod tests {
         s.protection.is_stealth_mode_enabled = false;
         s.protection.strip_utm_tracking = true;
         s.protection.block_web_rtc_leaks = true;
+        s.protection.anti_dpi = true;
         let off = build(&s, false);
         assert!(!off.config.stealth.strips_utm());
         assert!(!off.config.stealth.blocks_web_rtc());
+        assert!(!off.config.stealth.fragments_hello());
 
         s.protection.is_stealth_mode_enabled = true;
         let on = build(&s, false);
         assert!(on.config.stealth.strips_utm());
         assert!(on.config.stealth.blocks_web_rtc());
         assert!(on.config.stealth.blocks_third_party_cookies());
+        assert!(on.config.stealth.fragments_hello());
         assert!(!on.config.stealth.disguises_user_agent());
+    }
+
+    /// The persisted shape is one JSON blob: a row written before a switch
+    /// existed has to load with the switch off rather than fail to read.
+    #[test]
+    fn a_settings_row_written_before_the_new_switches_still_loads() {
+        let mut s = StateSnapshot::default();
+        s.protection.anti_dpi = true;
+        s.protection.mask_ip = "203.0.113.9".to_string();
+        let mut value = serde_json::to_value(&s.protection).expect("serialize");
+        let row = value.as_object_mut().expect("an object");
+        row.remove("anti_dpi").expect("the field was written");
+        row.remove("mask_ip").expect("the field was written");
+        let restored: crate::state::model::ProtectionState =
+            serde_json::from_value(value).expect("an older row reads back");
+        assert!(!restored.anti_dpi);
+        assert!(restored.mask_ip.is_empty());
+    }
+
+    #[test]
+    fn a_masked_address_reaches_the_config_and_bad_text_does_not() {
+        let mut s = snapshot();
+        s.protection.is_stealth_mode_enabled = true;
+        s.protection.mask_ip = " 203.0.113.9 ".to_string();
+        let plan = build(&s, false);
+        assert_eq!(
+            plan.config.stealth.masked_ip(),
+            Some(IpAddr::V4(Ipv4Addr::new(203, 0, 113, 9)))
+        );
+        assert!(plan.config.stealth.has_request_edits());
+
+        // Half-typed text keeps the field but adds no header: inventing an
+        // address the user did not write would be the worse failure.
+        s.protection.mask_ip = "203.0.113".to_string();
+        assert_eq!(build(&s, false).config.stealth.masked_ip(), None);
+
+        // The master switch decides whether the text is applied, not whether it
+        // is remembered.
+        s.protection.mask_ip = "203.0.113.9".to_string();
+        s.protection.is_stealth_mode_enabled = false;
+        let off = build(&s, false);
+        assert_eq!(off.config.stealth.masked_ip(), None);
+        assert!(off.config.stealth.mask_ip.is_some());
     }
 
     #[test]

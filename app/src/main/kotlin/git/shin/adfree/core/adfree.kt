@@ -4111,6 +4111,20 @@ data class ProtectionState (
     , 
     var `blockGeolocationApi`: kotlin.Boolean
     , 
+    /**
+     * Split the TLS ClientHello across segments so a device that reads the
+     * server name out of the first packet cannot. AdGuard's `Anti-DPI`.
+     */
+    var `antiDpi`: kotlin.Boolean
+    , 
+    /**
+     * The address a site is told the request came through, as the user typed
+     * it. Empty or unparseable means no header is added. AdGuard's `Mask IP
+     * address`; a string rather than an address because the field is what the
+     * UI shows back, and a half-typed value must not be silently thrown away.
+     */
+    var `maskIp`: kotlin.String
+    , 
     var `selectedDnsProviderId`: kotlin.String
     , 
     var `httpsSkipHosts`: List<kotlin.String>
@@ -4215,6 +4229,8 @@ public object FfiConverterTypeProtectionState: FfiConverterRustBuffer<Protection
             FfiConverterBoolean.read(buf),
             FfiConverterBoolean.read(buf),
             FfiConverterBoolean.read(buf),
+            FfiConverterBoolean.read(buf),
+            FfiConverterString.read(buf),
             FfiConverterString.read(buf),
             FfiConverterSequenceString.read(buf),
             FfiConverterSequenceString.read(buf),
@@ -4271,6 +4287,8 @@ public object FfiConverterTypeProtectionState: FfiConverterRustBuffer<Protection
             FfiConverterBoolean.allocationSize(value.`hideSearchQuery`) +
             FfiConverterBoolean.allocationSize(value.`blockPushApi`) +
             FfiConverterBoolean.allocationSize(value.`blockGeolocationApi`) +
+            FfiConverterBoolean.allocationSize(value.`antiDpi`) +
+            FfiConverterString.allocationSize(value.`maskIp`) +
             FfiConverterString.allocationSize(value.`selectedDnsProviderId`) +
             FfiConverterSequenceString.allocationSize(value.`httpsSkipHosts`) +
             FfiConverterSequenceString.allocationSize(value.`httpsOnlyHosts`) +
@@ -4326,6 +4344,8 @@ public object FfiConverterTypeProtectionState: FfiConverterRustBuffer<Protection
             FfiConverterBoolean.write(value.`hideSearchQuery`, buf)
             FfiConverterBoolean.write(value.`blockPushApi`, buf)
             FfiConverterBoolean.write(value.`blockGeolocationApi`, buf)
+            FfiConverterBoolean.write(value.`antiDpi`, buf)
+            FfiConverterString.write(value.`maskIp`, buf)
             FfiConverterString.write(value.`selectedDnsProviderId`, buf)
             FfiConverterSequenceString.write(value.`httpsSkipHosts`, buf)
             FfiConverterSequenceString.write(value.`httpsOnlyHosts`, buf)

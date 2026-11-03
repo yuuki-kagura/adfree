@@ -6,6 +6,8 @@ package git.shin.adfree.model
  * AdGuard comments start with `!`; hosts files use `#`. A leading `#` is only
  * kept when it is part of a cosmetic marker (`##`, `#%#`, `#@#`, `#$#`, `#?#`)
  * so a global cosmetic rule survives while a hosts-style comment does not.
+ * A `!` is dropped when the line is prose, and kept when it parks a rule —
+ * `!||example.com^` is a rule the user switched off and wants back later.
  * Blank lines and duplicates are dropped, and order is preserved.
  */
 fun parseUserRulesText(text: String): List<String> =
@@ -18,11 +20,22 @@ fun parseUserRulesText(text: String): List<String> =
         .toList()
 
 private fun isCommentLine(line: String): Boolean {
-    if (line.startsWith("!")) return true
+    if (line.startsWith("!")) return !isParkedRule(line)
     if (!line.startsWith("#")) return false
     // "# comment" and "#comment" are hosts comments; "##.ad" and "#%#..." are
     // cosmetic rules and must survive an import.
     return line.length < 2 || line[1] !in "#%@$?"
+}
+
+/**
+ * AdGuard switches a rule off by writing `!` in front of it. The core's parser
+ * sees an inert comment, so the parked rule costs nothing to keep and can be
+ * switched back on without retyping. Prose behind the `!` is a comment, not a
+ * parked rule, and must not accumulate in the user's list forever.
+ */
+private fun isParkedRule(line: String): Boolean {
+    val rest = line.drop(1).trimStart()
+    return rest.startsWith("@@") || hasExplicitRuleSyntax(rest)
 }
 
 /**
@@ -65,19 +78,37 @@ fun userBlockRule(input: String): String? {
  *
  * Only `@@` lines belong here: a blocking rule shown in an allowlist screen
  * would be deleted by a user who thinks it is an exception, and the screen has
- * no way to tell the two apart afterwards. The query matches against the rule's
- * host as well as its raw text, so `example` finds `@@||example.com^`.
+ * no way to tell the two apart afterwards. Rules parked behind a `!` are listed
+ * too, marked off, because they are the same exception waiting to be switched
+ * back on. The query matches against the rule's host as well as its raw text,
+ * so `example` finds `@@||example.com^`.
  */
 fun allowlistRules(rules: List<String>, query: String): List<String> {
-    val exceptions = rules.filter { it.startsWith("@@") }
+    val exceptions = rules.filter { isAllowlistRule(it) }
     val needle = query.trim().lowercase()
     if (needle.isEmpty()) return exceptions
     return exceptions.filter { it.lowercase().contains(needle) || allowlistHost(it).contains(needle) }
 }
 
+/** Whether an allowlist screen should offer this rule at all. */
+fun isAllowlistRule(rule: String): Boolean = allowlistRuleBody(rule).startsWith("@@")
+
+/** The rule as the core would see it, with the `!` that parks it taken off. */
+fun allowlistRuleBody(rule: String): String = rule.removePrefix("!").trim()
+
+/** True when the rule reaches the core; false while it waits behind a `!`. */
+fun allowlistRuleEnabled(rule: String): Boolean = !rule.startsWith("!")
+
+/** The same rule written switched on, or parked with `!` like AdGuard does. */
+fun withAllowlistRuleEnabled(rule: String, enabled: Boolean): String {
+    val body = allowlistRuleBody(rule)
+    return if (enabled) body else "!$body"
+}
+
 /** The host an exception rule is about, for display and for search. */
 fun allowlistHost(rule: String): String =
-    rule.removePrefix("@@")
+    allowlistRuleBody(rule)
+        .removePrefix("@@")
         .removePrefix("||")
         .substringBefore('^')
         .substringBefore('#')

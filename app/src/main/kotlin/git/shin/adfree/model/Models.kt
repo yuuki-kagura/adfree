@@ -650,6 +650,23 @@ data class ProtectionSettings(
     val hideSearchQuery: Boolean = false,
     val blockPushApi: Boolean = false,
     val blockGeolocationApi: Boolean = false,
+    /**
+     * Split the first TLS handshake segment so a device doing deep packet
+     * inspection cannot read the server name out of one packet. AdGuard's
+     * `Anti-DPI`. Costs one extra write per new connection, so it is not part
+     * of the privacy levels: those promise what a site sees, not what a
+     * middlebox sees.
+     */
+    val antiDpi: Boolean = false,
+    /**
+     * The address a site is told the request came through, as AdGuard's
+     * `Địa chỉ IP mặt nạ`: `X-Forwarded-For` is set to it on every filtered
+     * request. It is what the page reads, not where the traffic goes — hiding
+     * the real address needs an exit through somebody else's machine, and this
+     * app makes no outbound connection the user did not ask for. Empty, or text
+     * that is not an address, adds no header.
+     */
+    val maskIp: String = "",
     val selectedDnsProviderId: String = "adguard_default",
     /** HTTPS allowlist: hosts never decrypted (banking, client-cert sites). */
     val httpsSkipHosts: List<String> = emptyList(),

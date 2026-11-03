@@ -103,6 +103,11 @@ enum class StealthPreset {
 /**
  * The twelve stealth switches as one comparable value. Only the ones a level
  * names are mentioned by the callers; the rest default to off.
+ *
+ * Anti-DPI and the masked address are deliberately absent: a level promises what
+ * a site sees, and splitting the handshake changes only what a middlebox sees
+ * while the mask is text the user typed, so both stay rows of their own and
+ * survive whichever level is picked.
  */
 private data class Switches(
     val stripUtm: Boolean = false,

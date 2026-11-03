@@ -134,6 +134,7 @@ sealed interface AdGuardIntent {
     data class InspectLog(val log: NetworkRequestLog?) : AdGuardIntent
     data class AddCustomRule(val rule: String) : AdGuardIntent
     data class RemoveCustomRule(val rule: String) : AdGuardIntent
+    data class ReplaceCustomRule(val oldRule: String, val newRule: String) : AdGuardIntent
     data class UpdateAllCustomRules(val rules: List<String>) : AdGuardIntent
     data class SelectDnsProvider(val id: String) : AdGuardIntent
     data class AddCustomDnsProvider(
@@ -270,6 +271,8 @@ sealed interface AdGuardIntent {
         val hideSearchQuery: Boolean? = null,
         val blockPushApi: Boolean? = null,
         val blockGeolocationApi: Boolean? = null,
+        val antiDpi: Boolean? = null,
+        val maskIp: String? = null,
     ) : AdGuardIntent
 
     data object DismissLoading : AdGuardIntent

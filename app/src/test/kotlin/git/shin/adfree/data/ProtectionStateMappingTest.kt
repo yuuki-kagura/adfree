@@ -35,6 +35,26 @@ class ProtectionStateMappingTest {
     }
 
     @Test
+    fun the_anti_dpi_switch_survives_the_core_round_trip() {
+        val settings = ProtectionSettings(isStealthModeEnabled = true, antiDpi = true)
+
+        val back = settings.toCoreState().toModel()
+
+        assertTrue(back.antiDpi)
+        assertFalse(ProtectionSettings().antiDpi)
+    }
+
+    @Test
+    fun the_masked_address_survives_the_core_round_trip() {
+        val settings = ProtectionSettings(isStealthModeEnabled = true, maskIp = "203.0.113.9")
+
+        val back = settings.toCoreState().toModel()
+
+        assertEquals("203.0.113.9", back.maskIp)
+        assertEquals("", ProtectionSettings().maskIp)
+    }
+
+    @Test
     fun log_level_survives_the_core_round_trip() {
         val settings = ProtectionSettings(logLevel = LogLevel.DEBUG)
 
@@ -137,6 +157,16 @@ class ProtectionStateMappingTest {
         assertEquals(StealthPreset.STANDARD, StealthPreset.of(standard))
         assertEquals(StealthPreset.HIGH, StealthPreset.of(high))
         assertEquals(StealthPreset.ULTRA, StealthPreset.of(ultra))
+
+        // Anti-DPI and the masked address are not a level's business: the first
+        // changes what a middlebox sees rather than what a site sees, and the
+        // second is text the user typed. Picking a level leaves both alone, and
+        // neither has any part in reading the level back.
+        val level = ultra.copy(antiDpi = true, maskIp = "203.0.113.9")
+        val repicked = StealthPreset.STANDARD.applyTo(level)
+        assertTrue(repicked.antiDpi)
+        assertEquals("203.0.113.9", repicked.maskIp)
+        assertEquals(StealthPreset.ULTRA, StealthPreset.of(level))
     }
 
     @Test

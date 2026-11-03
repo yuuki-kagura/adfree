@@ -70,6 +70,28 @@ class UserRulesTextTest {
         assertEquals(emptyList<String>(), parseUserRulesText("\n\n! only a comment\n"))
     }
 
+    /**
+     * The allowlist's per-rule switch parks a rule as `!` + rule instead of
+     * deleting it, so a parked rule has to survive every read of the file —
+     * and prose behind a `!` still has to go, or the user's list fills up with
+     * whatever a comment line happened to say.
+     */
+    @Test
+    fun `a parked rule survives while commented prose does not`() {
+        val text = """
+            !@@||safe.example^
+            !||ads.example^
+            !##.banner
+            ! thanks for trying
+            !!@@||double.example^
+        """.trimIndent()
+
+        assertEquals(
+            listOf("!@@||safe.example^", "!||ads.example^", "!##.banner"),
+            parseUserRulesText(text),
+        )
+    }
+
     @Test
     fun `a typed domain becomes an exception rule`() {
         assertEquals("@@||example.com^", userWhitelistRule("example.com"))

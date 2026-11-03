@@ -68,6 +68,8 @@ import git.shin.adfree.ui.theme.AdGuardTextMuted
 import git.shin.adfree.ui.theme.AdGuardTextPrimary
 import git.shin.adfree.ui.theme.AdGuardOnAccent
 import git.shin.adfree.ui.theme.AdGuardTextSecondary
+import git.shin.adfree.model.allowlistRuleBody
+import git.shin.adfree.model.isAllowlistRule
 import git.shin.adfree.model.parseUserRulesText
 import git.shin.adfree.model.userBlockRule
 import git.shin.adfree.model.userWhitelistRule
@@ -412,7 +414,7 @@ fun FriendlyCustomRuleEditorSheet(
                 verticalArrangement = Arrangement.spacedBy(6.dp),
             ) {
                 items(filteredRules) { rule ->
-                    val isWhitelist = rule.startsWith("@@")
+                    val isWhitelist = allowlistRuleBody(rule).startsWith("@@")
                     val isRegex = rule.startsWith("/") && rule.endsWith("/")
                     val badgeColor = if (isWhitelist) AdGuardGreenLight else if (isRegex) AdGuardPurpleAI else AdGuardRedBlocked
                     val badgeText = when {
@@ -624,7 +626,7 @@ fun FriendlyCustomRuleEditorSheet(
 
             Spacer(modifier = Modifier.height(10.dp))
 
-            val whitelistRules = rulesList.filter { it.startsWith("@@") }
+            val whitelistRules = rulesList.filter { isAllowlistRule(it) }
             if (whitelistRules.isEmpty()) {
                 Box(
                     modifier = Modifier

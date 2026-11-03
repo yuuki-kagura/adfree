@@ -7349,6 +7349,34 @@ mod tests {
         assert!(fe.check_host("x.my-block.test").blocked);
     }
 
+    /// The allowlist's per-rule switch parks a rule behind `!` instead of
+    /// deleting it, so "switched off" has to mean inert in the core too —
+    /// for the exception, for the block rule, and for every side scan that
+    /// reads rule text on its own.
+    #[test]
+    fn a_parked_user_rule_is_inert() {
+        let fe = FilterEngine::new();
+        fe.rebuild(
+            &default_lists(),
+            &[
+                "!@@||doubleclick.net^".to_string(),
+                "!||my-block.test^".to_string(),
+            ],
+        );
+        assert!(fe.check_host("doubleclick.net").blocked);
+        assert!(!fe.check_host("my-block.test").blocked);
+        // The same two lines un-parked do have their opposite effects.
+        fe.rebuild(
+            &default_lists(),
+            &[
+                "@@||doubleclick.net^".to_string(),
+                "||my-block.test^".to_string(),
+            ],
+        );
+        assert!(!fe.check_host("doubleclick.net").blocked);
+        assert!(fe.check_host("my-block.test").blocked);
+    }
+
     #[test]
     fn url_scoped_rules_need_the_whole_request() {
         let fe = cosmetic_engine("||shop.test/ads/tracker.js$script\n");

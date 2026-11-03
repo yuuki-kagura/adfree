@@ -1921,6 +1921,92 @@ fn the_privacy_signals_go_out_and_the_search_query_stays_home() {
     tcp.close();
 }
 
+/// The address the user typed is the address the origin reads: whatever the app
+/// claimed for itself is overwritten, because the point is that the page sees
+/// one address and no other.
+#[test]
+fn a_masked_address_replaces_the_one_the_client_claims() {
+    let origin = start_origin(HTML);
+    let (core, ca_der) = setup_core_with_list(&origin, "stealth-mask", "");
+    core.set_config(Config {
+        mitm_enabled: true,
+        stealth: StealthConfig {
+            enabled: true,
+            mask_ip: Some("203.0.113.9".parse().expect("an address")),
+            ..StealthConfig::default()
+        },
+        ..core.config()
+    });
+
+    let mut tcp = Client::connect(core.clone(), origin.port);
+    let mut conn = handshake(&mut tcp, client_config(ca_der));
+    assert!(!conn.is_handshaking(), "the MITM handshake must complete");
+
+    let (head, _) = request_with(
+        &mut tcp,
+        &mut conn,
+        "/",
+        "X-Forwarded-For: 198.51.100.7\r\n",
+    );
+    assert!(head.starts_with("HTTP/1.1 200"), "{head}");
+    {
+        let seen = origin.requests.lock().expect("requests");
+        let sent = seen.last().expect("the request reached the origin");
+        assert!(
+            sent.contains("X-Forwarded-For: 203.0.113.9"),
+            "the masked address must go out: {sent:?}"
+        );
+        assert!(
+            !sent.contains("198.51.100.7"),
+            "and not the address the app claimed: {sent:?}"
+        );
+    }
+    tcp.close();
+}
+
+/// The address survives being switched off in the stored text, but the master
+/// switch decides whether a byte is written: an off mode leaves the head of the
+/// request exactly as the app composed it.
+#[test]
+fn a_masked_address_is_not_added_when_stealth_is_off() {
+    let origin = start_origin(HTML);
+    let (core, ca_der) = setup_core_with_list(&origin, "stealth-mask-off", "");
+    core.set_config(Config {
+        mitm_enabled: true,
+        stealth: StealthConfig {
+            enabled: false,
+            mask_ip: Some("203.0.113.9".parse().expect("an address")),
+            ..StealthConfig::default()
+        },
+        ..core.config()
+    });
+
+    let mut tcp = Client::connect(core.clone(), origin.port);
+    let mut conn = handshake(&mut tcp, client_config(ca_der));
+    assert!(!conn.is_handshaking(), "the MITM handshake must complete");
+
+    let (head, _) = request_with(
+        &mut tcp,
+        &mut conn,
+        "/",
+        "X-Forwarded-For: 198.51.100.7\r\n",
+    );
+    assert!(head.starts_with("HTTP/1.1 200"), "{head}");
+    {
+        let seen = origin.requests.lock().expect("requests");
+        let sent = seen.last().expect("the request reached the origin");
+        assert!(
+            !sent.contains("203.0.113.9"),
+            "a mode that is off must add nothing: {sent:?}"
+        );
+        assert!(
+            sent.contains("X-Forwarded-For: 198.51.100.7"),
+            "the client's own head goes out as it came: {sent:?}"
+        );
+    }
+    tcp.close();
+}
+
 /// A page gets the scriptlets the browser-API switches ask for, inline and with
 /// the nonce the policy was taught: the guard has to run before the page's own
 /// scripts do.

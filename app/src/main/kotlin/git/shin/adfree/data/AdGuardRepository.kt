@@ -719,6 +719,8 @@ class AdGuardRepository(
         hideSearchQuery: Boolean? = null,
         blockPushApi: Boolean? = null,
         blockGeolocationApi: Boolean? = null,
+        antiDpi: Boolean? = null,
+        maskIp: String? = null,
     ) = updateSettings { cur ->
         cur.copy(
             stripUtmTracking = stripUtm ?: cur.stripUtmTracking,
@@ -734,6 +736,8 @@ class AdGuardRepository(
             hideSearchQuery = hideSearchQuery ?: cur.hideSearchQuery,
             blockPushApi = blockPushApi ?: cur.blockPushApi,
             blockGeolocationApi = blockGeolocationApi ?: cur.blockGeolocationApi,
+            antiDpi = antiDpi ?: cur.antiDpi,
+            maskIp = maskIp ?: cur.maskIp,
         )
     }
 
@@ -1684,6 +1688,33 @@ class AdGuardRepository(
                         val updated = it.customRules.filter { r -> r != ruleStr }
                         it.copy(ruleCount = updated.size, customRules = updated)
                     } else it
+                }
+            }
+            saveFilterChoices()
+            pushListsToEngine()
+        }
+    }
+
+    /**
+     * Swap one stored rule for its rewritten form — the allowlist's per-rule
+     * switch puts a `!` in front of an exception, or takes it back off.
+     * Switching on cannot produce two rows for the same host: if the rule
+     * already exists un-parked, the parked one simply goes away.
+     */
+    fun replaceCustomRule(oldRule: String, newRule: String) {
+        if (oldRule == newRule) return
+        scope.launch {
+            _filterLists.update { lists ->
+                lists.map {
+                    if (!it.isCustom) return@map it
+                    val updated = it.customRules.flatMap { r ->
+                        when {
+                            r != oldRule -> listOf(r)
+                            newRule in it.customRules -> emptyList()
+                            else -> listOf(newRule)
+                        }
+                    }.distinct()
+                    it.copy(ruleCount = updated.size, customRules = updated)
                 }
             }
             saveFilterChoices()

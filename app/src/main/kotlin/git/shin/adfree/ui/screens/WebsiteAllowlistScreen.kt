@@ -31,6 +31,8 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
+import androidx.compose.material3.Switch
+import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
@@ -41,17 +43,23 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import git.shin.adfree.R
 import git.shin.adfree.model.allowlistHost
+import git.shin.adfree.model.allowlistRuleBody
+import git.shin.adfree.model.allowlistRuleEnabled
 import git.shin.adfree.model.allowlistRules
+import git.shin.adfree.model.isAllowlistRule
 import git.shin.adfree.model.userWhitelistRule
+import git.shin.adfree.model.withAllowlistRuleEnabled
 import git.shin.adfree.ui.AdGuardIntent
 import git.shin.adfree.ui.AdGuardViewModel
 import git.shin.adfree.ui.theme.AdGuardDarkBg
@@ -70,9 +78,10 @@ import git.shin.adfree.ui.theme.AdGuardTextPrimary
  * rather than a text file.
  *
  * This is a front door over the same `@@` rules the raw editor writes, so both
- * views stay true. It deliberately has no per-rule on/off switch: `!` lines are
- * stripped before the rules reach the core, so a "disabled" exception would be
- * silently deleted rather than parked.
+ * views stay true. Each row has its own switch: switching off rewrites the rule
+ * as `!@@…`, the spelling AdGuard uses to park a rule. The core reads that line
+ * as an inert comment, so the exception waits in the list instead of being
+ * deleted and retyped.
  */
 @Composable
 fun WebsiteAllowlistScreen(
@@ -86,7 +95,9 @@ fun WebsiteAllowlistScreen(
     var problem by rememberSaveable { mutableStateOf(0) }
 
     val rules = state.filterLists.firstOrNull { it.isCustom }?.customRules.orEmpty()
-    val exceptions = rules.filter { it.startsWith("@@") }
+    val exceptions = rules.filter { isAllowlistRule(it) }
+    val switchedOn = exceptions.count { allowlistRuleEnabled(it) }
+    val parked = exceptions.size - switchedOn
     val shown = allowlistRules(rules, query)
 
     Box(
@@ -114,8 +125,15 @@ fun WebsiteAllowlistScreen(
                         fontWeight = FontWeight.Bold,
                         color = AdGuardTextPrimary,
                     )
+                    // Only the switched-on rules bypass anything, so that is the
+                    // number the subtitle carries; parked ones are counted apart.
+                    val parkedNote = if (parked > 0) {
+                        " · " + stringResource(R.string.allowlist_parked_count, parked)
+                    } else {
+                        ""
+                    }
                     Text(
-                        text = stringResource(R.string.allowlist_subtitle, exceptions.size),
+                        text = stringResource(R.string.allowlist_subtitle, switchedOn) + parkedNote,
                         fontSize = 12.sp,
                         color = AdGuardTextMuted,
                     )
@@ -168,8 +186,19 @@ fun WebsiteAllowlistScreen(
             Button(
                 onClick = {
                     val rule = userWhitelistRule(draft)
+                    // Adding a host the switch parked turns it back on instead
+                    // of storing the same exception twice.
+                    val parkedRule = exceptions.firstOrNull {
+                        !allowlistRuleEnabled(it) && allowlistRuleBody(it) == rule
+                    }
                     when {
                         rule == null -> problem = R.string.rules_invalid_domain
+                        parkedRule != null -> {
+                            viewModel.onIntent(AdGuardIntent.ReplaceCustomRule(parkedRule, rule))
+                            draft = ""
+                            problem = 0
+                        }
+
                         rule in exceptions -> problem = R.string.rules_exception_exists
                         else -> {
                             viewModel.onIntent(AdGuardIntent.AddCustomRule(rule))
@@ -280,6 +309,15 @@ fun WebsiteAllowlistScreen(
                     items(shown, key = { it }) { rule ->
                         AllowlistRow(
                             rule = rule,
+                            enabled = allowlistRuleEnabled(rule),
+                            onToggle = { wanted ->
+                                viewModel.onIntent(
+                                    AdGuardIntent.ReplaceCustomRule(
+                                        rule,
+                                        withAllowlistRuleEnabled(rule, wanted),
+                                    ),
+                                )
+                            },
                             onDelete = { viewModel.onIntent(AdGuardIntent.RemoveCustomRule(rule)) },
                         )
                     }
@@ -297,7 +335,12 @@ fun WebsiteAllowlistScreen(
 }
 
 @Composable
-private fun AllowlistRow(rule: String, onDelete: () -> Unit) {
+private fun AllowlistRow(
+    rule: String,
+    enabled: Boolean,
+    onToggle: (Boolean) -> Unit,
+    onDelete: () -> Unit,
+) {
     val host = allowlistHost(rule)
     Card(
         modifier = Modifier
@@ -316,14 +359,19 @@ private fun AllowlistRow(rule: String, onDelete: () -> Unit) {
             Box(
                 modifier = Modifier
                     .clip(RoundedCornerShape(6.dp))
-                    .background(AdGuardGreenLight.copy(alpha = 0.15f))
+                    .background(
+                        if (enabled) AdGuardGreenLight.copy(alpha = 0.15f)
+                        else AdGuardTextMuted.copy(alpha = 0.15f),
+                    )
                     .padding(horizontal = 6.dp, vertical = 2.dp),
             ) {
                 Text(
-                    text = stringResource(R.string.rules_badge_allow),
+                    text = stringResource(
+                        if (enabled) R.string.rules_badge_allow else R.string.allowlist_off_badge,
+                    ),
                     fontSize = 10.sp,
                     fontWeight = FontWeight.Bold,
-                    color = AdGuardGreenLight,
+                    color = if (enabled) AdGuardGreenLight else AdGuardTextMuted,
                 )
             }
             Spacer(modifier = Modifier.width(10.dp))
@@ -332,8 +380,11 @@ private fun AllowlistRow(rule: String, onDelete: () -> Unit) {
                     text = host.ifEmpty { rule },
                     fontSize = 13.sp,
                     fontWeight = FontWeight.Bold,
-                    color = AdGuardTextPrimary,
+                    color = if (enabled) AdGuardTextPrimary else AdGuardTextMuted,
+                    textDecoration = if (enabled) null else TextDecoration.LineThrough,
                 )
+                // The raw rule explains the row whenever it is not the plain
+                // `@@||host^` form — including the `!` that parks it.
                 if (host.isNotEmpty() && rule != "@@||$host^") {
                     Text(
                         text = rule,
@@ -343,6 +394,17 @@ private fun AllowlistRow(rule: String, onDelete: () -> Unit) {
                     )
                 }
             }
+            Switch(
+                checked = enabled,
+                onCheckedChange = onToggle,
+                modifier = Modifier.testTag("allowlist_toggle_${host.ifEmpty { rule }}"),
+                colors = SwitchDefaults.colors(
+                    checkedThumbColor = Color.White,
+                    checkedTrackColor = AdGuardGreenPrimary,
+                    uncheckedThumbColor = AdGuardTextMuted,
+                    uncheckedTrackColor = AdGuardDarkSurface,
+                ),
+            )
             IconButton(
                 onClick = onDelete,
                 modifier = Modifier.testTag("allowlist_delete_${host.ifEmpty { rule }}"),

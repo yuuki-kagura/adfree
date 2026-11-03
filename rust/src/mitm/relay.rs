@@ -41,6 +41,19 @@ pub const MAX_PENDING_TO_CLIENT: usize = 4 * 1024 * 1024;
 /// while the client sits at the cap.
 pub const CLIENT_RESUME_AT: usize = MAX_PENDING_TO_CLIENT / 2;
 
+/// A TLS handshake record, by its content type.
+const RECORD_HANDSHAKE: u8 = 0x16;
+
+/// How many bytes anti-DPI lets the peer see before the rest of the hello
+/// follows in its own segment.
+///
+/// The hello's opening is record header (5) + handshake header (4) + legacy
+/// version (2) + the client random (32), so a cut at 24 bytes lands inside the
+/// random and leaves everything an inspector is looking for — cipher list,
+/// extensions, `server_name` — behind it. TCP reassembles whatever the segments
+/// say, so a real server cannot tell the difference.
+const ANTI_DPI_HEAD: usize = 24;
+
 /// One relayed connection.
 ///
 /// `session` is `Some` only for TLS-terminated flows (HTTPS filtering): with
@@ -117,6 +130,13 @@ pub struct Relay {
     /// counts the SYN-ACK and the FIN, which are sequence numbers, not traffic,
     /// so the statistics cannot read the total from it.
     pub payload_to_client: u64,
+    /// Whether the connection's opening has begun crossing to the peer.
+    ///
+    /// Anti-DPI has one thing to say about a flow, and it is worth exactly one
+    /// write. SOCKS5 negotiation is not that opening — those bytes go to the
+    /// proxy and carry no server name — so the engine sets this only for bytes
+    /// the origin asked for, and a proxied flow still splits its ClientHello.
+    pub opening_sent: bool,
     /// Reports what crossed this connection when it retires; `None` in tests.
     pub traffic: Option<TrafficSink>,
 }
@@ -156,6 +176,7 @@ impl Relay {
             pending_client: Vec::new(),
             pending_client_bytes: 0,
             payload_to_client: 0,
+            opening_sent: false,
             traffic: None,
         }
     }
@@ -193,6 +214,7 @@ impl Relay {
             pending_client: Vec::new(),
             pending_client_bytes: 0,
             payload_to_client: 0,
+            opening_sent: false,
             traffic: None,
         }
     }
@@ -206,6 +228,24 @@ impl Relay {
     /// Buffers client bytes until the peer connection is writable.
     pub fn queue_to_peer(&mut self, bytes: &[u8]) {
         self.pending_to_peer.extend_from_slice(bytes);
+    }
+
+    /// Where the first flight to the peer is cut, or `None` when it goes out as
+    /// one piece.
+    ///
+    /// Only the opening of a connection matters: a middlebox that reads the
+    /// server name straight out of the first segment never reaches the rest of
+    /// the hello once it is split. Everything after that, and every byte that
+    /// is not a handshake record, is written exactly as it came — fragmenting a
+    /// download would cost packets for nothing.
+    pub fn anti_dpi_head(&self, chunk: &[u8], enabled: bool) -> Option<usize> {
+        if !enabled || self.opening_sent {
+            return None;
+        }
+        if chunk.first() != Some(&RECORD_HANDSHAKE) || chunk.len() <= ANTI_DPI_HEAD {
+            return None;
+        }
+        Some(ANTI_DPI_HEAD)
     }
 
     /// Turns a payload into the TCP segments addressed to the client.
@@ -1058,6 +1098,67 @@ mod tests {
         assert!(
             browser_plain.starts_with(b"HTTP/1.1 200 OK"),
             "the browser must receive the response"
+        );
+    }
+
+    /// Anti-DPI has one job: keep the server name out of the first segment of a
+    /// connection. Anything else — a switch flipped off, bytes that already
+    /// followed the hello, plain HTTP — must go out exactly as it came, because
+    /// splitting a download would cost packets and prove nothing.
+    #[test]
+    fn anti_dpi_splits_only_the_first_handshake_record() {
+        let hello: Vec<u8> = std::iter::once(0x16u8)
+            .chain((0..1_400u32).map(|i| (i % 250) as u8))
+            .collect();
+        let http = b"GET / HTTP/1.1\r\n\r\n".to_vec();
+
+        let mut relay = plain_relay_with_syn();
+        assert_eq!(None, relay.anti_dpi_head(&hello, false));
+        assert_eq!(Some(ANTI_DPI_HEAD), relay.anti_dpi_head(&hello, true));
+        // Not a handshake record.
+        assert_eq!(None, relay.anti_dpi_head(&http, true));
+        // Nothing to hide in a fragment shorter than the cut.
+        assert_eq!(None, relay.anti_dpi_head(&hello[..20], true));
+        // The opening has been sent, so this is no longer the first flight.
+        relay.opening_sent = true;
+        assert_eq!(None, relay.anti_dpi_head(&hello, true));
+    }
+
+    /// The cut has to land before the extension area, or the server name stays
+    /// in the segment a matcher reads.
+    #[test]
+    fn the_anti_dpi_cut_leaves_the_extensions_for_the_next_segment() {
+        // A hello laid out the way TLS lays one out: record header 5, handshake
+        // header 4, legacy version 2, random 32. The body — where the server
+        // name lives — starts at byte 43.
+        let mut hello: Vec<u8> = vec![
+            RECORD_HANDSHAKE,
+            0x03,
+            0x03,
+            0x01,
+            0x00,
+            0x01,
+            0x00,
+            0x00,
+            0xc0,
+            0x03,
+            0x03,
+        ];
+        hello.extend_from_slice(&[0xa5; 32]);
+        let body = b"server-name-in-the-extensions".to_vec();
+        hello.extend_from_slice(&body);
+
+        let relay = plain_relay_with_syn();
+        let cut = relay
+            .anti_dpi_head(&hello, true)
+            .expect("the opening flight of a handshake is what gets split");
+
+        // Everything before the body, counted from the bytes rather than taken
+        // from the comment above: the cut may never reach it.
+        let header_len = hello.len() - body.len();
+        assert!(
+            cut < header_len,
+            "the split must stay inside header and random: {cut} of {header_len}"
         );
     }
 }

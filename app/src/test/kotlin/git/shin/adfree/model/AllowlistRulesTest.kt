@@ -41,4 +41,31 @@ class AllowlistRulesTest {
         assertEquals("example.com", allowlistHost("@@example.com##.banner"))
         assertEquals("example.com", allowlistHost("@@||example.com"))
     }
+
+    /**
+     * Switching a row off rewrites it the way AdGuard parks a rule, `!` in
+     * front. The screen still has to list it — the user switched it off from
+     * here, so this is where it gets switched back on — and a parked block rule
+     * stays out of this screen like any other block rule.
+     */
+    @Test
+    fun `a parked exception is listed and reads as switched off`() {
+        val rules = listOf("@@||a.test^", "!@@||b.test^", "||c.test^", "!||d.test^")
+
+        assertEquals(listOf("@@||a.test^", "!@@||b.test^"), allowlistRules(rules, ""))
+        assertEquals(listOf("!@@||b.test^"), allowlistRules(rules, "b.t"))
+        assertEquals("b.test", allowlistHost("!@@||b.test^"))
+        assertEquals(true, isAllowlistRule("@@||a.test^"))
+        assertEquals(false, isAllowlistRule("!||d.test^"))
+        assertEquals(true, allowlistRuleEnabled("@@||a.test^"))
+        assertEquals(false, allowlistRuleEnabled("!@@||b.test^"))
+    }
+
+    @Test
+    fun `switching a rule adds or removes the leading mark only`() {
+        assertEquals("!@@||b.test^", withAllowlistRuleEnabled("@@||b.test^", false))
+        assertEquals("@@||b.test^", withAllowlistRuleEnabled("!@@||b.test^", true))
+        assertEquals("@@||b.test^", withAllowlistRuleEnabled("@@||b.test^", true))
+        assertEquals("!@@||b.test^", withAllowlistRuleEnabled("!@@||b.test^", false))
+    }
 }

@@ -184,6 +184,14 @@ pub struct ProtectionState {
     pub hide_search_query: bool,
     pub block_push_api: bool,
     pub block_geolocation_api: bool,
+    /// Split the TLS ClientHello across segments so a device that reads the
+    /// server name out of the first packet cannot. AdGuard's `Anti-DPI`.
+    pub anti_dpi: bool,
+    /// The address a site is told the request came through, as the user typed
+    /// it. Empty or unparseable means no header is added. AdGuard's `Mask IP
+    /// address`; a string rather than an address because the field is what the
+    /// UI shows back, and a half-typed value must not be silently thrown away.
+    pub mask_ip: String,
     pub selected_dns_provider_id: String,
     pub https_skip_hosts: Vec<String>,
     pub https_only_hosts: Vec<String>,
@@ -267,6 +275,8 @@ impl Default for ProtectionState {
             hide_search_query: false,
             block_push_api: false,
             block_geolocation_api: false,
+            anti_dpi: false,
+            mask_ip: String::new(),
             selected_dns_provider_id: "adguard_default".to_string(),
             https_skip_hosts: Vec::new(),
             https_only_hosts: Vec::new(),

@@ -444,6 +444,9 @@ class AdGuardViewModel(
             }
 
             is AdGuardIntent.RemoveCustomRule -> repository.removeCustomRule(intent.rule)
+            is AdGuardIntent.ReplaceCustomRule ->
+                repository.replaceCustomRule(intent.oldRule, intent.newRule)
+
             is AdGuardIntent.UpdateAllCustomRules -> {
                 repository.updateAllCustomRules(intent.rules)
                 // Keep the sheet open: add/delete/import are incremental edits,
@@ -680,6 +683,8 @@ class AdGuardViewModel(
                 hideSearchQuery = intent.hideSearchQuery,
                 blockPushApi = intent.blockPushApi,
                 blockGeolocationApi = intent.blockGeolocationApi,
+                antiDpi = intent.antiDpi,
+                maskIp = intent.maskIp,
             )
 
             is AdGuardIntent.DismissLoading -> repository.dismissLoading()
