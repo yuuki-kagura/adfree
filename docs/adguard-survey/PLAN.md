@@ -556,12 +556,11 @@ section recommended.
     The ongoing status notification stays on the LOW channel it has always
     used: it redraws every ten seconds, and a DEFAULT channel would make that
     a sound.
-  Owed on device: the services table accepting a tracker dataset over both
-  update paths — a `trackers.json` URL and a DuckDuckGo region file through the
-  picker — and refusing a body that is neither. The other five were settled by
-  the 2026-11-03 passes in §6.5: the consent-lost alert fires and sounds on the
-  DEFAULT channel after a system revoke, a witness origin read the mask
-  header, a parked `!@@` rule was proven against live traffic and across a
+  Nothing is owed on device now. The services table took a tracker dataset over
+  both update paths and refused a body that was neither, and the other five were
+  settled by the 2026-11-03 passes in §6.5: the consent-lost alert fires and
+  sounds on the DEFAULT channel after a system revoke, a witness origin read the
+  mask header, a parked `!@@` rule was proven against live traffic and across a
   process death, an armed always-on VPN came back after a reboot with no tap
   and no alert while an unarmed revoke alerted and stayed down, and the
   anti-DPI handshake split measured +1.2 ms against a ~130 ms first byte in
@@ -1119,12 +1118,11 @@ section recommended.
     `run-as` and identical to the copy taken before the pass,
     `stay_on_while_plugged_in` back to 0, Chrome force-stopped, screen left
     unlocked on the launcher.
-  - Still owed on this device: the services table accepting a tracker dataset
-    over both update paths — a `trackers.json` URL and a DuckDuckGo region file
-    through the picker — and refusing a body that is neither. The parked
-    allowlist rule, the always-on restart and the anti-DPI cost are no longer on
-    this list; the passes below settled them, the last one as +1.2 ms on the TLS
-    handshake against ~130 ms to first byte in `BENCHMARK.md`.
+  - Nothing is owed on this device. The services table took a tracker dataset
+    over both update paths and refused a body that was neither, and the parked
+    allowlist rule, the always-on restart and the anti-DPI cost went before it;
+    the last of those measured +1.2 ms on the TLS handshake against ~130 ms to
+    first byte in `BENCHMARK.md`.
     The two Redmi-only items (positive roaming enforcement, the per-flow memory
     probe) stay blocked until that device is back.
   - The Manual and Visual checklist lines at the end of this file, run on the
@@ -1338,6 +1336,81 @@ section recommended.
       `anti_dpi` back to off with `mask_ip` empty, `stay_on_while_plugged_in`
       back to 0, the whole `state` + `settings` set re-read through `run-as` and
       byte-identical to the copy taken before the pass, screen on the launcher.
+  - The services table over both update paths, run 2026-11-03 (23:07) into
+    2026-11-04 (00:02) — the last item this device owed. Both paths land in
+    `keep_services_body` (`rust/src/api.rs:1073-1094`), which converts through
+    `services::import::to_table` and refuses anything it cannot binary search
+    before `assets::save` is reached, so the two entry points differ only in how
+    the body arrives: `core_services_fetch` pulls it with ureq
+    (`rust/src/assets.rs:47-69`, plain `http://` accepted, 32 MB cap) and
+    `core_services_save` takes the text the app read from a `content://` stream
+    (`AdGuardRepository.kt:2004-2020`).
+    - URL path. Served from a loopback harness — `python3 -m http.server 8099
+      --bind 127.0.0.1` plus `adb reverse tcp:8099 tcp:8099`, and the app's own
+      package is already excluded from the tunnel, so the fetch is direct and
+      needs no CDN. The real AdGuard `trackers.json` (621,685 B, unpacked from
+      the 4.14.68 APK's `assets/preset/`) came back as 5,125 rows, sorted, four
+      columns, no duplicates, under the header `Converted from AdGuard trackers …
+      2026-06-29T16:28:06.945Z`. A copy of `rust/assets/services.tsv` (267,658 B)
+      passed through byte-for-byte — same sha256 prefix `97c94920643fe4fb` on the
+      device as on the host, which is the check that a canonical body is not
+      rewritten. Two refusals: a 57-byte JSON with no dataset gave `no known
+      tracker dataset in this JSON body`, and a permuted copy of the canonical
+      table gave `the table is not a sorted domain list`. Each left the previous
+      copy untouched and each surfaced as the four-second snackbar the dump reads
+      two seconds after the tap.
+    - Picker path. `adfree-ddg-merged.json` (644,157 B, three radar records under
+      `domains`) → 340 B, three rows; `adfree-ddg-single.json` (262,880 B, one
+      record with `owner` and `prevalence`, the shape DuckDuckGo actually
+      publishes — one file per domain, which is why the picker exists at all) →
+      255 B, one row — domain `scorecardresearch.com`, company `comScore`, the
+      service column empty, category `Analytics`;
+      `adfree-junk.json` (20 B) → the same dataset refusal with the 255-byte copy
+      still sha `b366bdfe85e93ba9`. The two dataset shapes were also fed through
+      the URL field (`d2.json`, and a 13,196,129-byte merge of ten records → ten
+      rows) so both entry points are proven against both shapes.
+    - Statistics breakdown. With the switch on and the ten-domain table loaded,
+      the `Dịch vụ` section titles the row `Google` and puts
+      `googleads.g.doubleclick.net · Ad Motivated Tracking` under it with the
+      counts beside, while domains absent from the table (`trk.pinterest.com`,
+      `s.eclick.vn`, `adp.vnecdn.net`, `57.144.64.196`) still render as bare
+      names — the labelled/unlabelled split the card's own footnote promises.
+      The ad-blocking module stayed off for the whole pass, so this read the
+      31,448 log rows already on the device rather than new traffic.
+    - The harness lesson, because it cost the most: DocumentsUI on this build
+      ignores injected touches on directory items. `input tap`,
+      `input touchscreen tap`, a zero-length `input swipe`, explicit
+      `motionevent DOWN`/`MOVE`/`UP` and a 900 ms long-press all leave the picker
+      exactly where it is, while the toolbar (search, view toggle) and the
+      drawer's root rows do respond. It is not an AdFree problem — a picker
+      launched from the shell with `am start -a android.intent.action.OPEN_DOCUMENT`
+      behaves the same. Two suspects were ruled out first: no overlay window was
+      present (`dumpsys window windows` lists only the picker, the app and system
+      windows), and `touch_exploration_enabled` and `accessibility_enabled` were
+      both 0. What works is the keyboard: `KEYCODE_DPAD_UP/DOWN/LEFT/RIGHT` moves
+      a visible focus ring over the grid and `KEYCODE_ENTER` (or
+      `KEYCODE_DPAD_CENTER`) activates it. `uiautomator` does not mark the
+      focused node, so the ring has to be read off a screenshot, and one
+      `input keyevent` per key with a pause between is required — a burst of
+      keys lands one move and drops the rest. Typing the file name into the
+      picker's own search box narrows the grid to a single tile, which turns the
+      walk into one key press; that is how the junk refusal was picked.
+    - Second harness note: the IME window can stay mapped after its field is
+      gone, and `dumpsys input` then shows `Window{…InputMethod}` `visible=true`
+      with a non-empty `touchableRegion` — it eats the first `KEYCODE_BACK` and
+      every tap inside that band. The Vietnamese IME also rewrites typed text
+      (a `u.tsv` request arrived as `%C3%BAnorted.tsv`, a 404 instead of the sort
+      refusal), so every URL was dumped back out of the field and compared
+      before pressing `Lưu`, and the test files were named to avoid the
+      transliteration rules.
+    - Device left as found: `Bảng tích hợp` cleared the URL and deleted
+      `filters/services.tsv` (the card reads `Đang dùng bảng tích hợp sẵn trong
+      bản cài đặt này.`), the breakdown switch back off, the three pushed files
+      removed from `/sdcard/Download`, `adb reverse --remove tcp:8099` and the
+      server stopped, `stay_on_while_plugged_in`, `pointer_location` and
+      `accessibility_enabled` back to 0, the pre-existing density override left
+      at 240, and the whole `state` + `settings` set re-read through `run-as`
+      identical to the copy taken before the pass — zero differing lines.
 
 ### Risks
 
@@ -1373,8 +1446,9 @@ section recommended.
 ## Testing checklist
 
 The first three bullets are run and recorded (suites green, the exported surface
-checked on the 2026-11-03 debug and release APKs); the device, manual and visual
-lines are the ones §6.5 still lists as owed.
+checked on the 2026-11-03 debug and release APKs), as are the device and visual
+lines. The manual line has one leg left, and it is the one this device cannot
+do: roaming with Wi-Fi off and mobile on needs a SIM.
 
 - Rust: `cargo test` for engine/firewall/new gates; persistence migration.
 - Kotlin: unit tests for stats formatting, relative-time text, module gates, and
@@ -1400,12 +1474,14 @@ lines are the ones §6.5 still lists as owed.
   `sha256` to the target-dir library), so nothing has to be de-hardlinked.
   `buildRust` itself is never considered up-to-date, which is what keeps an APK
   from packaging a stale core.
-- Device: the services table over both update paths. Point the URL at a raw
-  `trackers.json` and at a canonical TSV, and import a DuckDuckGo region file
-  through the picker; each must leave `filters/services.tsv` sorted and
-  four-column, and the Statistics breakdown must show the company plus the
-  category instead of the bare domain. A body that is neither a dataset nor a
-  sorted table must be refused with the previous copy intact.
+- Device (run 2026-11-03/04, see the dated record): the services table over both
+  update paths. A raw `trackers.json` URL left 5,125 sorted four-column rows, a
+  canonical TSV came back byte-identical, a DuckDuckGo region file through the
+  picker became one labelled row and a three-record merge became three, and the
+  Statistics breakdown showed `Google` with
+  `googleads.g.doubleclick.net · Ad Motivated Tracking` instead of the bare
+  domain. A body that was neither a dataset nor a sorted table was refused on
+  both paths with the previous copy intact.
 - Manual (run 2026-11-03, see the dated record): notification in both states
   and both languages, assistant over a third-party app, each new toggle
   surviving process death, and the per-app override beating the global rule
