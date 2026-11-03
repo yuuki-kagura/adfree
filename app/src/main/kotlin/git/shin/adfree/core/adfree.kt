@@ -4140,7 +4140,7 @@ data class ProtectionState (
     var `servicesTableUrl`: kotlin.String
     , 
     /**
-     * Verbosity of the core's own diagnostics ring, exported with the log.
+     * Verbosity of the core's own diagnostics ring, drained to logcat.
      */
     var `logLevel`: LogLevel
     
@@ -5472,9 +5472,9 @@ public object FfiConverterTypeFirewallAccess: FfiConverterRustBuffer<FirewallAcc
 
 
 /**
- * How much of the core's own diagnostics the ring keeps for the log export.
- * `Warn` - failures plus the lines that explain a fallback - is what every
- * install has always buffered, and it is the default for that reason.
+ * How much of the core's own diagnostics the ring keeps for Android to forward
+ * to logcat. `Warn` - failures plus the lines that explain a fallback - is what
+ * every install has always buffered, and it is the default for that reason.
  */
 
 enum class LogLevel {

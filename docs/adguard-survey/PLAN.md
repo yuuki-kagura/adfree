@@ -1,9 +1,15 @@
 # Follow-up plan — notification actions and Protection parity
 
-Companion to `SURVEY.md`. Scope for the next session, ordered by value and
-risk. Each step starts with the GitNexus impact check required by `AGENTS.md`.
+Companion to `SURVEY.md`. Phases 0–6 are all shipped: what is written below in
+the imperative is the design each stage settled on, now marked with the commit
+that landed it. What is left is verification — the dated device records, the
+AdFree-side captures still owed and the Redmi-only checks are all listed in
+§6.5, and the benchmark notes live in `BENCHMARK.md`. Each step still starts
+with the GitNexus impact check required by `AGENTS.md`.
 
 ## Phase 0 — baseline
+
+Standing rule for every phase below, not a one-off task:
 
 1. Re-run `node .gitnexus/run.cjs analyze --index-only --repo .` if the graph
    is stale, then `impact` on every symbol before editing it.
@@ -13,7 +19,7 @@ risk. Each step starts with the GitNexus impact check required by `AGENTS.md`.
 ## Phase 1 — notification parity (highest value, lowest risk)
 
 Goal: title + live stats + two actions, and a disabled state that keeps a
-tap-to-enable reminder, matching AdGuard 4.14.
+tap-to-enable reminder, matching AdGuard 4.14. **Shipped** in `80f1f61`.
 
 Files:
 
@@ -70,24 +76,35 @@ recorded with the other outstanding checks in §6.5.
 ## Phase 2 — Protection rows: annoyances and browsing security
 
 Goal: two new rows on the landing, backed by real gates rather than reusing
-the ad-blocking flag.
+the ad-blocking flag. **Shipped**: the gates and rows in `06cf503`, the
+malicious-block notice in `974cfed`, the gate-to-toggle assertion in `162f6d9`.
 
-1. Annoyances module:
-   - Rust: add a module flag in `ProtectionConfig` (`rust/src/engine.rs`,
-     near `ad_blocking` ~237), include it in `set_module_flags` (~848–858,
-     ~1021–1034), and gate `FilterGroup.ANNOYANCES` on it instead of
-     `AD_BLOCKING` (`FilterCatalog.moduleGate` ~60–65).
-   - Kotlin: settings field, repository toggle, MVI intent, landing row
-     (icon from `Icons.Default.*` or a new vector), detail screen reusing the
-     switch list from `15-annoyances.png`.
+1. Annoyances module (`06cf503`):
+   - Rust: the engine carries five module bits — `MODULE_ADS`,
+     `MODULE_TRACKING`, `MODULE_DNS`, `MODULE_ANNOYANCES`, `MODULE_SECURITY`
+     (`rust/src/filter.rs` ~712–723). `category_enabled_by` (~728) decides
+     `CAT_ANNOYANCE` against the annoyances bit instead of the ad one,
+     `set_module_flags` (~1388) writes all five from the config, and four of
+     them — everything except DNS, which is a runtime gate over the same engine
+     and must not throw a 35 MB cache away — are folded into the build cache key
+     (~1031), so a switched-off module's lists leave the engine rather than keep
+     matching from the cache.
+   - Kotlin: `isAnnoyancesEnabled` on `ProtectionSettings` (~582), the
+     repository toggle, the MVI intent, the landing row and its detail screen
+     in `ProtectionScreen.kt` reusing the switch list from
+     `15-annoyances.png`.
    - uniffi: regenerated bindings via `./gradlew :app:verifyBindings` with
      `ADFREE_RUST_TARGET_DIR` and `ANDROID_NDK_HOME` as before.
-2. Browsing security module:
-   - The security lists already exist in `FilterCatalog` (URLhaus, Phishing
-     URL Blocklist, Dandelion anti-malware, ~240–266). Either add a module
-     gate for `FilterGroup.SECURITY` or create one grouped filter set.
-   - Detail screen mirrors `10-browsing-security.png`: master switch plus a
-     short privacy note (hash/domain check, no URLs leave the device).
+2. Browsing security module (`06cf503`, `974cfed`):
+   - The security lists already existed in `FilterCatalog` (URLhaus, Phishing
+     URL Blocklist, Dandelion anti-malware); `FilterGroup.SECURITY ->
+     ModuleGate.BROWSING_SECURITY` now has a real `MODULE_SECURITY` bit behind
+     it, so `CAT_MALWARE` is excluded at build time and gated at request time
+     like every other module.
+   - Detail screen mirrors `10-browsing-security.png`: master switch plus the
+     privacy note (`protection_browsing_security_body`) — every page domain is
+     checked against the lists on this device, and which sites you visit never
+     leaves the phone.
    - Decided and shipped: a malicious block has to be visible without opening a
      screen. `974cfed` posts one localized notice per domain per hour on the
      existing alert channel, gated by the browsing-security switch, and the tap
@@ -98,57 +115,94 @@ the ad-blocking flag.
    - AdGuard keeps two separate groups (`47`, `49`): `Bộ lọc bảo mật` is
      tracking-gated (spyware, URL tracking, EasyPrivacy, ...) while
      `Bộ lọc bảo vệ` holds the malware/phishing lists and is **not** gated by
-     the tracking switch. AdFree's single `FilterGroup.SECURITY` is currently
-     ungated and mixes both. Split it (or add a subgroup flag) so the
-     browsing-security gate covers malware lists without switching off the
-     tracking lists, and show the inactive warning when the owning module is
-     off.
+     the tracking switch. Covered by the group layout rather than a new
+     subgroup flag: `Bộ lọc bảo mật`'s tracking lists are
+     `FilterGroup.PRIVACY`/`SOCIAL` → `ModuleGate.TRACKING`, and `Bộ lọc bảo vệ`'s
+     malware lists are `FilterGroup.SECURITY` → `ModuleGate.BROWSING_SECURITY`
+     alone, so neither switch can silence the other's lists. The
+     inactive-group card (`FiltersScreen.kt` ~744–815, from `6174356`) names the
+     owning module and offers its one-tap enable; `162f6d9` pins each card's
+     button to the toggle that gate actually reads, next to the group-to-gate
+     mapping it comes from.
 
 ## Phase 3 — Firewall parity
 
 Goal: global five-rule grid, per-app overrides, quick actions, notifications.
+**Shipped** in `22b64fa` (`FirewallScreens.kt`, `FirewallCommon.kt`,
+`FirewallNotifier.kt`, the five `firewall_allow_*` dimensions in
+`rust/src/state/config.rs` ~344–351 and the `NetworkRules` decision path in
+`rust/src/engine.rs` ~409–528); the two defects the device pass found —
+transport failures counted as blocks, and the blocked-app notification that
+could never fire — were fixed in `5a1c9d9`.
 
-1. Model and core:
-   - `AppFirewallRule` (~329–338) gains per-network screen-off/roaming
-     dimensions or a shared `NetworkRule` value; `ProtectionSettings`
-     (~465) gains the five global defaults.
-   - Rust firewall evaluation currently understands Wi-Fi/cellular and
-     screen-off; add roaming detection (TelephonyManager/ConnectivityManager
-     signal in Kotlin, or pass a roaming flag into the core) and separate
-     screen-off policies per transport. This is the largest change; keep the
-     hot path allocation-free and add engine tests mirroring
-     `rust/src/store/mod.rs` test style.
-   - Persist via the same settings store and bump the schema version if the
-     format changes; include a migration test.
-2. UI:
-   - Firewall detail (`ProtectionScreen.kt` ~581–621) gains
-     `Quy tắc tường lửa toàn cầu`, `Quy tắc tường lửa tùy chỉnh`,
-     `Hành động nhanh`, `Thông báo` rows like `04-firewall.png`.
-   - Global rules screen: master + five switches (`05`).
-   - Custom rules screen: app list with overrides (`06`), app picker sheet
-     with search and grouped system apps (`07`), per-app override screen
-     (`08`).
+1. Model and core — `22b64fa`:
+   - `AppFirewallRule` carries one `FirewallAccess` per dimension, so
+     screen-off and roaming are per-app answers alongside Wi-Fi and cellular
+     rather than new fields bolted on; `ProtectionSettings` carries the five
+     global defaults (`firewallAllowWifi`, `firewallAllowWifiScreenOff`,
+     `firewallAllowCellular`, `firewallAllowCellularScreenOff`,
+     `firewallAllowRoaming`) behind two master gates
+     (`firewallGlobalRules`, `firewallCustomRules`).
+   - Roaming is a Kotlin flag, not core plumbing: `AdGuardVpnService.kt`
+     ~143–147 reads `NET_CAPABILITY_NOT_ROAMING` from the active cellular
+     network and calls `CoreEngine.setRoaming` → `coreSetRoaming`, and the
+     engine snapshots network type, screen state and roaming into one
+     `NetworkRules` value rebuilt when any of them changes, so the hot path is
+     still a single map lookup per flow. Screen-off policy is per transport
+     (`allow_wifi_screen_off` / `allow_cellular_screen_off`), and an
+     app barred from roaming stays offline on a visited network.
+   - Persistence: the rules ride `ProtectionState` JSON, so no SQL migration
+     was needed; `rust/src/state/legacy.rs` keeps the old blob byte-compatible
+     (`app_firewall`, `is_firewall_enabled` read at ~192 and ~250) and the
+     engine tests pin the decisions — `a_roaming_rule_only_applies_while_roaming`
+     and `screen_off_cuts_open_flows_of_restricted_apps`.
+2. UI — `22b64fa`:
+   - Firewall detail (`ProtectionScreen.kt`) carries the `Quy tắc tường lửa
+     toàn cầu`, `Quy tắc tường lửa tùy chỉnh`, `Hành động nhanh` and `Thông báo`
+     rows like `04-firewall.png`, opening `FirewallGlobalDetail`,
+     `FirewallCustomDetail`, `FirewallAppRuleDetail`,
+     `FirewallQuickActionsDetail` and `FirewallNotificationsDetail`.
+   - Global rules: master + five switches (`05`).
+   - Custom rules: app list with overrides (`06`), app picker sheet with search
+     and grouped system apps (`07`), per-app override screen (`08`) over the
+     shared `FirewallNetworkStrip`.
    - Quick actions (`09`, `62`): recent log entries grouped by app, `Chặn truy
-     cập` button mapping to the same per-app rule update; reuse the
-     infinite-log data already loaded by the repository. Per-card overflow
-     offers recent app activity, app firewall rule, app management and a
-     one-tap `Tắt tiếng thông báo`; the first three are navigation shortcuts,
-     the last flips the per-app notification toggle.
+     cập` mapping to the same per-app rule update, reusing the infinite-log data
+     already loaded by the repository. Per-card overflow offers recent app
+     activity, app firewall rule, app management and a one-tap `Tắt tiếng thông
+     báo`; the first three are navigation shortcuts, the last flips the per-app
+     notification toggle.
    - Firewall overflow (`60`, `61`): a single `Đặt lại mặc định` action with a
-     confirmation sheet. If added, reset only the firewall section (global
-     defaults, per-app overrides, quick-action mutes), not other modules.
-   - Notifications toggle: only notify for apps the user selected; post on
-     the first blocked attempt per app/window to avoid spam.
-3. Keep the existing Apps-tab sheet working; the new screens should call
-   `updateAppFirewall` rather than duplicate state.
+     confirmation sheet, resetting only the firewall section (global defaults,
+     per-app overrides, quick-action mutes) through
+     `AdGuardRepository.resetFirewall`.
+   - Notifications toggle: `firewallNotifications` plus the per-app
+     `notifyBlocked`; the repository poller (`AdGuardRepository.kt` ~411–428)
+     reads new `"App firewall"` rows and raises `FirewallNotifier` at most once
+     per app per hour (`FIREWALL_NOTICE_WINDOW_MS`), on the `adfree_firewall`
+     channel, and `5a1c9d9` made the TCP half of the firewall file its rows
+     under `"App firewall"` so the notifier can actually see them.
+3. The Apps-tab sheet calls `updateAppFirewall`, the same entry point the new
+   screens use; no second copy of the state exists.
 
 ## Phase 4 — assistant depth and leftovers
 
-- Assistant app stats/activity tabs wired to the existing log filters.
-- Optional: `Cách chặn quảng cáo trên YouTube` help row and private-browser
-  link, if the user wants them; both are navigation-only in AdGuard.
+**Shipped.** `AssistantActivity` carries both tabs over the existing log
+filters — `Ứng dụng` and `Trang web` (`assistant_tab_apps`/`assistant_tab_websites`,
+~290/~298) — and the per-app panel shows requests, blocked and saved bytes with
+`Hoạt động gần đây`, app management and a back row (~471–508). The panel not
+scrolling was a defect on that viewport, not a missing feature: `b0101c8` made
+it scroll (the device re-check is still owed, §6.5). The
+`Cách chặn quảng cáo trên YouTube` row and the private-browser link are decided
+against — see §6.5.
 
 ## Phase 5 — app management, settings and remaining screens
+
+**Shipped** across `22b64fa` (firewall, assistant, logging), `86c4098`
+(Statistics tab), `c988623` (per-app proxy, DNS filters, log fields),
+`1b34e10` (website allowlist) and `f153ee0` (company breakdown). The bullets
+below stay as the record of what each screen had to cover; the wording that
+changed since they were written is marked.
 
 ### Filter catalog parity (`43`–`51`)
 
@@ -159,39 +213,52 @@ AdFree already has `FiltersScreen`/`FiltersExtensions` and
   puts the sentence under the group name (`filters_group_enabled`) instead of
   the bare `2/3` ratio it used to show on the right of the row.
 - Inactive warning: when the gate module is off, grey the affected category
-  and offer `Kích hoạt` (AdGuard does this for tracking-gated security
-  filters; AdFree needs it once annoyances/security have their own gates).
+  and offer `Kích hoạt`. Done in `6174356`, with a real gate behind it since
+  `06cf503` — see Phase 2.
 - Filter detail: description, last update, rule count, homepage, source URL
-  and feature bullets. `FilterCatalog` already stores URL and description;
-  rule count comes from the downloaded list metadata.
+  and feature bullets. Done — `FiltersScreen.kt` ~883/~1747 render the last
+  update (`filter_not_updated` when the metadata has none), the version row
+  only once the list's own metadata provides one, and the homepage button
+  (~1833).
 - Custom filters: `Thêm bộ lọc tuỳ chỉnh` plus the empty state; the add sheet
   takes a URL/local path with `Tiếp theo` and a file `Duyệt` picker (`66`).
+  Done.
 - Language filters: the existing language group already matches AdGuard's
-  list (ABPVN for Vietnamese); add version/update rows if the store has them.
+  list (ABPVN for Vietnamese); the version/update rows are the same
+  metadata-driven rows as the filter detail above.
 - Allowlist add sheet (`67`): single `Địa chỉ trang web` field and `Thêm`.
+  Done in `1b34e10`.
 - DNS add sheet (`69`) mirrors the custom-filter sheet with DNS-specific hint
-  text; user-rule sheet (`68`) takes a raw rule with a syntax help link.
+  text; the user-rule flow (`68`) went further than the capture —
+  `CustomRulesEditor.kt` offers a visual card manager (search, badges, delete)
+  and a raw multi-line editor with syntax chips, both saving the whole list
+  because the core recompiles from the complete set.
 
 ### Per-app screen (`25-app-detail.png`)
 
-The current Apps tab sheet has filtering/HTTPS/firewall switches. Add routing
-(`Định tuyến qua AdGuard`), proxy routing, per-app firewall shortcut and a
-stats row. The firewall shortcut should open the new per-app rule screen from
-Phase 3 instead of a second sheet.
+Done. The Apps-tab sheet (`AppsManagementScreen.kt` ~1003–1100) carries the
+filtering/HTTPS switches, the SOCKS5 routing section (`btn_apply_app_routing`,
+~914), the per-app firewall dimensions — Wi-Fi, Wi-Fi screen-off, cellular,
+cellular screen-off, roaming — and the stats row, and the firewall shortcut
+opens the Phase 3 `FirewallAppRuleDetail` rather than a second sheet.
 
 ### Settings (`34`–`40`)
 
-- `Mạng`: AdFree's HTTPS filter switch already exists as a Protection module;
-  expose a `Chế độ định tuyến` row that names the active mode (local VPN
-  today, SOCKS5 endpoint when the proxy is configured).
-- General: verify AdFree already covers auto-start, theme, language, update
-  schedule and notification settings; add missing rows only where they change
-  engine behavior.
-- `Thông báo ứng dụng` is only a deep link to the OS channel settings in
-  AdGuard (`70`–`72`); AdFree can add the same shortcut
-  (`Settings.ACTION_APP_NOTIFICATION_SETTINGS`) instead of building an
-  options screen, and should register separate channels per feature
-  (protection, firewall, updates) like AdGuard's six OS channels.
+- `Mạng`: done — `settings_routing_mode_title` (`Chế độ định tuyến`) names the
+  active mode, `VPN cục bộ` or `SOCKS5 thượng nguồn`
+  (`settings_routing_local_vpn`/`settings_routing_socks5`).
+- General: verified against `35` — `settings_autostart_title` (~195), theme
+  chips (~410), language chips (~368), the app-notification deep link and the
+  periodic filter refresh (`work/FilterUpdateScheduler.kt`, driven by the
+  user's chosen interval) are all present, so no row had to be added.
+- `Thông báo ứng dụng`: done as the deep link
+  (`AndroidSettings.ACTION_APP_NOTIFICATION_SETTINGS` in `SettingsScreen.kt`
+  ~229 and `HomeScreen.kt` ~376), and the notifier objects register their own
+  channels per feature rather than one shared channel: `adfree_status`,
+  `adfree_firewall` (the block alert the firewall and the security notice both
+  raise), `adfree_updates` (filter lists), `adfree_https_reminder` and
+  `adfree_conflicts` — five against AdGuard's six (`SURVEY.md` ~310), because
+  AdFree has nothing to put in a per-app-store or media-license channel.
 
 ### Allowlist, statistics, log
 
@@ -291,32 +358,41 @@ migration test in the same commit.
 
 Order matters: 6.1 unblocks 6.2 and 6.3, so do it first.
 
+**Shipped** — 6.1 in `c988623`/`01ec9e5`/`a36dd7f`/`868c5fd`/`f153ee0`, 6.2 in
+`c988623`/`86c4098`/`f153ee0`, 6.3 and 6.4 in `c988623`. What is left of this
+phase is verification, not code: §6.5 keeps the dated device records and the
+checks still owed.
+
 ### 6.1 Log storage: transport, flow id, URL, DNS answer, sizes
 
 Screens `52`–`59` and `73`–`79` need fields the log does not store today.
+**Shipped**: the v6 columns and event enrichment in `c988623`, the v7
+per-connection traffic table in `01ec9e5`, the datagram half of it in
+`a36dd7f`, the read-back on device in `868c5fd`, and the v8 `(ts_ms, domain)`
+index that feeds the company breakdown in `f153ee0`.
 
-- Schema v6 (`rust/src/store/mod.rs`, `migrate()` after the v5 index at
-  ~412): add `transport INTEGER NOT NULL DEFAULT 0`, `flow_id INTEGER NOT
+- Schema v6 (`rust/src/store/mod.rs`, `migrate()` after the v5 index):
+  `transport INTEGER NOT NULL DEFAULT 0`, `flow_id INTEGER NOT
   NULL DEFAULT 0`, `url TEXT NOT NULL DEFAULT ''`, `dns_answer TEXT NOT NULL
   DEFAULT ''`, `bytes_sent INTEGER NOT NULL DEFAULT 0`, `bytes_recv INTEGER
   NOT NULL DEFAULT 0`; index `log_events_transport_action ON
-  log_events(transport, action)` for the statistics tabs. Keep the
-  `INSERT INTO log_events` column list at ~513 and every test fixture in sync.
-- `rust/src/events.rs` `Event` (~48): transport (unknown/wifi/cellular) and
-  roaming ride in spare `flags` bits next to `ipv6`; add a `flow_id` field.
-  `MAX_URL` needs a byte budget decision: 256 B × 10k ring events is ~2.5 MB
-  on top of the current ring, so cap at 128 B and store only the path when
-  MITM knows it. Builders at ~245 (`with_app`, `allow_event`, `block_event`)
-  and the ring/persist path take the new fields.
-- Fill transport from the existing `Core.network_type` / `roaming` atomics
-  (`rust/src/engine.rs` ~705–707, setter ~1027) at event construction; the
-  packet loop already reads these for firewall decisions, so this is a
-  snapshot, not new connectivity plumbing.
-- URL: `mitm::proxy::MitmBlock` (`rust/src/mitm/proxy.rs` ~141) gains
-  `url: &str` (or path) filled by the decryptor; `log_mitm_block`
-  (`rust/src/engine.rs` ~729) writes it. Non-MITM events keep `url` empty.
-- DNS answer: when the packet path answers a query from upstream, attach the
-  first A/AAAA answers to the event; otherwise leave empty.
+  log_events(transport, action)` for the statistics tabs. The
+  `INSERT INTO log_events` column list and every test fixture are in sync.
+- `rust/src/events.rs` `Event`: transport (unknown/wifi/cellular) and
+  roaming ride in spare `flags` bits next to `ipv6`, and the record carries a
+  `flow_id`. `MAX_URL` is capped at 128 B and only the path is stored when
+  MITM knows it: 256 B × 10k ring events would have been ~2.5 MB on top of the
+  current ring. The builders (`with_app`, `allow_event`, `block_event`,
+  `with_url`) and the ring/persist path take the new fields.
+- Fill transport from the existing `Core.network_type` / `roaming` atomics at
+  event construction; the packet loop already reads these for firewall
+  decisions, so this is a snapshot, not new connectivity plumbing.
+- URL: `mitm::proxy::MitmBlock` carries `url: Option<&str>` (`rust/src/mitm/proxy.rs`
+  ~145) filled by the decryptor, and `log_mitm_block` writes it through
+  `events::with_url` (`rust/src/engine.rs` ~883). Non-MITM events keep `url`
+  empty.
+- DNS answer: when the packet path answers a query from upstream, the first
+  A/AAAA answers ride on the event; otherwise the column stays empty.
 - Sizes: implemented as a separate per-connection table, not an update of the
   decision row. `flow_id` in `log_events` is the id the core gives each *row*
   (`engine.rs`, `next_flow_id`), so no row can be "finished" at close, and a
@@ -343,27 +419,32 @@ Screens `52`–`59` and `73`–`79` need fields the log does not store today.
   five-tuple, and reaping, splicing or abandoning reports. Quinn's upstream
   half is deliberately not counted — the client-facing side is what the app
   actually put on and took off the wire.
-- uniffi: extend `LogEvent` (`rust/src/api.rs` ~189) and both `From` impls;
-  regenerate bindings (`app/src/main/kotlin/git/shin/adfree/core/adfree.kt`,
-  `CoreEngine.kt`) with `./gradlew :app:verifyBindings`.
-- Kotlin: `NetworkRequestLog` (`model/Models.kt` ~40) gains transport,
+- uniffi: `LogEvent` (`rust/src/api.rs`) and both `From` impls carry the new
+  fields, and the bindings (`app/src/main/kotlin/git/shin/adfree/core/adfree.kt`,
+  `CoreEngine.kt`) were regenerated with `./gradlew :app:verifyBindings`.
+- Kotlin: `NetworkRequestLog` (`model/Models.kt` ~74) carries transport,
   flowId, url, dnsAnswer, bytesSent, bytesRecv; `from(event)` maps them; the
-  log detail rows in `FilteringLogScreen.kt` render URL, DNS answer,
-  connection id and sizes; `AdGuardRepository.exportLogs` adds the columns to
-  the CSV header.
+  log detail rows in `FilteringLogScreen.kt` render URL (`~886`), DNS answer
+  (`~889`), connection id and sizes; `writeLogCsv` (`data/LogExport.kt` ~13)
+  ends its header with `transport,roaming,flow_id,url,dns_answer,bytes_sent,bytes_recv`.
 
 ### 6.2 Statistics parity (`52`–`59`)
 
+**Shipped**: the `transport` column and its filter in `c988623`, the Statistics
+tab, the per-app ads/trackers/requests aggregate and the sort keys in
+`86c4098`, the company breakdown in `f153ee0`.
+
 - Data-type filter (all / mobile / Wi-Fi) chips on the statistics header,
-  backed by `transport`; this is the piece missing from Phase 5.
-- Ads vs trackers: `RequestCategory` already separates ad and tracking
-  categories, so extend the per-app aggregate instead of inventing a field.
-  Either widen `AppUsage` (`rust/src/api.rs` ~687) with ads/trackers counts
-  or add `core_app_usage_detail_since`; the Kotlin list in
-  `AppsManagementScreen.kt` gains a two-number row and the sort enum a third
-  key if AdGuard's column is kept.
-- Keep the existing time ranges, search and sort; they already cover `53`,
-  `57`.
+  backed by `transport`: `AppUsageTransport` in the repository selects the
+  transport code passed to `engine.appUsageSince` and `logWindowTotalsSince`
+  (`AdGuardRepository.kt` ~1897), and the header renders the three
+  `stats_transport_*` labels.
+- Ads vs trackers: the aggregate was widened rather than a field invented —
+  `AppUsage` (`rust/src/api.rs` ~719) carries `ads`, `trackers` and `requests`
+  beside `blocked`, from `GROUP BY app, category`, the app cards in
+  `AppsManagementScreen.kt` show the three numbers, and `AppSort` gained the
+  matching keys (`86c4098`, headers tidied in `cf6461a`).
+- The existing time ranges, search and sort cover `53` and `57`; they were kept.
 - Company breakdown (`59`): no longer out of scope — see the `Các dịch vụ`
   entry under the statistics section, closed by `f153ee0` with a project-owned
   `services.tsv`. The "top domains contacted" fallback this line proposed is
@@ -372,41 +453,47 @@ Screens `52`–`59` and `73`–`79` need fields the log does not store today.
 ### 6.3 Per-app proxy routing
 
 Phase 5 shipped the per-app screen without this row because the flag does not
-exist; `isFilterRouted` only controls VPN inclusion.
+exist; `isFilterRouted` only controls VPN inclusion. **Shipped** in `c988623`,
+verified on the Sony with a SOCKS5 witness (`§6.5`, 2026-11-01 record).
 
-- Model: `AppFirewallRule` gains `proxyAccess` (INHERIT / THROUGH / DIRECT,
-  reusing the tri-state pattern from `FirewallAccess`); Rust mirror in
-  `AppFirewallRule` + wire struct (`rust/src/state/model.rs` ~309–395) and
-  `AppFirewallState` (`rust/src/engine.rs` ~327). State is JSON, so no SQL
-  migration — add a serde default so old profiles load.
-- Core: the TCP and UDP dial paths already resolve `cfg.proxy` (~2640) and
-  the firewall lookup already has the per-flow package list. Add one lookup
-  of `proxyAccess` there: THROUGH forces the SOCKS5 endpoint even when the
-  global proxy is off, DIRECT bypasses it. Keep it allocation-free and reuse
-  the firewall attribution map.
-- Kotlin: repository `updateAppFirewall(proxyAccess = …)`, MVI intent field,
-  `StateMapping` round-trip, a `Định tuyến proxy` row in the per-app sheet
-  (`AppsManagementScreen.kt`) disabled while no usable global proxy is
-  configured, plus strings in both locales.
-- Tests: override beats the global routing mode in both directions; a
-  DIRECT app is unaffected when the proxy is off.
+- Model: `AppFirewallRule.proxyAccess` (INHERIT / THROUGH / DIRECT, `Models.kt`
+  ~413, reusing the tri-state pattern from `FirewallAccess`), mirrored by
+  `AppFirewallRule.proxy: ProxyAccess` (`rust/src/state/model.rs` ~437) with a
+  serde default so an old profile loads as INHERIT — the state is JSON, so no
+  SQL migration was needed.
+- Core: the per-app answers live in `NetworkRules.proxy_rules` beside the
+  firewall rules (`rust/src/engine.rs` ~436) and `proxy_through(packages,
+  global)` (~473) decides each new TCP and UDP flow: THROUGH takes the SOCKS5
+  endpoint even when the global proxy is off, DIRECT never does, and the
+  strictest answer among a flow's packages wins. Routing is deliberately a
+  proxy feature, not a firewall dimension, so it keeps applying when the
+  firewall switch is off (`rust/src/state/config.rs` ~353).
+- Kotlin: repository `updateAppFirewall(proxyAccess = …)`, the MVI intent
+  field, the `StateMapping` round-trip, and the `Định tuyến proxy` row in the
+  per-app sheet (`AppsManagementScreen.kt`) disabled while no usable global
+  proxy is configured, in both locales.
+- Tests: `proxy_routing_prefers_the_strictest_per_app_answer` and
+  `proxy_rules_keep_the_policy_live_without_a_firewall` (engine.rs ~5661/~5691),
+  `proxy_routing_survives_the_firewall_switch` (config.rs ~595).
 
 ### 6.4 DNS filters (`69`)
 
-AdGuard keeps DNS-only lists apart from the website lists; AdFree applies
-every catalog list to DNS and has no separate store, which is why the add
-sheet was skipped.
+AdGuard keeps DNS-only lists apart from the website lists; AdFree applied
+every catalog list to DNS and had no separate store, which is why the add
+sheet was skipped. **Shipped** in `c988623` as the separate collection this
+section recommended.
 
-- Core: add a `dns_filters` collection to `FilterState`
-  (`rust/src/state/model.rs` ~602) and a second matcher consulted only in
-  the DNS path; keep the existing lists on the current path unchanged so
-  block counts do not shift.
-- UI: a `Bộ lọc DNS` section in `FiltersScreen`/`FiltersExtensions` with the
-  `Thêm bộ lọc DNS` sheet from `69` (URL or local file, reuse the custom
-  filter flow and error copy).
-- Alternative if the separate store is rejected: document in the UI that
-  regular lists already filter DNS and delete the screenshot's flow from the
-  plan. Decide before coding; the recommendation is the separate collection.
+- Core: `FilterState.dns_filters` (`rust/src/state/model.rs` ~736) is a second
+  list store consulted only on the hostname path, so the website lists keep
+  answering HTTP rules and the DNS-only lists never enter them —
+  `dns_filters_decide_lookups_only` (`rust/src/filter.rs` ~7133) pins that, and
+  `dns_filters_persist_apart_from_the_custom_lists` (`rust/src/state/mod.rs`
+  ~550) pins the store side, including that a blank id never persists.
+- UI: a `Bộ lọc DNS` section in `FiltersScreen` (`~478`) with the
+  `Thêm bộ lọc DNS` sheet from `69` (`AddDnsFilterDialog`, `~533`): URL or local
+  file, reusing the custom filter flow and error copy.
+- The alternative (document that regular lists already filter DNS and drop the
+  screenshot's flow) was not taken; the separate store shipped instead.
 
 ### 6.5 Carry-over and verification
 
@@ -734,15 +821,58 @@ sheet was skipped.
     at the shipped defaults — `is_smart_filtering_enabled: false`,
     `show_services_breakdown: false`, `log_level: "warn"`. App language
     `Tiếng Việt`. The two DB copies pulled for that read were deleted after it.
+  - Native libraries: the pass above ran a build whose `libadfree_core.so` was
+    older than its own Kotlin side. `rust/src/mitm/proxy.rs` was last written at
+    06:41 and the arm64-v8a library in `jniLibs/` was linked at 06:39, so
+    everything packaged after that — including the `-PskipNative` releases —
+    carried a core without the last diagnostics edit. `x86_64` and `x86` were
+    fine (linked at 06:45/06:47, after every source edit), and smart filtering,
+    the company breakdown and the log fields all predate 06:39, so the 48/48
+    probe result and the automation matrix stand. `:app:buildRust` relinked
+    arm64-v8a (10:43) and armeabi-v7a (10:47) and left the other two at their
+    06:45/06:47 timestamps — consistent with those two targets already holding
+    the current sources. `:app:verifyBindings` after it changed two doc comments
+    in `core/adfree.kt` and nothing else, so the committed bindings had drifted
+    from `rust/src/state/model.rs` in prose only.
+  - Log levels against live traffic (`61dcccd`), on a build from after that
+    relink: the debug APK packaged at 11:31, whose arm64 library is the 10:43
+    one and with no `rust/src` file newer than it, installed over the running
+    app with the data and the `tun0` that was already up. `Gỡ lỗi` selected,
+    then Chrome traffic. Nothing reached logcat while AdFree stayed hidden; the
+    lines
+    arrived as one batch at 11:38:48 when it came back to the foreground, and
+    the batch carried the DEBUG-only `mitm <host>: privacy signals added` and
+    `mitm www.wikipedia.org: third-party cookies stripped` next to the warn
+    lines. Selecting `Cảnh báo` and reloading took exactly those two away: the
+    11:39 window has `mitm www.wikipedia.org: third-party set-cookie dropped`
+    (WARN, `rust/src/mitm/proxy.rs:1908`) and the `splicing verbatim` fallbacks
+    with zero `privacy signals added`. The request half of that same stealth
+    action kept happening while its line was suppressed, so what changed between
+    the two windows is the level and not the traffic.
+    Two things this settled alongside it. The drain rides the stats poller,
+    which parks while the UI is hidden (`AdGuardRepository.kt:350`), so a field
+    report only picks core lines up while the app is open, and they arrive
+    batched after it returns rather than as they happen. And one stealth row
+    was proven on live requests by the same run: `inject_gpc_dnt` was turned on
+    for the test, every decrypted request gained `Sec-GPC`/`DNT`, and its
+    DEBUG line was what made that visible.
+    Left as found after it: stealth master and `inject_gpc_dnt` off, the
+    `Tiêu chuẩn` preset radio untouched (its two switches,
+    `strip_utm_tracking` and `block_third_party_cookies`, still read true),
+    `log_level: "warn"`, `is_smart_filtering_enabled: false`,
+    `show_services_breakdown: false` and `allow_external_control: false` read
+    back through `run-as`, the tunnel up, the app sent home, and both DB copies
+    pulled for that read deleted after it.
   - Still owed on this device, none of it claimed above: the assistant panel
     scroll re-check (`b0101c8`), a full-store log export line count vs the store
     (`023b835`), add/remove on the allowlist screen (`1b34e10`), a real
     malicious-list hit posting the notice (`974cfed`, whose one-per-hour dedupe
-    needs a force-stop to re-arm), the stealth switches and privacy-level radio
-    taking effect on live requests (`91dc2dd`, `5858a75`), the services breakdown
-    switch showing no `GROUP BY` and no RSS growth while off (`f153ee0`), the
-    log-level rows actually changing what reaches logcat (`61dcccd`), and a
-    system-initiated revoke posting the dropped-protection alert (`fa79e84`).
+    needs a force-stop to re-arm), the remaining stealth switches and the
+    privacy-level radio taking effect on live requests (`91dc2dd`, `5858a75` —
+    `inject_gpc_dnt` is the one row the log-level pass above settled), the
+    services breakdown switch showing no `GROUP BY` and no RSS growth while off
+    (`f153ee0`), and a system-initiated revoke posting the dropped-protection
+    alert (`fa79e84`).
     The two Redmi-only items (positive roaming enforcement, the per-flow memory
     probe) stay blocked until that device is back.
 
@@ -785,6 +915,10 @@ sheet was skipped.
 
 ## Testing checklist
 
+The first three bullets are run and recorded (suites green, the exported surface
+checked on the 2026-11-03 debug and release APKs); the device, manual and visual
+lines are the ones §6.5 still lists as owed.
+
 - Rust: `cargo test` for engine/firewall/new gates; persistence migration.
 - Kotlin: unit tests for stats formatting, relative-time text, module gates, and
   `AutomationGateTest` for the gate itself — off by default, one token minted and
@@ -803,8 +937,12 @@ sheet was skipped.
   `git.shin.adfree.automation.*`, and no `git.shin.adfree.action.ENABLE_PROTECTION`
   resource string exists at all.
 - Device: `./gradlew :app:verifyBindings`, rebuild the four ABIs with
-  `cargo ndk`, copy the `.so` files manually (cargo-ndk hardlinks), then
-  `./gradlew :app:assembleRelease -PskipNative`.
+  `cargo ndk`, then `./gradlew :app:assembleRelease -PskipNative`. The manual
+  `.so` copy the first pass here prescribed is not needed with cargo-ndk 4.1.2:
+  it writes a separate file into `jniLibs/` (different inode, identical
+  `sha256` to the target-dir library), so nothing has to be de-hardlinked.
+  `buildRust` itself is never considered up-to-date, which is what keeps an APK
+  from packaging a stale core.
 - Manual: notification in both states and both languages; assistant opens
   over a third-party app; each new toggle survives process death; per-app
   override beats global rules; roaming and screen-off behavior verified with
