@@ -86,6 +86,19 @@
             </intent-filter>
         </receiver>
 
+        <!-- Tasker-style "Send Intent". Exported, so every installed app can
+            reach it: the handler obeys nothing until the user turns the switch
+             on in Settings and the broadcast carries the token that row shows.
+             Rotating that token also turns the switch back off. -->
+        <receiver
+            android:name=".automation.AutomationReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="git.shin.adfree.action.ENABLE_PROTECTION" />
+                <action android:name="git.shin.adfree.action.DISABLE_PROTECTION" />
+            </intent-filter>
+        </receiver>
+
         <!-- Quick Settings tile: one tap toggles the tunnel. -->
         <service
             android:name=".vpn.AdFreeTileService"

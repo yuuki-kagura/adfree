@@ -6,8 +6,7 @@
    See https://developer.android.com/about/versions/12/backup-restore
 -->
 <full-backup-content>
-    <!--
-   <include domain="sharedpref" path="."/>
-   <exclude domain="sharedpref" path="device.xml"/>
--->
+    <!-- The automation token is device-local on purpose: with it, a broadcast
+         can switch protection off, so it must not ride along in an OS backup. -->
+    <exclude domain="sharedpref" path="adfree_automation.xml" />
 </full-backup-content>

@@ -8,6 +8,7 @@ import git.shin.adfree.core.AssetState
 import git.shin.adfree.core.ConfigWarning
 import git.shin.adfree.core.CoreEngine
 import git.shin.adfree.data.AdGuardRepository
+import git.shin.adfree.data.AutomationControl
 import git.shin.adfree.model.AppCategory
 import git.shin.adfree.model.AppCategoryFilter
 import git.shin.adfree.model.AppFirewallRule
@@ -104,6 +105,12 @@ class AdGuardViewModel(
 
     /** The downloaded services table, or null while the shipped one is used. */
     val servicesTableState: StateFlow<AssetState?> = repository.servicesState
+
+    /**
+     * Whether other apps may drive protection, and the token they must present.
+     * Device-local by design, so it never travels in a backup.
+     */
+    val automationState: StateFlow<AutomationControl> = repository.automation.state
 
     /**
      * One-shot request for the Protection tab to open a specific detail page.
@@ -407,6 +414,9 @@ class AdGuardViewModel(
             is AdGuardIntent.SetAppLanguage -> repository.setAppLanguage(intent.language)
             is AdGuardIntent.SetThemeMode -> repository.setThemeMode(intent.mode)
             is AdGuardIntent.SetLogLevel -> repository.setLogLevel(intent.level)
+            is AdGuardIntent.ToggleExternalControl ->
+                repository.automation.setEnabled(intent.enabled)
+            AdGuardIntent.RotateControlToken -> repository.automation.rotateToken()
             is AdGuardIntent.ToggleBlockDoh -> repository.toggleBlockDoh(intent.enabled)
             is AdGuardIntent.ToggleBlockDot -> repository.toggleBlockDot(intent.enabled)
             is AdGuardIntent.ToggleSafeSearch -> repository.toggleSafeSearch(intent.enabled)

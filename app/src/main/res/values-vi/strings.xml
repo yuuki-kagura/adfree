@@ -914,6 +914,13 @@
     <string name="settings_routing_socks5">SOCKS5 thượng nguồn</string>
     <string name="settings_notifications_title">Thông báo ứng dụng</string>
     <string name="settings_notifications_subtitle">Mở công tắc hệ thống cho kênh bảo vệ, tường lửa và cập nhật</string>
+    <string name="settings_group_automation">Tự động hóa</string>
+    <string name="settings_external_control_title">Cho phép app khác điều khiển</string>
+    <string name="settings_external_control_subtitle">Tasker và các app tương tự có thể bật hoặc tắt bảo vệ bằng broadcast mang mã bên dưới</string>
+    <string name="settings_external_control_hint">Gửi broadcast chỉ định tới gói git.shin.adfree với action git.shin.adfree.action.ENABLE_PROTECTION hoặc git.shin.adfree.action.DISABLE_PROTECTION kèm extra dạng chuỗi token</string>
+    <string name="settings_external_control_warning">App nào gửi được broadcast và biết mã này đều có thể tắt bảo vệ. Hãy tắt công tắc khi không cần tự động hóa nữa</string>
+    <string name="settings_external_control_copy">Sao chép mã</string>
+    <string name="settings_external_control_rotate">Đổi mã khác</string>
     <string name="settings_group_data">Sao lưu &amp; dữ liệu</string>
     <string name="settings_group_about">Giới thiệu</string>
     <string name="settings_language_title">Ngôn ngữ ứng dụng</string>

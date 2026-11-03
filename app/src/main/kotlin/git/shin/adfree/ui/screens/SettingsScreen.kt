@@ -82,6 +82,7 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LifecycleEventEffect
 import git.shin.adfree.core.DnsRewriteValidation
 import git.shin.adfree.core.MitmStatus
+import git.shin.adfree.data.AutomationControl
 import git.shin.adfree.model.AppLanguage
 import git.shin.adfree.model.DnsProvider
 import git.shin.adfree.model.DnsRewriteRule
@@ -126,6 +127,7 @@ fun SettingsScreen(
     modifier: Modifier = Modifier
 ) {
     val state by viewModel.uiState.collectAsState()
+    val automation by viewModel.automationState.collectAsState()
     val scrollState = rememberScrollState()
     val uriHandler = LocalUriHandler.current
     val context = LocalContext.current
@@ -261,6 +263,16 @@ fun SettingsScreen(
             LogLevelSection(
                 selected = state.settings.logLevel,
                 onSelect = { viewModel.onIntent(AdGuardIntent.SetLogLevel(it)) },
+            )
+
+            Spacer(modifier = Modifier.height(20.dp))
+
+            SettingsGroupHeader(stringResource(R.string.settings_group_automation))
+
+            AutomationSection(
+                control = automation,
+                onToggle = { viewModel.onIntent(AdGuardIntent.ToggleExternalControl(it)) },
+                onRotate = { viewModel.onIntent(AdGuardIntent.RotateControlToken) },
             )
 
             Spacer(modifier = Modifier.height(20.dp))
@@ -479,6 +491,84 @@ private fun logLevelLabel(level: LogLevel): String = stringResource(
         LogLevel.DEBUG -> R.string.settings_log_debug
     }
 )
+
+/**
+ * Tasker-style control from other apps, behind a token the user pastes into the
+ * automation app.
+ *
+ * The switch is off on a fresh install and rotating retires the old token along
+ * with the setting, because a broadcast that can silently switch protection off
+ * is a worse outcome than no automation at all.
+ */
+@Composable
+private fun AutomationSection(
+    control: AutomationControl,
+    onToggle: (Boolean) -> Unit,
+    onRotate: () -> Unit,
+) {
+    SettingsSwitch(
+        icon = Icons.Default.Lock,
+        title = stringResource(R.string.settings_external_control_title),
+        subtitle = stringResource(R.string.settings_external_control_subtitle),
+        checked = control.enabled,
+        onCheckedChange = onToggle,
+    )
+
+    Spacer(modifier = Modifier.height(8.dp))
+
+    Text(
+        text = stringResource(R.string.settings_external_control_hint),
+        fontSize = 11.sp,
+        color = AdGuardTextMuted,
+    )
+
+    Spacer(modifier = Modifier.height(8.dp))
+
+    Text(
+        text = stringResource(R.string.settings_external_control_warning),
+        fontSize = 11.sp,
+        color = AdGuardOrangeWarning,
+    )
+
+    Spacer(modifier = Modifier.height(8.dp))
+
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .testTag("settings_external_control_token_row"),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        Text(
+            text = control.token,
+            fontSize = 11.sp,
+            fontFamily = FontFamily.Monospace,
+            color = AdGuardTextSecondary,
+            modifier = Modifier.weight(1f),
+        )
+        val clipboard = LocalClipboardManager.current
+        IconButton(
+            onClick = { clipboard.setText(AnnotatedString(control.token)) },
+            modifier = Modifier.testTag("settings_external_control_token_copy"),
+        ) {
+            Icon(
+                imageVector = Icons.Default.ContentCopy,
+                contentDescription = stringResource(R.string.settings_external_control_copy),
+                tint = AdGuardTextSecondary,
+                modifier = Modifier.size(16.dp),
+            )
+        }
+        OutlinedButton(
+            onClick = onRotate,
+            modifier = Modifier.testTag("settings_external_control_rotate"),
+        ) {
+            Text(
+                text = stringResource(R.string.settings_external_control_rotate),
+                fontSize = 11.sp,
+            )
+        }
+    }
+}
 
 /** Export/restore the two core blobs without including device-local scripts. */
 @Composable

@@ -5,15 +5,11 @@
 -->
 <data-extraction-rules>
     <cloud-backup>
-        <!-- TODO: Use <include> and <exclude> to control what is backed up.
-        <include .../>
-        <exclude .../>
-        -->
+        <!-- The automation token grants control of protection to whoever can
+             send a broadcast with it, so it stays on the device. -->
+        <exclude domain="sharedpref" path="adfree_automation.xml" />
     </cloud-backup>
-    <!--
     <device-transfer>
-        <include .../>
-        <exclude .../>
+        <exclude domain="sharedpref" path="adfree_automation.xml" />
     </device-transfer>
-    -->
 </data-extraction-rules>

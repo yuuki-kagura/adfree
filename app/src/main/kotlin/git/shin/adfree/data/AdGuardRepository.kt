@@ -141,6 +141,14 @@ class AdGuardRepository(
     private val _settings = MutableStateFlow(ProtectionSettings())
     val settings: StateFlow<ProtectionSettings> = _settings.asStateFlow()
 
+    /**
+     * The gate for broadcasts from other apps. Deliberately not part of
+     * [settings]: that record is exported verbatim by the backup, and a token
+     * inside a file the user can hand to anyone would hand over control of
+     * protection with it.
+     */
+    val automation: AutomationGate by lazy { AutomationGate(context) }
+
     private val _stats = MutableStateFlow(ProtectionStats())
     val stats: StateFlow<ProtectionStats> = _stats.asStateFlow()
 

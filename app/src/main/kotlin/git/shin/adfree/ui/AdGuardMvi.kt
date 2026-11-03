@@ -124,6 +124,10 @@ sealed interface AdGuardIntent {
     data class ToggleLogAllowed(val enabled: Boolean) : AdGuardIntent
     /** How much of the core's own diagnostics the log ring keeps. */
     data class SetLogLevel(val level: LogLevel) : AdGuardIntent
+    /** Whether another app may switch protection, once it proves the token. */
+    data class ToggleExternalControl(val enabled: Boolean) : AdGuardIntent
+    /** Retires the current token; the switch goes back off with it. */
+    data object RotateControlToken : AdGuardIntent
     data class SetBlockMode(val mode: DnsBlockMode) : AdGuardIntent
     data class SearchQueryChanged(val query: String) : AdGuardIntent
     data class FilterStatusChanged(val status: FilterStatus?) : AdGuardIntent
