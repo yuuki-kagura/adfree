@@ -557,13 +557,14 @@ section recommended.
     used: it redraws every ten seconds, and a DEFAULT channel would make that
     a sound.
   Owed on device: the always-on restart (kill the tunnel from Settings while
-  the system keeps the VPN, and confirm no alert fires), one allowlist rule
-  switched off and back on across an app restart, and the anti-DPI switch
-  against a real page load — with a time-to-first-byte comparison against the
-  switch off, so the cost of the split lands in `BENCHMARK.md` as a measured
-  number rather than a claim. The other two were settled by the 2026-11-03 pass
-  in §6.5: the consent-lost alert fires and sounds on the DEFAULT channel after
-  a system revoke, and a witness origin read the mask header.
+  the system keeps the VPN, and confirm no alert fires), and the anti-DPI
+  switch against a real page load — with a time-to-first-byte comparison
+  against the switch off, so the cost of the split lands in `BENCHMARK.md` as a
+  measured number rather than a claim. The other three were settled by the
+  2026-11-03 passes in §6.5: the consent-lost alert fires and sounds on the
+  DEFAULT channel after a system revoke, a witness origin read the mask
+  header, and a parked `!@@` rule was proven against live traffic and across a
+  process death.
 - Rust tests: v5→v6 migration keeps row counts and old rows read with
   defaults; `flags` transport/roaming round-trip; `GROUP BY app, category`
   counts; per-app routing override; DNS-only lists do not match HTTP rules.
@@ -955,6 +956,7 @@ section recommended.
     the three-rule baseline it started from. Two halves of this row are still
     not proven on the device: the parked rule was never reloaded through the
     engine against live traffic, and it was not carried across an app restart.
+    (Both settled by the pass at the end of this record.)
   - Real malicious-list hit posting the notice (`974cfed`): catalog `scamblock`
     downloaded 950 rules into `files/filters/cat_scamblock.txt`, which contains
     `||1stireland.com^`. `ping 1stireland.com` from the shell resolved to
@@ -1113,12 +1115,12 @@ section recommended.
     `stay_on_while_plugged_in` back to 0, Chrome force-stopped, screen left
     unlocked on the launcher.
   - Still owed on this device: the always-on restart (kill the tunnel while the
-    system keeps the VPN and confirm no alert fires), the parked allowlist rule
-    against live traffic and across an app restart, the anti-DPI switch with a
+    system keeps the VPN and confirm no alert fires), the anti-DPI switch with a
     time-to-first-byte comparison against it off so the cost lands in
     `BENCHMARK.md` as a number, and the services table accepting a tracker dataset
     over both update paths — a `trackers.json` URL and a DuckDuckGo region file
-    through the picker — and refusing a body that is neither.
+    through the picker — and refusing a body that is neither. The parked
+    allowlist rule is no longer on this list; the pass below settled it.
     The two Redmi-only items (positive roaming enforcement, the per-flow memory
     probe) stay blocked until that device is back.
   - The Manual and Visual checklist lines at the end of this file, run on the
@@ -1187,6 +1189,36 @@ section recommended.
       HOME.
     - What this pass did not touch: the four items in the "Still owed" bullet
       above, and roaming, which needs the SIM the Sony does not have.
+  - The parked allowlist rule against live traffic and across a process death —
+    the two halves `1b34e10` left unproven. `pagead2.googlesyndication.com` was
+    picked because the enabled lists already block it and a browser can be
+    pointed straight at it, so the verdict is a rendered page rather than a
+    counter. Adding `@@||pagead2.googlesyndication.com^` through
+    `Ngoại lệ trang web` let Chrome render the favicon at
+    `…/favicon.ico?af=allowon`. The row switch then parked it as
+    `!@@||pagead2.googlesyndication.com^` — badge `Tắt`, header
+    `1 domain bỏ qua mọi bộ lọc · 1 đang tắt` — and the same host on a fresh
+    query answered `DNS_PROBE_FINISHED_NXDOMAIN`. `am force-stop` + relaunch
+    (pid 26433 → 5085) kept the rule parked, rebuilt `tun0` by itself, and kept
+    blocking: 12 more BLOCKED rows inside the window after the restart, which
+    is the engine-reload half nothing had yet exercised. Switching the row back
+    on rendered the favicon again and logged `action=0` (id 33521) with no
+    block, and deleting the rule returned `state.filters` to its exact
+    three-rule baseline with the block following it (id 33530).
+    - What the rows say about where the exception applies: the engine files
+      these as DNS decisions — rule `||pagead2.googlesyndication.com^`, list
+      `AdGuard DNS filter`, `category=6`, `app=com.android.chrome` — so the
+      `@@` rule has to win at the resolver, and the A/B shows it does in both
+      directions.
+    - Harness note: the row's switch is the unlabelled clickable View at
+      x=620, while the control at x=698 is delete and carries the
+      `Xoá ngoại lệ` description. Tapping the row body does nothing, and
+      `Ngoại lệ trang web` is reached through Bảo vệ → Chặn quảng cáo, not from
+      the module list itself.
+    - Device left as found: rule deleted, every `state` row and `settings`
+      byte-identical to the copy taken before the pass, Chrome force-stopped,
+      tunnel up at 10.111.42.1/32, `stay_on_while_plugged_in` 0, screen on the
+      launcher.
 
 ### Risks
 
