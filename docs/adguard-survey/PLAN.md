@@ -70,8 +70,8 @@ lines; expand/collapse both states, toggle disable/enable, confirm AdFree VPN
 re-registers and the assistant opens over any app. Done on the Sony 2026-11-02
 — see the group-2 device verification record in §6.5. The open item it listed —
 the assistant's per-app panel could not be scrolled back out — is fixed by
-`b0101c8`; the panel is now a scrolling column, and the on-device re-check is
-recorded with the other outstanding checks in §6.5.
+`b0101c8`; the panel is now a scrolling column, and the on-device re-check ran on
+2026-11-03 — see that pass in §6.5.
 
 ## Phase 2 — Protection rows: annoyances and browsing security
 
@@ -192,7 +192,7 @@ filters — `Ứng dụng` and `Trang web` (`assistant_tab_apps`/`assistant_tab_
 ~290/~298) — and the per-app panel shows requests, blocked and saved bytes with
 `Hoạt động gần đây`, app management and a back row (~471–508). The panel not
 scrolling was a defect on that viewport, not a missing feature: `b0101c8` made
-it scroll (the device re-check is still owed, §6.5). The
+it scroll, re-checked on the device 2026-11-03 (§6.5). The
 `Cách chặn quảng cáo trên YouTube` row and the private-browser link are decided
 against — see §6.5.
 
@@ -557,12 +557,13 @@ section recommended.
     used: it redraws every ten seconds, and a DEFAULT channel would make that
     a sound.
   Owed on device: the always-on restart (kill the tunnel from Settings while
-  the system keeps the VPN, and confirm no alert fires), the consent-lost alert
-  (revoke and confirm the DEFAULT channel sounds), one allowlist rule switched
-  off and back on across an app restart, the anti-DPI switch against a real
-  page load — with a time-to-first-byte comparison against the switch off, so
-  the cost of the split lands in `BENCHMARK.md` as a measured number rather than
-  a claim — and the mask header read by a witness origin.
+  the system keeps the VPN, and confirm no alert fires), one allowlist rule
+  switched off and back on across an app restart, and the anti-DPI switch
+  against a real page load — with a time-to-first-byte comparison against the
+  switch off, so the cost of the split lands in `BENCHMARK.md` as a measured
+  number rather than a claim. The other two were settled by the 2026-11-03 pass
+  in §6.5: the consent-lost alert fires and sounds on the DEFAULT channel after
+  a system revoke, and a witness origin read the mask header.
 - Rust tests: v5→v6 migration keeps row counts and old rows read with
   defaults; `flags` transport/roaming round-trip; `GROUP BY app, category`
   counts; per-app routing override; DNS-only lists do not match HTTP rules.
@@ -735,7 +736,7 @@ section recommended.
     Outstanding: the per-app panel does emit the `assistant_app_back` row but
     it is not visible and the sheet does not scroll (content bottom y=1293
     inside the sheet bounds [0,386][800,1316]), so a per-app panel is a dead
-    end on this viewport.
+    end on this viewport. (Closed by the 2026-11-03 pass below.)
   - Toggle persistence: `Chặn làm phiền`, `Bảo vệ Duyệt web` and `Tường lửa`
     were switched off, then `am force-stop` + relaunch; all three came back
     off, so the Rust-side `state` rows survive process death. They are
@@ -920,18 +921,158 @@ section recommended.
     `show_services_breakdown: false` and `allow_external_control: false` read
     back through `run-as`, the tunnel up, the app sent home, and both DB copies
     pulled for that read deleted after it.
-  - Still owed on this device, none of it claimed above: the assistant panel
-    scroll re-check (`b0101c8`), a full-store log export line count vs the store
-    (`023b835`), add/remove on the allowlist screen (`1b34e10`), a real
-    malicious-list hit posting the notice (`974cfed`, whose one-per-hour dedupe
-    needs a force-stop to re-arm), the remaining stealth switches and the
-    privacy-level radio taking effect on live requests (`91dc2dd`, `5858a75` —
-    `inject_gpc_dnt` is the one row the log-level pass above settled), the
-    services breakdown switch showing no `GROUP BY` and no RSS growth while off
-    (`f153ee0`), the services table accepting a tracker dataset over both update
-    paths — a `trackers.json` URL and a DuckDuckGo region file through the
-    picker — and refusing a body that is neither, and a system-initiated revoke
-    posting the dropped-protection alert (`fa79e84`).
+  - The seven checks the list above left owed, all run on the same device in one
+    pass on 2026-11-03 (16:20–18:10 local), on the debug `1.1.1` installed at
+    16:38:03 from HEAD `51b3eb5`.
+  - Assistant panel scroll (`b0101c8`): the sheet was opened with
+    `run-as git.shin.adfree am start --user 0 -n git.shin.adfree/.AssistantActivity`
+    — a plain shell `am start` is still refused for `exported="false"`, and the
+    run-as start only lands when the app is already in the foreground
+    (`Displayed … +156ms`). The `AccuWeather` row (10 requests, 10 blocked,
+    480 KB) showed `Hoạt động gần đây` at `[84,1042][314,1087]` and
+    `Quản lý ứng dụng` at `[84,1129][295,1174]` with nothing below them; one
+    `input swipe 400 1150 400 800` moved those to `[84,972]` and `[84,1059]` and
+    revealed `Quay lại danh sách` at `[84,1146][314,1191]`. The two pinned
+    shortcut buttons stay anchored outside the scrolling column, which is the
+    layout the fix intends. This closes the `assistant_app_back` dead-end note in
+    the 2026-11-02 record.
+  - Full-store export (`023b835`): `Xuất hoạt động` wrote
+    `/sdcard/Download/adfree-activity (4).csv`, 3,616,843 bytes — 1 header line
+    plus 24,899 data lines over the 17 columns. The store copy taken at the same
+    moment held 24,905 rows (`MIN(id)=3324`, `MAX(id)=28228`). The newest
+    exported line is the `ns-global-dual.rtc.vietteltammi.vn` query carrying
+    `flow_id` 1283, whose row is `id=28222`, and
+    `COUNT(*) … WHERE id <= 28222` = 24,899: the export is the whole store, row
+    for row, and the six rows that arrived while the file was being written are
+    the only gap.
+  - Allowlist add / park / restore / delete (`1b34e10`): `@@||adb-check.local^`
+    added → snackbar `Đã thêm quy tắc @@||adb-check.local^`, header
+    `2 domain bỏ qua mọi bộ lọc`; switched off → the `state.filters` row becomes
+    `!@@||adb-check.local^`, the screen shows the `Tắt` badge with the parked
+    text `!@@||adb-check.local^` under the host, header
+    `1 domain bỏ qua mọi bộ lọc · 1 đang tắt`; switched back on → `2 domain bỏ
+    qua mọi bộ lọc` with both rows `CHO PHÉP`; deleted → `state.filters` exactly
+    the three-rule baseline it started from. Two halves of this row are still
+    not proven on the device: the parked rule was never reloaded through the
+    engine against live traffic, and it was not carried across an app restart.
+  - Real malicious-list hit posting the notice (`974cfed`): catalog `scamblock`
+    downloaded 950 rules into `files/filters/cat_scamblock.txt`, which contains
+    `||1stireland.com^`. `ping 1stireland.com` from the shell resolved to
+    52.10.27.176, lost both packets and wrote no log row at all — the tunnel
+    excludes `com.android.shell` (`AdGuardVpnService.kt:347`), so shell traffic
+    never reaches the engine and the hit had to come from a real app. Chrome
+    loading `http://1stireland.com/` posted id 66968 on `adfree_firewall`
+    (`2000 + (domain.hashCode() and 0xFFFF)`) with
+    `1stireland.com là trang độc hại` / `Bị chặn theo danh sách bảo mật Scam
+    Blocklist`, and the log carried the blocked rows 28320, 28321–28326,
+    28332–28337 and 28342–28347 with `action=1, category=5`, rule
+    `1stireland.com^`, list `Scam Blocklist`. The one-hour dedupe did not need a
+    force-stop this time: the 16:38 reinstall started a fresh process, so
+    `securityNoticeAt` was already empty.
+  - Stealth switches and the privacy-level radio on live requests (`91dc2dd`,
+    `5858a75`), each against a real request Chrome made through the tunnel:
+    `strip_utm_tracking` (query parameters gone on both an `Ultimate` fetch and a
+    `High` navigation, intact with the master off), `disguise_user_agent`
+    (`Chrome/156` → `Chrome/124` plus `sec-ch-ua` removed, A/B on one host),
+    `block_third_party_cookies` (first-party `adfree=…` present, absent on a
+    top-level cross-site navigation whose `Sec-Fetch-Site: cross-site` proves the
+    direction), `block_all_cookies` (no `Cookie` header at all on a fresh
+    connection under `Ultimate`, present under `High`),
+    `strip_third_party_authorization` (`Authorization: Bearer …` when off, gone
+    when on), `hide_third_party_referer` (referer `https://example.net/` when
+    off, absent when on), `hide_search_query` (seven engine lines for the
+    rewritten query links), `strip_etag` (engine line only — nothing at app level
+    shows it), `inject_gpc_dnt` (`Sec-GPC` is the differentiator, because Chrome
+    sends its own `DNT: 1` with that toggle and stealth off),
+    `block_push_api` (`PushManager.subscribe` rejects with `NotAllowedError:
+    Blocked by AdFree` and `Notification.permission` reads `denied`, against
+    native/`default` when off), `block_geolocation_api` (`getCurrentPosition`
+    errors `1:User denied Geolocation` and `permissions.query` reports `denied`),
+    `mask_ip` (a witness origin echoed `X-Forwarded-For` `203.0.113.77` ahead of
+    the real address, and only the real address with the field cleared), the
+    master switch, and the `Cao`/`Cực đại` radios, whose writes were read back
+    from `state.protection`.
+  - Two things that method had to work around, both worth keeping. `StealthConfig`
+    is a `Copy` snapshot taken once per TLS connection
+    (`rust/src/mitm/proxy.rs:671-672`), and Chrome keeps sockets and pages:
+    `example.com` answers with `Cache-Control: max-age=604800`, so a reload after
+    a preset change can serve a cached body with the previous guards and look
+    like a failure. Every verdict above therefore used a URL never fetched
+    before (a unique query on a known-good host), or a `force-stop` of Chrome to
+    reset the socket pool. And a guard replaces prototype methods, not the
+    constructor, so `RTCPeerConnection.prototype.toString()` still reads
+    `[native code]` while it is armed — the probes had to be functional.
+  - The WebRTC row has a limitation and a control, both measured. With
+    `block_web_rtc_leaks` on, the page's own `icecandidate` handler receives
+    `candidates: []`; with it off the same probe on the same host receives
+    `candidate:3925871770 1 udp 2113937151 10.111.42.1 36206 typ host` through
+    both `onicecandidate` and `addEventListener`, with
+    `setLocalDescription` native — so the empty list is AdFree's doing, not
+    Chrome's. What the guard does not hide is the stored description: while it is
+    armed, `pc.localDescription.sdp` still carries
+    `a=candidate:… 10.111.42.1 51626 typ host`, because Chrome patches candidates
+    it gathered after `setLocalDescription` into that object. A page that reads
+    the local description instead of listening for events still sees the tunnel
+    address.
+  - `StealthPreset.of()` (`app/src/main/kotlin/git/shin/adfree/model/StealthPreset.kt:83`)
+    reads the level from the twelve switches only and ignores
+    `isStealthModeEnabled`, so with the master off and `Cực đại`'s twelve flags
+    still stored the radio reports `Cực đại` while nothing is applied. Accepted
+    for now: the row labels say what the level means, not what is running, and
+    the disabled switch list under it is visibly greyed.
+  - Services breakdown switch (`f153ee0`): the `GROUP BY domain` really is behind
+    the switch — `engine.domainUsageSince` is called only inside
+    `if (_settings.value.showServicesBreakdown)` at
+    `app/src/main/kotlin/git/shin/adfree/data/AdGuardRepository.kt:1957`, while
+    the per-app and window-total calls stay unconditional — and the `Dịch vụ`
+    section appears on the Statistics screen only when the switch is on. Cost
+    measured by `/proc/<pid>/stat` ticks at 100 Hz over identical 41 s windows of
+    tap-driven refreshes on a 25,306-row store: off +1,014 ticks (10.14 s CPU),
+    on +1,151 (11.51 s), i.e. roughly 23 ms of CPU per extra refresh. On the
+    `Hôm nay` window (3,036 rows, 40 refreshes) the two are indistinguishable
+    (+598 off against +596 on), so the price scales with the rows scanned, not
+    with the switch. RSS did not grow in either run — total PSS fell in both
+    (174.7→167.4 MB off, 171.8→165.9 MB on) — which is what the claim was about.
+  - System-initiated revoke posting the dropped alert (`fa79e84`): the tunnel was
+    dropped from Settings, and logcat shows
+    `11-03 17:34:40.295 D/Vpn: setting state=DISCONNECTED, reason=agentDisconnect`
+    → `17:34:40.354 I/AdGuardVpnService(5939): VPN revoked by user/system` →
+    `17:34:40.623 D/NotificationService: 0|git.shin.adfree|70000|null|10344:
+    granting content://settings/system/notification_sound`. The record is
+    `id=70000 channel=adfree_protection importance=3 category=err` with
+    `Hệ thống đã dừng bảo vệ` / `Đường hầm VPN đã đóng trong khi AdFree vẫn cần
+    chặn quảng cáo. Android cần bạn xác nhận để mở lại - nhấn để bật lại bảo vệ`
+    and a `ACTION_ENABLE_PROTECTION` content intent; the ongoing 1001 row was
+    taken down by `stopForeground`, `is_protection_active` read false, and no
+    retry ran because `VpnService.prepare` still wanted consent (this device has
+    no always-on VPN — `settings get secure always_on_vpn_app` is `null`, so the
+    silent-restart branch is untouched and stays owed).
+    Two properties of the alert this pass exposed. Nothing cancels
+    `DROPPED_ALERT_ID` — `AdGuardVpnService.kt:764` is the only reference besides
+    the constant — so re-enabling protection leaves the row behind until the user
+    swipes it. And the row was not even visible to swipe: this device has
+    rate-limited AdFree's posts (`post_frequency{pkg=git.shin.adfree, …
+    muted=3378/3378}`), so the alert kept only its status-bar icon and never
+    joined the shade list, while the older security row did.
+  - Device left as found, read back through `run-as` against the copy taken
+    before any of this: `filters` byte-identical (catalog
+    `ag-base, ag-mobile-ads, ag-tracking, ag-dns, oisd, abpvn` with `scamblock`
+    off again, three user rules, no custom or DNS lists), `protection` identical
+    except that `anti_dpi` and `mask_ip` are now written as `false` and `""`
+    instead of being absent from the JSON — same values, the preset write
+    serialised them. Stealth master off with the `Tiêu chuẩn` flags, tracking
+    protection on, `log_level: "warn"`, `show_services_breakdown: false`, the
+    tunnel back up (`tun0`, 10.111.42.1/32, DNS 94.140.14.14), the screen-density
+    override (240) untouched, the malware notice dismissed, the three probe tabs
+    closed, `adb forward tcp:9333` removed, and today's 128 `/sdcard/*.xml` dumps
+    deleted. The dropped-protection row itself stays posted, for the reason above.
+  - Still owed on this device: the always-on restart (kill the tunnel while the
+    system keeps the VPN and confirm no alert fires), the parked allowlist rule
+    against live traffic and across an app restart, the anti-DPI switch with a
+    time-to-first-byte comparison against it off so the cost lands in
+    `BENCHMARK.md` as a number, and the services table accepting a tracker dataset
+    over both update paths — a `trackers.json` URL and a DuckDuckGo region file
+    through the picker — and refusing a body that is neither.
     The two Redmi-only items (positive roaming enforcement, the per-flow memory
     probe) stay blocked until that device is back.
 
