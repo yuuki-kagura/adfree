@@ -612,13 +612,13 @@ section recommended.
   and `ANDROID_NDK_HOME`, rebuild the four ABIs with `cargo ndk`, then
   `./gradlew :app:testDebugUnitTest :app:assembleRelease -PskipNative`.
 - Device (deferred from Phases 3–5): most of it was verified on the connected
-  Sony instead of the Redmi — see the two records below. What still needs the
-  Redmi: roaming with Wi-Fi off and mobile on (positive enforcement, not
+  Sony instead of the Redmi — see the dated records below. What still needs
+  the Redmi: roaming with Wi-Fi off and mobile on (positive enforcement, not
   reachable without root on the Sony), and the per-flow memory probe in
-  `BENCHMARK.md`. Screenshots `52`–`58`, `69`, `73`–`79` are captured. `59`
-  (AdGuard's all-companies list) still needs an AdFree-side capture: the
-  company breakdown it shows shipped in `f153ee0`, but no side-by-side
-  screenshot of our version exists yet.
+  `BENCHMARK.md`. Screenshots `52`–`58`, `69`, `73`–`79` and `59` are
+  captured: `adfree-59-stats-all-companies.png` closed the last gap of the
+  stage 5–12 set on 2026-11-03, so every AdGuard frame in that range now has
+  our version beside it.
 - Device verification record (2026-11-01, Sony 802SO / Android 10, the
   connected device in place of the unavailable Redmi; VPN up on Wi-Fi,
   per-app evidence read from the on-device `adfree.db`):
@@ -1121,6 +1121,72 @@ section recommended.
     through the picker — and refusing a body that is neither.
     The two Redmi-only items (positive roaming enforcement, the per-flow memory
     probe) stay blocked until that device is back.
+  - The Manual and Visual checklist lines at the end of this file, run on the
+    same debug build after the CPU/RAM pass, every capture at 800×1340.
+    - Notification in both states and both languages — all four combinations
+      are now on disk: `adfree-84-notification-active-vi.png`
+      (`Đang chặn quảng cáo và công cụ theo dõi` / `Bị chặn: N`, bigText
+      adding `Dữ liệu đã lưu: X MB`, actions `Vô hiệu` and `Trợ lý`),
+      `adfree-85-notification-paused-vi.png` (`Đã tạm dừng bảo vệ` /
+      `VPN vẫn bật; quảng cáo & tracker chưa bị lọc`, actions `Tiếp tục` and
+      `Trợ lý`), `adfree-86-notification-active-en.png` and
+      `adfree-92-notification-paused-en.png` (`Protection paused` /
+      `The VPN is on; ads and trackers are not filtered`, `Resume` and
+      `Assistant`). The paused variant only ever comes from the assistant's
+      pause control, so each paused row was made by opening the sheet, tapping
+      it, then reading `dumpsys notification --noredact` extras next to the
+      screenshot rather than trusting the pixels.
+    - Two harness facts that cost time. The status row has no fixed rank: the
+      10 s counter re-post moves it down the list, so a shade opened into the
+      QS panel shows no AdFree row at all. That also casts doubt on the
+      explanation given for the invisible dropped-protection alert earlier in
+      this record — `post_frequency{pkg=git.shin.adfree, muted=3914/3914}`
+      mutes alerting, not visibility, so that row was probably below the fold
+      too rather than suppressed. And the action buttons only exist once the
+      `Mở rộng` chevron is tapped; tapping the row body fires `contentIntent`
+      and brings MainActivity forward, which is what three of the assistant
+      attempts below actually did.
+    - Assistant over a third-party app (`adfree-83-assistant-over-app.png`) —
+      passes, and the reason it intermittently looks like it does not is now
+      pinned. `AssistantActivity` declares no `taskAffinity`
+      (`app/src/main/AndroidManifest.xml:43-49`) and the notification's
+      PendingIntent carries only `FLAG_ACTIVITY_NEW_TASK`, so while the app's
+      own task is alive the new-task match resolves to that task and the sheet
+      draws over MainActivity instead of over the foreground app. With the
+      task finished — BACK until `mCurrentFocus` is the launcher, process and
+      `tun0` unaffected — the same tap opened its own task over Chrome, and
+      the sheet's X returned to Chrome. The English paused capture needed
+      exactly that detour: three taps surfaced the Settings screen, and only a
+      force-stop plus the one-tap re-enable let the sheet float free.
+    - Each new toggle survives process death: stealth master, the four `Cao`
+      sub-switches, `anti_dpi`, `mask_ip` set to `203.0.113.7` and
+      `show_services_breakdown` were written, then `am force-stop` and a
+      relaunch (pid 20533 → 8900). All came back as set, the tunnel rebuilt
+      itself at 10.111.42.1/32, the Stealth screen and the Statistics
+      breakdown re-rendered from the persisted values, and no other key in any
+      `state` row moved. Everything was reverted through the UI afterwards.
+    - Per-app override beats the global rule, re-run on this build with two
+      signals in the same window so the shell's own path could not be mistaken
+      for the app's: under the global Wi-Fi block the shell TCP probes failed
+      (`rc=-110` at ~2 s, `gai=7` for uncached names) while Chrome showed
+      `ERR_NAME_NOT_RESOLVED`; a per-app `wifi: "allow"` for Chrome let Chrome
+      render example.com with the shell still failing, and deleting the rule
+      blocked Chrome again. `state.firewall` is back to `[]` and
+      `state.protection` has zero diffs against the as-found copy.
+    - Visual: nine captures join the set — `adfree-59-stats-all-companies.png`
+      (the last open stage 5–12 frame), `adfree-87-stealth-presets.png`,
+      `adfree-88-stealth-antidpi-maskip.png`,
+      `adfree-89-stealth-maskip-editor.png`,
+      `adfree-90-filters-services-table.png`,
+      `adfree-91-allowlist-parked-rule.png`, and the four notification rows.
+    - Device left as found: language back to `Tiếng Việt` through the app's
+      own `App language` chips (no system locale change, no reboot),
+      protection active and unpaused with `tun0` 10.111.42.1/32, every `state`
+      row and `settings` byte-identical to the copy taken before the pass,
+      `stay_on_while_plugged_in` 0, the density override untouched, screen sent
+      HOME.
+    - What this pass did not touch: the four items in the "Still owed" bullet
+      above, and roaming, which needs the SIM the Sony does not have.
 
 ### Risks
 
@@ -1189,12 +1255,15 @@ lines are the ones §6.5 still lists as owed.
   four-column, and the Statistics breakdown must show the company plus the
   category instead of the bare domain. A body that is neither a dataset nor a
   sorted table must be refused with the previous copy intact.
-- Manual: notification in both states and both languages; assistant opens
-  over a third-party app; each new toggle survives process death; per-app
-  override beats global rules; roaming and screen-off behavior verified with
-  Wi-Fi off/mobile on if a SIM is available.
-- Visual: screenshot each new screen at the same 800×1340 viewport for a
-  side-by-side table against the AdGuard captures.
+- Manual (run 2026-11-03, see the dated record): notification in both states
+  and both languages, assistant over a third-party app, each new toggle
+  surviving process death, and the per-app override beating the global rule
+  are all done. The only leg left is roaming with Wi-Fi off and mobile on —
+  this Sony has no SIM, so it waits for the Redmi. Screen-off per-app
+  firewall was already verified on 2026-11-01.
+- Visual (done 2026-11-03): every new screen is captured at the same
+  800×1340 viewport for the side-by-side table against the AdGuard captures,
+  through `adfree-92`.
 
 ## Risks
 
