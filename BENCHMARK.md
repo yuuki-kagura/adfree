@@ -338,6 +338,15 @@ default changed. The Protection → Ad blocking screen shows the switch; a pass
 that reports fewer than 48/48 blocked probes should check it before anything
 else.
 
+For the CPU and RAM rows the probe is the wrong tool on a release AdFree, because
+release never routes the shell into the tunnel. Use the two helpers instead:
+`bench/win.sh <package> <seconds> <label>` samples one quiet window (ticks from
+`/proc/<pid>/stat`, PSS from `dumpsys meminfo`, and it refuses the window if the
+pid changed under it), and `bench/sweep.sh <pass>` drives the 12-page Chrome
+workload and reports both blockers' ticks plus Chrome's own as the control. Both
+were written for `Re-run — CPU and RAM on HEAD`, which has the URL list and the
+numbers.
+
 ## Caveats
 
 - Wall times include the probe host's scheduling and Wi-Fi, so run all rounds
@@ -766,7 +775,10 @@ Two things this pass does not measure, and why:
 - **CPU and RAM.** The rows in the earlier sections are release-APK figures, and
   the marker file that lets the shell's probes reach the tunnel only exists in a
   debug build. Re-running the RAM comparison would mean giving up the marker, so
-  this section deliberately quotes neither.
+  this section deliberately quotes neither. It has since been measured, on the
+  same device the same evening, against a release AdFree and with a real-traffic
+  workload that needs no marker at all:
+  see `Re-run — CPU and RAM on HEAD, release against release (2026-11-03)`.
 - **The upgrade path.** `smartFiltering` is persisted per device, so an install
   that had it on keeps it on after the default changes — this very device had
   `true` stored and needed the switch turned off by hand before the pass. A fresh
@@ -774,3 +786,148 @@ Two things this pass does not measure, and why:
   migration (`rust/src/state/legacy.rs`); a blob already on the current schema
   keeps exactly what it stored. The row's subtitle states the shipped default in
   both locales.
+
+
+## Re-run — CPU and RAM on HEAD, release against release (2026-11-03, Sony 802SO)
+
+The CPU and RAM rows in `Re-run — on the Sony 802SO` were measured at `8ea0c8c`
+with smart filtering **on**, and everything shipped since then has a footprint:
+MITM stealth edits, the services breakdown query, the tunnel rebuild, the mask-IP
+header. The parity claim is about the app as shipped now, so it was re-measured
+at HEAD (`ffb2d43`; the last commit that touched code is `ad874fe`, and the debug
+build the device was already running had been installed from that same tree)
+against the same AdGuard **4.14.0** release APK already on the device.
+
+- AdFree: `app-release.apk` built 18:30, installed over the debug build at
+  18:31:55. Both variants are signed with the SDK debug key, so `install -r`
+  kept the store: the `filters` row is byte-identical to the copy taken before
+  the switch and the `protection` row is value-identical. Release because
+  AdGuard is a release app and the debug build nearly doubles AdFree's resident
+  set (the table in *Memory, and why the build type mattered*).
+- Settings during the pass, read back from the store afterwards:
+  `is_smart_filtering_enabled = false`, `is_https_filtering_enabled = true`,
+  `is_dns_protection_enabled = true`, `is_eco_battery_mode_enabled = true`,
+  `log_allowed_requests = true`, `log_level = warn`, stealth master off,
+  `show_services_breakdown = false`, six catalog lists on.
+- AdGuard: protection toggled from its own main screen, `tun0` asserted at
+  `172.18.11.218` per pass; AdFree's asserted at `10.111.42.1` per pass.
+  `svc power stayon true` and `Display Power: state=ON` pinned before any
+  window, as the traps section demands.
+- Two interleaved passes per app: AdFree, AdGuard, AdFree, AdGuard.
+
+### The workload is Chrome, not the probe
+
+The old CPU row was "CPU for the same 108 probes", and a probe cannot be used
+against a release AdFree: `capture-shell` is gated on `BuildConfig.DEBUG`
+(`AdGuardVpnService.kt:344`), so in release the shell is always excluded from
+the tunnel and the probe's traffic never reaches the engine. AdGuard has no such
+exclusion — `adb shell ping pagead2.googlesyndication.com` returns
+`unknown host` through its tunnel — so a probe pass would compare AdGuard's
+tunnel against AdFree's idle one.
+
+The workload is therefore twelve real pages loaded in Chrome, which is inside
+every VPN: `vnexpress.net`, `cafef.vn`, `kenh14.vn`, `24h.com.vn`, `soha.vn`,
+`genk.vn`, `youtube.com`, `github.com/adblockplus`, one Wikipedia article,
+`cloudflare.com`, `apple.com/vn`, `microsoft.com/en-vn`, each with
+`?adfreebench=<pass>` to defeat the HTTP cache, 10 s apart, Chrome force-stopped
+before each sweep so no socket pool carries over. Chrome's own tick delta is the
+control that both apps were handed a comparable page set: 1096 / 1062 on the
+AdFree passes, 1017 / 1062 on the AdGuard passes — within 8 %.
+
+### Results
+
+| Metric | AdFree | AdGuard | Verdict |
+| --- | --- | --- | --- |
+| Background idle CPU (60 s windows ×4) | 0.70–1.07 %, median **0.83** | 0.63–3.75 %, median **0.74** | parity, AdGuard noisier |
+| Foreground idle CPU (20 s windows ×4) | 5.55–10.55 %, median **7.10** | 22.95–24.25 %, median **23.27** | AdFree ~3.3× lower |
+| CPU over the 12-page sweep | 2.77 s / 2.65 s | 12.96 s / 7.70 s | AdFree 2.9–4.7× lower |
+| Sweep cost as % of one core | 2.50 % / 2.39 % | 11.57 % / 6.88 % | |
+| Background PSS (settled) | 85.8–108.6 MB, median **94.9** | 254.6–289.2 MB, median **264.9** | AdFree **64 % lighter** |
+| Foreground PSS | 101.3–105.1 MB, median **101.7** | 278.0–286.2 MB, median **281.2** | AdFree **64 % lighter** |
+
+Every window, in order, with the device uptime stamped on it:
+
+| Pass | Window | Ticks | % of a core | TOTAL PSS | Swap PSS | Uptime |
+| --- | --- | --- | --- | --- | --- | --- |
+| AdFree 1 | bg 60 s | 49 | 0.82 | 100.8 MB | 60.6 MB | 533 s |
+| AdFree 1 | bg 60 s | 42 | 0.70 | 85.8 MB | 53.8 MB | 593 s |
+| AdFree 1 | fg 20 s | 211 | 10.55 | 102.0 MB | 46.8 MB | 637 s |
+| AdFree 1 | fg 20 s | 142 | 7.10 | 105.1 MB | 46.6 MB | 658 s |
+| AdFree 1 | sweep 111 s | 277 | 2.50 | — | — | 788 s |
+| AdGuard 1 | bg 60 s | 41 | 0.68 | 289.2 MB | 0.005 MB | 1217 s |
+| AdGuard 1 | bg 60 s | 48 | 0.80 | 262.8 MB | 0.004 MB | 1277 s |
+| AdGuard 1 | fg 20 s | 460 | 23.00 | 283.2 MB | 0.004 MB | 1322 s |
+| AdGuard 1 | fg 20 s | 485 | 24.25 | 278.0 MB | 0.004 MB | 1343 s |
+| AdGuard 1 | sweep 112 s | 1296 | 11.57 | — | — | 1478 s |
+| AdFree 2 | bg 60 s | 64 | 1.07 | 108.6 MB | 0.005 MB | 1689 s |
+| AdFree 2 | bg 60 s | 51 | 0.85 | 88.9 MB | 0.003 MB | 1750 s |
+| AdFree 2 | fg 20 s | 142 | 7.10 | 101.4 MB | 0.003 MB | 1783 s |
+| AdFree 2 | fg 20 s | 111 | 5.55 | 101.3 MB | 0.003 MB | 1804 s |
+| AdFree 2 | sweep 111 s | 265 | 2.39 | — | — | 1935 s |
+| AdGuard 2 | bg 60 s | 38 | 0.63 | 266.9 MB | 24.9 MB | 2089 s |
+| AdGuard 2 | bg 60 s | 225 | 3.75 | 254.6 MB | 34.6 MB | 2150 s |
+| AdGuard 2 | fg 20 s | 459 | 22.95 | 286.2 MB | 34.6 MB | 2193 s |
+| AdGuard 2 | fg 20 s | 471 | 23.55 | 279.1 MB | 34.6 MB | 2214 s |
+| AdGuard 2 | sweep 111 s | 770 | 6.94 | — | — | 2337 s |
+
+Both apps really filtered the sweep, which is the assertion that makes the CPU
+row mean anything: AdFree's home counters went 136 → 199 ads and 257 → 474
+trackers across its pass-1 sweep, and AdGuard's own card went 488 → 2,363
+blocked and 34 MB → 141 MB saved across its two.
+
+### Composition at rest, from the `App Summary` block
+
+| | AdFree bg | AdFree fg | AdGuard bg | AdGuard fg |
+| --- | --- | --- | --- | --- |
+| Java heap | 7.9 MB | 8.2 MB | 68.1 MB | 65.6 MB |
+| Native heap | 61.2 MB | 61.2 MB | 131.3 MB | 132.4 MB |
+| Code | 9.6 MB | 8.1 MB | 10.2 MB | 22.0 MB |
+| Graphics | 2.8 MB | 16.2 MB | 3.4 MB | 17.1 MB |
+| System | 3.5 MB | 3.6 MB | 37.4 MB | 37.6 MB |
+| **TOTAL PSS** | **88.9 MB** | **101.3 MB** | **254.6 MB** | **279.1 MB** |
+
+The shape is the same as the 2026-11-02 run: AdFree's entire background footprint
+(88.9 MB) is only 21 MB more than AdGuard's Java heap alone (68.1 MB), and
+AdGuard carries 37 MB of `System` that AdFree does not. AdFree's native heap is
+61 MB here against the 14.7 MB PSS that run recorded at the same heap size
+(69.6 MB) — pages freshly touched by the engine, not a growth in what it holds.
+
+### What this run changes
+
+- The RAM claim now belongs to HEAD and to the shipped configuration: AdFree is
+  **64 % lighter than AdGuard in both states**, at 95 MB against 265 MB in the
+  background and 102 MB against 281 MB in the foreground. It repeats the
+  2026-11-02 result (68 % / 63 %) rather than contradicting it, which is the
+  point: a dozen stages of features did not move the ratio.
+- Foreground idle CPU is still a UI cost, not an engine cost, and the gap is
+  narrower than the 2026-11-02 run measured: 7.1 % against 23.3 % here (3.3×)
+  where that run had 5.90 % against 25.05 % (4.3×). AdFree's first foreground
+  window reads high in both passes (10.55 % then 7.10 %, against 7.10 % and 5.55 %
+  for the windows after them); the cause was not isolated, so the second window
+  is the number to quote.
+- The sweep row is the closest thing this harness has to an engine cost under
+  real traffic, and it is the one row that moved: AdGuard's two sweeps differ by
+  1.7× (12.96 s against 7.70 s) while AdFree's differ by 4 %. Read AdFree as
+  ~2.5 % of a core for twelve page loads, AdGuard as 7–12 %.
+- AdGuard's 3.75 % background window is the noisiest single reading in either
+  series and the pass that produced it also shows its swap PSS climbing from
+  0.004 MB to 34 MB. What ran inside it was not identified; the honest read of
+  the background row is "same order, AdGuard occasionally does something".
+
+### Two new traps found doing this
+
+- **A reboot in the middle of a pass invalidates every window before it.** The
+  device kernel-panicked at 18:43:21, during the first sweep attempt:
+  `ro.boot.bootreason = kernel_panic,sysrq`, and
+  `persist.sys.boot.reason.history` shows a second entry at 2026-11-02 11:53:38,
+  so this is the device, not the measurement — `/sys/fs/pstore` is not readable
+  without root, so the panic itself cannot be attributed to anything. The four
+  windows taken before it (0.55 %/1.68 % background, 5.55 %/4.40 % foreground,
+  90.1/83.8 MB and 96.4/96.0 MB PSS) are quoted nowhere above: the pass was
+  restarted from the cold boot so that every row shares one device state, and
+  each window now carries its uptime stamp so a reboot cannot pass unnoticed.
+- **A pid captured before a handover can be recycled.** During the AdGuard pass
+  the harness still held AdFree's old pid, and by then that number belonged to a
+  different process, so its "CPU" came back as −2,565 ticks. A negative delta is
+  pid reuse, not an idle app. `win.sh` now refuses a window whose pid changed
+  under it instead of reporting a number.

@@ -1066,6 +1066,52 @@ section recommended.
     override (240) untouched, the malware notice dismissed, the three probe tabs
     closed, `adb forward tcp:9333` removed, and today's 128 `/sdcard/*.xml` dumps
     deleted. The dropped-protection row itself stays posted, for the reason above.
+  - The CPU/RAM comparison `BENCHMARK.md` said it did not measure, run on the
+    same device 18:31–19:25. AdFree is the release APK built at 18:30 from the
+    `ad874fe` code tree, installed over the debug build at 18:31:55 — both
+    variants carry the SDK debug key, so `install -r` kept the store, and the
+    `filters` row read back byte-identical with the `protection` row
+    value-identical. AdGuard is the 4.14.0 release already on the device. Two
+    interleaved passes, `tun0` asserted per app (`10.111.42.1` / `172.18.11.218`),
+    screen pinned on.
+    - Background idle CPU (60 s ×4): AdFree 0.70–1.07 %, median 0.83; AdGuard
+      0.63–3.75 %, median 0.74 — parity, AdGuard noisier.
+    - Foreground idle CPU (20 s ×4): 5.55–10.55 % median 7.10 against
+      22.95–24.25 % median 23.27.
+    - RAM: background PSS 85.8–108.6 MB median 94.9 against 254.6–289.2 MB median
+      264.9; foreground 101.3–105.1 MB median 101.7 against 278.0–286.2 MB median
+      281.2 — **AdFree 64 % lighter in both states**, repeating the 2026-11-02
+      68 %/63 % at a dozen stages of features later.
+    - Composition at rest (`App Summary`): AdFree Java 7.9 / native 61.2 / System
+      3.5 MB against AdGuard Java 68.1 / native 131.3 / System 37.4 MB.
+  - The workload had to change. A release AdFree never routes the shell into its
+    tunnel (`AdGuardVpnService.kt:344` gates `capture-shell` on
+    `BuildConfig.DEBUG`), while AdGuard does — `adb shell ping
+    pagead2.googlesyndication.com` answers `unknown host` through AdGuard's
+    tunnel — so the old probe would have measured AdGuard's filtering against
+    AdFree's idleness. Twelve real pages loaded in Chrome 10 s apart with
+    `?adfreebench=<pass>` to defeat the cache replaced it, and AdFree costs
+    2.77 s / 2.65 s of CPU where AdGuard costs 12.96 s / 7.70 s for the same
+    pages, with Chrome's own tick delta (1096/1062 against 1017/1062) as the
+    control that both apps were handed a comparable page set. Both really
+    filtered it: AdFree's counters moved 136→199 ads and 257→474 trackers over
+    one sweep, AdGuard's card 488→2,363 blocked and 34→141 MB saved over two.
+    The helpers are committed as `bench/win.sh` and `bench/sweep.sh`.
+  - The device kernel-panicked mid-pass at 18:43:21 (`ro.boot.bootreason =
+    kernel_panic,sysrq`, and `persist.sys.boot.reason.history` shows an earlier
+    entry at 2026-11-02 11:53:38, so this is the hardware, not the measurement;
+    `/sys/fs/pstore` needs root to read). The four windows taken before it were
+    thrown away and the pass restarted from the cold boot, so every row above
+    shares one device state and each carries its uptime stamp. A second lesson
+    went into the harness: a pid held across a VPN handover can be recycled by
+    another process and reads as negative CPU, so `win.sh` refuses a window whose
+    pid changed.
+  - Device left as found: AdGuard toggled off and force-stopped, the debug APK
+    reinstalled at 19:23, protection re-enabled from the home power button
+    (`tun0` 10.111.42.1/32, no `capture-shell` marker), store re-read through
+    `run-as` and identical to the copy taken before the pass,
+    `stay_on_while_plugged_in` back to 0, Chrome force-stopped, screen left
+    unlocked on the launcher.
   - Still owed on this device: the always-on restart (kill the tunnel while the
     system keeps the VPN and confirm no alert fires), the parked allowlist rule
     against live traffic and across an app restart, the anti-DPI switch with a
