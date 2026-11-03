@@ -237,9 +237,10 @@ from the core, not from placeholders.
 
 ### Stealth mode
 
-A master switch gates twelve effects; each sub-flag is stored separately, so a
+A master switch gates fourteen effects; each sub-flag is stored separately, so a
 user can choose which to use. Above the switches sits a privacy level —
-Standard, High, Ultra — that writes a documented set of them in one tap. The
+Standard, High, Ultra — that writes a documented set of twelve of them in one
+tap (the two it leaves alone are described below). The
 level is deliberately not stored: it is read back from the switches it would
 have written (`StealthPreset.of`), so the radio cannot claim a level the traffic
 is not getting after a restore, a backup from another device, or an older build
@@ -291,6 +292,37 @@ level the master leaves off is a level no packet sees.
   They ride the WebRTC scriptlet injection path rather than
   `rust/assets/scriptlets.json`, because that asset feeds the `$scriptlet` rule
   pipeline and these guards are not rule-addressable.
+
+- **Anti-DPI** — AdGuard's `Bảo vệ chống lại DPI`, whose documented mechanism is
+  modifying packets at a low level so a middlebox cannot read what it wants from
+  one of them. Here that is the first flight of a connection: when the bytes
+  leaving for the origin start with a TLS handshake record and nothing the origin
+  was asked for has gone out yet — a SOCKS5 greeting precedes the hello and does
+  not spend that opening — `Relay::anti_dpi_head` cuts the write at 24 bytes, so
+  the `ClientHello` arrives as a header segment the extensions follow in a second
+  `send()`. A device that reassembles only what one packet holds stops being able
+  to read the server name out of it. TCP reassembles the bytes either way, so the
+  site sees the same hello; the cost is one syscall per new connection and the
+  switch is off until asked for. Bulk traffic is untouched — the cut is decided
+  per connection, not per write. That one syscall is only cheap because peer
+  sockets carry `TCP_NODELAY`: without it the 24-byte opening leaves the rest of
+  the hello to Nagle, which holds it a full round trip waiting for an
+  acknowledgement that says nothing, so every connection would start late. The
+  option is set for every origin socket at dial time, not behind the switch,
+  because a client that writes short bursts already pays the same toll.
+- **Mask IP address** — `Địa chỉ IP mặt nạ`, kept honest about what it is: the
+  address is written into `X-Forwarded-For` on every filtered request, *set*
+  rather than appended, so the page reads one address and no other. AdGuard's own
+  knowledge base says tracking protection cannot hide the real address, and this
+  app does not pretend otherwise — the subtitle says the traffic still leaves
+  from where it leaves from. Hiding it would mean routing through somebody else's
+  machine, which is a product this app is not. The field keeps the text as typed
+  and the core only applies it when it parses, so a half-typed value adds no
+  header and a nonsense one restored from a backup adds no header either.
+
+Neither is one of the privacy levels' twelve: a level promises what a site sees,
+and these change what a middlebox sees and what an address a page is *told*.
+Picking a level leaves both switches as the user had them.
 
 Every one of these defaults to off, so an install that never opens the screen
 behaves byte-for-byte as before the switches existed, and the request hot path
@@ -948,14 +980,33 @@ The platform layer owns lifecycle and presentation, not filtering decisions.
   (re-checked on resume, screen-on, tunnel start and settings changes). AdGuard
   keeps the equivalent reminder until the certificate is installed.
 - **Dropped protection** — when the tunnel dies while the user still expects it
-  (`onDestroy` or `onRevoke` with the flag still set), one silent low-priority
-  notification says so and taps back into enable through
-  `ACTION_ENABLE_PROTECTION`, which raises the system consent dialog. There is
-  no alarm and no restart attempt: Android 10+ needs the user's `prepareVpn`
-  confirmation, so a silent relaunch would be a lie either way. A stop the user
-  made themselves — the switch, the tile, the notification action — is never
-  reported, which is why the decision is a pure function of the state captured
-  before the teardown.
+  (`onDestroy` or `onRevoke` with the flag still set), one notification says so
+  and taps back into enable through `ACTION_ENABLE_PROTECTION`, which raises the
+  system consent dialog. A stop the user made themselves — the switch, the tile,
+  the notification action — is never reported, which is why the decision is a
+  pure function of the state captured before the teardown.
+- **Tunnel restart** — a failed `establish()` is retried rather than announced:
+  three attempts on a doubling backoff (1 s, 2 s, 4 s), each of them silent. A
+  retry is skipped and the alert posted only when Android wants consent again
+  (`VpnService.prepare` returns non-null) or the attempts run out; either way
+  `isProtectionActive` is written off first, so a tunnel the user did not lose
+  does not go on looking like it is up. If the system is keeping the VPN —
+  `isAlwaysOn()`, which the service becomes eligible for through the
+  `SUPPORTS_ALWAYS_ON` meta-data in the manifest — neither the retry nor the
+  alert happens: the platform is already rebuilding that tunnel and a second
+  owner competing with it would be the fault, not the fix. Consent is the one
+  thing a restart cannot obtain silently, because Android 10+ requires the
+  user's `prepareVpn` confirmation; the failure path therefore ends in a tap,
+  never in a relaunch behind the user's back. `teardownTunnel` closes the
+  interface and stops the core on every exhausted path, so a half-built tunnel
+  cannot leave the device black-holed with `isRunning` already false.
+- **Notification channels** — the ongoing status notification, the certificate
+  reminder and the update report ride the LOW `adfree_status` channel: the
+  status line redraws every ten seconds with the counters, and an audible
+  channel would turn that into a sound the user cannot explain. The one thing
+  worth hearing — protection stopped without being asked — has its own DEFAULT
+  channel, `adfree_protection`, created beside the other at tunnel start so the
+  settings screen lists both.
 - **Automation** — `AutomationReceiver` is exported and takes two actions,
   `git.shin.adfree.automation.ENABLE_PROTECTION` and
   `…DISABLE_PROTECTION`, so Tasker's "Send Intent" can drive protection. They
@@ -1148,9 +1199,21 @@ issue tracker, release notes and measured behavior rather than from code.
   in BENCHMARK.md. AdGuard has no allow window at all, so the parity here is on
   the shipped default, not on the optional feature.
 - **Website allowlist.** AdGuard keeps `Danh sách trắng` as its own screen,
-  separate from user rules, and AdFree now does the same. What it does not copy
-  is a per-rule enable switch: `!`-prefixed lines are stripped before rules
-  reach the core, so a "disabled" exception would be deleted rather than parked.
+  separate from user rules, and AdFree does the same, with the same per-rule
+  enable switch: switching a rule off writes AdGuard's own `!` mark onto the rule
+  text (`!@@||example^`), which every reader in this app already treats as inert,
+  so the exception is parked rather than deleted and comes back with its text
+  intact. What the screen does not do is hide the parked rows: a switched-off
+  rule stays in the list, struck through and badged `Off`, because a rule that
+  silently disappears looks like a rule that was deleted.
+- **Anti-DPI and mask IP.** AdGuard's `Bảo vệ chống lại DPI` fragments what a
+  deep-packet-inspection device reads; AdFree splits the first handshake write
+  and nothing else, which is the same claim at the same layer for the one thing
+  DPI actually reads — the server name. Its `Địa chỉ IP mặt nạ` is header
+  spoofing, not egress masking, and AdFree ships exactly that with the same
+  caveat in the row's own subtitle; the address a page is shown is not the
+  address the traffic leaves from. Neither feature needs or gets a new outbound
+  connection.
 - **Company breakdown.** AdGuard labels traffic by service from its own
   database — `assets/preset/trackers.json` in the APK, 4552 domains, shipped at
   build time with no update endpoint. AdFree uses the same dataset, converted to

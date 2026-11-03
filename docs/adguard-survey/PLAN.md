@@ -521,6 +521,48 @@ section recommended.
 - Allowlist (`67`): closed by `1b34e10` with the dedicated screen this section
   called cosmetic parity. The HTTPS website rules stay what they are — the
   per-module skip/only lists — and the new screen owns the `@@` exceptions.
+- The four rows this file parked as out of scope are shipped, and the fifth is
+  scoped instead of dropped:
+  - `Bảo vệ chống lại DPI` splits the first ClientHello flight into two writes on
+    the relay's origin-bound path (`Relay::anti_dpi_head`, 24 bytes then the
+    rest), behind the stealth master switch. One extra `send()` per new
+    connection; nothing is hidden from the site, only from whatever reads the
+    wire. The opening is counted from the bytes the origin was asked for, not
+    from every write on the peer socket: a proxied flow greets SOCKS5 first, and
+    `engine::tests::the_socks5_greeting_leaves_the_anti_dpi_opening_for_the_hello`
+    fails if that greeting is allowed to spend it. Peer sockets carry
+    `TCP_NODELAY` from dial time — `open_peer_socket` sets it, and
+    `engine::tests::a_peer_socket_is_not_nagle_delayed` reads it back — because
+    the 24-byte opening otherwise leaves the rest of the hello to Nagle, which
+    costs a round trip on every new connection and would make the switch a
+    latency regression rather than a privacy one.
+  - `Địa chỉ IP mặt nạ` sets `X-Forwarded-For` to the address the user typed on
+    every filtered request, and its subtitle says what AdGuard's own knowledge
+    base says: the address a page is shown is not the address the traffic
+    leaves from. A real mask needs an exit through somebody else's machine,
+    which stays out of scope.
+  - Silent VPN restart: `scheduleTunnelRetry` retries three times on a doubling
+    backoff, and only falls back to the alert when Android actually wants
+    consent again (`VpnService.prepare` non-null) or the retries run out. The
+    service declares `SUPPORTS_ALWAYS_ON`, so on a device told to keep the
+    tunnel the platform rebuilds it and AdFree stays quiet rather than
+    reporting a loss it did not cause.
+  - Per-rule enable on the allowlist screen parks an exception as `!@@…`
+    instead of deleting it. The mark survives in the user-rule text and every
+    reader already treats a `!` line as inert — the compiled engine, the
+    cosmetic and `$` side scanners, and the screen's own list — so a switched-off
+    rule costs nothing and comes back with its text intact.
+  - The audible alert moved to its own DEFAULT channel (`adfree_protection`).
+    The ongoing status notification stays on the LOW channel it has always
+    used: it redraws every ten seconds, and a DEFAULT channel would make that
+    a sound.
+  Owed on device: the always-on restart (kill the tunnel from Settings while
+  the system keeps the VPN, and confirm no alert fires), the consent-lost alert
+  (revoke and confirm the DEFAULT channel sounds), one allowlist rule switched
+  off and back on across an app restart, the anti-DPI switch against a real
+  page load — with a time-to-first-byte comparison against the switch off, so
+  the cost of the split lands in `BENCHMARK.md` as a measured number rather than
+  a claim — and the mask header read by a witness origin.
 - Rust tests: v5→v6 migration keeps row counts and old rows read with
   defaults; `flags` transport/roaming round-trip; `GROUP BY app, category`
   counts; per-app routing override; DNS-only lists do not match HTTP rules.
@@ -915,15 +957,11 @@ section recommended.
 - Wikidata as a company-name source: the datasets below already name every
   domain, so the build-time P856 (official website) merge this file used to
   propose for scaling `rust/assets/services.tsv` is no longer needed.
-- Mask-IP and any DPI-resistant transport: both are network-egress features, and
-  this app's rule is no telemetry and no new outbound service.
-- Silent VPN restart. Android 10+ requires the user's `prepareVpn` confirmation,
-  so a dropped tunnel is reported (`fa79e84`), never re-established behind the
-  user's back.
-- Per-rule enable/disable on the allowlist screen: `!`-prefixed lines are
-  stripped before rules reach the core, so a "disabled" exception would be
-  deleted rather than parked.
-- Switching AdFree to a DEFAULT-importance channel.
+- A real IP mask, as opposed to the advertised one. AdGuard's own knowledge base
+  says tracking protection cannot hide the address, and its `Địa chỉ IP mặt nạ`
+  only writes one into `X-Forwarded-For`, which AdFree now does too (stealth
+  section). Hiding the address means the traffic leaves through somebody else's
+  machine, and this app makes no outbound connection the user did not ask for.
 - Any network/telemetry feature. The automation receiver (`e7430ef`) is the only
   externally reachable surface added, and it is default-off, token-gated, and
   excluded from OS backup along with its token.

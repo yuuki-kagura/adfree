@@ -28,12 +28,21 @@ telemetry.
   can be routed or excluded in the UI.
 - **Cosmetic filtering and userscripts** — injected page runtime with
   `@require` and a safe subset of the GM APIs.
+- **Tracking protection** — one master switch over fourteen edits: the header
+  and cookie rewrites a site sees, the browser-API guards a page sees, the split
+  of a connection's first handshake write so a deep-inspection device cannot
+  read the site name out of one packet (anti-DPI), and the address a site is told
+  made the request (mask IP — a header, not an exit, and the row says so). Three
+  privacy levels write twelve of them in one tap; the last two are not a level's
+  business and survive whichever level is picked.
 - **Smart filtering** — off by default. When switched on, a host the same app
   has been blocked on seven times in ten seconds gets a one-minute pass, so a
   retry loop stops burning CPU. It is opt-in because the pass makes that host
   reachable for a minute.
 - **Website exceptions** — the ad-blocking module opens its own allowlist
-  screen: the `@@` rules as domains, with search, add and delete.
+  screen: the `@@` rules as domains, with search, add, delete, and a switch per
+  rule. Switching one off writes AdGuard's `!` mark onto the rule text instead of
+  deleting it, so the exception comes back with its text intact.
 - **Company breakdown** — the Statistics view groups blocked traffic by domain
   and labels each with the company, service and category recorded in a
   `services.tsv` built from AdGuard's own tracker dataset plus Ghostery
@@ -59,9 +68,13 @@ rules). The Security Lab is reachable from Settings, along with the backup pair,
 the diagnostics level and the automation gate.
 
 If the system drops the tunnel while protection is still expected — a revoke, an
-OEM battery saver, another app taking the VPN — one silent notification says so
-and taps back into enable. AdFree never restarts the tunnel behind the user's
-back: Android 10+ requires the confirmation for that.
+OEM battery saver, another app taking the VPN — AdFree reopens it, three attempts
+on a doubling delay, without asking. What it cannot do silently is obtain VPN
+consent: when Android wants the confirmation again, or the attempts run out, one
+notification you can hear taps back into enable. Where the system has been told
+to keep this VPN up (always-on), AdFree posts nothing and starts nothing — the
+platform is already rebuilding that tunnel, and a second owner competing with it
+is the fault rather than the fix.
 
 ## Build
 
