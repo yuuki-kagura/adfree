@@ -438,6 +438,12 @@ class AdGuardVpnService : VpnService() {
     }
 
     override fun onDestroy() {
+        // Read before stopVpn() clears it: whether the tunnel was up and the
+        // switch still expected it is what tells a kill apart from a stop.
+        val dropped = shouldReportDroppedProtection(
+            wasRunning = isRunning,
+            protectionExpected = container.repository.settings.value.isProtectionActive,
+        )
         serviceScope.cancel()
         runCatching { contentResolver.unregisterContentObserver(privateDnsObserver) }
         runCatching { unregisterReceiver(screenReceiver) }
@@ -445,13 +451,21 @@ class AdGuardVpnService : VpnService() {
         runCatching { connectivity?.unregisterNetworkCallback(networkCallback) }
         activeTransports.clear()
         stopVpn()
+        if (dropped) postDroppedAlert()
         super.onDestroy()
     }
 
     override fun onRevoke() {
         Log.i(TAG, "VPN revoked by user/system")
+        // The switch still says the tunnel should be up: it is this call that
+        // says otherwise, so the expectation has to be read before it.
+        val dropped = shouldReportDroppedProtection(
+            wasRunning = isRunning,
+            protectionExpected = container.repository.settings.value.isProtectionActive,
+        )
         container.repository.toggleProtection(false)
         stopVpn()
+        if (dropped) postDroppedAlert()
         super.onRevoke()
     }
 
@@ -613,6 +627,40 @@ class AdGuardVpnService : VpnService() {
         getSystemService(NotificationManager::class.java)?.notify(NOTIFICATION_ID, notification)
     }
 
+    /**
+     * One alert for a tunnel the user never stopped: Android will not let the
+     * service put the session back without a fresh consent dialog, so this says
+     * what happened and taps into the enable flow instead of retrying behind the
+     * user's back. A separate id from the ongoing notification, so the shade
+     * still shows it after `stopForeground` took the tunnel's notification away.
+     */
+    private fun postDroppedAlert() {
+        val ui = localizedContext()
+        createNotificationChannel()
+        val open = PendingIntent.getActivity(
+            this,
+            4,
+            Intent(this, MainActivity::class.java).apply {
+                action = MainActivity.ACTION_ENABLE_PROTECTION
+                flags = Intent.FLAG_ACTIVITY_NEW_TASK or
+                    Intent.FLAG_ACTIVITY_CLEAR_TOP or
+                    Intent.FLAG_ACTIVITY_SINGLE_TOP
+            },
+            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
+        )
+        val notification = NotificationCompat.Builder(this, NOTIFICATION_CHANNEL_ID)
+            .setContentTitle(ui.getString(R.string.vpn_notification_dropped_title))
+            .setContentText(ui.getString(R.string.vpn_notification_dropped_text))
+            .setSmallIcon(R.drawable.ic_qs_shield)
+            .setContentIntent(open)
+            .setAutoCancel(true)
+            .setSilent(true)
+            .setPriority(NotificationCompat.PRIORITY_LOW)
+            .setCategory(NotificationCompat.CATEGORY_SERVICE)
+            .build()
+        getSystemService(NotificationManager::class.java)?.notify(DROPPED_ALERT_ID, notification)
+    }
+
     /** Applies the transient pause and redraws the foreground notification. */
     private fun setPaused(paused: Boolean) {
         container.coreEngine.setProtectionPaused(paused)
@@ -637,6 +685,13 @@ class AdGuardVpnService : VpnService() {
         private const val CAPTURE_SHELL_MARKER = "capture-shell"
         const val NOTIFICATION_CHANNEL_ID = "adfree_status"
         private const val NOTIFICATION_ID = 1001
+
+        /**
+         * The dropped-tunnel alert. Ids are app-global, not per channel, and the
+         * two hash-based notifiers occupy 1003..66538 and 2000..67536, so this
+         * sits above both rather than replacing one of their rows.
+         */
+        private const val DROPPED_ALERT_ID = 70_000
         /** Stats change slowly enough that ten seconds is imperceptible. */
         private const val NOTIFICATION_STATS_INTERVAL_MS = 10_000L
         private const val TUN_ADDRESS = "10.111.42.1"

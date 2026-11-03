@@ -37,3 +37,14 @@ object VpnActions {
 /** The pause/resume button the notification shows for [paused]. */
 fun vpnToggleAction(paused: Boolean): String =
     if (paused) VpnActions.RESUME else VpnActions.PAUSE
+
+/**
+ * Whether the user has to be told protection went away. Both halves are needed:
+ * a stop the user asked for has already turned the remembered switch off by the
+ * time the service dies, and a reconfigure stop leaves `wasRunning` false before
+ * `onDestroy` runs, so neither produces an alert for a tunnel that was meant to
+ * come back. A revoke or a system kill leaves the switch on with a live tunnel,
+ * and that is the case the user did not choose.
+ */
+fun shouldReportDroppedProtection(wasRunning: Boolean, protectionExpected: Boolean): Boolean =
+    wasRunning && protectionExpected

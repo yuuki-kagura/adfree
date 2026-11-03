@@ -256,6 +256,8 @@
     <string name="vpn_notification_assistant">Assistant</string>
     <string name="vpn_notification_disabled_title">Protection is disabled</string>
     <string name="vpn_notification_disabled_text">Ads and trackers are not blocked. Tap to enable</string>
+    <string name="vpn_notification_dropped_title">Protection stopped by the system</string>
+    <string name="vpn_notification_dropped_text">The VPN tunnel closed while AdFree was still meant to be blocking. Android needs your confirmation to open it again - tap to turn protection back on</string>
     <string name="vpn_start_blocked_title">AdFree could not start</string>
     <string name="vpn_start_blocked_text">Tap to open AdFree and restart protection</string>
     <string name="tile_state_on">Protection on</string>

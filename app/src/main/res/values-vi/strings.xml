@@ -255,6 +255,8 @@
     <string name="vpn_notification_assistant">Trợ lý</string>
     <string name="vpn_notification_disabled_title">Bảo vệ bị vô hiệu hóa</string>
     <string name="vpn_notification_disabled_text">Quảng cáo và trình theo dõi không bị chặn. Nhấn để bật</string>
+    <string name="vpn_notification_dropped_title">Hệ thống đã dừng bảo vệ</string>
+    <string name="vpn_notification_dropped_text">Đường hầm VPN đã đóng trong khi AdFree vẫn cần chặn quảng cáo. Android cần bạn xác nhận để mở lại - nhấn để bật lại bảo vệ</string>
     <string name="vpn_start_blocked_title">AdFree không thể khởi động</string>
     <string name="vpn_start_blocked_text">Chạm để mở AdFree và bật lại bảo vệ</string>
     <string name="tile_state_on">Đang bảo vệ</string>
