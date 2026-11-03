@@ -49,6 +49,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import git.shin.adfree.R
+import git.shin.adfree.data.serviceSubtitle
 import git.shin.adfree.data.servicesKnownByCompany
 import git.shin.adfree.model.AppFirewallRule
 import git.shin.adfree.model.AppUsageRange
@@ -573,6 +574,7 @@ private fun AppStatRow(app: AppFirewallRule, onClick: () -> Unit) {
  * One domain in the services breakdown. AdGuard's rows read "company" over
  * "domain"; the name is kept under it whenever the table supplied a company, so
  * a row the table does not know shows only the name and claims nothing else.
+ * The category the dataset carries goes on the same line when it has one.
  */
 @Composable
 private fun ServiceStatRow(row: ServiceUsage) {
@@ -608,7 +610,7 @@ private fun ServiceStatRow(row: ServiceUsage) {
             )
             if (row.company.isNotBlank()) {
                 Text(
-                    text = row.domain,
+                    text = serviceSubtitle(row),
                     fontSize = 11.sp,
                     color = AdGuardTextMuted,
                     maxLines = 1,

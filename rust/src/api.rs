@@ -743,6 +743,10 @@ pub struct DomainUsage {
     /// The company that owns the domain, from the services table. Empty when
     /// the table has no row: the UI shows the name and claims nothing more.
     pub company: String,
+    /// What kind of service the table says this is: advertising, analytics.
+    /// Empty when the row has no category, which is the two-column form this
+    /// project authored before the datasets arrived.
+    pub category: String,
     /// Requests the engine answered without forwarding.
     pub blocked: u32,
     /// Every request in the window, allowed and blocked.
@@ -808,12 +812,16 @@ pub fn core_domain_usage_since(since_ms: i64, transport: i32) -> Vec<DomainUsage
             store
                 .log_usage_by_domain(since_ms, transport as i64)
                 .into_iter()
-                .map(|row| DomainUsage {
-                    company: services.company(&row.domain).unwrap_or_default(),
-                    domain: row.domain,
-                    blocked: row.blocked.min(u32::MAX as i64) as u32,
-                    requests: row.requests.min(u32::MAX as i64) as u32,
-                    bytes_saved: row.bytes_saved as u64,
+                .map(|row| {
+                    let entry = services.entry(&row.domain).unwrap_or_default();
+                    DomainUsage {
+                        company: entry.company,
+                        category: entry.category,
+                        domain: row.domain,
+                        blocked: row.blocked.min(u32::MAX as i64) as u32,
+                        requests: row.requests.min(u32::MAX as i64) as u32,
+                        bytes_saved: row.bytes_saved as u64,
+                    }
                 })
                 .collect()
         }
@@ -1003,13 +1011,16 @@ pub fn core_filter_remove(id: String) -> bool {
     })
 }
 
-/// Downloads a services table (domain, company) into `filters/services.tsv`,
-/// replacing the one this build ships.
+/// Downloads a services table into `filters/services.tsv`, replacing the one
+/// this build ships.
 ///
-/// The body is checked before it is kept: the lookup binary searches, so a
-/// table that is not byte-sorted on the domain column would answer with
-/// silent misses, and a file with no rows at all is not a table. Either way
-/// the previous copy survives.
+/// A body in any of the tracker-dataset shapes is converted to this app's
+/// format first ([`crate::services::import`]), so a subscription to AdGuard's,
+/// Ghostery's or DuckDuckGo's data lands as the same sorted table the lookup
+/// reads. Then it is checked before it is kept: a table that is not byte-sorted
+/// on the domain column would answer with silent misses, and a body with no
+/// rows at all is not a table. Nothing is written until the body has passed, so
+/// a refused update leaves the previous copy in charge.
 #[uniffi::export]
 pub fn core_services_fetch(url: String) -> DownloadOutcome {
     guard(
@@ -1019,36 +1030,67 @@ pub fn core_services_fetch(url: String) -> DownloadOutcome {
                 return download_failure(DownloadError::StoreUnavailable, "store is not open");
             };
             let dir = store.filters_dir();
-            let outcome = match crate::assets::fetch(
-                &dir,
-                crate::services::OVERRIDE_ID,
-                "tsv",
-                &url,
-                false,
-            ) {
-                Ok(o) => o,
+            let body = match crate::assets::fetch_body(&url) {
+                Ok(body) => body,
                 Err(e) => return download_failure(classify_download(&e), &e),
             };
-            let reject = match crate::assets::read_text(&dir, crate::services::OVERRIDE_ID, "tsv")
-                .as_deref()
-            {
-                Some(body)
-                    if crate::services::row_count(body) > 0 && crate::services::is_sorted(body) =>
-                {
-                    None
-                }
-                Some(_) => Some("the table is not a sorted domain list"),
-                None => Some("the table could not be read back"),
-            };
-            match reject {
-                Some(message) => {
-                    crate::assets::remove(&dir, crate::services::OVERRIDE_ID, "tsv");
-                    download_failure(DownloadError::Empty, message)
-                }
-                None => to_outcome(outcome),
+            match keep_services_body(&dir, &body) {
+                Ok(outcome) => to_outcome(outcome),
+                Err(message) => download_failure(DownloadError::Empty, &message),
             }
         },
     )
+}
+
+/// Stores a services table the platform already has (imported from a file),
+/// through the same conversion and checks as a download. DuckDuckGo publishes
+/// its radar as a directory of per-domain files, so a merged body has to arrive
+/// this way rather than from a URL. The outcome says why a body was refused, in
+/// which case nothing on disk changed.
+#[uniffi::export]
+pub fn core_services_save(text: String) -> DownloadOutcome {
+    guard(
+        download_failure(DownloadError::StoreUnavailable, "store is not open"),
+        || {
+            let Some(store) = crate::core().store() else {
+                return download_failure(DownloadError::StoreUnavailable, "store is not open");
+            };
+            if let Err(e) = crate::assets::check_size(&text) {
+                return download_failure(DownloadError::Empty, &e);
+            }
+            let dir = store.filters_dir();
+            match keep_services_body(&dir, &text) {
+                Ok(outcome) => to_outcome(outcome),
+                Err(message) => download_failure(DownloadError::Empty, &message),
+            }
+        },
+    )
+}
+
+/// Converts and checks a body, then stores it as the services table. The error
+/// says why a body cannot be kept, in which case the file on disk is still the
+/// one that was there before.
+fn keep_services_body(dir: &std::path::Path, raw: &str) -> Result<crate::assets::Outcome, String> {
+    let table = crate::services::import::to_table(raw)?;
+    if crate::services::row_count(&table) == 0 {
+        return Err("the body is not a domain table".to_string());
+    }
+    if !crate::services::is_sorted(&table) {
+        return Err("the table is not a sorted domain list".to_string());
+    }
+    crate::assets::save(
+        dir,
+        crate::services::OVERRIDE_ID,
+        crate::services::OVERRIDE_EXT,
+        &table,
+    )?;
+    crate::assets::state(
+        dir,
+        crate::services::OVERRIDE_ID,
+        crate::services::OVERRIDE_EXT,
+        false,
+    )
+    .ok_or_else(|| "the table could not be re-read".to_string())
 }
 
 /// The downloaded services table, if the user subscribes to one. `None` means
@@ -1593,6 +1635,37 @@ mod tests {
     fn core_starts_and_stops_without_a_tun() {
         // Starting without a valid descriptor must not panic; it just stops.
         assert!(!core_is_running() || core_is_running());
+    }
+
+    #[test]
+    fn a_refused_services_body_leaves_the_previous_one_in_place() {
+        let dir = std::env::temp_dir().join(format!("adfree-services-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let keep = "example.com\tExample\n";
+        crate::assets::save(
+            &dir,
+            crate::services::OVERRIDE_ID,
+            crate::services::OVERRIDE_EXT,
+            keep,
+        )
+        .unwrap();
+        // Two rows out of order: the lookup binary searches, so this cannot be
+        // kept, and it must not be written either.
+        let refused = "z.example\tZ\na.example\tA\n";
+        assert!(keep_services_body(&dir, refused).is_err());
+        assert_eq!(
+            crate::assets::read_text(
+                &dir,
+                crate::services::OVERRIDE_ID,
+                crate::services::OVERRIDE_EXT
+            )
+            .as_deref(),
+            Some(keep),
+            "a refused update leaves the table the lookup was using"
+        );
+        assert!(keep_services_body(&dir, "z.example\tZ\n").is_ok());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
 

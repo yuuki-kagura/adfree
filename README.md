@@ -35,9 +35,10 @@ telemetry.
 - **Website exceptions** — the ad-blocking module opens its own allowlist
   screen: the `@@` rules as domains, with search, add and delete.
 - **Company breakdown** — the Statistics view groups blocked traffic by domain
-  and labels each with the company that owns it, from a `services.tsv` authored
-  for this project. Off by default: the grouping is a second query over the
-  whole window.
+  and labels each with the company, service and category recorded in a
+  `services.tsv` built from AdGuard's own tracker dataset plus Ghostery
+  TrackerDB, updatable from a URL or a file like any filter list. Off by
+  default: the grouping is a second query over the whole window.
 - **Proactive security notice** — when a security list blocks a domain, one
   localized notification per domain per hour opens the log filtered to it.
 - **Request log** — decisions and statistics persist in SQLite and feed the
@@ -77,6 +78,21 @@ Requirements:
 ./gradlew :app:verifyBindings               # regenerate Kotlin bindings after Rust API changes
 ./gradlew :app:assembleDebug -PskipNative   # UI only, no native build
 ```
+
+The company table ships at `rust/assets/services.tsv`. To rebuild it from
+tracker datasets — AdGuard's `trackers.json`, Ghostery TrackerDB, DuckDuckGo
+Tracker Radar, or an existing TSV for the rows to merge over — in precedence
+order:
+
+```bash
+cd rust && cargo run --example services_dataset -- <body> <body> … [--out <path>]
+```
+
+A user can update the table without a rebuild: subscribe to a URL from the
+Filters screen, or import a file there. The core converts either to the shipped
+format before it keeps it, and leaves the previous table in place when the body
+is not a sorted domain list. DuckDuckGo publishes its radar as one JSON file per
+region, so it comes in through the file picker, joined first.
 
 ## Test
 

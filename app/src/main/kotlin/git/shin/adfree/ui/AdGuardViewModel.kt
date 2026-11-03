@@ -664,6 +664,7 @@ class AdGuardViewModel(
                 repository.setServicesBreakdownVisible(intent.visible)
             is AdGuardIntent.SetServicesTableUrl -> repository.setServicesTableUrl(intent.url)
             AdGuardIntent.RefreshServicesTable -> repository.refreshServicesTable()
+            is AdGuardIntent.ImportServicesTable -> repository.importServicesTable(intent.uri)
             is AdGuardIntent.RunThreatScan -> handleThreatScan(intent.domain)
             is AdGuardIntent.ResetAiLab -> _aiLabState.value = AiLabUiState.Idle
             is AdGuardIntent.UpdateStealth -> repository.updateStealthSetting(

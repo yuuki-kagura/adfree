@@ -827,6 +827,8 @@ internal object IntegrityCheckingUniffiLib {
     ): Int
     external fun uniffi_adfree_core_checksum_func_core_services_remove(
     ): Int
+    external fun uniffi_adfree_core_checksum_func_core_services_save(
+    ): Int
     external fun uniffi_adfree_core_checksum_func_core_services_state(
     ): Int
     external fun uniffi_adfree_core_checksum_func_core_set_data_root(
@@ -1023,6 +1025,8 @@ internal object UniffiLib {
     ): RustBuffer.ByValue
     external fun uniffi_adfree_core_fn_func_core_services_remove(uniffi_out_err: UniffiRustCallStatus, 
     ): Byte
+    external fun uniffi_adfree_core_fn_func_core_services_save(`text`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    ): RustBuffer.ByValue
     external fun uniffi_adfree_core_fn_func_core_services_state(uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
     external fun uniffi_adfree_core_fn_func_core_set_data_root(`path`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
@@ -1344,10 +1348,13 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
     if ((lib.uniffi_adfree_core_checksum_func_core_scripts_save() and 0xFFFF) != 31369) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if ((lib.uniffi_adfree_core_checksum_func_core_services_fetch() and 0xFFFF) != 55690) {
+    if ((lib.uniffi_adfree_core_checksum_func_core_services_fetch() and 0xFFFF) != 35017) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if ((lib.uniffi_adfree_core_checksum_func_core_services_remove() and 0xFFFF) != 10620) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if ((lib.uniffi_adfree_core_checksum_func_core_services_save() and 0xFFFF) != 15462) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if ((lib.uniffi_adfree_core_checksum_func_core_services_state() and 0xFFFF) != 65196) {
@@ -3216,6 +3223,13 @@ data class DomainUsage (
     var `company`: kotlin.String
     , 
     /**
+     * What kind of service the table says this is: advertising, analytics.
+     * Empty when the row has no category, which is the two-column form this
+     * project authored before the datasets arrived.
+     */
+    var `category`: kotlin.String
+    , 
+    /**
      * Requests the engine answered without forwarding.
      */
     var `blocked`: kotlin.UInt
@@ -3244,6 +3258,7 @@ public object FfiConverterTypeDomainUsage: FfiConverterRustBuffer<DomainUsage> {
         return DomainUsage(
             FfiConverterString.read(buf),
             FfiConverterString.read(buf),
+            FfiConverterString.read(buf),
             FfiConverterUInt.read(buf),
             FfiConverterUInt.read(buf),
             FfiConverterULong.read(buf),
@@ -3253,6 +3268,7 @@ public object FfiConverterTypeDomainUsage: FfiConverterRustBuffer<DomainUsage> {
     override fun allocationSize(value: DomainUsage) = (
             FfiConverterString.allocationSize(value.`domain`) +
             FfiConverterString.allocationSize(value.`company`) +
+            FfiConverterString.allocationSize(value.`category`) +
             FfiConverterUInt.allocationSize(value.`blocked`) +
             FfiConverterUInt.allocationSize(value.`requests`) +
             FfiConverterULong.allocationSize(value.`bytesSaved`)
@@ -3261,6 +3277,7 @@ public object FfiConverterTypeDomainUsage: FfiConverterRustBuffer<DomainUsage> {
     override fun write(value: DomainUsage, buf: ByteBuffer) {
             FfiConverterString.write(value.`domain`, buf)
             FfiConverterString.write(value.`company`, buf)
+            FfiConverterString.write(value.`category`, buf)
             FfiConverterUInt.write(value.`blocked`, buf)
             FfiConverterUInt.write(value.`requests`, buf)
             FfiConverterULong.write(value.`bytesSaved`, buf)
@@ -6881,13 +6898,16 @@ public object FfiConverterSequenceTypeUidApps: FfiConverterRustBuffer<List<UidAp
     
 
         /**
-         * Downloads a services table (domain, company) into `filters/services.tsv`,
-         * replacing the one this build ships.
+         * Downloads a services table into `filters/services.tsv`, replacing the one
+         * this build ships.
          *
-         * The body is checked before it is kept: the lookup binary searches, so a
-         * table that is not byte-sorted on the domain column would answer with
-         * silent misses, and a file with no rows at all is not a table. Either way
-         * the previous copy survives.
+         * A body in any of the tracker-dataset shapes is converted to this app's
+         * format first ([`crate::services::import`]), so a subscription to AdGuard's,
+         * Ghostery's or DuckDuckGo's data lands as the same sorted table the lookup
+         * reads. Then it is checked before it is kept: a table that is not byte-sorted
+         * on the domain column would answer with silent misses, and a body with no
+         * rows at all is not a table. Nothing is written until the body has passed, so
+         * a refused update leaves the previous copy in charge.
          */ fun `coreServicesFetch`(`url`: kotlin.String): DownloadOutcome {
             return FfiConverterTypeDownloadOutcome.lift(
     uniffiRustCall() { _status ->
@@ -6909,6 +6929,24 @@ public object FfiConverterSequenceTypeUidApps: FfiConverterRustBuffer<List<UidAp
     UniffiLib.uniffi_adfree_core_fn_func_core_services_remove(
     
         _status)
+}
+    )
+    }
+    
+
+        /**
+         * Stores a services table the platform already has (imported from a file),
+         * through the same conversion and checks as a download. DuckDuckGo publishes
+         * its radar as a directory of per-domain files, so a merged body has to arrive
+         * this way rather than from a URL. The outcome says why a body was refused, in
+         * which case nothing on disk changed.
+         */ fun `coreServicesSave`(`text`: kotlin.String): DownloadOutcome {
+            return FfiConverterTypeDownloadOutcome.lift(
+    uniffiRustCall() { _status ->
+    UniffiLib.uniffi_adfree_core_fn_func_core_services_save(
+    
+        
+        FfiConverterString.lower(`text`),_status)
 }
     )
     }

@@ -509,6 +509,7 @@ fun FiltersScreen(
                         },
                         onSetUrl = { viewModel.onIntent(AdGuardIntent.SetServicesTableUrl(it)) },
                         onRefresh = { viewModel.onIntent(AdGuardIntent.RefreshServicesTable) },
+                        onImportFile = { viewModel.onIntent(AdGuardIntent.ImportServicesTable(it)) },
                     )
                 }
 
@@ -1101,7 +1102,9 @@ private fun UserRulesCard(
  * The domain-to-company table behind the Statistics breakdown. The switch
  * stays off by default: the group-by is a whole-window query and the labels
  * cost a disk read. A subscription is optional — with the URL empty the table
- * this build ships is used and nothing is downloaded.
+ * this build ships is used and nothing is downloaded. A file can be imported
+ * instead, which is how a dataset published as a directory (DuckDuckGo's radar)
+ * reaches the app.
  */
 @Composable
 private fun ServicesTableCard(
@@ -1111,10 +1114,16 @@ private fun ServicesTableCard(
     onToggleBreakdown: (Boolean) -> Unit,
     onSetUrl: (String) -> Unit,
     onRefresh: () -> Unit,
+    onImportFile: (String) -> Unit,
 ) {
     var draft by remember(url) { mutableStateOf(url) }
     val draftUrl = draft.trim()
     val draftError = if (draftUrl.isEmpty()) null else filterUrlError(draftUrl)
+    // The picker serves the merged-file case only: the core converts whatever
+    // body it is handed, so a JSON dataset and a plain table both arrive here.
+    val tablePicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        if (uri != null) onImportFile(uri.toString())
+    }
 
     Card(
         modifier = Modifier
@@ -1207,6 +1216,28 @@ private fun ServicesTableCard(
                             color = AdGuardTextMuted,
                         )
                     }
+                }
+                // Import is not tied to a subscription: a dataset published as a
+                // directory arrives as a file, whether or not a URL is set.
+                TextButton(
+                    onClick = { tablePicker.launch(arrayOf("application/json", "text/plain", "text/*", "*/*")) },
+                    modifier = Modifier.testTag("services_table_import"),
+                ) {
+                    Icon(
+                        Icons.Default.UploadFile,
+                        contentDescription = null,
+                        tint = AdGuardBlueDns,
+                        modifier = Modifier.size(16.dp),
+                    )
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text(
+                        stringResource(R.string.services_table_import),
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = AdGuardBlueDns,
+                    )
+                }
+                if (url.isNotBlank()) {
                     TextButton(
                         onClick = onRefresh,
                         modifier = Modifier.testTag("services_table_refresh"),

@@ -647,9 +647,10 @@
     <string name="filters_user_rules_title">Your rules</string>
     <string name="filters_user_rules_meta">%1$d rules • %2$d exceptions</string>
     <string name="services_table_title">Services table</string>
-    <string name="services_table_subtitle">Names the company behind each domain in the Statistics breakdown. Grouping the log is a query over the whole window, so the breakdown stays off until you switch it on.</string>
+    <string name="services_table_subtitle">Names the company behind each domain in the Statistics breakdown, and what kind of service it is. Grouping the log is a query over the whole window, so the breakdown stays off until you switch it on.</string>
     <string name="services_table_url_label">Subscription URL (optional)</string>
     <string name="services_table_reset">Built-in table</string>
+    <string name="services_table_import">Import a file</string>
     <string name="services_table_downloaded">Downloaded table: %1$s</string>
     <string name="services_table_shipped">Using the table that shipped with this build.</string>
     <string name="services_table_updated">Services table updated</string>

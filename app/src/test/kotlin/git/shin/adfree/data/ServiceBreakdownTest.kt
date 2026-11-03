@@ -59,15 +59,25 @@ class ServiceBreakdownTest {
         assertEquals(listOf("a.example", "b.example"), rows.map { it.domain })
     }
 
+    @Test
+    fun `the category a dataset carries joins the domain on the second line`() {
+        val withCategory = serviceRows(listOf(usage("doubleclick.net", "Google", blocked = 1, requests = 2, category = "advertising")))
+        val without = serviceRows(listOf(usage("doubleclick.net", "Google", blocked = 1, requests = 2)))
+        assertEquals("doubleclick.net · advertising", serviceSubtitle(withCategory.first()))
+        assertEquals("doubleclick.net", serviceSubtitle(without.first()))
+    }
+
     private fun usage(
         domain: String,
         company: String,
         blocked: Int,
         requests: Int,
         bytesSaved: Long = 0L,
+        category: String = "",
     ) = DomainUsage(
         domain = domain,
         company = company,
+        category = category,
         blocked = blocked.toUInt(),
         requests = requests.toUInt(),
         bytesSaved = bytesSaved.toULong(),

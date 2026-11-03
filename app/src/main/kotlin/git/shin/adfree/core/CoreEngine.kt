@@ -390,15 +390,28 @@ class CoreEngine {
      * cannot binary search, so a bad subscription leaves the previous one in
      * place. Blocking: call it off the main thread.
      */
-    fun downloadServicesTable(url: String): DownloadResult {
-        val outcome = runCatching { git.shin.adfree.core.coreServicesFetch(url) }
-            .getOrElse {
-                return DownloadResult(
-                    false,
-                    git.shin.adfree.core.DownloadError.NETWORK,
-                    it.javaClass.simpleName,
-                )
-            }
+    fun downloadServicesTable(url: String): DownloadResult =
+        servicesOutcome(runCatching { git.shin.adfree.core.coreServicesFetch(url) })
+
+    /**
+     * Stores a services table the platform has already read (a file the user
+     * picked), through the same conversion and checks as
+     * [downloadServicesTable]. Blocking: call it off the main thread.
+     */
+    fun saveServicesTable(text: String): DownloadResult =
+        servicesOutcome(runCatching { git.shin.adfree.core.coreServicesSave(text) })
+
+    /** The one shape both services entry points answer with. */
+    private fun servicesOutcome(
+        result: Result<git.shin.adfree.core.DownloadOutcome>,
+    ): DownloadResult {
+        val outcome = result.getOrElse {
+            return DownloadResult(
+                false,
+                git.shin.adfree.core.DownloadError.NETWORK,
+                it.javaClass.simpleName,
+            )
+        }
         if (!outcome.ok) return DownloadResult(false, outcome.error, outcome.message)
         return DownloadResult(
             ok = true,

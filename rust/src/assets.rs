@@ -83,6 +83,23 @@ pub fn fetch(
     Ok(state_of(&path, &body, with_meta))
 }
 
+/// Fetches a body with the same cap and timeout [`fetch`] uses, without
+/// touching disk. For a download that has to prove itself before the previous
+/// copy is replaced — the services table converts and sorts what it accepts.
+pub fn fetch_body(url: &str) -> Result<String, String> {
+    fetch_text(url, MAX_BODY_BYTES, Duration::from_secs(60))
+}
+
+/// The size limit a download enforces, applied to a body that arrived another
+/// way: the platform reads a file the user picked straight into a string, and
+/// nothing else on that path bounds it.
+pub fn check_size(text: &str) -> Result<(), String> {
+    if text.len() as u64 > MAX_BODY_BYTES {
+        return Err("the body is larger than any list this app accepts".to_string());
+    }
+    Ok(())
+}
+
 /// Writes `text` exactly like [`fetch`] would: temp file, then rename. Used
 /// for lists the user imported from a file, and pasted rules.
 pub fn save(dir: &Path, id: &str, ext: &str, text: &str) -> Result<PathBuf, String> {

@@ -1963,6 +1963,40 @@ class AdGuardRepository(
         }
     }
 
+    /**
+     * Replaces the table from a file the user picked. DuckDuckGo publishes its
+     * radar as a directory of per-domain files, so a merged body has to arrive
+     * this way rather than from a URL; the core converts whatever it gets and
+     * refuses a body it cannot binary search, leaving the previous table in
+     * place either way.
+     */
+    fun importServicesTable(uriText: String) {
+        scope.launch {
+            val uri = android.net.Uri.parse(uriText)
+            val text = withContext(Dispatchers.IO) {
+                runCatching {
+                    context.contentResolver.openInputStream(uri)
+                        ?.bufferedReader()
+                        ?.use { it.readText() }
+                }.getOrNull()
+            }
+            if (text.isNullOrBlank()) {
+                showTransientStatus(UiText.Resource(R.string.filter_file_unreadable))
+                return@launch
+            }
+            val result = withContext(Dispatchers.IO) { engine.saveServicesTable(text) }
+            _servicesState.value = withContext(Dispatchers.IO) { engine.servicesState() }
+            showTransientStatus(
+                if (result.ok) {
+                    UiText.Resource(R.string.services_table_updated)
+                } else {
+                    UiText.Formatted(R.string.services_table_failed, result.message)
+                },
+            )
+            if (result.ok && _settings.value.showServicesBreakdown) refreshAppUsage()
+        }
+    }
+
     /** Downloads the configured table now, reporting the outcome to the UI. */
     fun refreshServicesTable() {
         scope.launch {

@@ -314,11 +314,24 @@ opens the Phase 3 `FirewallAppRuleDetail` rather than a second sheet.
   "out of scope". `f153ee0` adds a domain breakdown to the Statistics screen,
   labelled with the company that owns each registrable domain and falling back
   to the plain domain when the table has no row. The labels come from
-  `rust/assets/services.tsv` (126 rows authored for this project — DuckDuckGo
-  Tracker Radar and Ghostery were rejected because both are CC BY-NC-SA 4.0 and
-  an app we distribute cannot carry NonCommercial). The table is compiled in
+  `rust/assets/services.tsv`, regenerated from the tracker datasets the survey
+  covered: AdGuard's own `assets/preset/trackers.json` (the shape its APK ships,
+  4552 domains) merged over Ghostery TrackerDB, plus the rows this project
+  authored first. 5,409 rows, every one with a company. DuckDuckGo Tracker Radar
+  is a supported import shape too, but it is published as a directory of
+  per-region JSON files, so it arrives through the file picker rather than a
+  URL. A row is tab-separated in AdGuard's own order — domain, company, service,
+  category — and the last two fields are optional, so the two-column rows this
+  project wrote before the datasets arrived still load. The table is compiled in
   with `include_str!`, looked up by suffix walk plus binary search over
   byte-sorted line offsets, and a downloaded override in `filters_dir` wins.
+  `core_services_fetch` and `core_services_save` convert any of those shapes to
+  the canonical table before they keep it, so subscribing to a raw
+  `trackers.json` URL works, and the shipped table and an imported file go
+  through the same Rust code (`cargo run --example services_dataset`).
+  Licensing is the maintainer's call — the app is open source and the dataset
+  terms are theirs to settle, so CC BY-NC-SA is no longer a reason to reject a
+  source.
   `show_services_breakdown` defaults off because the second `GROUP BY` costs a
   query per refresh; the refresh piggybacks on the existing filter-update loop.
 - `log_events` stores per-app attribution, so these aggregates are a new
@@ -446,8 +459,10 @@ tab, the per-app ads/trackers/requests aggregate and the sort keys in
   matching keys (`86c4098`, headers tidied in `cf6461a`).
 - The existing time ranges, search and sort cover `53` and `57`; they were kept.
 - Company breakdown (`59`): no longer out of scope — see the `Các dịch vụ`
-  entry under the statistics section, closed by `f153ee0` with a project-owned
-  `services.tsv`. The "top domains contacted" fallback this line proposed is
+  entry under the statistics section, closed by `f153ee0`. Its project-owned
+  `services.tsv` has since been regenerated from AdGuard's own `trackers.json`
+  and Ghostery TrackerDB, so the breakdown now names the company, the service
+  and its category. The "top domains contacted" fallback this line proposed is
   what the screen shows when the table has no row for a domain.
 
 ### 6.3 Per-app proxy routing
@@ -871,8 +886,10 @@ section recommended.
     privacy-level radio taking effect on live requests (`91dc2dd`, `5858a75` —
     `inject_gpc_dnt` is the one row the log-level pass above settled), the
     services breakdown switch showing no `GROUP BY` and no RSS growth while off
-    (`f153ee0`), and a system-initiated revoke posting the dropped-protection
-    alert (`fa79e84`).
+    (`f153ee0`), the services table accepting a tracker dataset over both update
+    paths — a `trackers.json` URL and a DuckDuckGo region file through the
+    picker — and refusing a body that is neither, and a system-initiated revoke
+    posting the dropped-protection alert (`fa79e84`).
     The two Redmi-only items (positive roaming enforcement, the per-flow memory
     probe) stay blocked until that device is back.
 
@@ -895,11 +912,9 @@ section recommended.
 
 - AdGuard VPN and private browser (separate products), the high-contrast theme,
   and the `Cách chặn quảng cáo trên YouTube` how-to row.
-- Tracker Radar / Ghostery as the company database: both are CC BY-NC-SA 4.0,
-  so NonCommercial plus ShareAlike cannot be carried by an app we distribute.
-  `rust/assets/services.tsv` is authored for this project instead; the scale-up
-  its header names is a build-time Wikidata P856 (official website) query, CC0,
-  merged into the same file.
+- Wikidata as a company-name source: the datasets below already name every
+  domain, so the build-time P856 (official website) merge this file used to
+  propose for scaling `rust/assets/services.tsv` is no longer needed.
 - Mask-IP and any DPI-resistant transport: both are network-egress features, and
   this app's rule is no telemetry and no new outbound service.
 - Silent VPN restart. Android 10+ requires the user's `prepareVpn` confirmation,
@@ -943,6 +958,12 @@ lines are the ones §6.5 still lists as owed.
   `sha256` to the target-dir library), so nothing has to be de-hardlinked.
   `buildRust` itself is never considered up-to-date, which is what keeps an APK
   from packaging a stale core.
+- Device: the services table over both update paths. Point the URL at a raw
+  `trackers.json` and at a canonical TSV, and import a DuckDuckGo region file
+  through the picker; each must leave `filters/services.tsv` sorted and
+  four-column, and the Statistics breakdown must show the company plus the
+  category instead of the bare domain. A body that is neither a dataset nor a
+  sorted table must be refused with the previous copy intact.
 - Manual: notification in both states and both languages; assistant opens
   over a third-party app; each new toggle survives process death; per-app
   override beats global rules; roaming and screen-off behavior verified with

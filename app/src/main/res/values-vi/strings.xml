@@ -647,9 +647,10 @@
     <string name="filters_user_rules_title">Quy tắc của bạn</string>
     <string name="filters_user_rules_meta">%1$d quy tắc • %2$d ngoại lệ</string>
     <string name="services_table_title">Bảng dịch vụ</string>
-    <string name="services_table_subtitle">Ghi tên công ty đứng sau mỗi tên miền ở phần Thống kê. Gom nhóm nhật ký phải quét toàn bộ khung thời gian nên bật tắt này mặc định tắt.</string>
+    <string name="services_table_subtitle">Ghi tên công ty đứng sau mỗi tên miền và loại dịch vụ ở phần Thống kê. Gom nhóm nhật ký phải quét toàn bộ khung thời gian nên bật tắt này mặc định tắt.</string>
     <string name="services_table_url_label">URL đăng ký (tuỳ chọn)</string>
     <string name="services_table_reset">Bảng tích hợp</string>
+    <string name="services_table_import">Nhập từ tệp</string>
     <string name="services_table_downloaded">Bảng đã tải: %1$s</string>
     <string name="services_table_shipped">Đang dùng bảng tích hợp sẵn trong bản cài đặt này.</string>
     <string name="services_table_updated">Đã cập nhật bảng dịch vụ</string>

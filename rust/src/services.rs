@@ -1,20 +1,28 @@
 //! Who owns a domain: the labels behind the services breakdown.
 //!
-//! The table is the app's own work — `assets/services.tsv`, one registrable
-//! domain and the company that owns it, sorted by byte order on the first
-//! field. It is compiled in, so the labels exist before the store opens and
-//! without a file read; a downloaded table in `filters/services.tsv` replaces
-//! it when the user subscribes to one.
+//! The shipped table is `assets/services.tsv`, rebuilt from tracker datasets by
+//! `cargo run --example services_dataset`. A downloaded one in
+//! `filters/services.tsv` replaces it when the user subscribes, and a
+//! subscription may arrive in any of the shapes the survey found in the field
+//! ([`import`]: AdGuard's `trackers.json`, Ghostery TrackerDB, DuckDuckGo
+//! Tracker Radar); the core converts it to this format before it is kept.
+//!
+//! A row is tab-separated, in AdGuard's own order: the registrable domain, the
+//! company that owns it, the service's name, what kind of service it is. The
+//! last two are optional, so the two-column rows this project authored still
+//! load; rows are sorted by byte order on the first field.
 //!
 //! Nothing is parsed until the first lookup, which only happens while the
 //! breakdown switch is on. The lookup is a binary search over the text's own
-//! line offsets: no map, no per-row allocation, so a table grown to tens of
-//! thousands of rows costs four bytes per row instead of a copy of every
-//! string in the file.
+//! line offsets: no map, no per-row allocation, so the 5409-row table this
+//! build ships costs one `usize` per row — about 43 KiB — instead of a copy of
+//! every string in the file.
 
 use std::borrow::Cow;
 use std::path::Path;
 use std::sync::{Arc, Mutex, OnceLock};
+
+pub mod import;
 
 /// The table this build ships.
 pub const BUILTIN: &str = include_str!("../assets/services.tsv");
@@ -47,10 +55,6 @@ impl Table {
         key_of(self.line(off))
     }
 
-    fn company_at(&self, off: usize) -> &str {
-        company_of(self.line(off))
-    }
-
     fn find(&self, key: &str) -> Option<usize> {
         match self
             .starts
@@ -65,35 +69,75 @@ impl Table {
     /// `doubleclick.net` row, and never to a shorter suffix that is not a
     /// label boundary. Each candidate is one binary search, so a host with
     /// five labels costs five searches over a table nobody copied.
-    fn lookup(&self, domain: &str) -> Option<&str> {
+    fn line_for(&self, domain: &str) -> Option<&str> {
         let mut start = 0usize;
         loop {
             if let Some(off) = self.find(&domain[start..]) {
-                let company = self.company_at(off);
-                return (!company.is_empty()).then_some(company);
+                return Some(self.line(off));
             }
-            match domain[start..].find('.') {
-                Some(dot) => start += dot + 1,
-                None => return None,
-            }
+            start += domain[start..].find('.')? + 1;
         }
+    }
+
+    /// The company a domain belongs to, empty when the row carries none.
+    fn company(&self, domain: &str) -> Option<&str> {
+        self.line_for(domain)
+            .map(company_of)
+            .filter(|company| !company.is_empty())
+    }
+
+    fn entry(&self, domain: &str) -> Option<Entry> {
+        let line = self.line_for(domain)?;
+        Some(Entry {
+            company: company_of(line).to_owned(),
+            tracker: tracker_of(line).to_owned(),
+            category: category_of(line).to_owned(),
+        })
+    }
+}
+
+/// What the table says about one domain: any of the three labels may be empty,
+/// and the UI claims nothing beyond the ones that are filled.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Entry {
+    pub company: String,
+    pub tracker: String,
+    pub category: String,
+}
+
+/// The `index`th tab-separated field of a row, empty when the row stops early.
+fn field(line: &str, index: usize) -> &str {
+    let mut rest = line;
+    for _ in 0..index {
+        match rest.find('\t') {
+            Some(tab) => rest = &rest[tab + 1..],
+            None => return "",
+        }
+    }
+    match rest.find('\t') {
+        Some(tab) => &rest[..tab],
+        None => rest,
     }
 }
 
 /// The domain a line is keyed by.
 fn key_of(line: &str) -> &str {
-    match line.find('\t') {
-        Some(tab) => &line[..tab],
-        None => line,
-    }
+    field(line, 0)
 }
 
 /// The company a line carries, empty when the row has no second field.
 fn company_of(line: &str) -> &str {
-    match line.split_once('\t') {
-        Some((_, company)) => company,
-        None => "",
-    }
+    field(line, 1)
+}
+
+/// The service's own name, the third field.
+fn tracker_of(line: &str) -> &str {
+    field(line, 2)
+}
+
+/// What kind of service the row describes, the fourth field.
+fn category_of(line: &str) -> &str {
+    field(line, 3)
 }
 
 /// True when a row is a lookup entry: not a comment, not blank, two fields.
@@ -174,12 +218,24 @@ impl Resolver {
     /// The company owning `domain`, or `None` when the table has no row for
     /// it: the UI then shows the name and claims nothing beyond it.
     pub fn company(&self, domain: &str) -> Option<String> {
-        let domain = domain.trim_end_matches('.').to_ascii_lowercase();
-        if domain.is_empty() || !domain.is_ascii() {
-            return None;
-        }
-        self.table.lookup(&domain).map(str::to_owned)
+        self.table.company(&normalize(domain)?).map(str::to_owned)
     }
+
+    /// Everything the table says about `domain`: the company, the service's
+    /// own name, and what kind of service it is. `None` when there is no row.
+    pub fn entry(&self, domain: &str) -> Option<Entry> {
+        self.table.entry(&normalize(domain)?)
+    }
+}
+
+/// The form a domain is looked up in: lower-case, no trailing dot, and nothing
+/// that could not be a row key.
+fn normalize(domain: &str) -> Option<String> {
+    let domain = domain.trim_end_matches('.').to_ascii_lowercase();
+    if domain.is_empty() || !domain.is_ascii() {
+        return None;
+    }
+    Some(domain)
 }
 
 #[cfg(test)]

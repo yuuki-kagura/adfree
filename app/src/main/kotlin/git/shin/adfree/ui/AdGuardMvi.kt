@@ -248,6 +248,8 @@ sealed interface AdGuardIntent {
     /** Subscribed table of domain owners; an empty URL restores the shipped one. */
     data class SetServicesTableUrl(val url: String) : AdGuardIntent
     data object RefreshServicesTable : AdGuardIntent
+    /** Replaces the services table with a dataset in a file the user picked. */
+    data class ImportServicesTable(val uri: String) : AdGuardIntent
     data class RunThreatScan(val domain: String) : AdGuardIntent
     data object ResetAiLab : AdGuardIntent
     /**

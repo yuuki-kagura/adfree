@@ -515,12 +515,17 @@ data class LogWindowTotals(
  * table has no row for the domain, and then [label] is the name itself — the
  * section never claims a company it does not know.
  *
+ * [category] is the third label a subscribed dataset can carry: what kind of
+ * service the domain is. It is empty for a table written before the column,
+ * which is the two-column form this project authored.
+ *
  * No bytes on the wire: the flow table records a package and an address, not a
  * name, so a per-domain figure there would be a guess.
  */
 data class ServiceUsage(
     val domain: String = "",
     val company: String = "",
+    val category: String = "",
     val blocked: Int = 0,
     val requests: Int = 0,
     val bytesSaved: Long = 0L,
