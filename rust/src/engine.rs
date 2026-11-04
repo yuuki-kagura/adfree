@@ -727,7 +727,10 @@ impl Drop for H3Flow {
 }
 
 pub struct Core {
-    cfg: RwLock<Config>,
+    /// Shared by `Arc`, not copied: [`Core::handle_packet`] takes it on every
+    /// packet, and a `Config` copy with a long HTTPS allowlist is 128 string
+    /// allocations on the tunnel's hot path.
+    cfg: RwLock<Arc<Config>>,
     filter: Arc<FilterEngine>,
     lists: RwLock<Vec<FilterListInfo>>,
     user_rules: RwLock<Vec<String>>,
@@ -969,7 +972,7 @@ impl Core {
             secure_receivers.push(receivers);
         }
         Core {
-            cfg: RwLock::new(Config::default()),
+            cfg: RwLock::new(Arc::new(Config::default())),
             filter: Arc::new(FilterEngine::new()),
             lists: RwLock::new(Vec::new()),
             user_rules: RwLock::new(Vec::new()),
@@ -1180,7 +1183,7 @@ impl Core {
         // published as a flag next to the config it came from.
         self.anti_dpi
             .store(cfg.stealth.fragments_hello(), Ordering::Relaxed);
-        *self.cfg.write().unwrap() = cfg;
+        *self.cfg.write().unwrap() = Arc::new(cfg);
         if h3_off {
             self.close_h3_flows();
         }
@@ -1197,7 +1200,15 @@ impl Core {
         }
     }
 
+    /// A copy of the live config, for the callers that need to edit it. The
+    /// packet path uses [`Core::config_ref`] instead and pays a refcount.
     pub fn config(&self) -> Config {
+        self.cfg.read().unwrap().as_ref().clone()
+    }
+
+    /// The live config as one shared allocation: taking it costs a refcount,
+    /// so a reader on the packet path does not copy what the config holds.
+    fn config_ref(&self) -> Arc<Config> {
         self.cfg.read().unwrap().clone()
     }
 
@@ -1874,7 +1885,7 @@ impl Core {
             return out;
         };
 
-        let cfg = self.cfg.read().unwrap().clone();
+        let cfg = self.config_ref();
         let paused = self.is_paused();
         if pkt.proto == PROTO_UDP && pkt.dst_port == 53 {
             self.stats.inc(&self.stats.packets_dns);
@@ -8183,5 +8194,37 @@ mod tests {
         assert!(second.filter.last_build_cached());
         assert!(second.filter.check_host("async-cache.test").blocked);
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn the_packet_path_shares_one_config_snapshot() {
+        // `handle_packet` takes this on every tun packet, so a snapshot has to
+        // be the same allocation each time rather than a copy of whatever the
+        // config holds: 64 allowlist hosts used to mean 128 string allocations
+        // per packet.
+        let core = Core::new();
+        core.set_config(Config {
+            mitm_enabled: true,
+            https_skip_hosts: (0..64).map(|i| format!("skip{i}.example.com")).collect(),
+            https_only_hosts: (0..64).map(|i| format!("only{i}.example.com")).collect(),
+            ..Config::default()
+        });
+        let first = core.config_ref();
+        let second = core.config_ref();
+        assert!(
+            Arc::ptr_eq(&first, &second),
+            "reading the config must not copy it"
+        );
+
+        // Publishing a new config has to produce a new allocation, or a reader
+        // holding the old snapshot would never see the switch.
+        core.set_config(Config {
+            block_dot: true,
+            ..Config::default()
+        });
+        let after = core.config_ref();
+        assert!(!Arc::ptr_eq(&first, &after));
+        assert!(after.block_dot);
+        assert!(first.mitm_enabled, "the old snapshot stays valid");
     }
 }
