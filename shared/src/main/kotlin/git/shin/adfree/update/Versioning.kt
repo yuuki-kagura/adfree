@@ -6,7 +6,7 @@ package git.shin.adfree.update
  */
 
 /** Strips a leading `v` and any prerelease/build suffix, keeping dotted digits. */
-internal fun normalizeVersion(raw: String): String? {
+public fun normalizeVersion(raw: String): String? {
     val value = raw.trim().removePrefix("v")
     val core = value.substringBefore('-').substringBefore('+')
     if (core.isBlank()) return null
@@ -15,7 +15,7 @@ internal fun normalizeVersion(raw: String): String? {
     return parts.joinToString(".")
 }
 
-internal fun isNewerVersion(
+public fun isNewerVersion(
     latest: String,
     current: String,
 ): Boolean {
@@ -35,12 +35,12 @@ internal fun isNewerVersion(
  * so a newer tag is the whole rule here; versionCode is verified again against
  * the downloaded APK before the installer is opened.
  */
-internal fun shouldOfferUpdate(
+public fun shouldOfferUpdate(
     version: String,
     versionName: String,
 ): Boolean = normalizeVersion(version)?.let { isNewerVersion(it, versionName) } == true
 
-internal fun versionParts(version: String): List<Int>? =
+public fun versionParts(version: String): List<Int>? =
     normalizeVersion(version)?.split('.')?.mapNotNull { it.toIntOrNull() }
 
 /**
@@ -49,7 +49,7 @@ internal fun versionParts(version: String): List<Int>? =
  * an unreachable releases API is retried once per interval, not once per
  * screen-on.
  */
-internal fun dueForAutomaticCheck(
+public fun dueForAutomaticCheck(
     lastCheckMs: Long,
     nowMs: Long,
     intervalMs: Long,

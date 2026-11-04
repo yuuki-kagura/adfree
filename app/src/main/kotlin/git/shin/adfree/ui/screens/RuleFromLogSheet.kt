@@ -224,11 +224,12 @@ fun RuleFromLogSheetContent(
                 )
             }
 
-            if (showAppScope && draft.appPackage != null) {
+            val scopedPackage = draft.appPackage
+            if (showAppScope && scopedPackage != null) {
                 OptionCheckbox(
                     label = stringResource(
                         R.string.rule_from_log_app_scope,
-                        appLabel ?: draft.appPackage,
+                        appLabel ?: scopedPackage,
                     ),
                     checked = appScoped,
                     onCheckedChange = {

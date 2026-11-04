@@ -1242,9 +1242,10 @@ private fun AppDetailsFirewallSheet(
                                 maxLines = 1,
                                 overflow = TextOverflow.Ellipsis
                             )
-                            if (logItem.matchedRule != null) {
+                            val matchedRule = logItem.matchedRule
+                            if (matchedRule != null) {
                                 Text(
-                                    text = logItem.matchedRule,
+                                    text = matchedRule,
                                     fontSize = 11.sp,
                                     color = AdGuardRedBlocked,
                                     maxLines = 1,

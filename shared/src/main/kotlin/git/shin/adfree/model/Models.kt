@@ -209,7 +209,7 @@ data class FilterList(
  * description, and the source URL (how users recognise a custom list). A
  * blank query matches everything.
  */
-internal fun filterMatchesQuery(
+fun filterMatchesQuery(
     list: FilterList,
     query: String,
     name: String = list.name,
@@ -226,7 +226,7 @@ internal fun filterMatchesQuery(
  * `DISPLAY_NAME` minus the `.user.js` / `.js` suffix. A nameless picker
  * answer still has to produce a row the user can recognise.
  */
-internal fun scriptNameFromFile(displayName: String?): String =
+fun scriptNameFromFile(displayName: String?): String =
     displayName
         ?.removeSuffix(".user.js")
         ?.removeSuffix(".js")
@@ -241,7 +241,7 @@ internal fun scriptNameFromFile(displayName: String?): String =
  * language; sub-1024 bodies show raw bytes, which never happens for real
  * subscriptions but keeps a half-written file readable.
  */
-internal fun assetSizeLabel(bytes: Long): String = when {
+fun assetSizeLabel(bytes: Long): String = when {
     bytes <= 0L -> "0 B"
     bytes < 1024L -> "$bytes B"
     bytes < 1024L * 1024L -> "${bytes / 1024L} KB"
@@ -259,7 +259,7 @@ internal fun assetSizeLabel(bytes: Long): String = when {
  * local files go through the file picker, so only `http(s)://` with a real
  * host counts here.
  */
-internal enum class FilterUrlError {
+enum class FilterUrlError {
     EMPTY,
     TOO_LONG,
     INVALID,
@@ -267,7 +267,7 @@ internal enum class FilterUrlError {
     NO_HOST,
 }
 
-internal fun filterUrlError(url: String): FilterUrlError? {
+fun filterUrlError(url: String): FilterUrlError? {
     val trimmed = url.trim()
     if (trimmed.isEmpty()) return FilterUrlError.EMPTY
     if (trimmed.length > 2048) return FilterUrlError.TOO_LONG

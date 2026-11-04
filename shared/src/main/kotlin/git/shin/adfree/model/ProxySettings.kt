@@ -33,7 +33,7 @@ fun normalizeProxyHost(raw: String): String? {
     return host.takeIf(::isIpLiteral)
 }
 
-internal fun isIpLiteral(host: String): Boolean {
+fun isIpLiteral(host: String): Boolean {
     val v4 = host.matches(Regex("^\\d{1,3}(\\.\\d{1,3}){3}$")) &&
         host.split('.').all { it.toIntOrNull()?.let { octet -> octet in 0..255 } == true }
     if (v4) return true

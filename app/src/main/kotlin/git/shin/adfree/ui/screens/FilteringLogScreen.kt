@@ -706,14 +706,15 @@ fun LogItemCard(
                             modifier = Modifier.weight(1f, fill = false)
                         )
                     }
-                    if (log.matchedRule != null) {
+                    val matchedRule = log.matchedRule
+                    if (matchedRule != null) {
                         Text(
                             text = "•",
                             fontSize = 11.sp,
                             color = AdGuardTextMuted
                         )
                         Text(
-                            text = log.matchedRule,
+                            text = matchedRule,
                             fontSize = 11.sp,
                             color = AdGuardTextSecondary,
                             maxLines = 1,
@@ -876,17 +877,17 @@ fun PacketInspectionSheetContent(
                     )
                 }
             }
-            if (log.matchedRule != null) {
-                DetailRow(label = stringResource(R.string.log_detail_rule), value = log.matchedRule)
+            log.matchedRule?.let { matchedRule ->
+                DetailRow(label = stringResource(R.string.log_detail_rule), value = matchedRule)
             }
-            if (log.filterListName != null) {
-                DetailRow(label = stringResource(R.string.log_detail_list), value = log.filterListName)
+            log.filterListName?.let { filterListName ->
+                DetailRow(label = stringResource(R.string.log_detail_list), value = filterListName)
             }
-            if (log.url != null) {
-                DetailRow(label = stringResource(R.string.log_detail_url), value = log.url)
+            log.url?.let { url ->
+                DetailRow(label = stringResource(R.string.log_detail_url), value = url)
             }
-            if (log.dnsAnswer != null) {
-                DetailRow(label = stringResource(R.string.log_detail_dns_answer), value = log.dnsAnswer)
+            log.dnsAnswer?.let { dnsAnswer ->
+                DetailRow(label = stringResource(R.string.log_detail_dns_answer), value = dnsAnswer)
             }
             if (log.flowId > 0) {
                 DetailRow(

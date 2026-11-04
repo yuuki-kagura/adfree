@@ -1788,8 +1788,9 @@ fun FilterDetailSheet(
             )
         }
 
-        if (!list.subscriptionUrl.isNullOrBlank()) {
-            val url = list.subscriptionUrl
+        val subscriptionUrl = list.subscriptionUrl
+        if (!subscriptionUrl.isNullOrBlank()) {
+            val url = subscriptionUrl
             Spacer(modifier = Modifier.height(8.dp))
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(
@@ -1861,8 +1862,9 @@ fun FilterDetailSheet(
                     Text(stringResource(R.string.ext_delete), fontSize = 12.sp, color = AdGuardRedBlocked)
                 }
             }
-            if (!list.homepage.isNullOrBlank()) {
-                OutlinedButton(onClick = { onOpenHomepage(list.homepage) }, shape = RoundedCornerShape(10.dp)) {
+            val homepage = list.homepage
+            if (!homepage.isNullOrBlank()) {
+                OutlinedButton(onClick = { onOpenHomepage(homepage) }, shape = RoundedCornerShape(10.dp)) {
                     Icon(Icons.Default.Public, contentDescription = null, tint = AdGuardBlueDns, modifier = Modifier.size(16.dp))
                     Spacer(modifier = Modifier.width(6.dp))
                     Text(stringResource(R.string.filters_homepage), fontSize = 12.sp, color = AdGuardBlueDns)

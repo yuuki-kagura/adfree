@@ -3,7 +3,7 @@
 // Layout:
 //   rust/                  Rust crate (cdylib) built with cargo-ndk for every ABI
 //   app/src/main/jniLibs/   destination of the produced .so files (gitignored)
-//   app/src/main/kotlin/..  uniffi generated Kotlin bindings (committed)
+//   shared/src/main/kotlin  uniffi generated Kotlin bindings + domain models
 //
 // Usage:
 //   ./gradlew :app:assembleDebug            # builds the .so for all ABIs
@@ -134,6 +134,8 @@ secrets {
 
 dependencies {
     implementation(platform(libs.androidx.compose.bom))
+    // Android-free domain: models, uniffi core bindings, OTA version rules.
+    implementation(project(":shared"))
     implementation(libs.androidx.activity.compose)
     implementation(libs.androidx.appcompat)
     implementation(libs.androidx.compose.material.icons.core)
@@ -261,7 +263,8 @@ val verifyBindings = tasks.register("verifyBindings") {
     group = "adfree"
     description = "Regenerates the uniffi Kotlin bindings from libadfree_core.so"
     // uniffi appends the Kotlin package path itself, so hand it the parent.
-    val outDir = layout.projectDirectory.dir("src/main/kotlin")
+    // The committed bindings live in :shared so any JVM target can use them.
+    val outDir = rootProject.layout.projectDirectory.dir("shared/src/main/kotlin")
     doLast {
         if (ndkDir.isEmpty()) throw GradleException("ADFREE: ANDROID_NDK_HOME is required")
         val lib = File("$rustTargetDir/aarch64-linux-android/release/libadfree_core.so")

@@ -25,3 +25,5 @@ dependencyResolutionManagement {
 rootProject.name = "AdGuard Ultra"
 
 include(":app")
+include(":shared")
+include(":desktop")

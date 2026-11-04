@@ -462,7 +462,7 @@ fun UserScriptStoreSheet(
             }
 
             state.error != null && state.items.isEmpty() -> {
-                Text(state.error, fontSize = 11.sp, color = AdGuardRedBlocked)
+                Text(state.error ?: "", fontSize = 11.sp, color = AdGuardRedBlocked)
                 TextButton(onClick = onRetry) {
                     Text(
                         stringResource(R.string.ext_retry),
@@ -490,8 +490,8 @@ fun UserScriptStoreSheet(
                     )
                     Spacer(modifier = Modifier.height(8.dp))
                 }
-                if (state.error != null) {
-                    Text(state.error, fontSize = 11.sp, color = AdGuardRedBlocked)
+                state.error?.let { error ->
+                    Text(error, fontSize = 11.sp, color = AdGuardRedBlocked)
                     Spacer(modifier = Modifier.height(6.dp))
                 }
                 LazyColumn(

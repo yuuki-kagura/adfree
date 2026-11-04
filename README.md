@@ -90,6 +90,8 @@ Requirements:
 ./gradlew :app:assembleDebug                # build the Rust core + APK
 ./gradlew :app:verifyBindings               # regenerate Kotlin bindings after Rust API changes
 ./gradlew :app:assembleDebug -PskipNative   # UI only, no native build
+./gradlew :desktop:installDist              # Linux smoke test of the shared core
+./desktop/build/install/desktop/bin/desktop # run it on the host JVM
 ```
 
 The company table ships at `rust/assets/services.tsv`. To rebuild it from
