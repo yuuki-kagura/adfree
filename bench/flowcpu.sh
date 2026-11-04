@@ -85,6 +85,13 @@ thread_report() {
 
 cpu() { adb shell "cat /proc/$(pid)/stat" | clean | awk '{printf "%s %s %s", $14, $15, $10}'; }
 
+# Traffic across the tunnel during the window, so "quiet" is a fact rather than
+# an assumption: an origin that answers the one byte the harness writes makes
+# every relay in the window a busy one, and then the poll set and the sweeps are
+# both being paid for real traffic. Fields of `/proc/net/dev`: rx bytes, rx
+# packets, then tx bytes, tx packets.
+tun() { adb shell cat /proc/net/dev | clean | awk '/tun0/ {print $2, $3, $10, $11}'; }
+
 # One adb round trip that waits on the device: polling the log from the host costs a
 # shell launch per try, and at 2048 sockets the open takes long enough that a
 # host-side loop runs out of iterations before the stage line lands.
@@ -104,12 +111,16 @@ run_one() {
         fill "$mode" "$n"
         echo "    filled: $(as_helper "head -1 $LOG")  live=$(live)"
     fi
-    local t0=/tmp/flowcpu.t0 t1=/tmp/flowcpu.t1 before after du ds df
+    local t0=/tmp/flowcpu.t0 t1=/tmp/flowcpu.t1 before after du ds df n0 n1
     dump_threads "$t0"
     before=$(cpu)
+    n0=$(tun)
     sleep "$HOLD"
     after=$(cpu)
+    n1=$(tun)
     dump_threads "$t1"
+    echo "    tun0: $(awk -v a="$n0" -v b="$n1" 'BEGIN{split(a,x," ");split(b,y," ");
+        printf "+%d B +%d pk in, +%d B +%d pk out", y[1]-x[1], y[2]-x[2], y[3]-x[3], y[4]-x[4]}')"
     echo "    live after hold: $(live)"
     if [ "$n" -gt 0 ]; then echo "    harness: $(as_helper "tail -1 $LOG")"; fi
     set -- $before

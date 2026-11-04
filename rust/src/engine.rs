@@ -728,8 +728,9 @@ impl Drop for H3Flow {
 
 pub struct Core {
     /// Shared by `Arc`, not copied: [`Core::handle_packet`] takes it on every
-    /// packet, and a `Config` copy with a long HTTPS allowlist is 128 string
-    /// allocations on the tunnel's hot path.
+    /// packet, and a `Config` copy with a populated HTTPS allowlist costs one
+    /// buffer and one `String` per host, on every packet, for the packets that
+    /// never consult the lists.
     cfg: RwLock<Arc<Config>>,
     filter: Arc<FilterEngine>,
     lists: RwLock<Vec<FilterListInfo>>,

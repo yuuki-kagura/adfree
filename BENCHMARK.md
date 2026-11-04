@@ -1212,3 +1212,118 @@ protection left running with the tunnel up, density override left at the as-foun
 `is_stealth_mode_enabled:false, anti_dpi:false`. The store's durable log does carry
 the rows the harness traffic wrote.
 
+## What a pass over the relay table is worth, and what a packet copy is worth (2026-11-04, host release build + Sony 802SO)
+
+The collision pass named four hot-path candidates and fixed none of them for want
+of a number. Three now have one, and they did not all come out the same way: one
+was a real cost and is fixed, one was predicted by the shape of the loop and is
+refuted, one is real but too small to be worth its call sites.
+
+### The config every packet copied — fixed
+
+`handle_packet` opened with `let cfg = self.cfg.read().unwrap().clone()`
+(`rust/src/engine.rs:1889`, which now reads `self.config_ref()`): a deep copy of `Config`, made on
+the path every tun packet takes — DNS, relay, STUN alike — to read about thirty
+switches. Measured on the host in the release profile, 300k iterations of the
+read-and-clone itself:
+
+| config | copied per packet | `Arc` per packet |
+| --- | --- | --- |
+| shipped defaults (`Config` is 112 B, empty host lists) | 116.4 ns | 99.0 ns |
+| 64 skip hosts + 64 only hosts | 17474.8 ns | 58.7 ns |
+
+The first row is noise: a 112-byte copy is not worth talking about, and most of
+both numbers is the `RwLock` read. The second is not, because `Vec<String>` clones
+element by element — one buffer plus one `String` per host, 130 allocations — so a
+phone whose owner filled in the HTTPS allowlist was paying 17.5 µs on every packet,
+including the packets that never consult the lists. The store is now
+`RwLock<Arc<Config>>` (`rust/src/engine.rs:730-734`) and the packet path takes the
+`Arc` through `Core::config_ref`; `config()` still hands out a copy, which is what
+its twelve callers — all of them tests that edit one — need.
+`the_packet_path_shares_one_config_snapshot` pins the identity: two reads must be
+the same allocation, and a `set_config` must produce a different one.
+
+What this does *not* remove is the ~99 ns lock read, and going below it is where
+this pass stopped deliberately: holding the guard across the dispatch instead of
+cloning would nest the same read lock in `relay_udp` (`:2017`), `h3_info` (`:2324`)
+and `log_event` (`:4427`), and `std::RwLock` deadlocks on a nested read as soon as
+a writer queues between the two — a `set_config` from the UI thread is exactly that
+writer.
+
+### The per-pass sweep — refuted
+
+`forwarder_loop` calls `prune_relays` on every pass (`rust/src/engine.rs:5081`),
+and `prune_relays` walks the whole relay table (`:5558`), so the upkeep work is
+quadratic in the number of relays if the passes themselves grow with the table.
+That is a shape, not a measurement, so the shape was tested by switching it off:
+a build with `prune_relays` returning immediately, against the committed build,
+`bench/flowcpu.sh` at the same specs, 40 s windows, the forwarder identified by its
+system-time bulk (it is the thread named `adfree-dns`, which runs
+`forwarder_loop` — `rust/src/engine.rs:1758-1762`).
+
+| run | live relays | tun0 packets in the window | forwarder | of which sys |
+| --- | --- | --- | --- | --- |
+| sweep on, 1024 opened | 357 | 2763 in / 3204 out | 2290 ms | 1980 ms |
+| sweep off, 1024 opened | 460 | 2625 in / 3123 out | 2010 ms | 1840 ms |
+| sweep on, 2048 opened | 603 | 4670 in / 5266 out | 5640 ms | 4970 ms |
+| sweep off, 2048 opened | 724 | 4444 in / 4714 out | 5790 ms | 5180 ms |
+
+Removing the sweep entirely moves the forwarder by less than the gap between two
+runs of the same build, and the no-sweep runs are the ones with *more* entries in
+the table — closed relays are only reaped inside the sweep, so they stayed counted
+(724 against 603). The app's fd ceiling is 32768 (`/proc/<pid>/limits`), so the
+no-sweep run was not being throttled by descriptors instead. The sweep is not the
+cost.
+
+Two things fall out of the same table. The first is a correction to
+`bench/flowcpu.sh`, whose header says a `nudge` hold is quiet: it is not. The bare
+`\n` the harness writes is a request the origins answer — with the clients silent
+for the whole window, 2763 packets still arrived through the tunnel at 1024 and
+4670 at 2048 — so 150-250 packets a second cross during a "quiet" window, and
+`per_relay` is a hold-plus-answer number. The script now samples `tun0` across the
+window so the assumption is checked rather than claimed. The second is where the
+time actually is: 5180 of the 5790 ms is *system* time on that thread, and its
+per-pass kernel work is `poll()` over one entry per live relay —
+`wait_for_events` rebuilds the fd set from `poll_snapshot()` on every pass
+(`rust/src/engine.rs:4888-4905`). That is the superlinear shape the loop's
+structure predicts, in the wait rather than in the Rust sweeps, and the fix is
+`epoll` — a persistent interest set owned by the one thread that is allowed to
+close a descriptor under a concurrent poll. It is not a change to make in the
+middle of this pass, and nothing here pretends the cost is gone.
+
+### The debug line — measured, declined
+
+`logbuf::push_debug` gates on the level (`rust/src/logbuf.rs:78`), but its fourteen
+callers build the line first: `push_debug(&format!("mitm {host}: cookies stripped"))`
+(`rust/src/mitm/proxy.rs:1323-1419`, `:1929`, `rust/src/mitm/quic/hub.rs:716-722`).
+At the shipped level 2 those lines are thrown away. Measured on the host, release
+profile, 500k iterations: 109.3 ns to build one and drop it, 1.5 ns to ask the gate
+first. A request that trips several privacy rewrites pays a few hundred
+nanoseconds, against the 1.2 ms a filtered connection costs in
+`Anti-DPI hello splitting — cost per connection` above — two orders of magnitude
+below the thing it would be measured against. Passing a closure would fix it and
+touch fourteen sites
+whose graph impact is HIGH (41 symbols), so the number is recorded and the code is
+left alone.
+
+Impact before editing: `handle_packet` **CRITICAL** (23 symbols, 11 execution
+flows), `set_config` **CRITICAL** (22 symbols, 9 flows), `config()` reported
+UNKNOWN and its callers were confirmed by search instead (twelve, all tests).
+828 lib tests plus the integration suites pass, `cargo clippy` still six
+pre-existing warnings and nothing at the edited sites.
+
+Device restored: the measurement build with the sweep switched off was overwritten
+by the committed library and reinstalled, protection left running with the tunnel
+up, `stay_on_while_plugged_in` back to 0, the helper's `files/` back to
+`profileInstalled` alone.
+
+One loose end, recorded rather than chased: the enable-protection shortcut did not
+bring the tunnel up in three attempts made from `adb shell am start` — once with
+the screen locked, where the refusal surfaced as the `AdFree không thể khởi động`
+notification (`notifyStartRefused`, reachable now because of `36b0412`, and the
+refusal itself is the defect that commit records without fixing), and twice with
+the screen on and the app warm, where nothing was logged and no consent dialog
+appeared while the same action from the home button started the tunnel in seconds.
+The second shape is not explained by the refused-start path and wants its own
+pass.
+
