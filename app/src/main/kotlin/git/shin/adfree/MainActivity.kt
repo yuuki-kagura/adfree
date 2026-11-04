@@ -23,6 +23,8 @@ import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.isSystemInDarkTheme
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -34,6 +36,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ListAlt
 import androidx.compose.material.icons.automirrored.outlined.ListAlt
@@ -52,6 +55,9 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.NavigationBarItemDefaults
+import androidx.compose.material3.NavigationRail
+import androidx.compose.material3.NavigationRailItem
+import androidx.compose.material3.NavigationRailItemDefaults
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Snackbar
 import androidx.compose.material3.SnackbarHost
@@ -224,71 +230,98 @@ class MainActivity : AppCompatActivity() {
                     }
                 }
 
-                Scaffold(
-                    modifier = Modifier.fillMaxSize(),
-                    contentWindowInsets = WindowInsets.safeDrawing,
-                    containerColor = AdGuardDarkBg,
-                    snackbarHost = {
-                        SnackbarHost(snackbarHostState) { data ->
-                            Snackbar(
-                                snackbarData = data,
-                                containerColor = AdGuardDarkSurface,
-                                contentColor = AdGuardTextPrimary,
-                            )
-                        }
-                    },
-                    bottomBar = {
-                        Column {
-                            // AdGuard pins this strip above the tab bar: with
-                            // HTTPS off the engine only filters DNS and plain
-                            // HTTP, so the Home screen otherwise overstates
-                            // what is actually blocked.
-                            if (!state.settings.isHttpsFilteringEnabled) {
-                                HttpsOffBar(
-                                    onEnable = {
-                                        viewModel.onIntent(
-                                            AdGuardIntent.OpenProtectionSection(
-                                                ProtectionSection.HTTPS,
-                                            ),
-                                        )
-                                    },
+                BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
+                    // Material wide-layout rule: below 600dp keep the bottom bar;
+                    // at or above it switch to a side rail, and cap the content
+                    // width so tablets never stretch one column edge to edge.
+                    val isWide = maxWidth >= 600.dp
+                    Scaffold(
+                        modifier = Modifier.fillMaxSize(),
+                        contentWindowInsets = WindowInsets.safeDrawing,
+                        containerColor = AdGuardDarkBg,
+                        snackbarHost = {
+                            SnackbarHost(snackbarHostState) { data ->
+                                Snackbar(
+                                    snackbarData = data,
+                                    containerColor = AdGuardDarkSurface,
+                                    contentColor = AdGuardTextPrimary,
                                 )
                             }
-                            AdGuardBottomBar(
-                                currentTab = state.currentTab,
-                                onTabSelected = { viewModel.onIntent(AdGuardIntent.SelectTab(it)) }
-                            )
-                        }
-                    }
-                ) { innerPadding ->
-                    AnimatedContent(
-                        targetState = state.currentTab,
-                        modifier = Modifier
-                            .fillMaxSize()
-                            .padding(innerPadding),
-                        transitionSpec = {
-                            val direction =
-                                if (targetState.ordinal > initialState.ordinal) 1 else -1
-                            (fadeIn(tween(200)) +
-                                slideInHorizontally(tween(260)) { direction * it / 10 })
-                                .togetherWith(
-                                    fadeOut(tween(150)) +
-                                        slideOutHorizontally(tween(260)) { -direction * it / 10 }
-                                )
                         },
-                        label = "tab-transition",
-                    ) { tab ->
-                        tabStateHolder.SaveableStateProvider(tab) {
-                            when (tab) {
-                                AdGuardTab.HOME -> HomeScreen(viewModel = viewModel)
-                                AdGuardTab.PROTECTION -> ProtectionScreen(viewModel = viewModel)
-                                AdGuardTab.ACTIVITY -> FilteringLogScreen(viewModel = viewModel)
-                                AdGuardTab.APPS -> AppsManagementScreen(viewModel = viewModel)
-                                AdGuardTab.STATISTICS -> StatisticsScreen(viewModel = viewModel)
-                                AdGuardTab.SETTINGS -> SettingsScreen(viewModel = viewModel)
-                                // Reached from Settings instead of the tab bar: it is
-                                // a diagnostic tool, not something used daily.
-                                AdGuardTab.AI_LAB -> SecurityLabScreen(viewModel = viewModel)
+                        bottomBar = {
+                            Column {
+                                // AdGuard pins this strip above the tab bar: with
+                                // HTTPS off the engine only filters DNS and plain
+                                // HTTP, so the Home screen otherwise overstates
+                                // what is actually blocked.
+                                if (!state.settings.isHttpsFilteringEnabled) {
+                                    HttpsOffBar(
+                                        onEnable = {
+                                            viewModel.onIntent(
+                                                AdGuardIntent.OpenProtectionSection(
+                                                    ProtectionSection.HTTPS,
+                                                ),
+                                            )
+                                        },
+                                    )
+                                }
+                                if (!isWide) {
+                                    AdGuardBottomBar(
+                                        currentTab = state.currentTab,
+                                        onTabSelected = { viewModel.onIntent(AdGuardIntent.SelectTab(it)) }
+                                    )
+                                }
+                            }
+                        }
+                    ) { innerPadding ->
+                        Row(
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .padding(innerPadding),
+                        ) {
+                            if (isWide) {
+                                AdGuardNavigationRail(
+                                    currentTab = state.currentTab,
+                                    onTabSelected = { viewModel.onIntent(AdGuardIntent.SelectTab(it)) },
+                                )
+                            }
+                            Box(
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .fillMaxSize(),
+                                contentAlignment = Alignment.TopCenter,
+                            ) {
+                                AnimatedContent(
+                                    targetState = state.currentTab,
+                                    modifier = Modifier
+                                        .fillMaxSize()
+                                        .widthIn(max = 1000.dp),
+                                    transitionSpec = {
+                                        val direction =
+                                            if (targetState.ordinal > initialState.ordinal) 1 else -1
+                                        (fadeIn(tween(200)) +
+                                            slideInHorizontally(tween(260)) { direction * it / 10 })
+                                            .togetherWith(
+                                                fadeOut(tween(150)) +
+                                                    slideOutHorizontally(tween(260)) { -direction * it / 10 }
+                                            )
+                                    },
+                                    label = "tab-transition",
+                                ) { tab ->
+                                    tabStateHolder.SaveableStateProvider(tab) {
+                                        when (tab) {
+                                            AdGuardTab.HOME -> HomeScreen(viewModel = viewModel)
+                                            AdGuardTab.PROTECTION -> ProtectionScreen(viewModel = viewModel)
+                                            AdGuardTab.ACTIVITY -> FilteringLogScreen(viewModel = viewModel)
+                                            AdGuardTab.APPS -> AppsManagementScreen(viewModel = viewModel)
+                                            AdGuardTab.STATISTICS -> StatisticsScreen(viewModel = viewModel)
+                                            AdGuardTab.SETTINGS -> SettingsScreen(viewModel = viewModel)
+                                            // Reached from Settings instead of the tab bar: it is
+                                            // a diagnostic tool, not something used daily.
+                                            AdGuardTab.AI_LAB -> SecurityLabScreen(viewModel = viewModel)
+                                        }
+                                    }
+                                }
                             }
                         }
                     }
@@ -400,19 +433,22 @@ data class NavItem(
     val tag: String
 )
 
+/** The bottom bar and the wide-layout side rail show the same six destinations. */
+private fun defaultNavItems(): List<NavItem> = listOf(
+    NavItem(AdGuardTab.HOME, UiText.Resource(R.string.nav_home), Icons.Filled.Home, Icons.Outlined.Home, "nav_home"),
+    NavItem(AdGuardTab.PROTECTION, UiText.Resource(R.string.nav_protection), Icons.Filled.Shield, Icons.Outlined.Shield, "nav_protection"),
+    NavItem(AdGuardTab.APPS, UiText.Resource(R.string.nav_apps), Icons.Filled.Apps, Icons.Outlined.Apps, "nav_apps"),
+    NavItem(AdGuardTab.ACTIVITY, UiText.Resource(R.string.nav_activity), Icons.AutoMirrored.Filled.ListAlt, Icons.AutoMirrored.Outlined.ListAlt, "nav_activity"),
+    NavItem(AdGuardTab.STATISTICS, UiText.Resource(R.string.nav_statistics), Icons.Filled.PieChart, Icons.Outlined.PieChart, "nav_statistics"),
+    NavItem(AdGuardTab.SETTINGS, UiText.Resource(R.string.nav_settings), Icons.Filled.Settings, Icons.Outlined.Settings, "nav_settings")
+)
+
 @Composable
 fun AdGuardBottomBar(
     currentTab: AdGuardTab,
     onTabSelected: (AdGuardTab) -> Unit
 ) {
-    val navItems = listOf(
-        NavItem(AdGuardTab.HOME, UiText.Resource(R.string.nav_home), Icons.Filled.Home, Icons.Outlined.Home, "nav_home"),
-        NavItem(AdGuardTab.PROTECTION, UiText.Resource(R.string.nav_protection), Icons.Filled.Shield, Icons.Outlined.Shield, "nav_protection"),
-        NavItem(AdGuardTab.APPS, UiText.Resource(R.string.nav_apps), Icons.Filled.Apps, Icons.Outlined.Apps, "nav_apps"),
-        NavItem(AdGuardTab.ACTIVITY, UiText.Resource(R.string.nav_activity), Icons.AutoMirrored.Filled.ListAlt, Icons.AutoMirrored.Outlined.ListAlt, "nav_activity"),
-        NavItem(AdGuardTab.STATISTICS, UiText.Resource(R.string.nav_statistics), Icons.Filled.PieChart, Icons.Outlined.PieChart, "nav_statistics"),
-        NavItem(AdGuardTab.SETTINGS, UiText.Resource(R.string.nav_settings), Icons.Filled.Settings, Icons.Outlined.Settings, "nav_settings")
-    )
+    val navItems = defaultNavItems()
 
     NavigationBar(
         containerColor = AdGuardDarkSurface,
@@ -439,6 +475,46 @@ fun AdGuardBottomBar(
                     )
                 },
                 colors = NavigationBarItemDefaults.colors(
+                    selectedIconColor = AdGuardOnAccent,
+                    selectedTextColor = AdGuardGreenPrimary,
+                    indicatorColor = AdGuardGreenPrimary,
+                    unselectedIconColor = AdGuardTextSecondary,
+                    unselectedTextColor = AdGuardTextMuted
+                ),
+                modifier = Modifier.testTag(item.tag)
+            )
+        }
+    }
+}
+
+/** Side navigation for wide layouts (tablets, desktop windows, landscape). */
+@Composable
+fun AdGuardNavigationRail(
+    currentTab: AdGuardTab,
+    onTabSelected: (AdGuardTab) -> Unit,
+) {
+    NavigationRail(
+        containerColor = AdGuardDarkSurface,
+    ) {
+        defaultNavItems().forEach { item ->
+            val isSelected = currentTab == item.tab
+            NavigationRailItem(
+                selected = isSelected,
+                onClick = { onTabSelected(item.tab) },
+                icon = {
+                    Icon(
+                        imageVector = if (isSelected) item.selectedIcon else item.unselectedIcon,
+                        contentDescription = item.label.asString()
+                    )
+                },
+                label = {
+                    Text(
+                        text = item.label.asString(),
+                        fontSize = 10.sp,
+                        fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal
+                    )
+                },
+                colors = NavigationRailItemDefaults.colors(
                     selectedIconColor = AdGuardOnAccent,
                     selectedTextColor = AdGuardGreenPrimary,
                     indicatorColor = AdGuardGreenPrimary,
