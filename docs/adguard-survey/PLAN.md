@@ -2,10 +2,18 @@
 
 Companion to `SURVEY.md`. Phases 0–6 are all shipped: what is written below in
 the imperative is the design each stage settled on, now marked with the commit
-that landed it. What is left is verification — the dated device records, the
-AdFree-side captures still owed and the Redmi-only checks are all listed in
-§6.5, and the benchmark notes live in `BENCHMARK.md`. Each step still starts
-with the GitNexus impact check required by `AGENTS.md`.
+that landed it. The verification §6.5 owed is booked — the dated device records,
+the AdFree-side captures, and both checks that had been parked on the Redmi are
+closed there, the last of them the on-device per-flow memory probe, and the
+benchmark notes live in `BENCHMARK.md`. Since 2026-11-05 it also carries the cost
+of the tunnel's existence to the phone's sleep, measured unplugged. What stays
+open is one behaviour rather than one task: an authorised `AutomationReceiver`
+ENABLE that reaches a process Android is already holding cached gets its service
+start refused, and the app answers with a tap-to-open notification instead of a
+tunnel (§6.5, 2026-11-05). Whether that is worth a code change is undecided;
+`startVpnService` is a CRITICAL-impact symbol, so it does not get touched on an
+assumption. Each step still starts with the GitNexus impact check required by
+`AGENTS.md`.
 
 ## Phase 0 — baseline
 
@@ -865,7 +873,7 @@ section recommended.
     on + correct token → `automation: disabling protection` and `tun0` gone, then
     `automation: enabling protection` and it back; force-stop + correct token → a
     fresh process (pid 6011) answered the broadcast and raised `tun0` without a
-    "tap to open", because Android 10 does not restrict this background start;
+    "tap to open";
     after `Đổi mã khác` the retired token was refused, the switch had returned to
     off by itself, and neither the retired nor the live value appeared anywhere
     in `logcat -d`. The same matrix had been run earlier the same day against
@@ -877,6 +885,23 @@ section recommended.
     actions, warning line, the 32-hex token, copy and rotate buttons; `aapt2 dump
     strings` on the installed APK shows the `automation.*` names in the resources
     and no `git.shin.adfree.action.ENABLE_PROTECTION` resource string at all.
+  - The force-stop case above does not generalize, and this record used to say it
+    did. Sent 2026-11-05 to a process Android had *not* created — pid 6069 already
+    alive, cached, screen off — the same authorised pair reached the receiver
+    (`automation: enabling protection`) and ActivityManager refused the follow-up
+    service call both ways: `Background start not allowed: service Intent {
+    act=com.adfree.START_VPN cmp=git.shin.adfree/.vpn.AdGuardVpnService } from
+    pid=6069 uid=10344 pkg=git.shin.adfree startFg?=true`, and the same line for
+    `STOP_VPN` at `startFg?=false`. `runCatching` in `VpnController
+    .startVpnService()` caught the exception, left `_isVpnActive` alone and posted
+    the tap-to-open notification — `id=1002`, `android.title=AdFree không thể
+    khởi động`, channel `adfree_conflicts` — still in `dumpsys notification` at
+    the end of the pass with `tun0` absent. So an ENABLE against a cached process
+    is a no-op that says so, not a flag that lies. What is *not* settled is which
+    side of the process boundary makes the difference: 2026-11-03 was a uid
+    created to deliver the broadcast, this one a uid already running, and nothing
+    between the two isolated that variable. Until it is measured, automation from
+    Tasker on an idle phone should be assumed to need the tap.
   - Device left as found: `files/capture-shell` absent, the tunnel up (last
     authorised ENABLE, the retired token then refused), the app sent to the
     home screen, automation switch off with a rotated token that was never
@@ -1447,13 +1472,16 @@ section recommended.
       files/flows'` and executed from that app's own data directory, because
       `/data/local/tmp` is not executable under `run-as` (SELinux). The only
       files the helper gained were `files/flows` and its log; both are deleted.
-    - One defect this pass surfaced, not fixed here: `VpnController
-      .startVpnService()` sets `_isVpnActive = true` before it asks the system
-      (`VpnController.kt:73`), and a refused start — Android 10 rejects
-      `startService` from a background uid, which is what happens while the
-      screen is locked — leaves the flag true with no tunnel. `isVpnActive` is
-      what `enableProtectionFromShortcut()` returns on, so the shortcut becomes
-      a no-op and the UI reports protection on. Recovery is a process restart.
+    - The defect this pass surfaced is fixed, and the sub-bullet that recorded it
+      as open was wrong for two days. `VpnController.startVpnService()` no longer
+      sets `_isVpnActive = true` ahead of the call: the flag rides
+      `runCatching{…}.onSuccess`, so a refused start leaves it down, and
+      `onFailure` logs and posts the tap-to-open notification (`36b0412`,
+      confirmed live on 2026-11-05 by the automation case in §6.5 — flag down, no
+      tunnel, `id=1002` showing). The guards that decide *against* starting now
+      read `isTunnelUp()` — the flag *and* `coreEngine.isRunning()` — rather than
+      the flag alone (`3546f66`), which is what `enableProtectionFromShortcut()`
+      and the Home toggle return on. Recovery is a tap, not a process restart.
     - Two harness lies had to be fixed before the numbers meant anything.
       A keep-alive socket always has an unread answer in its buffer, and a
       socket with data pending never reports the FIN behind it, so the old
@@ -1565,7 +1593,14 @@ negative half of that rule is recorded (`:640-645`).
 ## Risks
 
 - The disabled-but-running notification changes AdFree's service lifetime;
-  verify no battery regression and that `onRevoke` still stops everything.
+  both halves of this are now answered. `onRevoke` is device-verified — the
+  armed and unarmed revoke cases at 17:34 and the un-arm of a live session
+  above, each with the dropped alert and the flag reading `false`. The battery
+  half is the 2026-11-05 sleep measurement in `BENCHMARK.md`: with the tunnel up
+  and 9.5 MB in / 1.2 MB out across it, the phone suspended 71.8 % of a
+  12-minute unplugged screen-off window and held **zero** partial wake locks in
+  either arm; what the service costs is 2.89 s of CPU per ~11 min of protection
+  against 0.13 s without, not sleep. It does not keep the device awake.
 - Roaming/screen-off rules touch the packet hot path; benchmark with
   `BENCHMARK.md` before shipping.
 - Annoyances/security modules change which filter rules are active; run the
