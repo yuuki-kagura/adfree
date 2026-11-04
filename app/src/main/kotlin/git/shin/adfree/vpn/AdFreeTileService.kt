@@ -33,7 +33,7 @@ class AdFreeTileService : TileService() {
 
     private fun toggle() {
         val controller = container.vpnController
-        if (controller.isVpnActive.value) {
+        if (controller.isTunnelUp()) {
             // A paused tunnel is still up: tapping resumes filtering instead
             // of tearing the VPN down.
             if (controller.isPaused()) {

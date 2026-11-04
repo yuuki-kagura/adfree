@@ -707,11 +707,19 @@ class AdGuardViewModel(
      * dialog itself, so it opens this Activity and the prompt flag does it.
      */
     fun enableProtectionFromShortcut() {
-        if (vpnController.isVpnActive.value) return
+        // `isTunnelUp`, not the flag alone: a dispatched start whose establish
+        // failed left the flag up, and this early return then refused every
+        // following tap in silence — no log, no dialog, no tunnel.
+        if (vpnController.isTunnelUp()) {
+            Log.i("AdFree", "enable-protection shortcut: tunnel already up")
+            return
+        }
         repository.toggleProtection(true)
         if (vpnController.prepareIfNeeded() != null) {
+            Log.i("AdFree", "enable-protection shortcut: VPN consent missing, raising prompt")
             _showVpnPermissionPrompt.value = true
         } else {
+            Log.i("AdFree", "enable-protection shortcut: dispatching tunnel start")
             vpnController.startVpnService()
         }
     }
@@ -753,9 +761,11 @@ class AdGuardViewModel(
 
     private fun toggleProtection() {
         // The switch follows the VPN itself, not a remembered flag: the flag
-        // defaulted to on while no tunnel existed, so the first tap after a
-        // restart "switched off" protection that had never come up.
-        val next = !vpnController.isVpnActive.value
+        // reads true from the moment a start is dispatched, so a start whose
+        // binder work failed left the first tap after it switching protection
+        // *off* — turning off a tunnel that had never come up — and only the
+        // tap after that brought the tunnel back.
+        val next = !vpnController.isTunnelUp()
         if (next) {
             val needsPermission = vpnController.prepareIfNeeded() != null
             if (needsPermission) {

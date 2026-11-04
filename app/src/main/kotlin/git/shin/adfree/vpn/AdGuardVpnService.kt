@@ -280,6 +280,9 @@ class AdGuardVpnService : VpnService() {
             Log.e(TAG, "notification failed: ${e.message}", e)
             isRunning = false
             establishing.set(false)
+            // Same reason as in [teardownTunnel]: this is a give-up path, and the
+            // controller set its flag when it dispatched the start.
+            container.vpnController.onVpnStopped()
             return
         }
         // Everything below is binder work — `establish()`, one
@@ -402,8 +405,11 @@ class AdGuardVpnService : VpnService() {
     private fun teardownTunnel() {
         isRunning = false
         container.coreEngine.stop()
-        if (vpnInterface == null) return
+        // Reported before the interface check: a start that died in `establish()`
+        // never got an interface, and skipping the callback there is what left
+        // the controller claiming a tunnel that did not exist.
         container.vpnController.onVpnStopped()
+        if (vpnInterface == null) return
         runCatching { vpnInterface?.close() }.onFailure { Log.w(TAG, "close TUN failed", it) }
         vpnInterface = null
     }

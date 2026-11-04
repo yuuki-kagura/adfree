@@ -37,6 +37,13 @@ class VpnController(
     private val _isVpnActive = MutableStateFlow(false)
     val isVpnActive: StateFlow<Boolean> = _isVpnActive.asStateFlow()
 
+    /**
+     * Whether a tunnel is actually up, as opposed to merely expected. Guards
+     * that decide against starting a tunnel read this; the UI keeps showing
+     * [isVpnActive] so a tap has immediate feedback while the binder work runs.
+     */
+    fun isTunnelUp(): Boolean = tunnelConfirmed(_isVpnActive.value, coreEngine.isRunning())
+
     private val mainHandler = Handler(Looper.getMainLooper())
     private val restartRunnable = Runnable {
         // A stop-then-start can be cancelled by turning protection off.

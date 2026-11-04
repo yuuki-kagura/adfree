@@ -67,4 +67,21 @@ class VpnRuntimeStateTest {
             ),
         )
     }
+
+    /**
+     * A start is dispatched before the tunnel exists, so the flag alone says no
+     * more than "a tunnel was asked for". A guard that refuses to start on the
+     * flag alone turns a failed start into a shortcut that never works again:
+     * the recorded shape was three enable-protection taps, the last two with no
+     * log and no dialog while `tun0` had no address.
+     */
+    @Test
+    fun `an expected tunnel is not a confirmed one`() {
+        assertFalse(tunnelConfirmed(flagActive = true, coreRunning = false))
+        assertTrue(tunnelConfirmed(flagActive = true, coreRunning = true))
+        // The flag is the only claim of intent, so no core state can confirm a
+        // start that was never dispatched.
+        assertFalse(tunnelConfirmed(flagActive = false, coreRunning = true))
+        assertFalse(tunnelConfirmed(flagActive = false, coreRunning = false))
+    }
 }

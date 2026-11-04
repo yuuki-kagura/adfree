@@ -55,3 +55,20 @@ fun shouldReportDroppedProtection(
     protectionExpected: Boolean,
     systemKeepsVpn: Boolean = false,
 ): Boolean = wasRunning && protectionExpected && !systemKeepsVpn
+
+/**
+ * Whether the tunnel-expected flag may be read as "there is a tunnel".
+ *
+ * [VpnController.startVpnService] raises the flag when a start is *dispatched*,
+ * and the service owns it from there: `establish()` returning null, a descriptor
+ * that could not be created, or a notification that failed to promote the
+ * service all leave the flag up with nothing behind it. [coreRunning] is the
+ * ground truth because the core sets it only once it has a descriptor to read.
+ *
+ * Every decision that refuses to start a tunnel because one is supposedly
+ * already running has to go through this, or a failed start silences the
+ * follow-up: the Quick Settings shortcut returns at its first line, and the
+ * protection switch reads the stale flag as "on" so the next tap switches
+ * protection off instead of bringing the tunnel back.
+ */
+fun tunnelConfirmed(flagActive: Boolean, coreRunning: Boolean): Boolean = flagActive && coreRunning
