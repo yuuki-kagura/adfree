@@ -1619,3 +1619,83 @@ provably, for free, is gone; the walk that would need a new class of bug is not.
 
 11 tests in `waitset.rs`, 840 lib tests and the integration suites pass; `cargo
 clippy --release --lib --tests` reports nothing at either edited site.
+
+## What the tunnel costs the phone's sleep (2026-11-05, Sony 802SO, unplugged)
+
+The sleep claim this project has been making is structural: the manifest declares no
+`android.permission.WAKE_LOCK` (`app/src/main/AndroidManifest.xml:5-17`), so no code
+here can hold one; nothing sends `SO_KEEPALIVE` or pings on a schedule; and the two
+timers that do spin — the forwarder's 1 s `epoll_wait` timeout and `adfree-db`'s
+500 ms `recv_timeout` — are `CLOCK_MONOTONIC` waits, which freeze when the SoC does.
+What was never measured is the other half: whether the phone *actually* suspends with
+a tunnel up, and what its presence costs when it does.
+
+**The cable had to come out.** Two 120 s control windows, screen off, a probe sleeping
+on `CLOCK_MONOTONIC` and comparing it against `CLOCK_REALTIME` and `CLOCK_BOOTTIME`
+each interval: on USB it measured 0.000 s of lag over 60 intervals, and 0.000 s again
+after `dumpsys deviceidle force-idle` had moved the state machine to `mState=IDLE`.
+A charging Xperia does not suspend for anything, forced Doze included, so every
+earlier screen-off window in this file — the 150 s one behind the 0.75–1.0 ms/s idle
+figures — was taken on a device that was *awake the whole time*. The instrument is a
+40-line NDK build: a process with no wakelock cannot delay suspend, and the gap
+between `boot` and `mono` in its own output is the time the SoC spent asleep.
+
+Two matched windows, screen off, device laid still, nothing plugged in, `batterystats
+--reset` and the probe started at the boundary, the host silent (`adb kill-server`) in
+between so the measurement does not wake the thing it measures:
+
+| | protection on | protection off |
+| --- | --- | --- |
+| window, `CLOCK_BOOTTIME` | 742.0 s | 651.8 s |
+| suspended, from the probe | **531.4 s = 71.8%**, longest single sleep 79.7 s | probe frozen at 32 s (see below) |
+| uid CPU, framework | u 1463 + s 1428 = **2891 ms** / 11m39s | u 104 + s 28 = **132 ms** / 10m15s |
+| `tun0` | +9923 rx / +6890 tx pkts, 9.54 MB in / 1.19 MB out | interface absent |
+| Wi-Fi sleep time | 11m38.9s = 99.9%, 6 AP wakeups | not attributed |
+| wakeups in window | 124 (72 unknown, 45 `WLAN_CE_2`, 7 `thr-int-en`) | 110 (52, 46, 5, 4, 3) |
+| `PowerManagerService.WakeLocks` | 1m43.7s / 50 times | 32.3s / 49 times |
+| partial wake locks held by us | **none** | **none** |
+| battery | 100 → 99% | 100% |
+
+So: **the tunnel does not block deep sleep.** The phone slept through nearly three
+quarters of the window with the forwarder, the reader and the dialler all alive and
+`tun0` carrying ten megabytes, and the wake census is the same shape on both sides of
+the comparison — the same 45-vs-46 Wi-Fi-controller wakeups, the same 50-vs-49
+framework wakelock acquisitions, no wake lock of ours in either window, which is what
+the missing permission predicts. The cost the table does show is work while the device
+is *up*: 2891 ms against 132 ms, and `PowerManagerService.WakeLocks` holding 3.2×
+longer for the same number of acquisitions.
+
+Two numbers in that table are worth reading carefully rather than quoting.
+
+The first is the framework's 2891 ms. The six threads sampled from `/proc` — main
+20 ms, `adfree-db` 210 ms, reader 670 ms, forwarder 1210 ms, dialler 770 ms,
+`adfree-quic` 0 — account for 2880 ms of it, so the remaining ~24 Android threads of
+the process spent ~11 ms in twelve minutes, and the packet path really is the app's
+entire CPU. It also says the walk priced in the last section is being paid: at 13.4
+packets a second the forwarder spent 1.63 ms of CPU per second, ~1.6% of one core on a
+device that was asleep for 72% of the wall clock.
+
+The second is the same 9.74 MB that `tun0` carried, which `batterystats` charges to
+*our* uid. That is not an accounting error: HTTPS filtering re-originates the
+connections, so the sockets that move the phone's traffic are the VPN's own, and every
+byte the filter lets through is billed to the filter. A parity claim against AdGuard on
+battery has to be made with that in mind — with filtering on, neither app is a
+bystander in the network stats.
+
+Three things this window does not settle:
+
+- The off arm has no direct suspend figure. The probe stopped writing after 16
+  intervals and the clock it prints shows no lag in them: Android 10 froze the
+  shell-spawned process, which the on arm — running beside a foreground service —
+  survived. The comparable numbers for that arm are the framework's own 132 ms and the
+  wake census, and they are quoted as such.
+- Ten minutes is not a night. The battery moved 1% in the on window and nothing in the
+  off one, which at 1% granularity is no measurement at all; the CPU columns are the
+  ones that mean something.
+- While the stored protection flag says *on* but no tunnel is established — the state
+  a force-stop plus missing consent leaves — the process burned 5.5 ms of CPU a second
+  against 1.78 ms with the flag off, and I have not pinned the 3.7 ms down. Both
+  notifier polls (`logPage(0, 32)` every 5 s each, `AdGuardRepository.kt:388-470`, both
+  gated on `isProtectionActive`) and the VPN-start retry loop
+  (`AdGuardVpnService.kt:441`, `RETRY_BASE_MS << attempt`) are candidates, and neither
+  is accounted for.
