@@ -1484,7 +1484,8 @@ What is left is the O(n) per pass, now the largest single item in it and exactly
 where the host measurement said it would be: 0.255 ms snapshotting every relay and
 every mapping, 0.253 ms walking that snapshot in `sync` — 0.508 ms together, 58% of
 the loop's CPU and 5.5× the wait it feeds. `epoll` removed the kernel's scan; the
-engine's own scan is the next thing standing between a pass and the relay count. The
+engine's own scan is the next thing standing between a pass and the relay count —
+`### The walk itself, priced entry by entry` takes it apart. The
 11.4 `epoll_ctl` calls a pass against 1497 descriptors are the design answering to
 its own shape — under one syscall per 130 watched descriptors, which is the
 withdrawn-and-re-added DNS and wake descriptors plus the relays whose mask moved,
@@ -1517,3 +1518,104 @@ nothing. What it would need is already paid for: the round trip from
 `poll_snapshot()` through the set to the dispatcher now carries a generation token,
 which is the one thing a port-only key cannot express.
 
+
+### The walk itself, priced entry by entry
+
+The number that closed the previous section — 0.508 ms of snapshot and `sync` for
+1484 rows, 58% of the loop — invited the obvious fix, which was wrong. `Relay` is
+1056 bytes and `UdpFlow` 176 (sizes pinned by `a_live_flow_carries_a_known_cost`,
+`rust/src/engine.rs:6130-6145`), so if the walk were moving bytes, grouping each
+struct's poll-relevant fields onto one cache line would be the cheapest large win
+left. `rust/tests/walkcost.rs` fills both tables at the mix the phone's `nudge2048`
+window showed and times the two `poll_snapshot()` calls and the `sync` they feed,
+minimum of five trials of 512 passes, because the first run taught that much: one
+machine loaded priced the identical walk at twice what it priced it unloaded.
+
+| run | ns per relay (1056 B) | ns per mapping (176 B) | `sync`, ns per row | the two buffers |
+| --- | --- | --- | --- | --- |
+| quiet | 21.6 | 28.9 | 36.9 | 0.4 |
+| loaded | 58.6 | 44.8 | 57.1 | 0.3 |
+
+The big entry is not the expensive one — in the quiet run it is the cheaper of the
+two, and which of them wins moved by more than 2× between runs. Nothing about the
+bytes moves, so `#[repr(C)]` is declined on that measurement, and the same probe
+declines the second tempting one: the two snapshot `Vec`s, bought and handed back
+once a pass, are 0.3–0.4 ns a row against the 37–57 ns the walk costs, so reusing
+the buffers would save a rounding error. What is left is per-entry logic: a
+predicate and a struct copy in the snapshot, one hash lookup in `sync`.
+
+One of those walks, though, was not about the entries at all. `sync` ended with
+`drop_gone`, a second sweep of every registration the set holds, comparing each
+slot's stamp to find the descriptors the snapshot had stopped reporting. A pass
+whose snapshot contained every registration it already had has nothing for that
+sweep to find, and the set can know it without looking: `reconcile` now counts the
+*distinct* slots that took the pass's stamp (`rust/src/waitset.rs:303`, `:343-344`),
+so a count short of the table's length names exactly the descriptors that have to go
+(`:238`), and a count equal to it means the sweep would delete nothing. Two rows for
+one descriptor count once, which is the case that would otherwise hide a stale slot,
+and `one_descriptor_is_one_slot_however_many_rows_carry_it` is the test for it; a
+paused relay never takes the stamp, so its slot still forces the sweep
+(`a_paused_relay_leaves_the_set_entirely`); and a failed `epoll_ctl` drops a slot it
+had already counted, which lands on the side that runs the sweep rather than the
+side that skips it.
+
+Measured in one process, five trials each, 1024 descriptors, 4096 passes
+(`cargo test --release --lib waitset -- --ignored --nocapture`; the test now prices
+the steady `sync` and the same `sync` with the sweep forced back in, so the
+difference is read rather than argued):
+
+| | µs per pass |
+| --- | --- |
+| `poll()` over an array rebuilt each pass | 123.1 |
+| `epoll_wait`, nothing ready | 2.5 |
+| `sync`, steady, with the sweep skipped | 33.3 |
+| the same `sync` with the sweep forced | 38.3 |
+
+5 µs a pass at 1024 descriptors, 13% of the `sync` that window used to pay. The
+`poll()` figure is worth noting too: that same loop read 130–195 µs in the table the
+port left behind and 218.3 µs in the first single-trial run of this one today,
+against 123.1 from the minimum of five — the clearest argument for the change of
+method. The ratios in that earlier table still hold; its absolute numbers were one
+noisy sample.
+
+The phone answers the question the previous section left open: whether 0.508 ms is a
+cost or an artifact of a 2048-socket harness. `bench/flowcpu.sh 40 base nudge1024`
+against the installed build, forwarder read from `/proc` with no instrumentation, the
+three workers separated by consecutive tid in spawn order (`adfree-tun`, `adfree-fwd`,
+`adfree-setup`, `rust/src/engine.rs:1752-1779`) — and on this build the middle one
+answered to `adfree-fwd` on tid 16841 in all three windows, which the run before the
+reinstall could not say: that one read `Thread-591`, `Thread-439`, `Thread-593` for
+the same three tids.
+
+| window | build | relays live | tun0 pkt/s | forwarder CPU |
+| --- | --- | --- | --- | --- |
+| nothing open | before | 0 to :80 | 6.5 | 40 ms / 40 s = 1.0 ms/s |
+| nothing open | after | 0 to :80 | 1.0 | 30 ms / 40 s = 0.75 ms/s |
+| 1024 sockets | before | 501 | 137 | 1070 ms / 40 s = 26.8 ms/s, 300 ms sys |
+| 1024 sockets | after | 497 | 128 | 840 ms / 40 s = 21.0 ms/s, 310 ms sys |
+| 1024 sockets | after | 686 | 141 | 790 ms / 40 s = 19.8 ms/s, 310 ms sys |
+
+The two idle rows are not a pair — the after window carried a sixth of the packets,
+and both numbers are one thread doing nothing, which is the point they are quoted
+for. The three 1024-socket rows are the comparison, and the process totals around
+them are not: the reinstall left ART verifying and JIT-compiling, and the main thread
+took 1040–1190 ms of the after windows for itself. Against the thread column: the
+walk the device measured is 0.508 ms for 1484 rows, 0.34 µs per row per pass, so the
+~500-row window pays ~0.17 ms a pass, and the forwarder's 26.8 ms a second over that
+is ~150 passes a second against the 137 packets a second `tun0` really carried. The
+walk is not an artifact of the 2048 case: at a few hundred live relays it is where
+the forwarder spends its time, and removing a quarter of that time for nothing is
+worth taking — 26.8 → 19.8–21.0 ms/s, with the second run carrying *more* relays than
+the baseline did.
+
+What this does not change is the verdict on the redesign that would remove the walk
+entirely, by registering on the event instead of re-asserting from a snapshot. The
+idle column is the reason: a phone at rest spends 0.75–1.0 ms of CPU per second on
+this thread, all of it included, so the walk at real relay counts is microseconds a
+second, and the failure mode the change buys is a mask change the set never hears
+about — a relay that stops being writable, in a loop paced by the very events it
+would have to miss, with no clock left to repair it. The sweep that could be removed
+provably, for free, is gone; the walk that would need a new class of bug is not.
+
+11 tests in `waitset.rs`, 840 lib tests and the integration suites pass; `cargo
+clippy --release --lib --tests` reports nothing at either edited site.

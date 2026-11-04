@@ -38,10 +38,13 @@
 # of it was system time — 20%. The same spec under `poll()` in a 40 s window
 # measured 4970 of 5640 ms, 87%; the share is the comparable number across the two
 # window lengths, and system time now reads as relay traffic rather than as the
-# wait. Spawn order separates the three, since tids come out in the order
-# `Core::start` asks for them:
-# `adfree-tun` reads packets and rewrites responses, `adfree-fwd` is the busiest by
-# total, `adfree-setup` dials the origins.
+# wait. Spawn order is what separates the three, since tids come out in the order
+# `Core::start` asks for them (`engine.rs:1752-1779`): `adfree-tun` reads packets
+# and rewrites responses, `adfree-fwd` waits on the descriptors, `adfree-setup`
+# dials the origins. Do not rank them by total CPU instead — under load the
+# forwarder is the busiest of the three, and in a 40 s idle window the same build
+# put 70 ms on the reader and 40 ms on the forwarder, so the ranking names the
+# wrong thread exactly where the loop costs nothing.
 #
 # Needs the debug build (tunnel up, /proc readable), `bench/flows` built and pushed
 # into the helper's `files/`, and the screen held on: `svc power stayon true` plus a

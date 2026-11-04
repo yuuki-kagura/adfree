@@ -139,6 +139,10 @@ pub struct WaitSet {
     interest: FdTable<Slot>,
     /// Incremented per `sync`; a slot carrying the current stamp survived it.
     stamp: u32,
+    /// Slots that carried the current stamp, counted as they got it. `sync` uses
+    /// the count to decide whether a descriptor can have gone stale; see
+    /// [`WaitSet::drop_gone`].
+    stamped: usize,
     /// `epoll_ctl` calls issued so far. An unchanged pass issues none, which is
     /// the reason the set is cheaper than `poll()`; growth says the traffic is
     /// churning its relays, and then the saving is smaller.
@@ -179,6 +183,7 @@ impl WaitSet {
             ep: unsafe { libc::epoll_create1(libc::EPOLL_CLOEXEC) },
             interest: FdTable::default(),
             stamp: 0,
+            stamped: 0,
             ops: 0,
             events: vec![
                 libc::epoll_event { events: 0, u64: 0 };
@@ -205,6 +210,10 @@ impl WaitSet {
     /// one hash lookup and no syscall, which is why the steady part of a busy
     /// tunnel is free here: relays that are only reading keep the registration
     /// they already have.
+    ///
+    /// What is left per row is that one lookup. A pass whose snapshot held every
+    /// registration it already had has nothing to reap, and `stamped` says so
+    /// without looking: see [`WaitSet::drop_gone`].
     pub fn sync(
         &mut self,
         wake_fd: RawFd,
@@ -213,6 +222,7 @@ impl WaitSet {
         udp: &[UdpPoll],
     ) {
         self.stamp += 1;
+        self.stamped = 0;
         if wake_fd >= 0 {
             self.reconcile(wake_fd, WaitEntry::Wake);
         }
@@ -225,7 +235,9 @@ impl WaitSet {
         for p in udp {
             self.reconcile(p.fd, WaitEntry::Udp(*p));
         }
-        self.drop_gone();
+        if self.stamped != self.interest.len() {
+            self.drop_gone();
+        }
     }
 
     /// Blocks until something is ready or `timeout_ms` passes.
@@ -273,6 +285,10 @@ impl WaitSet {
 
     /// Brings one descriptor's registration in line with what the engine wants
     /// from it now.
+    ///
+    /// Counts the slot as seen for this pass the first time the pass touches it,
+    /// which is what lets [`WaitSet::sync`] skip the reap when nothing went
+    /// missing: two snapshot rows on one descriptor must not read as two.
     fn reconcile(&mut self, fd: RawFd, entry: WaitEntry) {
         let (ep, stamp) = (self.ep, self.stamp);
         let bits = entry.bits();
@@ -282,7 +298,9 @@ impl WaitSet {
         }
         let instance = entry.instance();
         let mut forget = false;
+        let mut seen = false;
         if let Some(slot) = self.interest.get_mut(&fd) {
+            seen = slot.stamp != stamp;
             slot.stamp = stamp;
             slot.entry = entry;
             if slot.instance.is_some() && slot.instance == instance {
@@ -311,6 +329,7 @@ impl WaitSet {
                 }
             }
         } else if ctl(ep, libc::EPOLL_CTL_ADD, fd, bits, &mut self.ops) == 0 {
+            seen = true;
             self.interest.insert(
                 fd,
                 Slot {
@@ -321,6 +340,9 @@ impl WaitSet {
                 },
             );
         }
+        if seen {
+            self.stamped += 1;
+        }
         if forget {
             self.interest.remove(&fd);
         }
@@ -328,6 +350,13 @@ impl WaitSet {
 
     /// Unregisters descriptors the snapshot no longer contains: closed relays,
     /// retired NAT mappings, replaced DNS sockets.
+    ///
+    /// This is a second walk of everything the set holds, so `sync` calls it only
+    /// when the pass left a slot untouched: `stamped` counts the distinct slots
+    /// that carry this pass's stamp, so a count short of the table's length names
+    /// exactly the descriptors that have to go, and a count that matches it means
+    /// the walk would delete nothing. A failed `epoll_ctl` can drop a slot it had
+    /// already counted, which lands on the safe side of the test — the walk runs.
     fn drop_gone(&mut self) {
         let (ep, stamp) = (self.ep, self.stamp);
         let mut gone = 0u64;
@@ -487,6 +516,19 @@ mod tests {
     }
 
     #[test]
+    fn one_descriptor_is_one_slot_however_many_rows_carry_it() {
+        // The reap is skipped when the pass touched as many slots as the table
+        // holds, so counting the same descriptor twice would hide the stale one.
+        let kept = Pipe::new();
+        let gone = Pipe::new();
+        let mut set = WaitSet::new();
+        set.sync(-1, &[], &[relay(1, kept.read), relay(2, gone.read)], &[]);
+        assert_eq!(set.watched(), 2);
+        set.sync(-1, &[], &[relay(1, kept.read), relay(1, kept.read)], &[]);
+        assert_eq!(set.watched(), 1, "a double row defeated the reap");
+    }
+
+    #[test]
     fn a_paused_relay_leaves_the_set_entirely() {
         let pipe = Pipe::new();
         let mut set = WaitSet::new();
@@ -618,31 +660,52 @@ mod tests {
         assert_eq!(set.watched(), N);
         let base_ops = set.ops();
 
-        // Split, because the two halves answer different questions: the wait
-        // says whether `epoll_wait` really costs what is ready rather than what
-        // is registered, and the reconcile says what the Rust side still walks.
-        let t0 = thread_cpu_ns();
-        for _ in 0..PASSES {
-            set.wait(0);
-        }
-        let wait_ns = thread_cpu_ns() - t0;
-        // The walk on its own, with `drop_gone` left out, so the two halves of
-        // `sync` can be told apart: one is the cost of looking at every entry
-        // the engine just reported, the other the cost of finding the entries it
-        // stopped reporting.
-        let t0 = thread_cpu_ns();
-        for _ in 0..PASSES {
-            set.stamp += 1;
-            for p in &relays {
-                set.reconcile(p.fd, WaitEntry::Relay(*p));
+        // Split, because the halves answer different questions: the wait says
+        // whether `epoll_wait` really costs what is ready rather than what is
+        // registered, and the two walks say what the Rust side pays per entry,
+        // with and without the scan for entries the snapshot stopped reporting.
+        // The minimum of five trials, because the same machine under load priced
+        // one of these walks at twice what it priced it at unloaded.
+        const TRIALS: usize = 5;
+        let trial = |run: &mut dyn FnMut()| -> u64 {
+            let mut min = u64::MAX;
+            for _ in 0..TRIALS {
+                let t0 = thread_cpu_ns();
+                run();
+                let ns = thread_cpu_ns() - t0;
+                if ns < min {
+                    min = ns;
+                }
             }
-        }
-        let walk_ns = thread_cpu_ns() - t0;
-        let t0 = thread_cpu_ns();
-        for _ in 0..PASSES {
-            set.sync(-1, &[], &relays, &[]);
-        }
-        let sync_ns = thread_cpu_ns() - t0;
+            min
+        };
+
+        let wait_ns = trial(&mut || {
+            for _ in 0..PASSES {
+                set.wait(0);
+            }
+        });
+        // The walk as `sync` runs it on a steady pass: every entry looked at, and
+        // no second sweep of the table to find what is missing, because the slot
+        // count already said nothing is.
+        let sync_ns = trial(&mut || {
+            for _ in 0..PASSES {
+                set.sync(-1, &[], &relays, &[]);
+            }
+        });
+        // The same walk with that sweep forced back in, which is the shape
+        // `sync` had before the count: the difference is the guard's saving, as a
+        // measurement rather than as an argument about stamping.
+        let reaped_ns = trial(&mut || {
+            for _ in 0..PASSES {
+                set.stamp += 1;
+                set.stamped = 0;
+                for p in &relays {
+                    set.reconcile(p.fd, WaitEntry::Relay(*p));
+                }
+                set.drop_gone();
+            }
+        });
         // A steady set is a set that issues no syscalls: everything the pass
         // re-reads, it re-reads from its own table.
         assert_eq!(
@@ -651,30 +714,38 @@ mod tests {
             "the steady passes issued epoll_ctl work"
         );
 
-        let t1 = thread_cpu_ns();
-        for _ in 0..PASSES {
-            // The old loop rebuilt the array every pass, so the rebuild is part
-            // of what is being compared — and left out here would flatter it.
-            let mut pfds: Vec<libc::pollfd> = relays
-                .iter()
-                .map(|r| libc::pollfd {
-                    fd: r.fd,
-                    events: libc::POLLIN as libc::c_short,
-                    revents: 0,
-                })
-                .collect();
-            let n = pfds.len() as libc::nfds_t;
-            std::hint::black_box(unsafe { libc::poll(pfds.as_mut_ptr(), n, 0) });
-        }
-        let poll_ns = thread_cpu_ns() - t1;
+        // A steady set is a set that issues no syscalls: everything the pass
+        // re-reads, it re-reads from its own table.
+        assert_eq!(
+            set.ops() - base_ops,
+            0,
+            "the steady passes issued epoll_ctl work"
+        );
+
+        let poll_ns = trial(&mut || {
+            for _ in 0..PASSES {
+                // The old loop rebuilt the array every pass, so the rebuild is
+                // part of what is being compared — and left out here would
+                // flatter it.
+                let mut pfds: Vec<libc::pollfd> = relays
+                    .iter()
+                    .map(|r| libc::pollfd {
+                        fd: r.fd,
+                        events: libc::POLLIN as libc::c_short,
+                        revents: 0,
+                    })
+                    .collect();
+                let n = pfds.len() as libc::nfds_t;
+                std::hint::black_box(unsafe { libc::poll(pfds.as_mut_ptr(), n, 0) });
+            }
+        });
 
         println!(
-            "nfds={N} passes={PASSES}: poll {:.1} us/pass | wait {:.1} + sync {:.1} (walk {:.1}, reap {:.1}) = {:.1} us/pass ({:.2}x)",
+            "nfds={N} passes={PASSES}: poll {:.1} us/pass | wait {:.1} + sync {:.1} (with the forced reap {:.1}) = {:.1} us/pass ({:.2}x)",
             poll_ns as f64 / PASSES as f64 / 1000.0,
             wait_ns as f64 / PASSES as f64 / 1000.0,
             sync_ns as f64 / PASSES as f64 / 1000.0,
-            walk_ns as f64 / PASSES as f64 / 1000.0,
-            (sync_ns - walk_ns) as f64 / PASSES as f64 / 1000.0,
+            reaped_ns as f64 / PASSES as f64 / 1000.0,
             (wait_ns + sync_ns) as f64 / PASSES as f64 / 1000.0,
             poll_ns as f64 / ((wait_ns + sync_ns).max(1) as f64),
         );

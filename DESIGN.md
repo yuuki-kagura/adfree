@@ -60,8 +60,11 @@ real TLS. Enabling it is **gated on the CA actually being installed** (see
 - `forward-thread`: **one** `epoll` interest set covering an eventfd wakeup, every
   DNS socket and every relay/NAT flow, re-asserted once per pass from a snapshot of
   the tables (`rust/src/waitset.rs`); the 1-second timeout only drives periodic
-  cleanup. It replaced a `poll()` over the same descriptors on 2026-11-04 — 1.85 ms
-  of CPU a pass at 1729 descriptors, 0.093 ms a pass at 1497 since (`BENCHMARK.md`).
+  cleanup. Re-asserting is not re-syscalling: a relay whose instance token and mask
+  are unchanged costs one hash lookup, and a pass that dropped no descriptor skips
+  the sweep that would look for it. It replaced a `poll()` over the same descriptors
+  on 2026-11-04 — 1.85 ms of CPU a pass at 1729 descriptors, 0.093 ms a pass at 1497
+  since (`BENCHMARK.md`).
   Anything that creates work (a DNS query, a new relay, a socket refusing bytes,
   `stop()`) writes the eventfd, so a long timeout costs no latency.
 There is no `Timer`, no `Handler.postDelayed`, no periodic wakeup.
