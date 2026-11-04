@@ -557,6 +557,12 @@ class AdGuardVpnService : VpnService() {
         container.coreEngine.markScreenOn()
         // The user may be returning from the certificate installer.
         container.repository.syncHttpsReminder()
+        // Checks happen here and not while off: the periodic pass is skipped
+        // when the screen is dark, so the wake-up edge is where stale lists
+        // and a possible new release get picked up. Both calls self-throttle
+        // (30 minutes and one day), so a busy day costs nothing extra.
+        container.repository.autoUpdateIfStale()
+        container.appUpdate.autoCheck()
     }
 
     /**

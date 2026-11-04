@@ -268,6 +268,8 @@
     <string name="tile_state_paused">Đã tạm dừng bảo vệ</string>
     <string name="notification_channel_updates">Cập nhật bộ lọc</string>
     <string name="notification_channel_updates_description">Kết quả làm mới bộ lọc tự động</string>
+    <string name="notification_app_update_title">AdFree %1$s đã khả dụng</string>
+    <string name="notification_app_update_text">Chạm để mở mục cập nhật và cài đặt.</string>
     <string name="notification_channel_firewall">Chặn của tường lửa</string>
     <string name="notification_channel_firewall_description">Ứng dụng bị tường lửa chặn truy cập Internet</string>
     <string name="notification_firewall_title">Đã chặn %1$s</string>
@@ -1083,6 +1085,17 @@
     <string name="settings_dns_add">Thêm và chọn</string>
     <string name="settings_engine_title">Trạng thái engine</string>
     <string name="settings_engine_build">Biên dịch bộ lọc: %1$d ms</string>
+    <string name="settings_update_title">Cập nhật ứng dụng</string>
+    <string name="settings_update_idle">Tự động kiểm tra theo lịch cập nhật bộ lọc</string>
+    <string name="settings_update_check">Kiểm tra ngay</string>
+    <string name="settings_update_checking">Đang kiểm tra…</string>
+    <string name="settings_update_available">Bản %1$s đã khả dụng</string>
+    <string name="settings_update_install">Cài đặt</string>
+    <string name="settings_update_downloading">Đang tải %1$d%%</string>
+    <string name="update_outcome_up_to_date">AdFree đã là bản mới nhất</string>
+    <string name="update_outcome_failed">Kiểm tra cập nhật thất bại</string>
+    <string name="update_outcome_install_started">Đã mở trình cài đặt</string>
+    <string name="update_outcome_install_failed">Tải xuống hoặc cài đặt thất bại</string>
     <string name="settings_help_title">Trợ giúp &amp; mã nguồn</string>
     <string name="settings_help_subtitle">Mở README của dự án trên GitHub</string>
     <string name="settings_https_sites_title">Trang web &amp; HTTPS</string>

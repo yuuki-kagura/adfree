@@ -31,6 +31,10 @@ import git.shin.adfree.model.ThreatAnalysisResult
 import git.shin.adfree.model.UserScriptInfo
 import git.shin.adfree.model.UserScriptStoreState
 import git.shin.adfree.security.ThreatAnalyzer
+import git.shin.adfree.update.AppUpdateController
+import git.shin.adfree.update.UpdateInfo
+import git.shin.adfree.update.UpdateOutcome
+import git.shin.adfree.update.UpdateUiState
 import git.shin.adfree.vpn.VpnController
 import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.flow.MutableSharedFlow
@@ -70,6 +74,8 @@ class AdGuardViewModel(
     private val isPrivateDnsStrict: () -> Boolean = { false },
     /** Last fallback the core had to take; supplied by DI. */
     private val configWarning: StateFlow<ConfigWarning> = MutableStateFlow(ConfigWarning.NONE),
+    /** The OTA question, supplied by DI; the Settings row renders its state. */
+    private val appUpdate: AppUpdateController,
 ) : ViewModel() {
 
     // ---------------------------------------------------------------- local UI
@@ -111,6 +117,18 @@ class AdGuardViewModel(
      * Device-local by design, so it never travels in a backup.
      */
     val automationState: StateFlow<AutomationControl> = repository.automation.state
+
+    /**
+     * OTA state for the Settings version row. The controller lives in the
+     * DI container, not here: the worker and the screen-on hook check through
+     * the same instance, and this is only one more reader of it.
+     */
+    val appUpdateState: StateFlow<UpdateUiState> = appUpdate.state
+
+    /** The Settings row tapped: the outcome comes back as a snackbar. */
+    fun checkAppUpdateManually() = appUpdate.manualCheck()
+
+    fun installAppUpdate(info: UpdateInfo) = appUpdate.downloadAndInstall(info)
 
     /**
      * One-shot request for the Protection tab to open a specific detail page.
@@ -335,6 +353,13 @@ class AdGuardViewModel(
         viewModelScope.launch {
             configWarning.collect { warning ->
                 configWarningMessage(warning)?.let { emit(AdGuardEffect.ShowSnackbar(it)) }
+            }
+        }
+        // The OTA answer the user has to hear: a silent check that failed is
+        // indistinguishable from one that never ran, so the row says which.
+        viewModelScope.launch {
+            appUpdate.outcomes.collect { outcome ->
+                updateOutcomeMessage(outcome)?.let { emit(AdGuardEffect.ShowSnackbar(it)) }
             }
         }
         // Protection that was on when the app last ran comes back by itself;
@@ -832,6 +857,19 @@ class AdGuardViewModel(
 
     private fun configWarningMessage(warning: ConfigWarning): UiText? =
         CoreText.configWarning(warning)
+
+    /**
+     * What a manual OTA check has to say for itself. The Available case is
+     * silent here: the Settings row already shows the version and the install
+     * button, and a snackbar on top of that would cover the thing it announces.
+     */
+    private fun updateOutcomeMessage(outcome: UpdateOutcome): UiText? = when (outcome) {
+        UpdateOutcome.UpToDate -> UiText.Resource(R.string.update_outcome_up_to_date)
+        UpdateOutcome.Available -> null
+        UpdateOutcome.Failed -> UiText.Resource(R.string.update_outcome_failed)
+        UpdateOutcome.InstallStarted -> UiText.Resource(R.string.update_outcome_install_started)
+        UpdateOutcome.InstallFailed -> UiText.Resource(R.string.update_outcome_install_failed)
+    }
 
     /**
      * Re-reads the system Private DNS switch and re-pushes the config: turning

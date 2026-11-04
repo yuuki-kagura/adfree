@@ -51,6 +51,7 @@ import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.RadioButton
@@ -111,6 +112,8 @@ import git.shin.adfree.ui.theme.AdGuardTextMuted
 import git.shin.adfree.ui.theme.AdGuardTextPrimary
 import git.shin.adfree.ui.theme.AdGuardOnAccent
 import git.shin.adfree.ui.theme.AdGuardTextSecondary
+import git.shin.adfree.update.UpdateInfo
+import git.shin.adfree.update.UpdateUiState
 
 /** Public project page; the README carries the user-facing documentation. */
 private const val HELP_URL = "https://github.com/tachibana-shin/adfree#readme"
@@ -128,6 +131,7 @@ fun SettingsScreen(
 ) {
     val state by viewModel.uiState.collectAsState()
     val automation by viewModel.automationState.collectAsState()
+    val appUpdateState by viewModel.appUpdateState.collectAsState()
     val scrollState = rememberScrollState()
     val uriHandler = LocalUriHandler.current
     val context = LocalContext.current
@@ -291,6 +295,12 @@ fun SettingsScreen(
             SettingsGroupHeader(stringResource(R.string.settings_group_about))
 
             EngineInfoSection(state.stats.filterBuildMs)
+
+            AppUpdateSection(
+                state = appUpdateState,
+                onCheck = { viewModel.checkAppUpdateManually() },
+                onInstall = { viewModel.installAppUpdate(it) },
+            )
 
             Spacer(modifier = Modifier.height(10.dp))
 
@@ -1664,6 +1674,88 @@ private fun EngineInfoSection(buildMs: Long) {
                 fontSize = 12.sp,
                 color = AdGuardTextPrimary,
             )
+        }
+    }
+}
+
+/**
+ * OTA status row: manual check, the release version once one is found, and
+ * install/download progress. Automatic checks ride the filter schedule and
+ * never run while the screen is off.
+ */
+@Composable
+private fun AppUpdateSection(
+    state: UpdateUiState,
+    onCheck: () -> Unit,
+    onInstall: (UpdateInfo) -> Unit,
+) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(12.dp),
+        colors = CardDefaults.cardColors(containerColor = AdGuardDarkSurface),
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 14.dp, vertical = 10.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Column(
+                modifier = Modifier.weight(1f),
+                verticalArrangement = Arrangement.spacedBy(4.dp),
+            ) {
+                Text(
+                    text = stringResource(R.string.settings_update_title),
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = AdGuardTextSecondary,
+                )
+                when (state) {
+                    UpdateUiState.Idle -> Text(
+                        text = stringResource(R.string.settings_update_idle),
+                        fontSize = 12.sp,
+                        color = AdGuardTextPrimary,
+                    )
+                    UpdateUiState.Checking -> Text(
+                        text = stringResource(R.string.settings_update_checking),
+                        fontSize = 12.sp,
+                        color = AdGuardTextPrimary,
+                    )
+                    is UpdateUiState.Available -> Text(
+                        text = stringResource(R.string.settings_update_available, state.info.version),
+                        fontSize = 12.sp,
+                        color = AdGuardGreenPrimary,
+                    )
+                    is UpdateUiState.Downloading -> Text(
+                        text = stringResource(R.string.settings_update_downloading, state.progress),
+                        fontSize = 12.sp,
+                        color = AdGuardTextPrimary,
+                    )
+                }
+                if (state is UpdateUiState.Downloading) {
+                    LinearProgressIndicator(
+                        progress = { state.progress / 100f },
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                }
+            }
+            Spacer(modifier = Modifier.width(12.dp))
+            when (state) {
+                UpdateUiState.Idle -> OutlinedButton(onClick = onCheck) {
+                    Text(stringResource(R.string.settings_update_check))
+                }
+                UpdateUiState.Checking -> CircularProgressIndicator(
+                    modifier = Modifier.size(20.dp),
+                    strokeWidth = 2.dp,
+                )
+                is UpdateUiState.Available -> Button(onClick = { onInstall(state.info) }) {
+                    Text(stringResource(R.string.settings_update_install))
+                }
+                is UpdateUiState.Downloading -> CircularProgressIndicator(
+                    modifier = Modifier.size(20.dp),
+                    strokeWidth = 2.dp,
+                )
+            }
         }
     }
 }

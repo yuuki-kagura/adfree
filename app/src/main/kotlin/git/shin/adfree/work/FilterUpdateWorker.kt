@@ -1,6 +1,7 @@
 package git.shin.adfree.work
 
 import android.content.Context
+import android.os.PowerManager
 import androidx.work.CoroutineWorker
 import androidx.work.WorkerParameters
 import git.shin.adfree.AdGuardApplication
@@ -22,6 +23,12 @@ class FilterUpdateWorker(
 
     override suspend fun doWork(): Result {
         val app = applicationContext as? AdGuardApplication ?: return Result.success()
+        // Nothing is checked with the screen off, filters and app release both.
+        // WorkManager opens the window even during Doze; the pass is simply
+        // skipped here, and the screen-on hook picks the same work up when the
+        // user is back with the phone.
+        val power = applicationContext.getSystemService(PowerManager::class.java)
+        if (power != null && !power.isInteractive) return Result.success()
         val repository = app.container.repository
         val updated = withContext(Dispatchers.IO) {
             runCatching { repository.backgroundUpdateStaleLists() }.getOrDefault(0)
@@ -33,6 +40,9 @@ class FilterUpdateWorker(
                 updated,
             )
         }
+        // The app release check rides this same pass: same schedule, same
+        // enable switch, same screen-on rule.
+        app.container.appUpdate.autoCheck()
         return Result.success()
     }
 }

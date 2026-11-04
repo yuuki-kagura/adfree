@@ -22,7 +22,12 @@ import git.shin.adfree.ui.Localization
 object FilterUpdateNotifier {
 
     private const val CHANNEL_ID = "adfree_updates"
-    private const val NOTIFICATION_ID = 1002
+
+    // Ids are process-wide, not per channel: 1002 belongs to the start-refused
+    // alert on the conflicts channel, so posting the refresh line under it
+    // would silently replace that one. 1004 is free; 1005 is the app-update
+    // notice in the update package.
+    private const val NOTIFICATION_ID = 1004
 
     fun notify(context: Context, language: AppLanguage, updated: Int) {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&

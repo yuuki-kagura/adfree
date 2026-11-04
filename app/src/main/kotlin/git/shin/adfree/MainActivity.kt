@@ -187,6 +187,9 @@ class MainActivity : AppCompatActivity() {
                 // the app after a day in Recents is the catch-up point.
                 LifecycleEventEffect(Lifecycle.Event.ON_RESUME) {
                     container.repository.autoUpdateIfStale()
+                    // The app release check rides the same pass, with its own
+                    // day gate and its own silence.
+                    container.appUpdate.autoCheck()
                     // The certificate installer is another activity: coming
                     // back is the moment trust can have changed.
                     container.repository.syncHttpsReminder()
@@ -331,6 +334,7 @@ class MainActivity : AppCompatActivity() {
                 }
             }
             ACTION_OPEN_APPS -> viewModel.onIntent(AdGuardIntent.SelectTab(AdGuardTab.APPS))
+            ACTION_OPEN_UPDATE -> viewModel.onIntent(AdGuardIntent.SelectTab(AdGuardTab.SETTINGS))
             ACTION_OPEN_APP_DETAILS -> {
                 intent.getStringExtra(EXTRA_APP_PACKAGE)?.let { packageName ->
                     viewModel.openAppDetails(
@@ -374,6 +378,9 @@ class MainActivity : AppCompatActivity() {
 
         /** Assistant shortcut: land on the Apps tab. */
         const val ACTION_OPEN_APPS = "git.shin.adfree.action.OPEN_APPS"
+
+        /** App-update notice tapped: land on Settings, where the row installs. */
+        const val ACTION_OPEN_UPDATE = "git.shin.adfree.action.OPEN_UPDATE"
 
         /** Assistant per-app panel: open that app's management sheet. */
         const val ACTION_OPEN_APP_DETAILS = "git.shin.adfree.action.OPEN_APP_DETAILS"

@@ -269,6 +269,8 @@
     <string name="tile_state_paused">Protection paused</string>
     <string name="notification_channel_updates">Filter updates</string>
     <string name="notification_channel_updates_description">Results of automatic filter refreshes</string>
+    <string name="notification_app_update_title">AdFree %1$s is available</string>
+    <string name="notification_app_update_text">Tap to open the update section and install.</string>
     <string name="notification_channel_firewall">Firewall blocks</string>
     <string name="notification_channel_firewall_description">Apps stopped from using the Internet by the firewall</string>
     <string name="notification_firewall_title">%1$s blocked</string>
@@ -1086,6 +1088,17 @@
     <string name="settings_dns_add">Add and select</string>
     <string name="settings_engine_title">Engine status</string>
     <string name="settings_engine_build">Filter compile: %1$d ms</string>
+    <string name="settings_update_title">App update</string>
+    <string name="settings_update_idle">Automatic checks follow the filter schedule</string>
+    <string name="settings_update_check">Check now</string>
+    <string name="settings_update_checking">Checking…</string>
+    <string name="settings_update_available">Version %1$s is available</string>
+    <string name="settings_update_install">Install</string>
+    <string name="settings_update_downloading">Downloading %1$d%%</string>
+    <string name="update_outcome_up_to_date">AdFree is up to date</string>
+    <string name="update_outcome_failed">Update check failed</string>
+    <string name="update_outcome_install_started">Installer opened</string>
+    <string name="update_outcome_install_failed">Download or install failed</string>
     <string name="settings_help_title">Help &amp; source code</string>
     <string name="settings_help_subtitle">Open the project README on GitHub</string>
     <string name="settings_https_sites_title">Websites &amp; HTTPS</string>

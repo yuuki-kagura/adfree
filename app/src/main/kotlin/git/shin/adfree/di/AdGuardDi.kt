@@ -14,6 +14,7 @@ import git.shin.adfree.core.CoreEngine
 import git.shin.adfree.data.AdGuardRepository
 import git.shin.adfree.security.ThreatAnalyzer
 import git.shin.adfree.ui.AdGuardViewModel
+import git.shin.adfree.update.AppUpdateController
 import git.shin.adfree.vpn.PrivateDns
 import git.shin.adfree.vpn.VpnController
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -48,6 +49,16 @@ class AdGuardAppContainer(private val context: Context) {
 
     /** Offline threat analysis via heuristics plus the filter engine; no API key. */
     val threatAnalyzer: ThreatAnalyzer by lazy { ThreatAnalyzer(repository, coreEngine) }
+
+    /**
+     * The OTA question for the whole process: the Settings row, the once-a-day
+     * automatic check that rides the filter refresh, and the download. Lazy so
+     * nothing is built until the first trigger, and it reads its language and
+     * enable switch through [repository] at check time.
+     */
+    val appUpdate: AppUpdateController by lazy {
+        AppUpdateController(context)
+    }
 
     /**
      * True while Private DNS is in strict ("provider hostname") mode.
@@ -96,6 +107,7 @@ class AdGuardAppContainer(private val context: Context) {
                         onConfigChanged = { applyConfig() },
                         isPrivateDnsStrict = { privateDnsStrict },
                         configWarning = configWarning,
+                        appUpdate = appUpdate,
                     ) as T
                 }
                 throw IllegalArgumentException("Unknown ViewModel: ${modelClass.name}")
