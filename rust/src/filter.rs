@@ -6884,7 +6884,13 @@ mod tests {
     }
 
     fn cache_root(name: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!("adfree-engine-cache-{name}"));
+        // The pid belongs in the name: two `cargo test` runs sharing /tmp delete
+        // each other's engine cache from under the rebuild that is about to read
+        // it, and the reuse assertions then fail only when the suites overlap.
+        let dir = std::env::temp_dir().join(format!(
+            "adfree-engine-cache-{name}-{}",
+            std::process::id()
+        ));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         dir
