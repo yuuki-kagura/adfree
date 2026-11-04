@@ -70,23 +70,34 @@ class VpnController(
             refreshTile()
             return
         }
-        _isVpnActive.value = true
         val intent = Intent(context, AdGuardVpnService::class.java).apply {
             action = AdGuardVpnService.ACTION_START_VPN
         }
+        // The flag follows the attempt instead of leading it. `wantsStart` is
+        // what says the user asked for protection; this one says a tunnel is
+        // expected, and the service owns it from `establish()` onwards through
+        // `onVpnStarted`. Setting it before the call returned left it true after
+        // a refusal — and Android 10 refuses `startService` from a background uid,
+        // which is what a locked screen does to the enable-protection shortcut —
+        // so the UI claimed protection, the shortcut short-circuited on the flag,
+        // and nothing could start the tunnel again until the process restarted.
+        // A failure deliberately leaves the flag alone: if a tunnel was already
+        // up, a refused extra start must not report it down.
         runCatching {
             if (fromBackground) {
                 ContextCompat.startForegroundService(context, intent)
             } else {
                 context.startService(intent)
             }
+        }.onSuccess {
+            _isVpnActive.value = true
         }.onFailure { error ->
-            // Android 12+ can refuse a foreground start made from the
+            // Android 12+ can refuse a start made while the app is in the
             // background (`ForegroundServiceStartNotAllowedException`, an
-            // IllegalStateException). Nothing is running, so the only useful
-            // follow-up is a tap-to-open notification.
+            // IllegalStateException). Nothing is running and nothing will be, so
+            // the only useful follow-up is a tap-to-open notification.
             Log.w(TAG, "VPN service start refused", error)
-            if (fromBackground) notifyStartRefused()
+            notifyStartRefused()
         }
         refreshTile()
     }
