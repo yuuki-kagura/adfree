@@ -2573,15 +2573,25 @@ impl Core {
         if pkt.is_syn {
             // A retransmitted SYN for a live relay: answer again without
             // disturbing the flow (the first answer may have been lost).
+            // The table is keyed by the client port alone, and the kernel
+            // hands that port to a new socket bound for another address as
+            // soon as the tuple allows it, so a port hit is a retransmission
+            // only when the stored SYN describes this flow. Answering a
+            // different one from this template puts the reply on the other
+            // flow's address pair, where the client cannot use it, and the
+            // new socket then waits for a SYN-ACK that never comes.
             let existing = {
                 let guard = self.relays.lock().unwrap();
-                guard.get(port).filter(|r| !r.closed).map(|relay| {
-                    (
-                        relay.syn_packet.clone(),
-                        relay.flow.my_seq,
-                        relay.flow.acked_seq,
-                    )
-                })
+                guard
+                    .get(port)
+                    .filter(|relay| !relay.closed && relay.serves(pkt))
+                    .map(|relay| {
+                        (
+                            relay.syn_packet.clone(),
+                            relay.flow.my_seq,
+                            relay.flow.acked_seq,
+                        )
+                    })
             };
             let Some((syn_packet, my_seq, acked_seq)) = existing else {
                 return false;
@@ -2601,7 +2611,7 @@ impl Core {
             // closes their descriptors, so a descriptor is never yanked from
             // under a concurrent poll().
             let mut guard = self.relays.lock().unwrap();
-            let Some(relay) = guard.get_mut(port) else {
+            let Some(relay) = guard.get_mut(port).filter(|relay| relay.serves(pkt)) else {
                 return false;
             };
             relay.close();
@@ -2616,7 +2626,7 @@ impl Core {
         let resumed;
         {
             let mut guard = self.relays.lock().unwrap();
-            let Some(relay) = guard.get_mut(port) else {
+            let Some(relay) = guard.get_mut(port).filter(|relay| relay.serves(pkt)) else {
                 return false;
             };
             if relay.closed {
@@ -3514,12 +3524,13 @@ impl Core {
 
     /// Refuses a flow whose SYN-ACK is already on the wire.
     ///
-    /// The reset has to carry our own sequence number: the client's stack is
-    /// ESTABLISHED by now, and a reset built from its SYN again (as
-    /// [`reset_tcp_inner`] does) would be dropped as out of window, leaving it
-    /// to time out instead of seeing the refusal.
+    /// The reset carries the sequence number *after* the SYN-ACK we answered
+    /// with: the client's stack is ESTABLISHED by now and has taken that one
+    /// number, so a reset naming the number before it (or built from its SYN
+    /// again, as [`reset_tcp_inner`] does) is out of window, gets discarded, and
+    /// leaves the client holding a connection nobody behind us will answer.
     fn refuse_answered_flow(&self, pkt: &Packet<'_>, my_seq: u32, reason: Option<&'static str>) {
-        let Some(reply) = crate::mitm::segment::build_rst(pkt, my_seq) else {
+        let Some(reply) = crate::mitm::segment::build_rst(pkt, my_seq.wrapping_add(1)) else {
             return;
         };
         if !self.write_raw(&reply) {
@@ -6134,7 +6145,10 @@ mod tests {
         let relay = std::mem::size_of::<crate::mitm::relay::Relay>();
         let udp = std::mem::size_of::<UdpFlow>();
         let h3 = std::mem::size_of::<H3Flow>();
-        assert!(relay <= 1024, "a TCP relay is {relay} B");
+        // The relay carries the address pair its client port cannot name (see
+        // `Relay::serves`), which is what keeps a reused port from being read as
+        // a retransmission of someone else's flow.
+        assert!(relay <= 1040, "a TCP relay is {relay} B");
         assert!(udp <= 192, "a datagram mapping is {udp} B");
         assert!(h3 <= 112, "a terminated QUIC flow is {h3} B");
         // The worst case for both datagram tables at the caps the engine
@@ -7384,9 +7398,13 @@ mod tests {
         );
     }
 
-    /// A flow that is refused after its SYN-ACK has gone out is reset with our
-    /// own sequence: the client's stack is ESTABLISHED there, and a reset
-    /// built from its SYN again (seq 0) would be dropped as out of window.
+    /// A flow that is refused after its SYN-ACK has gone out is reset with the
+    /// number *after* that answer: the client's stack is ESTABLISHED there and
+    /// has taken the SYN-ACK's own number, so a reset naming it (or the client's
+    /// SYN, seq 0) is out of window and discarded. On device that discarded reset
+    /// was measured as a connection that stayed open and silent for as long as
+    /// the harness watched it — a blocked app waiting for an answer instead of
+    /// seeing the refusal.
     #[test]
     fn a_refused_flow_resets_with_the_answered_sequence() {
         use std::os::fd::IntoRawFd;
@@ -7413,9 +7431,63 @@ mod tests {
         assert!(syn_ack.is_syn && syn_ack.is_ack, "the SYN-ACK goes first");
         assert!(rst.is_rst, "then the flow is reset");
         assert_eq!(
-            rst.seq, syn_ack.seq,
-            "the reset must sit in the client's receive window"
+            rst.seq,
+            syn_ack.seq.wrapping_add(1),
+            "the reset must name the number the client expects next"
         );
+    }
+
+    /// A new socket that lands on a client port a live relay already holds is
+    /// not a retransmission of that relay: the kernel reuses a port for another
+    /// destination as soon as the tuple differs. Answering it from the relay's
+    /// template would put the SYN-ACK on an address pair its client cannot read,
+    /// and the new socket would wait out its timeout for an answer that never
+    /// comes — the stall that made 7% of connects die on a phone holding 2048
+    /// relays over six destinations.
+    #[test]
+    fn a_port_a_live_relay_holds_is_refused_for_another_destination() {
+        use std::os::fd::IntoRawFd;
+        let core = Core::new();
+        core.set_socket_protector(Arc::new(AllowAll));
+        let tun = std::fs::OpenOptions::new()
+            .write(true)
+            .open("/dev/null")
+            .expect("write end")
+            .into_raw_fd();
+        core.set_tun_fd_for_test(tun);
+
+        core.handle_packet(&tcp_syn(40000, [93, 184, 216, 34], 80));
+        let answered = core.take_outbox();
+        assert_eq!(answered.len(), 1, "the flow is answered once");
+        assert_eq!(
+            Packet::parse(&answered[0])
+                .expect("answer")
+                .src_ip_text(),
+            "93.184.216.34"
+        );
+
+        let replies = core.handle_packet(&tcp_syn(40000, [198, 51, 100, 7], 80));
+        assert!(
+            replies.is_empty(),
+            "nothing is answered from the other flow's template"
+        );
+        let out = core.take_outbox();
+        assert_eq!(out.len(), 2, "the new flow is answered and then refused");
+        let syn_ack = Packet::parse(&out[0]).expect("answer");
+        let rst = Packet::parse(&out[1]).expect("refusal");
+        assert_eq!(syn_ack.src_ip_text(), "198.51.100.7");
+        assert!(rst.is_rst, "a refusal, not an unanswered SYN");
+        assert_eq!(rst.src_ip_text(), "198.51.100.7");
+        // The client took the SYN-ACK, so its stack expects our next byte one
+        // number later. A reset naming the SYN-ACK's own number is out of window
+        // and discarded, which leaves the client holding a connection that only
+        // looks open — the state a refused flow must never end in.
+        assert_eq!(
+            rst.seq,
+            syn_ack.seq.wrapping_add(1),
+            "the refusal carries the number the client expects next"
+        );
+        assert_eq!(core.relay_count(), 1, "the live relay keeps its slot");
     }
 
     /// Turning the screen off cuts an open flow belonging to an app that is

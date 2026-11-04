@@ -139,6 +139,27 @@ pub struct Relay {
     pub opening_sent: bool,
     /// Reports what crossed this connection when it retires; `None` in tests.
     pub traffic: Option<TrafficSink>,
+    /// The address pair the client's SYN named, or `None` for a relay built
+    /// without one. See [`Relay::serves`].
+    pub flow_key: Option<FlowKey>,
+}
+
+/// The half of a relay's identity that its client port cannot carry.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FlowKey {
+    client: crate::packet::IpKey,
+    peer: crate::packet::IpKey,
+    peer_port: u16,
+}
+
+impl FlowKey {
+    fn of(pkt: &crate::packet::Packet<'_>) -> Option<FlowKey> {
+        Some(FlowKey {
+            client: pkt.src_ip()?,
+            peer: pkt.dst_ip()?,
+            peer_port: pkt.dst_port,
+        })
+    }
 }
 
 impl Relay {
@@ -152,11 +173,13 @@ impl Relay {
         mss: usize,
         connecting: bool,
     ) -> Self {
+        let flow_key = crate::packet::Packet::parse(&syn_packet).and_then(|pkt| FlowKey::of(&pkt));
         Relay {
             flow,
             session: Some(session),
             peer_fd,
             syn_packet,
+            flow_key,
             closed: false,
             mss,
             last_ms: now_ms(),
@@ -190,11 +213,13 @@ impl Relay {
         mss: usize,
         connecting: bool,
     ) -> Self {
+        let flow_key = crate::packet::Packet::parse(&syn_packet).and_then(|pkt| FlowKey::of(&pkt));
         Relay {
             flow,
             session: None,
             peer_fd,
             syn_packet,
+            flow_key,
             closed: false,
             mss,
             last_ms: now_ms(),
@@ -216,6 +241,28 @@ impl Relay {
             payload_to_client: 0,
             opening_sent: false,
             traffic: None,
+        }
+    }
+
+    /// The client's SYN, and with it the identity every reply is built from.
+    pub fn set_syn(&mut self, syn: Vec<u8>) {
+        self.flow_key = crate::packet::Packet::parse(&syn).and_then(|pkt| FlowKey::of(&pkt));
+        self.syn_packet = syn;
+    }
+
+    /// Whether a packet coming from the client belongs to this relay.
+    ///
+    /// The engine's table is keyed by the client port alone, and the kernel
+    /// happily gives that port to a new socket bound for another address while
+    /// this flow is still live — the tuple only has to differ somewhere. So a
+    /// port hit names this flow only when the address pair matches too. Without
+    /// the check, the other flow's SYN-ACK would be built from this relay's
+    /// template, land on an address pair its client cannot use, and leave the
+    /// new socket waiting for an answer that never arrives.
+    pub fn serves(&self, pkt: &crate::packet::Packet<'_>) -> bool {
+        match self.flow_key {
+            Some(stored) => FlowKey::of(pkt) == Some(stored),
+            None => false,
         }
     }
 
@@ -669,7 +716,7 @@ mod tests {
 
     fn relay_with_syn() -> Relay {
         let mut r = relay();
-        r.syn_packet = syn_packet();
+        r.set_syn(syn_packet());
         // The engine sets this right after it answers the SYN: the SYN-ACK
         // consumed one client-facing sequence number.
         r.flow.up_bytes = 1;

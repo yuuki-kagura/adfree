@@ -523,8 +523,9 @@ impl<'a> Packet<'a> {
     }
 }
 
-/// Builds a TCP RST (+ACK) answer for a SYN, terminating the connection
-/// locally instead of letting the app wait for a timeout.
+/// Builds a TCP RST (+ACK) answer to a segment the engine will not carry,
+/// terminating the connection locally instead of letting the app wait for a
+/// timeout. Works for a SYN and for a data or FIN segment alike.
 pub fn build_rst(packet: &Packet<'_>) -> Option<Vec<u8>> {
     if packet.raw.len() < packet.ip_hdr_len + 20 {
         return None;
@@ -551,13 +552,18 @@ pub fn build_rst(packet: &Packet<'_>) -> Option<Vec<u8>> {
     if packet.proto == PROTO_UDP {
         out[9] = 6;
     }
-    // The RST acknowledges everything already seen: seq = ack,
-    // ack = seq + payload + the SYN/FIN that was consumed.
-    let mut ack = packet.seq.wrapping_add(1);
+    // The reset acknowledges what the sender actually put on the wire: its
+    // payload, plus the one sequence number a SYN consumes and the one a FIN
+    // consumes. Anything else is an acknowledgement beyond the sender's next
+    // byte, and a stack checks the ack before it looks at the reset — an answer
+    // it cannot use is dropped, so the client never sees the refusal.
+    let mut ack = packet.seq.wrapping_add(packet.l4_payload_len as u32);
+    if packet.is_syn {
+        ack = ack.wrapping_add(1);
+    }
     if packet.is_fin {
         ack = ack.wrapping_add(1);
     }
-    ack = ack.wrapping_add(packet.l4_payload_len as u32);
     out[l4 + 4..l4 + 8].copy_from_slice(&packet.ack_seq.to_be_bytes());
     out[l4 + 8..l4 + 12].copy_from_slice(&ack.to_be_bytes());
     // data offset 5, flags RST|ACK, window 0
@@ -855,6 +861,46 @@ mod tests {
         assert!(rp.is_rst);
         assert!(rp.is_ack);
         assert_eq!(rp.total_len, 20 + 20);
+    }
+
+    fn ipv4_tcp(seq: u32, ack: u32, flags: u8, payload: &[u8]) -> Vec<u8> {
+        let mut p = Vec::new();
+        let total = 20 + 20 + payload.len();
+        p.extend_from_slice(&[0x45, 0x00]);
+        p.extend_from_slice(&(total as u16).to_be_bytes());
+        p.extend_from_slice(&[0x00, 0x00, 0x00, 0x00, 64, 6, 0x00, 0x00]);
+        p.extend_from_slice(&[192, 168, 1, 5]);
+        p.extend_from_slice(&[142, 250, 185, 194]);
+        p.extend_from_slice(&43210u16.to_be_bytes());
+        p.extend_from_slice(&80u16.to_be_bytes());
+        p.extend_from_slice(&seq.to_be_bytes());
+        p.extend_from_slice(&ack.to_be_bytes());
+        p.extend_from_slice(&[0x50, flags, 0xff, 0xff, 0, 0, 0, 0]);
+        p.extend_from_slice(payload);
+        fix_ipv4_checksum(&mut p);
+        p
+    }
+
+    #[test]
+    fn a_reset_acks_exactly_what_the_sender_put_on_the_wire() {
+        // A stack validates the acknowledgement before it reads the reset, so a
+        // number it has no room for is discarded and the client keeps waiting on
+        // a flow nobody answers. The number is the sender's next byte: payload,
+        // plus the one number a SYN consumes and the one a FIN consumes.
+        let cases = [
+            (ipv4_tcp(1000, 7000, 0x02, b""), 1001),        // SYN
+            (ipv4_tcp(1001, 7000, 0x18, b"GET / x"), 1008), // one request byte
+            (ipv4_tcp(1008, 7000, 0x11, b""), 1009),        // FIN
+            (ipv4_tcp(1009, 7000, 0x19, b"end"), 1013),     // data and FIN
+        ];
+        for (raw, want_ack) in cases {
+            let p = Packet::parse(&raw).expect("parse");
+            let reply = build_rst(&p).expect("rst");
+            let rp = Packet::parse(&reply).expect("parse rst");
+            assert_eq!(rp.ack_seq, want_ack, "reset answering seq {}", p.seq);
+            assert_eq!(rp.seq, 7000, "reset answers a segment we already read");
+            assert!(rp.is_rst);
+        }
     }
 
     #[test]

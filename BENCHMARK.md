@@ -1063,3 +1063,152 @@ measurable to wait for.
 Device restored: marker removed and the tunnel rebuilt without it (`Uids:` range
 excludes uid 2000 again), stealth master and `anti_dpi` back to off, store
 byte-identical to the pre-pass snapshot, `stay_on_while_plugged_in` back to 0.
+
+## Client-port collisions and the refusal nobody receives (2026-11-04, Sony 802SO)
+
+`flowcpu.sh` priced a relay that already exists. This is the other half: the cost
+of *reaching* N live relays, which turned out to grow faster than N and to be
+caused by the relay table's key rather than by any per-flow work.
+
+The relay table is `HashMap<u16, Relay>` keyed by the client's source port alone
+(`rust/src/mitm/relay.rs:581-583`), and `relay_tcp` treats a port hit on a
+live relay as a SYN retransmission (`rust/src/engine.rs:2571-2606`) — so it answers
+the new SYN from the *stored* `syn_packet` template. A port is not a flow: the
+kernel hands the same source port to a socket bound for another address as soon as
+the 4-tuple differs, and on a ramp opening 2048 flows over six destinations that
+landed on 5.1% of the attempts it made (110 refused or timed out against 2158) —
+not a tail event. The answer then goes to the other flow's address
+pair, the new socket never sees its SYN-ACK, and it waits out its own timeout.
+
+Harness: `bench/flows` (`bench/flows.c`) in `nudge` mode under the helper uid
+(`git.shin.komorei`, 10309) inside the tunnel, six destinations, staged 512 → 2048
+with a 20 s hold per stage; both halves of every flow counted from
+`/proc/net/tcp` (uid 10344 = the origin half the engine dials, uid 10309 = the
+client half). `missed` counts connects that returned anything but success.
+
+| Run | wall at stage lines 1/2/3/4 | missed at those lines |
+| --- | --- | --- |
+| before | 14 / 85 / 185 / 284 s | 6 / 31 / 71 / 110 |
+| tuple check only | 1 / 20 / 41 / 61 s | 0 / 0 / 0 / 0 |
+| both refusal fixes | hold-bound (~60 s) | 3 / 32 / 83 / 159 |
+
+The before-row is the superlinearity: 110 misses × the harness' 2 s connect timeout
+≈ 220 s of the 284 s wall, and the shape is exactly a sum of timeouts. The 61 s row
+is the four 20 s holds plus ~1 s of real fill, so the tuple check removed the
+stalls — and its `missed 0` needed explaining, because the model predicted refusals,
+not silence.
+
+Three alternatives were refuted rather than assumed:
+
+- **tun queue overflow.** Across the whole 284 s burst `tun0` read
+  `rx_drop=0 tx_drop=0` (`/proc/net/dev`, fields 5 and 13), so nothing was being
+  discarded for a full queue. A non-blocking `write()` returning `EAGAIN` would be
+  invisible there, which is why the collision probe below was built.
+- **the engine's own load.** Run from the app's own uid (10344, which the VPN's
+  `Uids: <{0-1999, 2001-10343, 10345-99999}>` range excludes, so the tunnel is out
+  of the path entirely) the same ramp showed `missed 0` and pure RTT pacing.
+- **one destination.** Six hosts in-tunnel stalls, one host in-tunnel does not —
+  which is what a *port* collision predicts and what a queue or a CPU limit does
+  not.
+
+### Making the collision deliberate
+
+`bench/dport.c` (`bench/dportrun.sh` watches `/proc/net/tcp` on both uids while it
+runs) binds one socket per destination to the *same* local port, so the collision
+is asked for rather than waited for. Four sockets, port 80, four Google hosts:
+
+| Build | refused flow's `connect()` | its state at t+2/4/6 s | engine→origin sockets |
+| --- | --- | --- | --- |
+| before | 1 ms, success | ESTABLISHED, silent (`again`) | 1 of 4 |
+| after | 1 ms, `ECONNRESET` (104) | gone | 1 of 4 |
+
+Same with a byte written on each socket: before, all four stayed ESTABLISHED and
+silent for the whole 6 s; after, the port owner keeps its relay and the other three
+are dead by t+2 s. The one engine socket across four client sockets is the point —
+the table carries one flow per port, and the rest are answered and then refused.
+
+### The two bugs, and why the second hid the first
+
+The tuple check (`Relay::serves`, `rust/src/mitm/relay.rs:248-270`, and the three
+lookups in `relay_tcp`) makes the colliding SYN fall through to
+`begin_tcp_relay` (`rust/src/engine.rs:2783-2840`), which answers it from *its own*
+packet — correct address pair, so `connect()` succeeds — and then refuses it through
+`refuse_answered_flow` because the port is taken. That refusal was never received:
+
+- `refuse_answered_flow` (`rust/src/engine.rs:3532-3540`) built the reset with
+  `seq = my_seq`. The SYN-ACK it follows *is* `my_seq` and consumes that number, so
+  the client's `rcv_nxt` is `my_seq + 1` and the reset sits one below the window:
+  discarded. `Relay::rst_to_client` (`rust/src/mitm/relay.rs:526-530`) already got
+  this right through `flow.up_bytes`; this is the same rule stated a second time,
+  in the one place it was missing.
+- `packet::build_rst` (`rust/src/packet.rs:529-572`) acknowledged
+  `seq + 1 + payload`: the `+1` is the SYN's number, added to data and FIN segments
+  too, so its ack landed one past the sender's `snd_nxt`. A stack validates the
+  acknowledgement before it reads the reset, so every reset this builder sent *in
+  answer to data* was dropped as a bogus ACK (and drew a challenge ACK back).
+  Resets in answer to a SYN were always fine, which is why the blocked-host path —
+  the refusal the UI reports — never looked broken.
+
+Together these are the reason "answered, then refused" looked identical to
+"served": the client's stack is left holding an ESTABLISHED socket with nothing
+behind it. That is not a slow path, it is the whole of `refuse_setup` — the
+per-app firewall cutting a flow, a `connect()` that failed, a TLS session that
+would not open (`rust/src/engine.rs:2865-2959`) — so every one of those decisions
+was recorded in the UI while the app kept waiting. Both fixes are one number each;
+`a_refused_flow_resets_with_the_answered_sequence`
+(`rust/src/engine.rs:7401-7437`) had been asserting the first one *wrong*, which is
+the cost of writing a sequence rule from prose instead of from a client that reads
+it. The tests now pin the numbers: `rust/src/engine.rs:7448` (collision: SYN-ACK on
+the right pair, then a reset naming `syn_ack.seq + 1`, one relay kept) and
+`rust/src/packet.rs:885` (ack for a SYN, a data segment, a FIN, data+FIN).
+
+### What the limit now costs
+
+Single-stage ramp, same six destinations:
+
+| target | wall | missed | missed / attempts |
+| --- | --- | --- | --- |
+| 256 | 1 s | 0 | 0% |
+| 512 | 1 s | 4 | 0.8% |
+| 1024 | 2 s | 39 | 3.7% |
+| 2048 | 2 s | 224 | 9.9% |
+
+and the `http`-mode staircase to 4096 (`flowmem.sh 1024 4 30`) shows 137 / 307 /
+515 / 814 misses at 1024 / 2048 / 3072 / 4096 — ~12–17% of attempts, each retried
+into a fresh port and each stage still reaching its live target. A miss now costs
+~1 ms rather than 2 s, which is why 2048 opens in 2 s: 2272 attempts at 2 s each
+could not fit in it.
+
+The table is still keyed by client port, so two flows that share a port cannot both
+be carried — this fixes the *failure mode*, not the ceiling. Keying by tuple is the
+ceiling's fix and `client_port` appears in 47 places in `engine.rs` (poll snapshot,
+`push_to_peer`, `half_close_peer`, the reap path all address a relay by port), so it
+is a separate change with its own measurement, not something to fold into a bug fix.
+
+Two side observations, both from the same staircase:
+
+- A relay is 1040 B now, and `flow_key` is what pushed it over the old bound:
+  `Option<FlowKey>` measures 80 B (`client` and `peer` are `IpKey`, which is 32 B
+  because of its `V6(u128)`), so `a_live_flow_carries_a_known_cost` moved its bound
+  1024 → 1040 to keep the number pinned. Against the 1.2 KB/flow measured on device
+  that is a few percent of a flow's cost, paid to stop a stall that measured 2 s
+  per hit.
+- Idle relays are not the leak it looked like. A run of 1024 leftover origin
+  sockets was visible 90 s after its harness was killed (`RELAY_IDLE_MS` is 300 s,
+  `rust/src/engine.rs:5538`), but at every stage transition — clients 4096 → 0 —
+  `relay_flows` went 249 → 0 inside 15 s: the FIN path retires relays promptly and
+  the idle timer is the backstop, not the routine.
+
+Impact before editing: `refuse_answered_flow` is **CRITICAL** (6 symbols, 6
+execution flows, 3 modules — it is the tail of every refusal the engine makes);
+`packet::build_rst` and `segment::build_rst` are LOW (5 and 8 symbols). 827 unit
+tests plus the integration suites pass; `cargo clippy` shows the same six
+pre-existing warnings and nothing at the edited sites.
+
+Device restored: `stay_on_while_plugged_in` back to 0, the helper's `files/` down
+to `profileInstalled`, the app's harness copies (`flows_direct`, its log) removed,
+protection left running with the tunnel up, density override left at the as-found
+240. No setting was written this pass — the `protection` row still reads
+`is_stealth_mode_enabled:false, anti_dpi:false`. The store's durable log does carry
+the rows the harness traffic wrote.
+
