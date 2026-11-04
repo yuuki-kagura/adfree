@@ -14,6 +14,7 @@ use crate::socks5::{ProxyEndpoint, Socks5Handshake};
 use crate::util::now_ms;
 use std::collections::VecDeque;
 use std::os::unix::io::RawFd;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
 /// Port we intercept for TLS termination. Everything else keeps flowing.
@@ -54,6 +55,21 @@ const RECORD_HANDSHAKE: u8 = 0x16;
 /// say, so a real server cannot tell the difference.
 const ANTI_DPI_HEAD: usize = 24;
 
+/// Instance token for peer sockets.
+///
+/// The forwarder keeps an `epoll` registration across passes, and a
+/// registration is about a *file*, not about a number: when a relay's socket
+/// closes, its descriptor number goes back into the pool and the next socket
+/// the engine opens usually gets it. Handing every peer socket a fresh token is
+/// what lets the wait set see that `(descriptor, client port)` is a different
+/// socket than the one it registered, and re-register instead of assuming the
+/// old interest still stands.
+static NEXT_PEER_SOCKET: AtomicU64 = AtomicU64::new(1);
+
+fn next_peer_gen() -> u64 {
+    NEXT_PEER_SOCKET.fetch_add(1, Ordering::Relaxed)
+}
+
 /// One relayed connection.
 ///
 /// `session` is `Some` only for TLS-terminated flows (HTTPS filtering): with
@@ -63,8 +79,10 @@ pub struct Relay {
     pub flow: Flow,
     pub session: Option<ProxySession>,
     /// Protected socket to the real server; the relay owns it and closes it on
-    /// drop (-1 in tests).
+    /// drop (-1 in tests). Install it with [`Self::attach_peer`].
     pub peer_fd: RawFd,
+    /// Instance token of [`Self::peer_fd`], from [`NEXT_PEER_SOCKET`].
+    pub peer_gen: u64,
     /// The client's SYN, kept as the template for every reply we build.
     pub syn_packet: Vec<u8>,
     /// Set once either side is done.
@@ -178,6 +196,7 @@ impl Relay {
             flow,
             session: Some(session),
             peer_fd,
+            peer_gen: next_peer_gen(),
             syn_packet,
             flow_key,
             closed: false,
@@ -218,6 +237,7 @@ impl Relay {
             flow,
             session: None,
             peer_fd,
+            peer_gen: next_peer_gen(),
             syn_packet,
             flow_key,
             closed: false,
@@ -242,6 +262,18 @@ impl Relay {
             opening_sent: false,
             traffic: None,
         }
+    }
+
+    /// Points the relay at a peer socket.
+    ///
+    /// Replacing `peer_fd` without this call would leave the new socket wearing
+    /// the old one's `peer_gen`, and the forwarder's wait set would read the
+    /// unchanged `(descriptor, generation)` pair as proof that its `epoll`
+    /// registration still covers the file behind it. It would not: the closed
+    /// socket's registration went with it, and the flow would never be woken.
+    pub fn attach_peer(&mut self, fd: RawFd) {
+        self.peer_fd = fd;
+        self.peer_gen = next_peer_gen();
     }
 
     /// The client's SYN, and with it the identity every reply is built from.
@@ -577,6 +609,26 @@ impl Drop for Relay {
     }
 }
 
+/// One relay's peer socket, as the forwarder's wait set needs it.
+///
+/// A struct rather than a tuple because there are six fields and the engine
+/// dispatches from all of them: `gen` says which socket the descriptor *is*,
+/// which is what lets a persistent `epoll` registration be reused, and the
+/// three flags say what to ask of it and what to do when it answers. A relay
+/// whose peer socket is not open yet (`fd` would be -1) is left out: there is
+/// nothing to wait on, and the engine learns the descriptor when setup
+/// installs it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RelayPoll {
+    /// Instance token of `fd`; see [`NEXT_PEER_SOCKET`].
+    pub gen: u64,
+    pub client_port: u16,
+    pub fd: RawFd,
+    pub connecting: bool,
+    pub want_write: bool,
+    pub paused: bool,
+}
+
 /// Every live relay, keyed by the client's port.
 pub struct RelayTable {
     relays: std::collections::HashMap<u16, Relay>,
@@ -631,14 +683,13 @@ impl RelayTable {
         self.relays.is_empty()
     }
 
-    /// Every peer socket in play, so the engine can poll them: client port,
-    /// descriptor, whether the connection is still being established, whether
-    /// buffered client bytes are waiting for a writable socket, and whether
-    /// the client-facing backlog forbids reading more.
-    pub fn poll_snapshot(&self) -> Vec<(u16, RawFd, bool, bool, bool)> {
+    /// Every peer socket in play, so the engine can wait on them. See
+    /// [`RelayPoll`] for what each field says and why the wait set needs all of
+    /// them.
+    pub fn poll_snapshot(&self) -> Vec<RelayPoll> {
         self.relays
             .values()
-            .filter(|r| !r.closed)
+            .filter(|r| !r.closed && r.peer_fd >= 0)
             .map(|r| {
                 // During SOCKS5 negotiation only handshake output deserves a
                 // writable wake: asking for POLLOUT because app bytes are
@@ -648,13 +699,17 @@ impl RelayTable {
                 } else {
                     !r.pending_to_peer.is_empty()
                 };
-                (
-                    r.flow.client_port,
-                    r.peer_fd,
-                    r.connecting,
-                    !r.connecting && want_write,
-                    r.client_paused,
-                )
+                RelayPoll {
+                    gen: r.peer_gen,
+                    client_port: r.flow.client_port,
+                    fd: r.peer_fd,
+                    connecting: r.connecting,
+                    // A socket that is still connecting is writable when the
+                    // connect finished; a connected one is writable when the
+                    // client's queued bytes need draining.
+                    want_write: !r.connecting && want_write,
+                    paused: r.client_paused,
+                }
             })
             .collect()
     }
@@ -806,6 +861,11 @@ mod tests {
     #[test]
     fn a_full_client_backlog_stops_peer_reads_until_acks_drain_it() {
         let mut r = plain_relay_with_syn();
+        // A relay with no peer socket is not in the snapshot at all, so this
+        // test needs a real descriptor to talk about.
+        let peer = unsafe { libc::socket(libc::AF_INET, libc::SOCK_STREAM, 0) };
+        assert!(peer >= 0, "socket: {}", std::io::Error::last_os_error());
+        r.attach_peer(peer);
         r.queue_to_client(&vec![0u8; MAX_PENDING_TO_CLIENT - 1]);
         assert!(!r.client_paused(), "the cap itself has not been reached");
 
@@ -822,7 +882,7 @@ mod tests {
         let mut table = RelayTable::new();
         table.insert(r);
         assert!(
-            table.poll_snapshot()[0].4,
+            table.poll_snapshot()[0].paused,
             "the snapshot must tell the engine not to read the peer"
         );
 
@@ -834,6 +894,16 @@ mod tests {
         assert!(!segments.is_empty());
         assert!(r.pending_to_client.is_empty());
         assert!(!r.client_paused());
+    }
+
+    #[test]
+    fn a_relay_that_has_no_peer_socket_yet_is_not_waited_on() {
+        let mut table = RelayTable::new();
+        table.insert(plain_relay_with_syn());
+        assert!(
+            table.poll_snapshot().is_empty(),
+            "a descriptor of -1 would make the wait fail on a socket that does not exist"
+        );
     }
 
     #[test]

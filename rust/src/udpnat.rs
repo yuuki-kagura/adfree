@@ -63,6 +63,14 @@ pub struct UdpFlow {
     /// Where a retired mapping reports what crossed it — the same sink the TCP
     /// relays use, so datagrams land in the same per-app totals.
     pub traffic: Option<TrafficSink>,
+    /// Instance token of `fd`, handed out by [`UdpNat::insert`].
+    ///
+    /// Zero in a flow that never entered a table. The forwarder's `epoll`
+    /// registration is keyed on it: a mapping that reopens the same four-tuple
+    /// on the descriptor number the expired one freed is otherwise
+    /// indistinguishable from its predecessor, and the new socket would never
+    /// be waited on.
+    pub id: u64,
 }
 
 impl Drop for UdpFlow {
@@ -86,9 +94,20 @@ impl Drop for UdpFlow {
     }
 }
 
+/// One NAT mapping's descriptor as the forwarder's wait set needs it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct UdpPoll {
+    /// Instance token of `fd`; see [`UdpFlow::id`].
+    pub id: u64,
+    pub key: UdpKey,
+    pub fd: RawFd,
+}
+
 /// Every live UDP mapping.
 pub struct UdpNat {
     flows: HashMap<UdpKey, UdpFlow>,
+    /// Next instance token to hand out; see [`UdpFlow::id`].
+    next_id: u64,
 }
 
 impl Default for UdpNat {
@@ -101,6 +120,7 @@ impl UdpNat {
     pub fn new() -> Self {
         UdpNat {
             flows: HashMap::new(),
+            next_id: 1,
         }
     }
 
@@ -121,7 +141,13 @@ impl UdpNat {
         self.flows.values().filter(|f| f.proxied).count()
     }
 
-    pub fn insert(&mut self, flow: UdpFlow) {
+    pub fn insert(&mut self, mut flow: UdpFlow) {
+        // The token is handed out here rather than at construction so that a
+        // mapping which reuses a retired one's four-tuple — and, once that one
+        // closed, its descriptor number — is a different instance as far as the
+        // wait set is concerned.
+        flow.id = self.next_id;
+        self.next_id += 1;
         self.flows.insert(flow.key, flow);
     }
 
@@ -155,14 +181,19 @@ impl UdpNat {
         before - self.flows.len()
     }
 
-    /// The descriptors to poll, each paired with the key that identifies its
-    /// mapping when a reply comes in. Retired mappings are left out: they will
-    /// be dropped on the next housekeeping pass.
-    pub fn poll_snapshot(&self) -> Vec<(UdpKey, RawFd)> {
+    /// The descriptors to wait on, each with the key that identifies its
+    /// mapping when a reply comes in and the instance token that says which
+    /// socket its descriptor is. Retired mappings are left out: they will be
+    /// dropped on the next housekeeping pass.
+    pub fn poll_snapshot(&self) -> Vec<UdpPoll> {
         self.flows
             .values()
-            .filter(|f| !f.retire)
-            .map(|f| (f.key, f.fd))
+            .filter(|f| !f.retire && f.fd >= 0)
+            .map(|f| UdpPoll {
+                id: f.id,
+                key: f.key,
+                fd: f.fd,
+            })
             .collect()
     }
 }
@@ -194,6 +225,7 @@ mod tests {
             sent: 0,
             recv: 0,
             traffic: None,
+            id: 0,
         });
         assert_eq!(nat.len(), 1);
         assert!(nat.get_mut(&key(5000)).is_some());
@@ -214,6 +246,7 @@ mod tests {
             sent: 0,
             recv: 0,
             traffic: None,
+            id: 0,
         });
         // Still fresh just under the threshold...
         assert_eq!(nat.expire(1000 + UDP_FLOW_IDLE_MS - 1), 0);
@@ -236,11 +269,13 @@ mod tests {
             sent: 0,
             recv: 0,
             traffic: None,
+            id: 0,
         });
         let snapshot = nat.poll_snapshot();
         assert_eq!(snapshot.len(), 1);
-        assert_eq!(snapshot[0].1, 7);
-        assert_eq!(snapshot[0].0, key(5000));
+        assert_eq!(snapshot[0].fd, 7);
+        assert_eq!(snapshot[0].key, key(5000));
+        assert_ne!(snapshot[0].id, 0, "insert must token the mapping");
     }
 
     /// What the last retired mapping reported.
@@ -273,6 +308,8 @@ mod tests {
             sent,
             recv,
             traffic: Some(record),
+            // UdpNat::insert hands out the real token.
+            id: 0,
         }
     }
 

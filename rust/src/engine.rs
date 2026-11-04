@@ -36,7 +36,7 @@ use crate::filter::{FilterEngine, FilterListInfo, HostVerdict};
 use crate::fxhash::{hash_str, FxHashMap};
 use crate::mitm::quic::bridge;
 use crate::mitm::quic::socket::{Datagram, TunUdpSocket};
-use crate::mitm::relay::TrafficSink;
+use crate::mitm::relay::{RelayPoll, TrafficSink};
 use crate::packet::{self, IpKey, Packet, PROTO_TCP, PROTO_UDP};
 use crate::socks5::Socks5Handshake;
 use crate::state::model::{FirewallAccess, ProxyAccess};
@@ -45,6 +45,7 @@ use crate::udpnat::{UdpFlow, UdpKey, UdpNat, UDP_MAX_FLOWS, UDP_MAX_PROXIED_FLOW
 use crate::uidmap::UidMap;
 use crate::upstream::Upstream;
 use crate::util::{now_ms, now_ns};
+use crate::waitset::{WaitEntry, WaitSet};
 use std::collections::HashSet;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr, SocketAddrV4};
 use std::os::unix::io::RawFd;
@@ -1756,7 +1757,10 @@ impl Core {
             workers.push(worker);
         }
         if let Ok(worker) = std::thread::Builder::new()
-            .name("adfree-dns".into())
+            // Named for what it runs. It was `adfree-dns` since the first
+            // version, which sent everyone reading `/proc/<pid>/task` to the
+            // resolver for time the forwarder was spending.
+            .name("adfree-fwd".into())
             .stack_size(1024 * 1024)
             .spawn(move || forwarder_loop(statics))
         {
@@ -2074,6 +2078,7 @@ impl Core {
             sent: payload.len() as u64,
             recv: 0,
             traffic: Some(record_flow_traffic),
+            id: 0,
         });
         // The reply can only arrive on this descriptor, so the forwarder must
         // start watching it now rather than at its next cadence tick.
@@ -3080,7 +3085,7 @@ impl Core {
                 }
                 return;
             }
-            relay.peer_fd = peer_fd;
+            relay.attach_peer(peer_fd);
             relay.connecting = connecting;
             relay.session = session;
             relay.app_packages = app_packages;
@@ -4134,14 +4139,14 @@ impl Core {
     /// Handles one upstream answer: rewrite it for the client, learn the address
     /// mapping and write it back through the tunnel.
     /// Test-only entry point for the reply path (normally driven by the
-    /// `adfree-dns` thread).
+    /// `adfree-fwd` thread).
     #[doc(hidden)]
     pub fn handle_reply_for_test(&self, reply: &crate::upstream::Reply) {
         self.handle_reply(reply);
     }
 
     /// Test-only: runs one iteration of the upstream poller and delivers what it
-    /// finds, which is what the `adfree-dns` thread does continuously.
+    /// finds, which is what the `adfree-fwd` thread does continuously.
     #[doc(hidden)]
     pub fn poll_upstream_once_for_test(&self) -> usize {
         let mut replies: Vec<crate::upstream::Reply> = Vec::new();
@@ -4767,16 +4772,20 @@ impl Core {
         self.relays.lock().unwrap().len()
     }
 
-    /// One pass of the forwarder loop without a tun: polls the wake eventfd,
-    /// the DNS sockets, every relay and UDP mapping, and dispatches whatever
-    /// is ready. Tests use it to move bytes between synthetic client packets
+    /// One pass of the forwarder loop without a tun: waits on the wake eventfd,
+    /// the DNS sockets, every relay and UDP mapping, and dispatches whatever is
+    /// ready. Tests use it to move bytes between synthetic client packets
     /// and the peer socket; in production the forwarder thread owns this.
     #[cfg(test)]
     pub fn pump_once(&self, timeout_ms: libc::c_int) {
         // No setup worker runs in tests: whichever thread drives the packet
         // loop also completes the flows the SYN path queued.
         self.run_setup_jobs();
-        self.wait_for_events(timeout_ms);
+        // A test drives one pass at a time, so the wait set lives for the call.
+        // The forwarder thread keeps its own for its whole life, which is what
+        // makes the registrations across passes worth having.
+        let mut waitset = WaitSet::new();
+        self.wait_for_events(&mut waitset, timeout_ms);
         // The wait itself services the queued DNS and relay work; QUIC
         // datagrams are turned into packets here, like the forwarder does.
         self.drain_quic();
@@ -4880,12 +4889,18 @@ impl Core {
 
     /// Sleeps until a descriptor is ready or the cadence ticks.
     ///
-    /// One `poll()` covers the wake eventfd, the upstream DNS sockets and
+    /// One `WaitSet` covers the wake eventfd, the upstream DNS sockets and
     /// every relay and UDP descriptor the engine owns: the loop blocks here
     /// between bursts of real work instead of circulating on a short timeout.
     /// Readiness is dispatched before returning, which is also what keeps
     /// every descriptor owned by this thread.
-    fn wait_for_events(&self, timeout_ms: libc::c_int) {
+    ///
+    /// `epoll` rather than `poll()` because the wait set is as large as the
+    /// traffic: `poll()` walks all of it on every call (1.85 ms of CPU per pass
+    /// at 1729 descriptors, measured on the device), while `epoll_wait` costs
+    /// only what answered. The `sync` that keeps the registration in step with
+    /// the tables is one hash lookup per descriptor.
+    fn wait_for_events(&self, waitset: &mut WaitSet, timeout_ms: libc::c_int) {
         let relays = self.relays.lock().unwrap().poll_snapshot();
         let udp = self.udp_nat.lock().unwrap().poll_snapshot();
         // Copy the DNS descriptors out and drop the lock before waiting: a UI
@@ -4900,74 +4915,22 @@ impl Core {
             .copied()
             .filter(|fd| *fd > 0)
             .collect();
-
-        let mut fds: Vec<libc::pollfd> =
-            Vec::with_capacity(1 + dns.len() + relays.len() + udp.len());
-        let wake_index = if self.wake_fd >= 0 {
-            let index = fds.len();
-            fds.push(libc::pollfd {
-                fd: self.wake_fd,
-                events: libc::POLLIN,
-                revents: 0,
-            });
-            Some(index)
-        } else {
-            None
-        };
-        fds.extend(dns.iter().map(|fd| libc::pollfd {
-            fd: *fd,
-            events: libc::POLLIN,
-            revents: 0,
-        }));
-        let flows_start = fds.len();
-        fds.extend(
-            relays
-                .iter()
-                .map(|(_, fd, connecting, want_write, paused)| {
-                    let write = *connecting || *want_write;
-                    let listen = !*paused;
-                    libc::pollfd {
-                        // A paused relay is left out of the read set. Dropping
-                        // the descriptor entirely, rather than asking for no
-                        // events, matters: POLLHUP is reported whatever the
-                        // requested mask, so a peer that finished sending
-                        // would wake the loop on every pass while its data
-                        // sits unread in the kernel buffer.
-                        fd: if listen || write { *fd } else { -1 },
-                        events: (if listen { libc::POLLIN } else { 0 })
-                            | (if write { libc::POLLOUT } else { 0 }),
-                        revents: 0,
-                    }
-                }),
-        );
-        fds.extend(udp.iter().map(|(_, fd)| libc::pollfd {
-            fd: *fd,
-            events: libc::POLLIN,
-            revents: 0,
-        }));
-
-        let n = unsafe { libc::poll(fds.as_mut_ptr(), fds.len() as libc::nfds_t, timeout_ms) };
-        if let Some(index) = wake_index {
-            // Drain on readiness only: a counter left behind by a racing wake
-            // simply makes the next wait return at once, which costs one pass
-            // and is always safe.
-            if fds[index].revents != 0 {
-                self.drain_wake();
-            }
-        }
-        if n <= 0 {
-            return;
-        }
-        for (i, p) in fds.iter().enumerate().skip(flows_start) {
-            if p.revents == 0 {
-                continue;
-            }
-            let index = i - flows_start;
-            if index < relays.len() {
-                self.handle_relay_ready(relays[index], p.revents);
-            } else {
-                let flow = udp[index - relays.len()];
-                self.handle_udp_reply(flow.0, flow.1);
+        waitset.sync(self.wake_fd, &dns, &relays, &udp);
+        let ready = waitset.wait(timeout_ms);
+        for r in ready {
+            match r.entry {
+                WaitEntry::Wake => {
+                    // Drain on readiness only: a counter left behind by a racing
+                    // wake simply makes the next wait return at once, which costs
+                    // one pass and is always safe.
+                    self.drain_wake();
+                }
+                WaitEntry::Dns => {
+                    // Reading it is `Upstream::poll`'s job at the top of the
+                    // next pass; readiness here only ended the wait.
+                }
+                WaitEntry::Relay(peer) => self.handle_relay_ready(peer, r.revents),
+                WaitEntry::Udp(p) => self.handle_udp_reply(p.key, p.fd),
             }
         }
     }
@@ -5031,6 +4994,10 @@ fn tun_loop(core: &'static Core, fd: RawFd) {
 /// NAT mappings.
 fn forwarder_loop(core: &'static Core) {
     let mut replies: Vec<crate::upstream::Reply> = Vec::with_capacity(32);
+    // Created here, used only by this thread, dropped when it exits: the
+    // registrations survive the pass boundaries, which is the whole point of
+    // `epoll`, and no other thread has any business touching the set.
+    let mut waitset = WaitSet::new();
     while core.is_running() {
         replies.clear();
         let now = now_ms();
@@ -5063,7 +5030,7 @@ fn forwarder_loop(core: &'static Core) {
         // events with no descriptor to wake us, so the wait is capped by the
         // first one due. With nothing in flight the slow cadence applies.
         let wait_ms = core.forward_wait_ms(now);
-        core.wait_for_events(wait_ms);
+        core.wait_for_events(&mut waitset, wait_ms);
 
         for reply in core.take_secure_replies() {
             core.handle_secure_reply(reply);
@@ -5145,8 +5112,14 @@ fn setup_loop(core: &'static Core) {
 /// sockets.
 impl Core {
     /// One relay's peer socket became readable (or writable again).
-    fn handle_relay_ready(&self, peer: (u16, RawFd, bool, bool, bool), revents: libc::c_short) {
-        let (client_port, fd, was_connecting, was_writing, _) = peer;
+    fn handle_relay_ready(&self, peer: RelayPoll, revents: libc::c_short) {
+        let RelayPoll {
+            client_port,
+            fd,
+            connecting: was_connecting,
+            want_write: was_writing,
+            ..
+        } = peer;
         // A client RST may have marked the relay closed since the poll(); the
         // entry itself is still there (only this thread reaps relays), so
         // matching it back means the descriptor is ours to touch.
@@ -5339,7 +5312,7 @@ impl Core {
             let mut guard = self.relays.lock().unwrap();
             match guard.get_mut(client_port) {
                 Some(relay) if !relay.closed => {
-                    relay.peer_fd = new_fd;
+                    relay.attach_peer(new_fd);
                     relay.connecting = connect == Connect::InProgress;
                     relay.connect_retries += 1;
                     relay.handshake = handshake;
@@ -5414,7 +5387,7 @@ impl Core {
             match guard.get_mut(client_port) {
                 Some(relay) if !relay.closed => {
                     relay.pending_to_peer.clear();
-                    relay.peer_fd = new_fd;
+                    relay.attach_peer(new_fd);
                     relay.connecting = connect == Connect::InProgress;
                     relay.handshake = handshake;
                     true
@@ -5893,6 +5866,7 @@ mod tests {
             sent: 0,
             recv: 0,
             traffic: None,
+            id: 0,
         });
         assert_eq!(core.forward_wait_ms(0), FORWARD_WAIT_MS);
     }
@@ -6159,8 +6133,9 @@ mod tests {
         let h3 = std::mem::size_of::<H3Flow>();
         // The relay carries the address pair its client port cannot name (see
         // `Relay::serves`), which is what keeps a reused port from being read as
-        // a retransmission of someone else's flow.
-        assert!(relay <= 1040, "a TCP relay is {relay} B");
+        // a retransmission of someone else's flow, and the peer-socket token the
+        // forwarder's `epoll` registration is keyed on.
+        assert!(relay <= 1056, "a TCP relay is {relay} B");
         assert!(udp <= 192, "a datagram mapping is {udp} B");
         assert!(h3 <= 112, "a terminated QUIC flow is {h3} B");
         // The worst case for both datagram tables at the caps the engine

@@ -1258,8 +1258,14 @@ quadratic in the number of relays if the passes themselves grow with the table.
 That is a shape, not a measurement, so the shape was tested by switching it off:
 a build with `prune_relays` returning immediately, against the committed build,
 `bench/flowcpu.sh` at the same specs, 40 s windows, the forwarder identified by its
-system-time bulk (it is the thread named `adfree-dns`, which runs
-`forwarder_loop` — `rust/src/engine.rs:1758-1762`).
+system-time bulk — the rule the script had then, and the reason it never had to
+trust a name: a `std::thread` name set in Rust is not dependable in
+`/proc/<pid>/task/<tid>/comm` on this device, the same tid reading `adfree-fwd` in
+one dump and `Thread-4899` in the next, minutes apart
+(`bench/flowcpu.sh:27-44`). The name that thread carried while these numbers were
+taken was `adfree-dns`, a holdover from the first version that sent anyone reading
+`comm` to the resolver for the time the forwarder was spending; it runs
+`forwarder_loop` and answers to `adfree-fwd` now (`rust/src/engine.rs:1803-1812`).
 
 | run | live relays | tun0 packets in the window | forwarder | of which sys |
 | --- | --- | --- | --- | --- |
@@ -1289,7 +1295,9 @@ per-pass kernel work is `poll()` over one entry per live relay —
 structure predicts, in the wait rather than in the Rust sweeps, and the fix is
 `epoll` — a persistent interest set owned by the one thread that is allowed to
 close a descriptor under a concurrent poll. It is not a change to make in the
-middle of this pass, and nothing here pretends the cost is gone.
+middle of this pass, and nothing here pretends the cost is gone. It was made
+afterwards, and `### The wait replaced — measured in pieces` below records what it
+did and did not remove.
 
 ### The debug line — measured, declined
 
@@ -1326,4 +1334,186 @@ the screen on and the app warm, where nothing was logged and no consent dialog
 appeared while the same action from the home button started the tunnel in seconds.
 The second shape is not explained by the refused-start path and wants its own
 pass.
+
+### The shortcut's second shape — chased
+
+It was not a refused start at all. `VpnController.startVpnService` raises
+`_isVpnActive` when a start is *dispatched* and hands the flag to the service;
+three give-up paths in `AdGuardVpnService` then left the flag up with no tunnel
+behind it. The one the shortcut hit is `teardownTunnel`, which returned at
+`if (vpnInterface == null) return` *before* calling `onVpnStopped()` — a start
+that died in `establish()` never had an interface, so the stop it owed went
+unreported and the controller kept claiming a tunnel that did not exist (the
+core's own `is_running` was false the whole time).
+`enableProtectionFromShortcut` opened with
+`if (vpnController.isVpnActive.value) return`, so the second tap and every tap
+after it returned at its first line: no log (that path had nothing to log), no
+consent dialog (consent had already been granted), no tunnel. The same action
+from Home only *looked* different because it went through the switch, and the
+switch read the same stale flag as "on" — one tap switched protection off, the
+next brought the tunnel up, two taps that happen to end where the shortcut never
+got to start.
+
+The rule is now stated once, as a pure function, so the two sources of truth are
+a decision instead of an accident: `tunnelConfirmed(flagActive, coreRunning)`
+(`app/src/main/kotlin/git/shin/adfree/vpn/VpnRuntimeState.kt:59-74`) — the flag
+says a start was expected, the core says there is a descriptor to read, and only
+the second is ground truth. `VpnController.isTunnelUp()` wraps it
+(`VpnController.kt:45`), and the three guards that can refuse a start read it:
+the shortcut, `toggleProtection`, the Quick Settings tile. The UI still renders
+`isVpnActive`, because a tap needs feedback while the binder work runs; what
+changed is that nothing *decides* on the flag any more. Two edits close all three
+give-up paths: `teardownTunnel` — which the first two run through — reports the
+stop before the interface check (`AdGuardVpnService.kt:405-413`), and the
+notification failure reports it beside it (`:280-286`). Every branch of the
+shortcut logs which way it went, so the shape cannot be silent again.
+
+One JVM test pins all four combinations of the rule
+(`app/src/test/kotlin/git/shin/adfree/vpn/VpnRuntimeStateTest.kt:78-85`),
+including the exact state the phone was in — flag up, core not running — which is
+the state that must not refuse a start. On the Sony the previous build reproduces
+the silent no-op from
+`am start -a git.shin.adfree.action.ENABLE_PROTECTION`, and the fixed build
+raises the tunnel on the first attempt after install. The locked-screen refusal
+that surfaced as the `AdFree không thể khởi động` notification is `36b0412`
+working as designed and is untouched by this change.
+
+### The wait replaced — measured in pieces
+
+`poll()` was still in the loop where the last section left it. The instrumented
+build (a `mod fwdmeasure` in `rust/src/engine.rs`, flushing counters to
+`files/fwdstats.txt` every 256 passes) put a number on it: 1.85 ms of CPU per pass
+spent inside the wait at `nfds_avg` 1729 — 7039 of the 8529 ms the forwarder thread
+used, 82.5% of its total. `epoll_wait` costs what is ready rather than what is
+registered, so the wait stops being a function of the relay count. The interest set
+that makes that true lives in `rust/src/waitset.rs`: one `sync` per pass (`:207`)
+fed by the same `poll_snapshot()` the old code consumed, one `epoll_wait` (`:234`),
+and a dispatcher that services the entry the registration carried instead of
+matching descriptors back to tables by position.
+
+Three things this had to get right, each of which a naive port gets wrong:
+
+- **A registration is about a file, not a number.** Closing the last descriptor
+  for a socket drops it from every epoll interest list, and `EPOLL_CTL_ADD`
+  answers `EEXIST` per *file*. A relay's number goes straight back into the pool
+  and the next socket the engine opens usually inherits it, so "descriptor plus
+  client port" is not evidence that the registration on file still stands. Every
+  peer socket now carries an instance token — `NEXT_PEER_SOCKET` into
+  `Relay::peer_gen` (`rust/src/mitm/relay.rs:67`, installed only by
+  `Relay::attach_peer`, `:274`), `UdpNat::next_id` into `UdpFlow::id`
+  (`rust/src/udpnat.rs:144-152`) — and the set re-registers whenever the token
+  changes. DNS and wake descriptors have no provable identity, because another
+  thread may replace them; they are withdrawn and re-added every pass, which is
+  two syscalls a pass rather than one per relay.
+- **A paused relay has to leave the set, not sit in it with no interest.**
+  `EPOLLERR` and `EPOLLHUP` are reported whatever the mask says, so a peer that
+  finished sending would wake the loop on every pass while its bytes sat unread;
+  `WaitEntry::bits()` returns 0 for that case (`waitset.rs:50-60`) and
+  `reconcile` (`:275`) declines to register it at all.
+- **The volatile flags are not identity.** The first version folded
+  `connecting`/`want_write`/`paused` into what a registration is keyed on, and
+  measurement caught it before the design was defended: 663 `epoll_ctl` calls per
+  pass at 1178 descriptors, because a relay whose queue drains flips its mask.
+  Identity is the token; a changed mask alone costs one `MOD`, and a steady relay
+  costs one hash lookup and no syscall.
+
+The alternative that was rejected, with its number: always `ADD`, treat `EEXIST`
+as the signal to `MOD`. Provably correct, no engine changes at all — and about one
+syscall per descriptor per pass, ≈650 µs at the 1178 descriptors that window saw,
+which is worse than the `poll()` it replaced at the relay counts a phone actually
+carries (50–300). The tokens exist because that number did.
+
+Reproduced on the host — 1024 descriptors, nothing ready, 4096 passes, five runs
+(`cargo test --release --lib waitset -- --ignored --nocapture`):
+
+| what | µs per pass |
+| --- | --- |
+| `poll()` over an array rebuilt each pass | 130–195 |
+| `epoll_wait(0)` | 3.5–3.9 |
+| `sync` over a steady set | 52–56 (walk ~45, reap 7–20) |
+
+so the pass costs about a third of what it did, and the kernel's per-descriptor
+work — the part that was 1.85 ms a pass on the phone — is gone: 3.7 µs against
+170 µs for the same 1024 descriptors. What the change does *not* remove is the
+O(n) per pass itself: the engine still snapshots every relay and every mapping
+each pass, and `sync` still walks that snapshot, which is why 45 µs of the 56 is
+Rust-side. The walk was the second thing measurement caught: at 95 ns per
+descriptor the table's SipHash — a hasher whose job is surviving keys an
+adversary chooses, on keys only the kernel hands out — was costing more than the
+syscall it fed. One multiply per descriptor number (`FdHasher`,
+`waitset.rs:102-131`) moved the same host pass from 106–131 µs to 52–56 and the
+reap from 34 µs to 7, and the ratio against `poll()` from ~1.3× to 3.3–3.5×.
+
+Ten tests in `waitset.rs` cover the cases the kernel decides rather than the
+loop: a steady descriptor costing no syscall, a changed mask costing one, a
+recycled number being re-registered, an unprovable registration being re-asserted,
+a paused relay leaving the set, `EPOLL*` bits arriving as the `POLL*` bits the
+dispatchers read, and a closed descriptor leaving no registration behind. 839 lib
+tests plus the integration suites pass; `cargo clippy` clean at every edited site.
+
+The device window replaces the voided one: the earlier run was taken while
+`system_server` restarted under it (an `am_proc_died` storm across gms, bluetooth
+and gservices at 18:00:23–30, pid 1651 → 14678, `dexopt compilation-reason=boot`),
+the app died mid-window, and the harness read `live after hold: 0` with negative CPU
+deltas. This one is `bench/flowcpu.sh 60 nudge2048` run twice on the Sony against
+the instrumented build, `files/fwdstats.txt` read before the second run and again
+after it, so the delta is exactly one window: 4864 passes at `nfds_avg` 1497.
+
+| per pass | `poll()` | `epoll` |
+| --- | --- | --- |
+| CPU inside the wait | 1.85 ms | 0.093 ms |
+| CPU for the whole loop | 2.24 ms | 0.875 ms |
+| snapshot + `sync` | — | 0.508 ms |
+| `epoll_ctl` calls | — | 11.4 |
+
+The kernel's scan is gone. 0.093 ms a pass spread over 1497 descriptors is 62 ns per
+descriptor where `poll()` was charging 1.07 µs for the same job at 1729 — 17× — and
+unlike that number this one does not track the descriptors in the set, because
+`epoll_wait` prices what answered rather than what was registered. The pass as a
+whole is 2.6× cheaper, and the wait is 10.6% of what the forwarder spends where it
+had been 82.5% of what it spent. The wall clock gives the other half: 18.9 ms a pass
+blocked in `epoll_wait` with 0.5% of it charged as CPU — a tunnel waiting instead of
+re-scanning. `/proc` agrees from the other side, and needs no instrumentation: the
+thread report for the first window puts 2640 ms of CPU on the forwarder's tid of
+which 540 ms was system time, 20% against the 87% (4970 of 5640 ms) the same spec
+showed when the wait was a `poll()`. The cumulative counter read two minutes later
+had reached 4279 ms since the process started, so the window accounts for most of
+what that thread had ever done.
+
+What is left is the O(n) per pass, now the largest single item in it and exactly
+where the host measurement said it would be: 0.255 ms snapshotting every relay and
+every mapping, 0.253 ms walking that snapshot in `sync` — 0.508 ms together, 58% of
+the loop's CPU and 5.5× the wait it feeds. `epoll` removed the kernel's scan; the
+engine's own scan is the next thing standing between a pass and the relay count. The
+11.4 `epoll_ctl` calls a pass against 1497 descriptors are the design answering to
+its own shape — under one syscall per 130 watched descriptors, which is the
+withdrawn-and-re-added DNS and wake descriptors plus the relays whose mask moved,
+and nothing at all for a steady relay.
+
+Two readings from the same window are worth keeping, and one of them qualifies a
+claim made above. The hold is not silent: with the clients quiet for 60 s, 4394
+packets arrived and 5166 left through `tun0`, because the origins answer the
+harness's bare `\n` (`### The per-pass sweep`), so every number above is paid for
+real traffic rather than for an idle set. And the forwarder *was* readable by name:
+`ps -T` showed `adfree-fwd` on tid 28185 in the first dump and `Thread-4899` on the
+same tid two minutes later, while `adfree-db`, `adfree-secure-dns-*` and
+`adfree-quic` kept their names in both. The name set at spawn is therefore real but
+not stable in `comm`, and the system-time bulk that used to identify the forwarder
+is gone with the syscall it came from — so `bench/flowcpu.sh` now finds the three
+workers by their consecutive tids and separates them by total CPU, and the script's
+header carries that correction.
+
+`mod fwdmeasure` and its counters existed only to take this window; they are not in
+the tree, and reproducing these numbers means putting them back.
+
+The follow-up this section provoked — keying `RelayTable` by the address tuple
+instead of the client port — was surveyed and declined. There is no defect left to
+fix: `begin_tcp_relay` refuses a new SYN whose client port is already in the table,
+so a port never has two owners, and `Relay::serves` (`rust/src/mitm/relay.rs:294`)
+already blocks a packet from being read as a retransmission of someone else's flow.
+The re-key would cost twelve signature changes, a peer identity added to `Flow`, a
+`Hash` and a `client_port` added to `FlowKey`, and ~16 test addresses, to buy
+nothing. What it would need is already paid for: the round trip from
+`poll_snapshot()` through the set to the dispatcher now carries a generation token,
+which is the one thing a port-only key cannot express.
 

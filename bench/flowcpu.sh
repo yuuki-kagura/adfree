@@ -4,8 +4,8 @@
 #
 # How much CPU the tunnel spends to keep a relay alive, and how much it spends on
 # a request through one. `flowmem.sh` asks what a relay weighs; this asks what it
-# costs, which is a different question because the forwarder rebuilds its poll set
-# and sweeps its relay table on every pass.
+# costs, which is a different question because the forwarder snapshots its relay and
+# NAT tables and re-asserts an epoll interest set on every pass.
 #
 # The shape to look for is superlinear. The forwarder loop is event-paced, not
 # clock-paced: a relay that receives something writes the wake eventfd, which ends
@@ -13,20 +13,35 @@
 # second is (passes per second) x (relays per pass), and if the passes themselves
 # grow with N the total grows with N^2.
 #
-# Two modes separate the two costs. `nudge` opens the flow and writes one byte —
-# enough for the engine to classify it and dial the origin — then leaves it quiet,
-# so CPU over a `nudge` window is the price of holding a relay with no traffic in
-# the tunnel. `http` re-pokes every socket with a keep-alive HEAD every ten
-# seconds, so the same window also pays for about N/10 requests a second. The two
-# at one count give the per-request cost; one mode across two counts gives the
-# scaling in N.
+# Two modes separate the two costs. `nudge` opens the flow and writes one byte down
+# it — enough for the engine to classify it and dial the origin — then stops. It is
+# NOT a quiet window: that bare `\n` is a request the origins answer, so with the
+# clients silent for the whole hold 150-250 packets a second still cross the tunnel
+# (4394 in / 5166 out over a 60 s hold at 2048, measured 04/11/2026), and a `nudge`
+# number is holding a relay plus answering what the harness provoked. `http`
+# re-pokes every socket with a keep-alive HEAD every ten seconds, so the same window
+# also pays for about N/10 requests a second. The two at one count give the
+# per-request cost; one mode across two counts gives the scaling in N. The `tun0`
+# sample around every window is what turns that from an assumption into a reading.
 #
-# CPU is read per thread, not per process, and the two data-path threads are told
-# apart by what they do rather than by their `std::thread` name: on this device the
-# workers appear as `Thread-<n>`, because the name set at spawn does not survive
-# into `/proc/<pid>/task/<tid>/comm`. The forwarder is the thread with the system
-# bulk (it lives in `poll()`); the packet reader is the one with the user bulk (it
-# parses and rewrites what it reads).
+# CPU is read per thread, not per process, and the three Rust workers are found by
+# position rather than by name: they are spawned together in `Core::start`, so they
+# hold three consecutive tids between the `adfree-secure-dns-*` threads and
+# `adfree-quic`. A `std::thread` name is not dependable in
+# `/proc/<pid>/task/<tid>/comm` on this device — the same tid read `adfree-fwd` in
+# one dump and `Thread-4899` in the next, minutes apart, while `adfree-db` and
+# `adfree-quic` kept theirs throughout.
+#
+# Within the three, the old rule of thumb (the forwarder owns the system bulk,
+# because it lived in `poll()` over one entry per relay) died with the `epoll` port.
+# In the 04/11/2026 window (60 s) the forwarder took 2640 ms of CPU and only 540 ms
+# of it was system time — 20%. The same spec under `poll()` in a 40 s window
+# measured 4970 of 5640 ms, 87%; the share is the comparable number across the two
+# window lengths, and system time now reads as relay traffic rather than as the
+# wait. Spawn order separates the three, since tids come out in the order
+# `Core::start` asks for them:
+# `adfree-tun` reads packets and rewrites responses, `adfree-fwd` is the busiest by
+# total, `adfree-setup` dials the origins.
 #
 # Needs the debug build (tunnel up, /proc readable), `bench/flows` built and pushed
 # into the helper's `files/`, and the screen held on: `svc power stayon true` plus a
@@ -87,8 +102,8 @@ cpu() { adb shell "cat /proc/$(pid)/stat" | clean | awk '{printf "%s %s %s", $14
 
 # Traffic across the tunnel during the window, so "quiet" is a fact rather than
 # an assumption: an origin that answers the one byte the harness writes makes
-# every relay in the window a busy one, and then the poll set and the sweeps are
-# both being paid for real traffic. Fields of `/proc/net/dev`: rx bytes, rx
+# every relay in the window a busy one, and then the wait and the sweeps are both
+# being paid for real traffic. Fields of `/proc/net/dev`: rx bytes, rx
 # packets, then tx bytes, tx packets.
 tun() { adb shell cat /proc/net/dev | clean | awk '/tun0/ {print $2, $3, $10, $11}'; }
 

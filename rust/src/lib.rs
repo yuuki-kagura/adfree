@@ -47,6 +47,7 @@ pub mod udpproxy;
 pub mod uidmap;
 pub mod upstream;
 pub mod util;
+pub mod waitset;
 
 pub use engine::core;
 

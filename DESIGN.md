@@ -57,11 +57,13 @@ real TLS. Enabling it is **gated on the CA actually being installed** (see
 
 **4. Two packet-path threads, both sleeping on descriptors — no clock polling.**
 - `tun-thread`: `poll(fd, 250ms)` → `read()` → parse → decide.
-- `forward-thread`: **one** `poll()` covering an eventfd wakeup, every DNS
-  socket and every relay/NAT flow; the 1-second timeout only drives periodic
-  cleanup. Anything that creates work (a DNS query, a new relay, a socket
-  refusing bytes, `stop()`) writes the eventfd, so a long timeout costs no
-  latency.
+- `forward-thread`: **one** `epoll` interest set covering an eventfd wakeup, every
+  DNS socket and every relay/NAT flow, re-asserted once per pass from a snapshot of
+  the tables (`rust/src/waitset.rs`); the 1-second timeout only drives periodic
+  cleanup. It replaced a `poll()` over the same descriptors on 2026-11-04 — 1.85 ms
+  of CPU a pass at 1729 descriptors, 0.093 ms a pass at 1497 since (`BENCHMARK.md`).
+  Anything that creates work (a DNS query, a new relay, a socket refusing bytes,
+  `stop()`) writes the eventfd, so a long timeout costs no latency.
 There is no `Timer`, no `Handler.postDelayed`, no periodic wakeup.
 
 **5. A per-host decision cache sits *in front of* the rule engine.** Apps ask
@@ -1033,9 +1035,9 @@ The platform layer owns lifecycle and presentation, not filtering decisions.
 The forwarder was rewritten to **sleep on descriptors instead of polling on a
 clock**: it used to poll every flow every 50 ms and wait for DNS on a 250 ms
 condvar, which meant dozens of wakeups per second for a single open connection.
-Now there is one `poll()` (eventfd + DNS + flows + NAT, 1-second timeout) that
-does work only when there is data, and every "there is new work" event writes
-the eventfd.
+Now there is one `epoll` interest set (eventfd + DNS + flows + NAT, 1-second
+timeout) that does work only when there is data, and every "there is new work"
+event writes the eventfd.
 
 Measured on the emulator while idle (background traffic subtracted): about
 **16 context switches per second** for the whole process (tun thread 4/s,

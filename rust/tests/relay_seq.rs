@@ -218,7 +218,12 @@ fn the_relay_table_tracks_flows_by_client_port() {
     use adfree_core::mitm::relay::RelayTable;
     let mut table = RelayTable::new();
     assert!(table.is_empty());
-    table.insert(make_relay());
+    let mut relay = make_relay();
+    // A relay only enters the forwarder's wait set once it has a peer socket.
+    let peer = unsafe { libc::socket(libc::AF_INET, libc::SOCK_STREAM, 0) };
+    assert!(peer >= 0, "socket: {}", std::io::Error::last_os_error());
+    relay.attach_peer(peer);
+    table.insert(relay);
     assert_eq!(table.len(), 1);
     assert!(table.get(40000).is_some());
     assert!(table.get_mut(40000).is_some());
