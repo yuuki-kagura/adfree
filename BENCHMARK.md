@@ -38,7 +38,13 @@ fork/exec cost ~50 ms per sample and swamped the tunnel's own cost. The binary
 must stay dynamically linked so lookups reach netd (a static build answers
 EAI_NODATA), and AdFree's shell capture marker (`files/capture-shell`, debug
 builds only) routes adb's traffic through the tunnel so the probe measures the
-app, not the host network.
+app, not the host network. The marker is read when the tunnel is built, so it
+only takes effect on the *next* protection start — `dumpsys connectivity` shows
+which of the two states the live tunnel is in. On the Sony 802SO the marker in
+place reads `Uids: <{0-10343, 10345-99999}>`, with uid 2000 inside, and the
+marker absent reads `Uids: <{0-1999, 2001-10343, 10345-99999}>`, with a hole at
+2000; the surrounding numbers are that device's app uids and only the hole
+matters. Measuring in the second state measures the Wi-Fi path, not the tunnel.
 
 ## Baseline — 2026-10-28
 
@@ -299,7 +305,9 @@ adb install -r app/build/outputs/apk/debug/app-debug.apk
 
 # 2. Let the shell's probes reach the tunnel (debug build only)
 adb shell run-as git.shin.adfree touch files/capture-shell
-# restart protection in the app, then background it
+# restart protection in the app — the marker is only read when the tunnel is
+# built — then background it, and assert it took:
+adb shell dumpsys connectivity | grep -o 'Uids: [^}]*'   # must contain 2000
 
 # 3. Build and run the probe
 "$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android26-clang" \
@@ -548,8 +556,9 @@ tree (`9c130b8`, checked out in a temporary worktree):
   memory.
 - The budget is pinned by `the_live_ring_stays_within_its_memory_budget` in
   `rust/src/events.rs`.
-- The per-flow cost half of that benchmark note is still open: the probe
-  harness runs on the Redmi (`flare`), which is not connected this session.
+- The per-flow cost half of that benchmark note is closed on the Sony by the
+  on-device staircase below: ~1.2 KB of heap per live TCP relay, against the
+  928 B the host-side `size_of` predicts.
 
 
 ## Flow traffic counters — per-flow memory (2026-11-02)
@@ -576,10 +585,70 @@ words added, so it is stated as arithmetic):
   writer already commits: traffic rows ride the log writer's channel and share
   its transaction, so the number of fsyncs per second does not change. A flow
   that moved no bytes sends nothing.
-- The on-device half of the note stays open: the probe harness runs on the Redmi
-  (`flare`), still not connected this session. The Sony can only show that the
-  totals are non-zero, which they do (160 KB up / 29.1 MB down after a browser
+- The on-device half of the note is the next section. The traffic totals
+  themselves are non-zero on the Sony (160 KB up / 29.1 MB down after a browser
   download, 151 KB on one app).
+
+## On-device per-flow memory (2026-11-04, Sony 802SO)
+
+`bench/flows.c` holds a staircase of concurrent TCP flows inside the tunnel and
+`bench/flowmem.sh` samples `dumpsys meminfo git.shin.adfree` on each tread, so
+the cost of a live flow is read off the slope instead of inferred from
+`size_of`. Run 2026-11-04 11:29-11:37 on the Sony 802SO (debug APK, AdFree
+`439cb4a`-era tree, tunnel up, screen pinned on, charger): step 512, four
+treads, 60 s hold each, `http` mode (a real `HEAD /` with `Connection:
+keep-alive` on port 80, re-poked every 10 s), eight Google hostnames.
+
+| Live relays | `heap_alloc` (KB) | Δ vs baseline | per flow | `native_pss` (KB) |
+| --- | --- | --- | --- | --- |
+| 0 (baseline ×3) | 79,296–79,434 | — | — | 23,058–23,178 |
+| 512 | 79,327–79,569 | +64 | 0.13 KB | 22,966–23,230 |
+| 1,024 | 79,707–79,963 | +439 | 0.43 KB | 23,210–23,442 |
+| 1,536 | 80,597–80,814 | +1,362 | 0.89 KB | 24,046–24,175 |
+| 2,048 | 81,804–81,998 | +2,549 | 1.24 KB | 25,179–25,623 |
+| 0 (after release ×3) | 78,867–78,902 | −460 | — | 23,311–25,475 |
+
+- **~1.2 KB per live TCP relay**, against `size_of::<Relay>() = 928 B` on the
+  host. The remainder is the per-flow heap the struct points at: the raw SYN it
+  keeps as its segment template and the payload staging buffers. A separate
+  768-flow run (`bench/netflow.sh 768 120 80`) put the same figure at 0.90 KB
+  (heap_alloc 78,581 → 79,275 KB across the samples taken at 768 live relays),
+  so the two runs agree to within 40 %.
+- **It is capacity, not a leak.** With the flows closed `heap_alloc` sits 460 KB
+  *below* the pre-run baseline and `heap_size` returns to 86.2 MB from 88.9 MB —
+  the allocator gave pages back. Nothing accumulates across treads.
+- The first two treads are under the noise floor and should not be read as
+  slopes. The process had been up 13 h with 123 MB of itself swapped, and
+  `heap_alloc` drifts ~1.2 MB per 17 min at zero relays, which is larger than
+  the 512-flow step. The marginal cost of the last tread (1,536 → 2,048) is
+  2.32 KB/flow; the aggregate over 2,048 is 1.24 KB/flow.
+- **The relay table tracks the client 1:1**: `client_flows` and `relay_flows`
+  (established sockets on the harness uid and on the engine uid for that port,
+  from `/proc/net/tcp`) were equal at every sample on every tread — 512/512,
+  1,024/1,024, 1,536/1,536, 2,048/2,048. An earlier run held 2,020/2,018.
+- Why that earlier run read 3.2 KB per flow over the 1,024 → 2,048 span: its
+  baseline already carried 207 relays still retiring from the pass before it,
+  and its 1,024-flow samples were taken against 1,217 live relays, so a
+  half-loaded tread was differenced against a fully loaded one. Its liveness
+  check was the broken one too, which is why that run timed out at stage 3.
+  Re-measured with both fixed, the same span costs 2.32 KB/flow at the top
+  tread and 1.24 KB/flow across the whole staircase.
+- Extrapolated: 10,000 concurrent relays cost ~12 MB of heap. There is no relay
+  cap in the engine (`rust/src/engine.rs`), only idle retirement at
+  `RELAY_IDLE_MS = 300_000`, so the practical bound is the fd limit (32,768 here).
+- Harness facts worth keeping: the flows must come from a uid the tunnel
+  captures, and the live tunnel decides that list. `adb shell` (uid 2000) was
+  outside it at the start of this pass because `files/capture-shell` had been
+  written *after* the tunnel was built; rebuilding protection put 2000 inside
+  (`Uids: <{0-10343, 10345-99999}>`, and the shell's `probe` then answered
+  `gai=7` for blocked names). The measurement used a captured debuggable app uid
+  regardless — `git.shin.komorei` — pushed with `run-as` and executed from that
+  app's own data directory, because `/data/local/tmp` is not executable under
+  `run-as`. A keep-alive socket always
+  has an unread answer in its buffer, and a socket with data pending never
+  reports the FIN behind it, so the harness drains before judging a socket dead
+  (`alive()` in `bench/flows.c`); without that, stages read full while the
+  tunnel had already retired the relays.
 
 ## Re-run — on the Sony 802SO, release against release (2026-11-02, evening)
 
@@ -708,8 +777,9 @@ the hedge stands; it is a property of that uplink, not of the code.
 - **The probe latency rows now measure the cache**, which they did not on the
   Redmi. Warm allowed lookups cost 2–3 ms in AdFree and 6–12 ms in AdGuard
   because AdFree answers from its DNS cache inside one round trip.
-- Battery remains unmeasured on a charging device, and the per-flow on-device
-  memory probe from the section above still needs the Redmi.
+- Battery remains unmeasured on a charging device. The per-flow on-device memory
+  probe that used to be listed with it is done — see *On-device per-flow memory*
+  above; it needed a captured uid, not the Redmi.
 
 ### Measurement traps found while doing this
 

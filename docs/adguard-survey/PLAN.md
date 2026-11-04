@@ -564,7 +564,11 @@ section recommended.
   process death, an armed always-on VPN came back after a reboot with no tap
   and no alert while an unarmed revoke alerted and stayed down, and the
   anti-DPI handshake split measured +1.2 ms against a ~130 ms first byte in
-  `BENCHMARK.md`.
+  `BENCHMARK.md`. The benchmark's own last owed number, the on-device cost of a
+  live flow, followed on 2026-11-04 on this same device: ~1.2 KB of heap per
+  relay with 2,048 held at once, all of it returned when they close. Positive
+  roaming enforcement is dropped rather than owed — no SIM on either phone, and
+  the flag cannot be set without root.
 - Rust tests: v5→v6 migration keeps row counts and old rows read with
   defaults; `flags` transport/roaming round-trip; `GROUP BY app, category`
   counts; per-app routing override; DNS-only lists do not match HTTP rules.
@@ -1123,8 +1127,13 @@ section recommended.
     allowlist rule, the always-on restart and the anti-DPI cost went before it;
     the last of those measured +1.2 ms on the TLS handshake against ~130 ms to
     first byte in `BENCHMARK.md`.
-    The two Redmi-only items (positive roaming enforcement, the per-flow memory
-    probe) stay blocked until that device is back.
+    Of the two items that had been parked on the Redmi, the per-flow memory
+    probe is now measured on this device (2,048 live relays held 1:1, ~1.2 KB of
+    heap each, all of it returned on release — `On-device per-flow memory` in
+    `BENCHMARK.md`), and positive roaming enforcement is **dropped by request**:
+    neither phone has a SIM, the flag cannot be set without root
+    (`:640-645` above), and the negative half — a roaming rule that does not
+    touch normal traffic — is already recorded.
   - The Manual and Visual checklist lines at the end of this file, run on the
     same debug build after the CPU/RAM pass, every capture at 800×1340.
     - Notification in both states and both languages — all four combinations
@@ -1190,7 +1199,8 @@ section recommended.
       `stay_on_while_plugged_in` 0, the density override untouched, screen sent
       HOME.
     - What this pass did not touch: the four items in the "Still owed" bullet
-      above, and roaming, which needs the SIM the Sony does not have.
+      above, and roaming, which needs a SIM neither device has and which the
+      user then asked to skip.
   - The parked allowlist rule against live traffic and across a process death —
     the two halves `1b34e10` left unproven. `pagead2.googlesyndication.com` was
     picked because the enabled lists already block it and a browser can be
@@ -1411,6 +1421,64 @@ section recommended.
       `accessibility_enabled` back to 0, the pre-existing density override left
       at 240, and the whole `state` + `settings` set re-read through `run-as`
       identical to the copy taken before the pass — zero differing lines.
+  - The on-device per-flow memory probe, run 2026-11-04 (11:29–11:37) on the
+    same debug build — the last number `BENCHMARK.md` owed, and the one that had
+    been parked on the Redmi. `bench/flows.c` (new) opens a staircase of live
+    connections and holds each tread, `bench/flowmem.sh` samples
+    `dumpsys meminfo git.shin.adfree` and counts established sockets per uid,
+    and `bench/netflow.sh` (new) answers the different question of what the
+    tunnel does while it holds N relays. Result: **~1.2 KB of heap per live TCP
+    relay** at 2,048 concurrent flows, against `size_of::<Relay>() = 928 B` on
+    the host, with the whole amount returned when the flows close — the table
+    and the reading are in `BENCHMARK.md` (*On-device per-flow memory*).
+    - Getting flows inside the tunnel was the work. The flows did not come from
+      `adb shell`: the live tunnel's `Uids:` range had a hole at 2000, and a
+      shell socket kept its `192.168.1.169` wlan0 source, so it never became a
+      relay. That hole was not a platform rule — the tunnel had been built at
+      22:26 the previous evening, before `files/capture-shell` was written at
+      10:27, and the marker is only read when the tunnel is built. Rebuilding
+      protection with the marker in place closed it: `Uids:` went to
+      `<{0-10343, 10345-99999}>` and `/data/local/tmp/probe` from the shell
+      answered `gai=7` for `doubleclick.net` and
+      `pagead2.googlesyndication.com` while `www.google.com` resolved at
+      6.7 ms — the shell really is inside the engine. The measurement itself
+      used a captured debuggable uid anyway (`git.shin.komorei`, 10309, inside
+      `2001-10343`), pushed with `run-as git.shin.komorei sh -c 'cat >
+      files/flows'` and executed from that app's own data directory, because
+      `/data/local/tmp` is not executable under `run-as` (SELinux). The only
+      files the helper gained were `files/flows` and its log; both are deleted.
+    - One defect this pass surfaced, not fixed here: `VpnController
+      .startVpnService()` sets `_isVpnActive = true` before it asks the system
+      (`VpnController.kt:73`), and a refused start — Android 10 rejects
+      `startService` from a background uid, which is what happens while the
+      screen is locked — leaves the flag true with no tunnel. `isVpnActive` is
+      what `enableProtectionFromShortcut()` returns on, so the shortcut becomes
+      a no-op and the UI reports protection on. Recovery is a process restart.
+    - Two harness lies had to be fixed before the numbers meant anything.
+      A keep-alive socket always has an unread answer in its buffer, and a
+      socket with data pending never reports the FIN behind it, so the old
+      liveness probe read a dead flow as live: 4,096 requested came back as
+      1,170 relays with the stage still claiming full. `alive()` now drains
+      before judging. And `CLOCK_MONOTONIC` stops in suspend, which stretched
+      60 s holds to four minutes and timed the driver out — `svc power stayon
+      true` plus a `KEYCODE_WAKEUP` before the run.
+    - The 1:1 mapping is what makes the slope readable: `client_flows` on the
+      harness uid and `relay_flows` on the engine uid were equal at every
+      sample of every tread (512/512, 1024/1024, 1536/1536, 2048/2048). The run
+      before it read 3 KB/flow because its baseline carried 207 relays still
+      retiring from the pass ahead of it and its 1,024 stage was measured
+      against 1,217 live relays — a half-loaded tread differenced against a
+      fully loaded one.
+    - Device left as found: `capture-shell` removed and the tunnel rebuilt
+      without it (`Uids:` back to `<{0-1999, 2001-10343, 10345-99999}>`,
+      protection active, `tun0` 10.111.42.1/32), `stay_on_while_plugged_in`
+      back to 0, the `RUN_ANY_IN_BACKGROUND` appop the recovery attempt set put
+      back to `default`, `files/{flows,probe,flows.log}` deleted from the helper
+      app and `/data/local/tmp/{flows,probe,flows.log}` deleted, the `state` (5
+      rows) and `settings` (2 rows) sets re-read through `run-as` and identical
+      to the copy taken before the pass — zero differing lines. The keyguard had
+      come up mid-pass and the PIN is not the harness's to know, so the screen
+      was unlocked by the user and left on the launcher.
 
 ### Risks
 
@@ -1447,8 +1515,10 @@ section recommended.
 
 The first three bullets are run and recorded (suites green, the exported surface
 checked on the 2026-11-03 debug and release APKs), as are the device and visual
-lines. The manual line has one leg left, and it is the one this device cannot
-do: roaming with Wi-Fi off and mobile on needs a SIM.
+lines. The manual line's last leg — roaming with Wi-Fi off and mobile on — is
+**dropped, not blocked**: neither phone has a SIM, `roaming` cannot be set
+without root to spoof the capability, and the user asked to skip it. The
+negative half of that rule is recorded (`:640-645`).
 
 - Rust: `cargo test` for engine/firewall/new gates; persistence migration.
 - Kotlin: unit tests for stats formatting, relative-time text, module gates, and
@@ -1485,9 +1555,9 @@ do: roaming with Wi-Fi off and mobile on needs a SIM.
 - Manual (run 2026-11-03, see the dated record): notification in both states
   and both languages, assistant over a third-party app, each new toggle
   surviving process death, and the per-app override beating the global rule
-  are all done. The only leg left is roaming with Wi-Fi off and mobile on —
-  this Sony has no SIM, so it waits for the Redmi. Screen-off per-app
-  firewall was already verified on 2026-11-01.
+  are all done. The one leg that was left, roaming with Wi-Fi off and mobile
+  on, is dropped rather than owed: no SIM on either phone and the flag needs
+  root to spoof. Screen-off per-app firewall was already verified on 2026-11-01.
 - Visual (done 2026-11-03): every new screen is captured at the same
   800×1340 viewport for the side-by-side table against the AdGuard captures,
   through `adfree-92`.
