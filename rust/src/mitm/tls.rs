@@ -180,7 +180,10 @@ impl ResolvesServerCert for FixedCertResolver {
 /// Loads the device's CA roots from disk.
 ///
 /// Android ships its trust anchors as PEM files; reading them directly avoids
-/// depending on the JVM's own store, which this library cannot see.
+/// depending on the JVM's own store, which this library cannot see. The desktop
+/// keeps the same shape — a PEM bundle the distribution maintains — so one
+/// reader covers both, and an engine with no anchors says so instead of failing
+/// every HTTPS session with a certificate error the user cannot interpret.
 pub fn system_root_store() -> rustls::RootCertStore {
     let mut store = rustls::RootCertStore::empty();
     for dir in [
@@ -191,18 +194,41 @@ pub fn system_root_store() -> rustls::RootCertStore {
             continue;
         };
         for entry in entries.flatten() {
-            let path = entry.path();
-            let Ok(bytes) = std::fs::read(&path) else {
-                continue;
-            };
-            for cert in rustls_pemfile::read_all(&mut std::io::Cursor::new(&bytes)).flatten() {
-                if let rustls_pemfile::Item::X509Certificate(der) = cert {
-                    store.add(CertificateDer::from(der.to_vec())).ok();
-                }
-            }
+            add_pem_file(&entry.path(), &mut store);
         }
     }
+    // The usual places a Linux or macOS box keeps the extracted bundle. Every
+    // distribution names its own; the first that exists wins, and reading the
+    // rest only ever adds anchors.
+    for file in [
+        "/etc/ssl/certs/ca-certificates.crt",
+        "/etc/ssl/cert.pem",
+        "/etc/pki/tls/certs/ca-bundle.crt",
+        "/etc/pki/ca-trust/extracted/pem/tls-ca-bundle.pem",
+        "/etc/ssl/ca-bundle.pem",
+        "/usr/local/share/certs/ca-root-nss.crt",
+    ] {
+        add_pem_file(std::path::Path::new(file), &mut store);
+    }
+    if store.is_empty() {
+        crate::logbuf::push(
+            "mitm: no trust anchors found; HTTPS filtering cannot verify servers \
+             until the system CA bundle is readable",
+        );
+    }
     store
+}
+
+/// Adds every certificate one PEM file carries (a bundle holds hundreds).
+fn add_pem_file(path: &std::path::Path, store: &mut rustls::RootCertStore) {
+    let Ok(bytes) = std::fs::read(path) else {
+        return;
+    };
+    for cert in rustls_pemfile::read_all(&mut std::io::Cursor::new(&bytes)).flatten() {
+        if let rustls_pemfile::Item::X509Certificate(der) = cert {
+            store.add(CertificateDer::from(der.to_vec())).ok();
+        }
+    }
 }
 
 /// Client config used to talk to the real server (normal verification).
@@ -806,4 +832,21 @@ pub(crate) fn with_fake_ech(record: &[u8]) -> Option<Vec<u8>> {
     let record_len = (out.len() - 5) as u16;
     out[3..5].copy_from_slice(&record_len.to_be_bytes());
     Some(out)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_device_bundle_yields_anchors_on_a_desktop() {
+        // An empty store is what made every desktop HTTPS session fail with
+        // `UnknownIssuer`: the reader only knew Android's layout. A host that
+        // ships a bundle must end up with anchors.
+        let bundle = std::path::Path::new("/etc/ssl/certs/ca-certificates.crt");
+        let store = system_root_store();
+        if bundle.exists() {
+            assert!(store.len() > 20, "the system CA bundle should be read");
+        }
+    }
 }

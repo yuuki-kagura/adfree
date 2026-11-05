@@ -19,10 +19,11 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 /// Binds the listener. Dual-stack `::` so a redirected flow arrives whatever
-/// family the app asked for — the redirect rules send v4 to `127.0.0.1` and
-/// v6 to `::1`, and one socket answers both. Only loopback clients reach it in
-/// practice (the rules redirect to loopback, and an explicit proxy points at
-/// it too).
+/// family the app asked for: `redirect` in the output hook keeps the
+/// destination address and only moves the port, so the socket has to answer on
+/// every local address, not just loopback. Only the machine's own flows reach
+/// it in practice (the rules redirect them, and an explicit proxy points at it
+/// too).
 pub(crate) fn bind_listener(port: u16) -> std::io::Result<TcpListener> {
     match bind_v6(port) {
         Ok(listener) => Ok(listener),

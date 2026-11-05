@@ -25,11 +25,16 @@ table inet adfree {
         meta mark 0xad45 accept
 
         # Locally generated packets reach the nat table at the output hook,
-        # not prerouting; dnat is what records the original destination that
-        # `SO_ORIGINAL_DST` reads back in `proxy::tcp`. Each family names its
-        # own loopback: an IPv6 packet cannot be sent to an IPv4 address.
-        meta nfproto ipv4 tcp dport { 80, 443 } dnat to 127.0.0.1:3129
-        meta nfproto ipv6 tcp dport { 80, 443 } dnat to [::1]:3129
+        # not prerouting, and there `redirect` — not `dnat to 127.0.0.1` — is
+        # the expression that works: it keeps the destination address and only
+        # moves the port onto the listening socket, so the packet still routes
+        # to loopback and conntrack still reverses the port on the way back.
+        # A dnat to an address would have to re-route a packet the routing
+        # decision already finished, and silently loses it instead.
+        # `redirect` names no address, so one line covers both families, and
+        # it records the destination `SO_ORIGINAL_DST` reads back in
+        # `proxy::tcp`.
+        meta l4proto tcp tcp dport { 80, 443 } redirect to :3129
     }
 
     # ------------------------------------------------------------- DNS flow
@@ -39,10 +44,8 @@ table inet adfree {
         meta mark 0xad45 accept
 
         # Both transports: some resolvers fall back to TCP/53 on truncation.
-        meta nfproto ipv4 udp dport 53 dnat to 127.0.0.1:5353
-        meta nfproto ipv4 tcp dport 53 dnat to 127.0.0.1:5353
-        meta nfproto ipv6 udp dport 53 dnat to [::1]:5353
-        meta nfproto ipv6 tcp dport 53 dnat to [::1]:5353
+        meta l4proto udp udp dport 53 redirect to :5300
+        meta l4proto tcp tcp dport 53 redirect to :5300
     }
 
     # ------------------------------------------------------------ QUIC gate

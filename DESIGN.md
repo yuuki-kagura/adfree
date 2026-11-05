@@ -1187,10 +1187,16 @@ Practical consequences per platform:
   fd; the shell needs root or `CAP_NET_ADMIN`, route/DNS setup and a systemd
   service, and UID attribution from `/proc` keeps `$app` rules working. Or, the
   way AdGuard for Windows does it, `rust/src/proxy` runs a local transparent
-  proxy (127.0.0.1:3129) and DNS server (:5353) that `tools/adfree-linux.nft`
-  redirects onto, with QUIC refused so nothing escapes to HTTP/3; the proxy's
-  own sockets carry mark `0xad45` to stay outside the redirect, and
-  `SO_PEERCRED` supplies the UID for the app firewall.
+  proxy (127.0.0.1:3129) and DNS server (:5300 — 5353 belongs to mDNS on
+  Linux) that `tools/adfree-linux.nft` redirects onto. A redirect lives in the
+  nat **output** hook, because a locally generated packet never passes
+  prerouting, and it must be `redirect` rather than `dnat to 127.0.0.1`: the
+  output hook has already made its routing decision, so only a port change is
+  delivered, and the answer has to leave from the address the client named —
+  which is what the packet-info control message in `proxy/dns.rs` arranges.
+  QUIC is refused so nothing escapes to HTTP/3; the proxy's own sockets carry
+  mark `0xad45` to stay outside the redirect, and `SO_PEERCRED` supplies the
+  UID for the app firewall.
 - **Windows** — Wintun supplies the adapter; a signed driver/service and the IP
   Helper API replace VpnService and `/proc`. The core needs a Windows
   implementation of the fd/socket layer, not a new filtering engine.

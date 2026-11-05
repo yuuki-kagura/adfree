@@ -145,7 +145,7 @@ Android 14+ user trust store path, is documented in
 A desktop has no per-app tunnel to open, so Linux filters traffic the way
 AdGuard for Windows does — a local transparent proxy rather than a VPN:
 
-- `rust/src/proxy` listens on `127.0.0.1:3129` (HTTP/HTTPS) and `:5353` (DNS)
+- `rust/src/proxy` listens on `127.0.0.1:3129` (HTTP/HTTPS) and `:5300` (DNS)
   and runs the same engine the tunnel does: the lists, the app firewall, the
   rewrites, the event log and, when HTTPS filtering is armed, the very same
   TLS-terminating session.
@@ -156,11 +156,14 @@ AdGuard for Windows does — a local transparent proxy rather than a VPN:
 
 The listeners skip the firewall mark `0xad45` on the sockets they dial
 themselves, which is what keeps the redirect from catching the proxy's own
-upstream traffic. Setting that mark needs `CAP_NET_ADMIN`, so the rules and an
-AdFree running as root belong together — or skip root entirely and point the
-browser at `127.0.0.1:3129`: an explicit `CONNECT`/absolute-form request names
-its own destination and gets identical filtering. The Home screen shows both
-addresses and the rule command so the setup is never guesswork.
+upstream traffic, and the DNS listener answers from the address the query was
+sent to — a redirect only reverses for a reply it can match, so the answer has
+to leave from the server the client thought it was asking. Both need
+`CAP_NET_ADMIN`, so the rules and an AdFree running as root belong together —
+or skip root entirely and point the browser at `127.0.0.1:3129`: an explicit
+`CONNECT`/absolute-form request names its own destination and gets identical
+filtering. The Home screen shows both addresses and the rule command so the
+setup is never guesswork.
 
 ## Limitations
 

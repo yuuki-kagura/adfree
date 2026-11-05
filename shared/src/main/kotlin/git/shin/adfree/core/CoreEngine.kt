@@ -614,7 +614,7 @@ class CoreEngine(
 
         /** The desktop proxy's listeners; must match `rust/src/proxy/mod.rs`. */
         const val PROXY_TCP_PORT = 3129
-        const val PROXY_DNS_PORT = 5353
+        const val PROXY_DNS_PORT = 5300
 
         @Volatile
         var screenOffFlag = false

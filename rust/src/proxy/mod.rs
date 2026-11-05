@@ -35,8 +35,14 @@ use std::time::Duration;
 pub const FWMARK: u32 = 0xad45;
 
 /// Conventional ports; the platform passes them to [`start`].
+///
+/// The DNS port is deliberately not 5353, which a Windows box has free but a
+/// Linux desktop hands to mDNS (avahi, `systemd-resolved`, browsers probing
+/// 224.0.0.251): binding it there fails, and forcing it with `SO_REUSEADDR`
+/// would quietly steal multicast DNS. 5300 is unclaimed by the usual Linux
+/// name services.
 pub const DEFAULT_TCP_PORT: u16 = 3129;
-pub const DEFAULT_DNS_PORT: u16 = 5353;
+pub const DEFAULT_DNS_PORT: u16 = 5300;
 
 /// How long a connection may sit with no traffic before the thread retires it.
 const IDLE_TIMEOUT: Duration = Duration::from_secs(300);
@@ -75,8 +81,8 @@ pub fn start(tcp_port: u16, dns_port: u16) -> bool {
             return false;
         }
     };
-    let dns_socket = match dns::bind_socket(dns_port) {
-        Ok(socket) => socket,
+    let dns_listeners = match dns::bind_listeners(dns_port) {
+        Ok(listeners) => listeners,
         Err(e) => {
             crate::logbuf::push(&format!("proxy: DNS listener on {dns_port}: {e}"));
             return false;
@@ -99,7 +105,7 @@ pub fn start(tcp_port: u16, dns_port: u16) -> bool {
     match std::thread::Builder::new()
         .name("adfree-proxy-dns".into())
         .stack_size(1024 * 1024)
-        .spawn(move || dns::serve_loop(dns_socket, dns_stop))
+        .spawn(move || dns::serve_loop(dns_listeners, dns_stop))
     {
         Ok(worker) => loops.push(worker),
         Err(e) => crate::logbuf::push(&format!("proxy: DNS loop: {e}")),
