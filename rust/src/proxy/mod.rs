@@ -63,6 +63,9 @@ struct Run {
 
 static RUN: Mutex<Option<Run>> = Mutex::new(None);
 
+/// When the interface list was last read, and what it held.
+static OWN: Mutex<Option<(std::time::Instant, Vec<std::net::IpAddr>)>> = Mutex::new(None);
+
 /// Starts both listeners. False when they cannot come up (port in use, proxy
 /// already running) — the caller then leaves protection off rather than
 /// pretending.
@@ -421,11 +424,82 @@ pub(crate) fn parse_sockaddr(sa: &libc::sockaddr_storage) -> Option<std::net::So
     }
 }
 
+/// The same host spelled either way: a dual-stack socket hands its v4 peers
+/// over as `::ffff:a.b.c.d`, and the interface list spells them as v4.
+fn flattened(ip: std::net::IpAddr) -> std::net::IpAddr {
+    match ip {
+        std::net::IpAddr::V6(v6) => match v6.to_ipv4_mapped() {
+            Some(v4) => v4.into(),
+            None => v6.into(),
+        },
+        other => other,
+    }
+}
+
+/// Addresses assigned to this machine's interfaces. Refreshed on a timer
+/// rather than per connection: a wireless host changes address when it
+/// roams, and a stale list must not outlive a lease.
+fn own_addresses() -> Vec<std::net::IpAddr> {
+    const TTL: Duration = Duration::from_secs(5);
+    let mut cache = match OWN.lock() {
+        Ok(cache) => cache,
+        Err(poisoned) => poisoned.into_inner(),
+    };
+    if let Some((seen, addrs)) = cache.as_ref() {
+        if seen.elapsed() < TTL {
+            return addrs.clone();
+        }
+    }
+    let mut addrs = Vec::new();
+    let mut cursor: *mut libc::ifaddrs = std::ptr::null_mut();
+    if unsafe { libc::getifaddrs(&mut cursor) } == 0 {
+        let mut node = cursor;
+        while !node.is_null() {
+            let entry = unsafe { &*node };
+            let sockaddr = match unsafe { entry.ifa_addr.as_ref() } {
+                Some(sa) => sa,
+                None => {
+                    node = entry.ifa_next;
+                    continue;
+                }
+            };
+            let family = i32::from(sockaddr.sa_family);
+            if family == libc::AF_INET || family == libc::AF_INET6 {
+                let storage = unsafe { &*(sockaddr as *const libc::sockaddr as *const libc::sockaddr_storage) };
+                if let Some(addr) = parse_sockaddr(storage) {
+                    addrs.push(flattened(addr.ip()));
+                }
+            }
+            node = entry.ifa_next;
+        }
+        unsafe { libc::freeifaddrs(cursor) };
+    }
+    *cache = Some((std::time::Instant::now(), addrs.clone()));
+    addrs
+}
+
+/// Is the other end a socket this machine opened? Both listeners bind a
+/// wildcard address because a `redirect` keeps the flow's original
+/// destination, so the same socket has to answer on every local address —
+/// which also puts them on the LAN interfaces. What keeps the network out is
+/// this check on every accepted flow: traffic that started here always
+/// carries an address of this machine (loopback above all) as its peer, and
+/// traffic from another host never does. Without it AdFree would be an open
+/// proxy and an open resolver on the local network.
+pub(crate) fn is_local_peer(addr: std::net::SocketAddr) -> bool {
+    let peer = flattened(addr.ip());
+    let loopback = match peer {
+        std::net::IpAddr::V4(v4) => v4.is_loopback(),
+        std::net::IpAddr::V6(v6) => v6.is_loopback(),
+    };
+    loopback || own_addresses().contains(&peer)
+}
+
 #[cfg(test)]
 mod lifecycle_tests {
     use super::*;
     use std::io::{Read, Write};
-    use std::net::{TcpListener, TcpStream};
+    use std::net::{SocketAddr, TcpListener, TcpStream};
 
     // The proxy is process-wide state; keep it away from other thread-spinning
     // tests and from itself.
@@ -573,5 +647,24 @@ mod lifecycle_tests {
             "the self-request must be refused, not dialled; log was {log:?}"
         );
         assert!(reply.is_empty(), "a refusal carries no answer, it just closes");
+    }
+
+    /// The listeners answer on every local address, so what keeps the network
+    /// out is the peer check on each accepted flow.
+    #[test]
+    fn only_a_local_peer_is_the_machines_own() {
+        let local: SocketAddr = "127.0.0.1:44321".parse().unwrap();
+        let mapped: SocketAddr = "[::ffff:127.0.0.1]:44321".parse().unwrap();
+        let v6: SocketAddr = "[::1]:44321".parse().unwrap();
+        // TEST-NET-1 and documentation space: no host is ever addressed so.
+        let away: SocketAddr = "192.0.2.10:44321".parse().unwrap();
+        let v6_away: SocketAddr = "[2001:db8::1]:44321".parse().unwrap();
+        assert!(is_local_peer(local) && is_local_peer(mapped) && is_local_peer(v6));
+        assert!(!is_local_peer(away) && !is_local_peer(v6_away));
+        // Whatever this machine itself is addressed as is local — that is the
+        // shape a redirected flow can arrive in, and it must never be refused.
+        for ip in own_addresses() {
+            assert!(is_local_peer(SocketAddr::new(ip, 44321)), "{ip} is this host");
+        }
     }
 }

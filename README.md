@@ -145,10 +145,14 @@ Android 14+ user trust store path, is documented in
 A desktop has no per-app tunnel to open, so Linux filters traffic the way
 AdGuard for Windows does — a local transparent proxy rather than a VPN:
 
-- `rust/src/proxy` listens on `127.0.0.1:3129` (HTTP/HTTPS) and `:5300` (DNS)
+- `rust/src/proxy` listens on port `3129` (HTTP/HTTPS) and `5300` (DNS)
   and runs the same engine the tunnel does: the lists, the app firewall, the
   rewrites, the event log and, when HTTPS filtering is armed, the very same
-  TLS-terminating session.
+  TLS-terminating session. A redirect only moves the port, so the sockets are
+  bound to the wildcard address and answer on every address of the machine;
+  each accepted flow is then checked against the addresses this host owns, so
+  another machine on the network can neither use AdFree as a proxy nor as a
+  resolver.
 - `tools/adfree-linux.nft` moves the machine's own traffic onto those
   listeners with `nft` redirect rules (`sudo nft -f tools/adfree-linux.nft`,
   remove with `sudo nft delete table inet adfree`) and refuses QUIC on UDP/443

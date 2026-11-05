@@ -21,9 +21,9 @@ use std::sync::Arc;
 /// Binds the listener. Dual-stack `::` so a redirected flow arrives whatever
 /// family the app asked for: `redirect` in the output hook keeps the
 /// destination address and only moves the port, so the socket has to answer on
-/// every local address, not just loopback. Only the machine's own flows reach
-/// it in practice (the rules redirect them, and an explicit proxy points at it
-/// too).
+/// every local address, not just loopback. That reach is closed again per
+/// connection — [`super::is_local_peer`] — so the listener sits on the LAN
+/// interfaces without serving them.
 pub(crate) fn bind_listener(port: u16) -> std::io::Result<TcpListener> {
     match bind_v6(port) {
         Ok(listener) => Ok(listener),
@@ -76,6 +76,17 @@ pub(crate) fn accept_loop(listener: TcpListener, stop: Arc<AtomicBool>) {
             Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
             Err(_) => return,
         };
+        // The wildcard bind is for the redirect's sake, not the network's:
+        // a flow that did not start on this machine is not ours to filter,
+        // and serving it would make AdFree an open proxy.
+        let local = client
+            .peer_addr()
+            .ok()
+            .is_some_and(|peer| super::is_local_peer(peer));
+        if !local {
+            reset_on_close(client.as_raw_fd());
+            continue;
+        }
         let Some(slot) = super::Slot::new() else {
             // Past the connection cap: refuse fast, the client retries later.
             reset_on_close(client.as_raw_fd());

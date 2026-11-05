@@ -1194,6 +1194,11 @@ Practical consequences per platform:
   output hook has already made its routing decision, so only a port change is
   delivered, and the answer has to leave from the address the client named —
   which is what the packet-info control message in `proxy/dns.rs` arranges.
+  Because that redirect keeps the destination address, both sockets bind the
+  wildcard address rather than loopback, and `proxy::is_local_peer` is what
+  puts the machine's own traffic back in alone: a peer address that is not
+  loopback and not assigned to this host is reset (TCP) or ignored (DNS), so
+  the listeners are never an open proxy or an open resolver on the network.
   QUIC is refused so nothing escapes to HTTP/3; the proxy's own sockets carry
   mark `0xad45` to stay outside the redirect, and `SO_PEERCRED` supplies the
   UID for the app firewall.

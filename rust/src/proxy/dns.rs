@@ -287,6 +287,12 @@ pub(crate) fn serve_loop(listeners: Vec<Listener>, stop: Arc<AtomicBool>) {
 fn serve_one(listener: &Listener, query: &Inquiry, stop: &AtomicBool) {
     let core = core();
     let client = query.peer;
+    // The listener answers on every local address so a redirected query
+    // arrives; a query from another machine is not ours to answer, and
+    // silence leaves no open resolver on the network.
+    if !super::is_local_peer(client) {
+        return;
+    }
     let Some(parsed) = dns::parse_query(&query.body) else {
         return; // Not a parseable query: silence, the client retries or gives up.
     };
