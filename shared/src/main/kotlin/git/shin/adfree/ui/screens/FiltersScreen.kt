@@ -1,11 +1,9 @@
 package git.shin.adfree.ui.screens
 
+import git.shin.adfree.l10n.Strings
 import git.shin.adfree.l10n.L10n
-import android.content.Intent
-import android.net.Uri
-import android.widget.Toast
-import androidx.activity.compose.rememberLauncherForActivityResult
-import androidx.activity.result.contract.ActivityResultContracts
+import git.shin.adfree.platform.currentFileHost
+import git.shin.adfree.platform.currentPlatformHost
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -74,6 +72,8 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import kotlinx.coroutines.launch
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -81,17 +81,14 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalClipboardManager
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.platform.testTag
-import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import git.shin.adfree.R
 import git.shin.adfree.data.FilterGroup
 import git.shin.adfree.data.ModuleGate
 import git.shin.adfree.data.moduleGate
@@ -132,7 +129,7 @@ fun FiltersScreen(
     modifier: Modifier = Modifier,
 ) {
     val state by viewModel.uiState.collectAsState()
-    val context = LocalContext.current
+    val platform = currentPlatformHost()
     val uriHandler = LocalUriHandler.current
     var expandedGroups by remember { mutableStateOf(setOf(FilterGroup.ADS.id)) }
     var showOverflow by remember { mutableStateOf(false) }
@@ -149,20 +146,17 @@ fun FiltersScreen(
     // Local files are imported through the system picker; the URI is read once
     // and copied into the app's own directory (SAF permissions are not trusted
     // to survive). The same picker serves both add sheets.
-    var pickFileForDns by remember { mutableStateOf(false) }
-    val filePicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
-        if (uri != null) {
-            runCatching {
-                context.contentResolver.takePersistableUriPermission(
-                    uri,
-                    Intent.FLAG_GRANT_READ_URI_PERMISSION,
-                )
-            }
+    val files = currentFileHost()
+    val pickerScope = rememberCoroutineScope()
+
+    fun pickFilterFile(dnsOnly: Boolean) {
+        pickerScope.launch {
+            val uriText = files.openText() ?: return@launch
+            files.persistRead(uriText)
             viewModel.onIntent(
-                AdGuardIntent.ImportLocalFilter(uri.toString(), dnsOnly = pickFileForDns),
+                AdGuardIntent.ImportLocalFilter(uriText, dnsOnly = dnsOnly),
             )
         }
-        pickFileForDns = false
     }
     val query = state.filterSearchQuery
     // Catalogue text is localized at render time; search has to see the same
@@ -207,21 +201,20 @@ fun FiltersScreen(
                     IconButton(onClick = it) {
                         Icon(
                             imageVector = Icons.AutoMirrored.Filled.ArrowBack,
-                            contentDescription = stringResource(R.string.hub_back),
+                            contentDescription = L10n.get(Strings.hub_back),
                             tint = AdGuardTextPrimary,
                         )
                     }
                 }
                 Column(modifier = Modifier.weight(1f)) {
                     Text(
-                        text = stringResource(R.string.nav_filters),
+                        text = L10n.get(Strings.nav_filters),
                         fontSize = 19.sp,
                         fontWeight = FontWeight.Bold,
                         color = AdGuardTextPrimary,
                     )
                     Text(
-                        text = stringResource(
-                            R.string.hub_filters_subtitle,
+                        text = L10n.format(Strings.hub_filters_subtitle,
                             enabledCount,
                             "%,d".format(totalRules),
                         ),
@@ -233,7 +226,7 @@ fun FiltersScreen(
                     IconButton(onClick = { showOverflow = true }) {
                         Icon(
                             Icons.Default.MoreVert,
-                            contentDescription = stringResource(R.string.filters_more_options),
+                            contentDescription = L10n.get(Strings.filters_more_options),
                             tint = AdGuardTextSecondary,
                         )
                     }
@@ -241,7 +234,7 @@ fun FiltersScreen(
                         DropdownMenuItem(
                             text = {
                                 Text(
-                                    stringResource(R.string.filters_restore_defaults),
+                                    L10n.get(Strings.filters_restore_defaults),
                                     fontSize = 13.sp,
                                 )
                             },
@@ -256,7 +249,7 @@ fun FiltersScreen(
                         DropdownMenuItem(
                             text = {
                                 Text(
-                                    stringResource(R.string.filters_help_design),
+                                    L10n.get(Strings.filters_help_design),
                                     fontSize = 13.sp,
                                 )
                             },
@@ -307,7 +300,7 @@ fun FiltersScreen(
                         ) {
                             Icon(
                                 Icons.Default.Close,
-                                contentDescription = stringResource(R.string.filters_dismiss_banner),
+                                contentDescription = L10n.get(Strings.filters_dismiss_banner),
                                 tint = AdGuardTextMuted,
                                 modifier = Modifier.size(16.dp),
                             )
@@ -331,7 +324,7 @@ fun FiltersScreen(
                     Icon(Icons.Default.Add, contentDescription = null, tint = AdGuardBlueDns, modifier = Modifier.size(16.dp))
                     Spacer(modifier = Modifier.width(6.dp))
                     Text(
-                        stringResource(R.string.filters_add),
+                        L10n.get(Strings.filters_add),
                         fontSize = 12.sp,
                         fontWeight = FontWeight.Bold,
                         color = AdGuardTextPrimary,
@@ -347,16 +340,16 @@ fun FiltersScreen(
                 ) {
                     Icon(
                         imageVector = Icons.Default.Sync,
-                        contentDescription = stringResource(R.string.filters_refresh),
+                        contentDescription = L10n.get(Strings.filters_refresh),
                         tint = AdGuardGreenLight,
                         modifier = Modifier.size(16.dp),
                     )
                     Spacer(modifier = Modifier.width(6.dp))
                     Text(
                         text = if (state.loadingMessage == null) {
-                            stringResource(R.string.filters_refresh)
+                            L10n.get(Strings.filters_refresh)
                         } else {
-                            stringResource(R.string.filters_refreshing)
+                            L10n.get(Strings.filters_refreshing)
                         },
                         fontSize = 12.sp,
                         fontWeight = FontWeight.Bold,
@@ -376,7 +369,7 @@ fun FiltersScreen(
                 singleLine = true,
                 placeholder = {
                     Text(
-                        stringResource(R.string.filters_search_hint),
+                        L10n.get(Strings.filters_search_hint),
                         color = AdGuardTextMuted,
                         fontSize = 13.sp,
                     )
@@ -394,7 +387,7 @@ fun FiltersScreen(
                         ) {
                             Icon(
                                 Icons.Default.Close,
-                                contentDescription = stringResource(R.string.filters_clear_search),
+                                contentDescription = L10n.get(Strings.filters_clear_search),
                                 tint = AdGuardTextMuted,
                                 modifier = Modifier.size(16.dp),
                             )
@@ -482,9 +475,9 @@ fun FiltersScreen(
                             onAdd = { viewModel.onIntent(AdGuardIntent.ShowAddDnsFilterDialog(true)) },
                             onToggleList = { viewModel.onIntent(AdGuardIntent.ToggleFilterList(it.id, !it.isEnabled)) },
                             onOpenList = { viewModel.onIntent(AdGuardIntent.InspectFilter(it.id)) },
-                            titleRes = R.string.filters_dns_title,
-                            subtitleRes = R.string.filters_dns_subtitle,
-                            emptyRes = R.string.filters_dns_empty,
+                            titleRes = Strings.filters_dns_title,
+                            subtitleRes = Strings.filters_dns_subtitle,
+                            emptyRes = Strings.filters_dns_empty,
                             icon = Icons.Default.Language,
                             tag = "dns_filters_section",
                         )
@@ -527,7 +520,7 @@ fun FiltersScreen(
             onAdd = { name, url -> viewModel.onIntent(AdGuardIntent.AddCustomFilter(name, url)) },
             onPickFile = {
                 viewModel.onIntent(AdGuardIntent.ShowAddFilterDialog(false))
-                filePicker.launch(arrayOf("text/plain", "text/*", "*/*"))
+                pickFilterFile(dnsOnly = false)
             },
         )
     }
@@ -537,9 +530,7 @@ fun FiltersScreen(
             onDismiss = { viewModel.onIntent(AdGuardIntent.ShowAddDnsFilterDialog(false)) },
             onAdd = { name, url -> viewModel.onIntent(AdGuardIntent.AddDnsFilter(name, url)) },
             onPickFile = {
-                pickFileForDns = true
-                viewModel.onIntent(AdGuardIntent.ShowAddDnsFilterDialog(false))
-                filePicker.launch(arrayOf("text/plain", "text/*", "*/*"))
+                pickFilterFile(dnsOnly = true)
             },
         )
     }
@@ -552,7 +543,7 @@ fun FiltersScreen(
                     onDismissRequest = { showDeleteConfirm = false },
                     title = {
                         Text(
-                            stringResource(R.string.filters_delete_title),
+                            L10n.get(Strings.filters_delete_title),
                             fontSize = 17.sp,
                             fontWeight = FontWeight.Bold,
                             color = AdGuardTextPrimary,
@@ -560,7 +551,7 @@ fun FiltersScreen(
                     },
                     text = {
                         Text(
-                            stringResource(R.string.filters_delete_body, filterDisplayName(list)),
+                            L10n.format(Strings.filters_delete_body, filterDisplayName(list)),
                             fontSize = 12.sp,
                             color = AdGuardTextSecondary,
                         )
@@ -572,7 +563,7 @@ fun FiltersScreen(
                             viewModel.onIntent(AdGuardIntent.InspectFilter(null))
                         }) {
                             Text(
-                                stringResource(R.string.ext_delete),
+                                L10n.get(Strings.ext_delete),
                                 fontSize = 13.sp,
                                 fontWeight = FontWeight.Bold,
                                 color = AdGuardRedBlocked,
@@ -582,7 +573,7 @@ fun FiltersScreen(
                     dismissButton = {
                         TextButton(onClick = { showDeleteConfirm = false }) {
                             Text(
-                                stringResource(R.string.common_cancel),
+                                L10n.get(Strings.common_cancel),
                                 fontSize = 13.sp,
                                 color = AdGuardTextSecondary,
                             )
@@ -608,7 +599,7 @@ fun FiltersScreen(
             onDismissRequest = { showResetConfirm = false },
             title = {
                 Text(
-                    stringResource(R.string.filters_reset_title),
+                    L10n.get(Strings.filters_reset_title),
                     fontSize = 17.sp,
                     fontWeight = FontWeight.Bold,
                     color = AdGuardTextPrimary,
@@ -619,19 +610,19 @@ fun FiltersScreen(
                     // AdGuard lists the scope and the consequences before the
                     // destructive word; here the reset is honestly narrow.
                     Text(
-                        stringResource(R.string.filters_reset_scope),
+                        L10n.get(Strings.filters_reset_scope),
                         fontSize = 12.sp,
                         color = AdGuardTextSecondary,
                     )
                     Spacer(modifier = Modifier.height(6.dp))
                     Text(
-                        stringResource(R.string.filters_reset_download),
+                        L10n.get(Strings.filters_reset_download),
                         fontSize = 12.sp,
                         color = AdGuardTextSecondary,
                     )
                     Spacer(modifier = Modifier.height(6.dp))
                     Text(
-                        stringResource(R.string.filters_reset_keep),
+                        L10n.get(Strings.filters_reset_keep),
                         fontSize = 12.sp,
                         color = AdGuardTextMuted,
                     )
@@ -643,7 +634,7 @@ fun FiltersScreen(
                     viewModel.onIntent(AdGuardIntent.RestoreDefaultFilters)
                 }) {
                     Text(
-                        stringResource(R.string.filters_reset_confirm),
+                        L10n.get(Strings.filters_reset_confirm),
                         fontSize = 13.sp,
                         fontWeight = FontWeight.Bold,
                         color = AdGuardRedBlocked,
@@ -653,7 +644,7 @@ fun FiltersScreen(
             dismissButton = {
                 TextButton(onClick = { showResetConfirm = false }) {
                     Text(
-                        stringResource(R.string.common_cancel),
+                        L10n.get(Strings.common_cancel),
                         fontSize = 13.sp,
                         color = AdGuardTextSecondary,
                     )
@@ -700,14 +691,10 @@ fun FiltersScreen(
                     },
                     onEdit = { showEditFilter = true },
                     onOpenHomepage = { url ->
-                        runCatching {
-                            context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)))
-                        }
+                        runCatching { uriHandler.openUri(url) }
                     },
                     onOpenSource = { url ->
-                        runCatching {
-                            context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)))
-                        }
+                        runCatching { uriHandler.openUri(url) }
                     },
                 )
             }
@@ -783,7 +770,7 @@ private fun FilterGroupCard(
                     // AdGuard names the configuration state in words rather
                     // than as a bare ratio on the right of the row.
                     Text(
-                        stringResource(R.string.filters_group_enabled, enabled, lists.size),
+                        L10n.format(Strings.filters_group_enabled, enabled, lists.size),
                         fontSize = 11.sp,
                         fontWeight = FontWeight.SemiBold,
                         color = if (enabled > 0) AdGuardGreenPrimary else AdGuardTextMuted,
@@ -807,14 +794,13 @@ private fun FilterGroupCard(
                 ) {
                     Column(modifier = Modifier.weight(1f)) {
                         Text(
-                            stringResource(R.string.filters_inactive_title),
+                            L10n.get(Strings.filters_inactive_title),
                             fontSize = 12.sp,
                             fontWeight = FontWeight.Bold,
                             color = AdGuardRedBlocked,
                         )
                         Text(
-                            stringResource(
-                                R.string.filters_inactive_body,
+                            L10n.format(Strings.filters_inactive_body,
                                 L10n.get(group.titleKey),
                                 gate?.let { L10n.get(it.titleKey) }.orEmpty(),
                             ),
@@ -824,7 +810,7 @@ private fun FilterGroupCard(
                     }
                     TextButton(onClick = onEnableModule) {
                         Text(
-                            stringResource(R.string.filters_enable_module),
+                            L10n.get(Strings.filters_enable_module),
                             fontSize = 12.sp,
                             fontWeight = FontWeight.Bold,
                             color = AdGuardGreenLight,
@@ -879,10 +865,9 @@ private fun FilterRow(
                 overflow = TextOverflow.Ellipsis,
             )
             Text(
-                text = stringResource(
-                    R.string.filters_row_meta,
+                text = L10n.format(Strings.filters_row_meta,
                     "%,d".format(list.ruleCount),
-                    list.lastUpdatedText.ifBlank { stringResource(R.string.filter_not_updated) },
+                    list.lastUpdatedText.ifBlank { L10n.get(Strings.filter_not_updated) },
                 ),
                 fontSize = 11.sp,
                 color = AdGuardTextMuted,
@@ -892,7 +877,7 @@ private fun FilterRow(
             // before the first download, no more faked "standard").
             if (list.version.isNotBlank()) {
                 Text(
-                    text = stringResource(R.string.filters_row_version, list.version),
+                    text = L10n.format(Strings.filters_row_version, list.version),
                     fontSize = 11.sp,
                     color = AdGuardTextMuted,
                     maxLines = 1,
@@ -904,7 +889,7 @@ private fun FilterRow(
             // inactive-filters banner.
             if (list.lastError.isNotBlank()) {
                 Text(
-                    text = stringResource(R.string.filters_row_error, list.lastError),
+                    text = L10n.format(Strings.filters_row_error, list.lastError),
                     fontSize = 11.sp,
                     color = AdGuardRedBlocked,
                     maxLines = 2,
@@ -938,14 +923,14 @@ private fun SearchEmptyCard(
     ) {
         Column(modifier = Modifier.padding(16.dp)) {
             Text(
-                text = stringResource(R.string.filters_search_empty_title),
+                text = L10n.get(Strings.filters_search_empty_title),
                 fontSize = 13.sp,
                 fontWeight = FontWeight.Bold,
                 color = AdGuardTextPrimary,
             )
             Spacer(modifier = Modifier.height(2.dp))
             Text(
-                text = stringResource(R.string.filters_search_empty_body, query),
+                text = L10n.format(Strings.filters_search_empty_body, query),
                 fontSize = 11.sp,
                 color = AdGuardTextMuted,
             )
@@ -954,7 +939,7 @@ private fun SearchEmptyCard(
                 modifier = Modifier.padding(top = 4.dp),
             ) {
                 Text(
-                    stringResource(R.string.filters_clear_search),
+                    L10n.get(Strings.filters_clear_search),
                     fontSize = 12.sp,
                     fontWeight = FontWeight.Bold,
                     color = AdGuardGreenLight,
@@ -970,9 +955,9 @@ private fun CustomFiltersCard(
     onAdd: () -> Unit,
     onToggleList: (FilterList) -> Unit,
     onOpenList: (FilterList) -> Unit,
-    titleRes: Int = R.string.filters_custom_title,
-    subtitleRes: Int = R.string.filters_custom_subtitle,
-    emptyRes: Int = R.string.filters_custom_empty,
+    titleRes: String = Strings.filters_custom_title,
+    subtitleRes: String = Strings.filters_custom_subtitle,
+    emptyRes: String = Strings.filters_custom_empty,
     icon: ImageVector = Icons.Default.Public,
     tag: String = "custom_filters_section",
 ) {
@@ -1003,13 +988,13 @@ private fun CustomFiltersCard(
                 Spacer(modifier = Modifier.width(12.dp))
                 Column(modifier = Modifier.weight(1f)) {
                     Text(
-                        stringResource(titleRes),
+                        L10n.get(titleRes),
                         fontSize = 13.sp,
                         fontWeight = FontWeight.Bold,
                         color = AdGuardTextPrimary,
                     )
                     Text(
-                        stringResource(subtitleRes),
+                        L10n.get(subtitleRes),
                         fontSize = 11.sp,
                         color = AdGuardTextMuted,
                     )
@@ -1018,7 +1003,7 @@ private fun CustomFiltersCard(
 
             if (lists.isEmpty()) {
                 Text(
-                    text = stringResource(emptyRes),
+                    text = L10n.get(emptyRes),
                     fontSize = 11.sp,
                     color = AdGuardTextMuted,
                     modifier = Modifier.padding(horizontal = 14.dp),
@@ -1040,7 +1025,7 @@ private fun CustomFiltersCard(
                 Icon(Icons.Default.Add, contentDescription = null, tint = AdGuardBlueDns, modifier = Modifier.size(16.dp))
                 Spacer(modifier = Modifier.width(6.dp))
                 Text(
-                    stringResource(R.string.filters_add),
+                    L10n.get(Strings.filters_add),
                     fontSize = 12.sp,
                     fontWeight = FontWeight.Bold,
                     color = AdGuardBlueDns,
@@ -1083,13 +1068,13 @@ private fun UserRulesCard(
             Spacer(modifier = Modifier.width(12.dp))
             Column(modifier = Modifier.weight(1f)) {
                 Text(
-                    stringResource(R.string.filters_user_rules_title),
+                    L10n.get(Strings.filters_user_rules_title),
                     fontSize = 13.sp,
                     fontWeight = FontWeight.Bold,
                     color = AdGuardTextPrimary,
                 )
                 Text(
-                    stringResource(R.string.filters_user_rules_meta, count, allowCount),
+                    L10n.format(Strings.filters_user_rules_meta, count, allowCount),
                     fontSize = 11.sp,
                     color = AdGuardTextMuted,
                 )
@@ -1122,9 +1107,8 @@ private fun ServicesTableCard(
     val draftError = if (draftUrl.isEmpty()) null else filterUrlError(draftUrl)
     // The picker serves the merged-file case only: the core converts whatever
     // body it is handed, so a JSON dataset and a plain table both arrive here.
-    val tablePicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
-        if (uri != null) onImportFile(uri.toString())
-    }
+    val importScope = rememberCoroutineScope()
+    val files = currentFileHost()
 
     Card(
         modifier = Modifier
@@ -1153,13 +1137,13 @@ private fun ServicesTableCard(
                 Spacer(modifier = Modifier.width(12.dp))
                 Column(modifier = Modifier.weight(1f)) {
                     Text(
-                        stringResource(R.string.services_table_title),
+                        L10n.get(Strings.services_table_title),
                         fontSize = 13.sp,
                         fontWeight = FontWeight.Bold,
                         color = AdGuardTextPrimary,
                     )
                     Text(
-                        stringResource(R.string.services_table_subtitle),
+                        L10n.get(Strings.services_table_subtitle),
                         fontSize = 11.sp,
                         color = AdGuardTextMuted,
                     )
@@ -1177,7 +1161,7 @@ private fun ServicesTableCard(
             OutlinedTextField(
                 value = draft,
                 onValueChange = { draft = it },
-                label = { Text(stringResource(R.string.services_table_url_label), fontSize = 12.sp) },
+                label = { Text(L10n.get(Strings.services_table_url_label), fontSize = 12.sp) },
                 placeholder = { Text("https://…", fontSize = 12.sp, color = AdGuardTextMuted) },
                 singleLine = true,
                 isError = draftError != null,
@@ -1212,7 +1196,7 @@ private fun ServicesTableCard(
                         modifier = Modifier.testTag("services_table_reset"),
                     ) {
                         Text(
-                            stringResource(R.string.services_table_reset),
+                            L10n.get(Strings.services_table_reset),
                             fontSize = 12.sp,
                             color = AdGuardTextMuted,
                         )
@@ -1221,7 +1205,9 @@ private fun ServicesTableCard(
                 // Import is not tied to a subscription: a dataset published as a
                 // directory arrives as a file, whether or not a URL is set.
                 TextButton(
-                    onClick = { tablePicker.launch(arrayOf("application/json", "text/plain", "text/*", "*/*")) },
+                    onClick = {
+                        importScope.launch { files.openText()?.let(onImportFile) }
+                    },
                     modifier = Modifier.testTag("services_table_import"),
                 ) {
                     Icon(
@@ -1232,7 +1218,7 @@ private fun ServicesTableCard(
                     )
                     Spacer(modifier = Modifier.width(6.dp))
                     Text(
-                        stringResource(R.string.services_table_import),
+                        L10n.get(Strings.services_table_import),
                         fontSize = 12.sp,
                         fontWeight = FontWeight.Bold,
                         color = AdGuardBlueDns,
@@ -1251,7 +1237,7 @@ private fun ServicesTableCard(
                         )
                         Spacer(modifier = Modifier.width(6.dp))
                         Text(
-                            stringResource(R.string.filters_refresh),
+                            L10n.get(Strings.filters_refresh),
                             fontSize = 12.sp,
                             fontWeight = FontWeight.Bold,
                             color = AdGuardBlueDns,
@@ -1266,7 +1252,7 @@ private fun ServicesTableCard(
                     contentPadding = PaddingValues(horizontal = 14.dp, vertical = 6.dp),
                 ) {
                     Text(
-                        stringResource(R.string.filters_save),
+                        L10n.get(Strings.filters_save),
                         fontSize = 12.sp,
                         fontWeight = FontWeight.Bold,
                     )
@@ -1275,8 +1261,8 @@ private fun ServicesTableCard(
 
             Text(
                 text = downloadedSize?.let {
-                    stringResource(R.string.services_table_downloaded, it)
-                } ?: stringResource(R.string.services_table_shipped),
+                    L10n.format(Strings.services_table_downloaded, it)
+                } ?: L10n.get(Strings.services_table_shipped),
                 fontSize = 11.sp,
                 color = AdGuardTextMuted,
             )
@@ -1302,7 +1288,7 @@ private fun AddFilterDialog(
                 Icon(Icons.Default.Public, contentDescription = null, tint = AdGuardBlueDns, modifier = Modifier.size(22.dp))
                 Spacer(modifier = Modifier.width(8.dp))
                 Text(
-                    stringResource(R.string.filters_add_title),
+                    L10n.get(Strings.filters_add_title),
                     fontSize = 17.sp,
                     fontWeight = FontWeight.Bold,
                     color = AdGuardTextPrimary,
@@ -1312,7 +1298,7 @@ private fun AddFilterDialog(
         text = {
             Column {
                 Text(
-                    text = stringResource(R.string.filters_add_body),
+                    text = L10n.get(Strings.filters_add_body),
                     fontSize = 12.sp,
                     color = AdGuardTextSecondary,
                 )
@@ -1320,7 +1306,7 @@ private fun AddFilterDialog(
                 Spacer(modifier = Modifier.height(12.dp))
 
                 Text(
-                    stringResource(R.string.filters_add_suggestions),
+                    L10n.get(Strings.filters_add_suggestions),
                     fontSize = 11.sp,
                     color = AdGuardTextMuted,
                 )
@@ -1345,7 +1331,7 @@ private fun AddFilterDialog(
                 OutlinedTextField(
                     value = name,
                     onValueChange = { name = it },
-                    label = { Text(stringResource(R.string.ext_name_optional), fontSize = 12.sp) },
+                    label = { Text(L10n.get(Strings.ext_name_optional), fontSize = 12.sp) },
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth(),
                     shape = RoundedCornerShape(10.dp),
@@ -1362,7 +1348,7 @@ private fun AddFilterDialog(
                 OutlinedTextField(
                     value = url,
                     onValueChange = { url = it },
-                    label = { Text(stringResource(R.string.filters_url_label), fontSize = 12.sp) },
+                    label = { Text(L10n.get(Strings.filters_url_label), fontSize = 12.sp) },
                     placeholder = { Text("https://…", fontSize = 12.sp, color = AdGuardTextMuted) },
                     singleLine = true,
                     isError = url.isNotBlank() && filterUrlError(url) != null,
@@ -1393,7 +1379,7 @@ private fun AddFilterDialog(
                     Icon(Icons.Default.UploadFile, contentDescription = null, tint = AdGuardGreenLight, modifier = Modifier.size(16.dp))
                     Spacer(modifier = Modifier.width(6.dp))
                     Text(
-                        stringResource(R.string.filters_pick_file),
+                        L10n.get(Strings.filters_pick_file),
                         fontSize = 12.sp,
                         color = AdGuardGreenLight,
                     )
@@ -1408,7 +1394,7 @@ private fun AddFilterDialog(
                 shape = RoundedCornerShape(8.dp),
             ) {
                 Text(
-                    stringResource(R.string.common_add),
+                    L10n.get(Strings.common_add),
                     color = AdGuardOnAccent,
                     fontWeight = FontWeight.Bold,
                 )
@@ -1416,7 +1402,7 @@ private fun AddFilterDialog(
         },
         dismissButton = {
             OutlinedButton(onClick = onDismiss, shape = RoundedCornerShape(8.dp)) {
-                Text(stringResource(R.string.common_cancel), color = AdGuardTextSecondary)
+                Text(L10n.get(Strings.common_cancel), color = AdGuardTextSecondary)
             }
         },
     )
@@ -1443,7 +1429,7 @@ private fun AddDnsFilterDialog(
                 Icon(Icons.Default.Language, contentDescription = null, tint = AdGuardBlueDns, modifier = Modifier.size(22.dp))
                 Spacer(modifier = Modifier.width(8.dp))
                 Text(
-                    stringResource(R.string.filters_dns_add_title),
+                    L10n.get(Strings.filters_dns_add_title),
                     fontSize = 17.sp,
                     fontWeight = FontWeight.Bold,
                     color = AdGuardTextPrimary,
@@ -1453,7 +1439,7 @@ private fun AddDnsFilterDialog(
         text = {
             Column {
                 Text(
-                    text = stringResource(R.string.filters_dns_add_body),
+                    text = L10n.get(Strings.filters_dns_add_body),
                     fontSize = 12.sp,
                     color = AdGuardTextSecondary,
                 )
@@ -1463,7 +1449,7 @@ private fun AddDnsFilterDialog(
                 OutlinedTextField(
                     value = name,
                     onValueChange = { name = it },
-                    label = { Text(stringResource(R.string.ext_name_optional), fontSize = 12.sp) },
+                    label = { Text(L10n.get(Strings.ext_name_optional), fontSize = 12.sp) },
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth(),
                     shape = RoundedCornerShape(10.dp),
@@ -1480,7 +1466,7 @@ private fun AddDnsFilterDialog(
                 OutlinedTextField(
                     value = url,
                     onValueChange = { url = it },
-                    label = { Text(stringResource(R.string.filters_url_label), fontSize = 12.sp) },
+                    label = { Text(L10n.get(Strings.filters_url_label), fontSize = 12.sp) },
                     placeholder = { Text("https://…", fontSize = 12.sp, color = AdGuardTextMuted) },
                     singleLine = true,
                     isError = url.isNotBlank() && filterUrlError(url) != null,
@@ -1509,7 +1495,7 @@ private fun AddDnsFilterDialog(
                     Icon(Icons.Default.UploadFile, contentDescription = null, tint = AdGuardGreenLight, modifier = Modifier.size(16.dp))
                     Spacer(modifier = Modifier.width(6.dp))
                     Text(
-                        stringResource(R.string.filters_pick_file),
+                        L10n.get(Strings.filters_pick_file),
                         fontSize = 12.sp,
                         color = AdGuardGreenLight,
                     )
@@ -1524,7 +1510,7 @@ private fun AddDnsFilterDialog(
                 shape = RoundedCornerShape(8.dp),
             ) {
                 Text(
-                    stringResource(R.string.common_add),
+                    L10n.get(Strings.common_add),
                     color = AdGuardOnAccent,
                     fontWeight = FontWeight.Bold,
                 )
@@ -1532,7 +1518,7 @@ private fun AddDnsFilterDialog(
         },
         dismissButton = {
             OutlinedButton(onClick = onDismiss, shape = RoundedCornerShape(8.dp)) {
-                Text(stringResource(R.string.common_cancel), color = AdGuardTextSecondary)
+                Text(L10n.get(Strings.common_cancel), color = AdGuardTextSecondary)
             }
         },
     )
@@ -1555,7 +1541,7 @@ private fun EditCustomFilterDialog(
         onDismissRequest = onDismiss,
         title = {
             Text(
-                stringResource(R.string.filters_edit_title),
+                L10n.get(Strings.filters_edit_title),
                 fontSize = 17.sp,
                 fontWeight = FontWeight.Bold,
                 color = AdGuardTextPrimary,
@@ -1566,7 +1552,7 @@ private fun EditCustomFilterDialog(
                 OutlinedTextField(
                     value = name,
                     onValueChange = { name = it },
-                    label = { Text(stringResource(R.string.filters_name_label), fontSize = 12.sp) },
+                    label = { Text(L10n.get(Strings.filters_name_label), fontSize = 12.sp) },
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth(),
                     shape = RoundedCornerShape(10.dp),
@@ -1581,7 +1567,7 @@ private fun EditCustomFilterDialog(
                 OutlinedTextField(
                     value = url,
                     onValueChange = { url = it },
-                    label = { Text(stringResource(R.string.filters_url_label), fontSize = 12.sp) },
+                    label = { Text(L10n.get(Strings.filters_url_label), fontSize = 12.sp) },
                     placeholder = { Text("https://…", fontSize = 12.sp, color = AdGuardTextMuted) },
                     singleLine = true,
                     isError = urlError != null,
@@ -1604,7 +1590,7 @@ private fun EditCustomFilterDialog(
                 }
                 Spacer(modifier = Modifier.height(8.dp))
                 Text(
-                    stringResource(R.string.filters_edit_reload),
+                    L10n.get(Strings.filters_edit_reload),
                     fontSize = 11.sp,
                     color = AdGuardTextMuted,
                 )
@@ -1618,7 +1604,7 @@ private fun EditCustomFilterDialog(
                 shape = RoundedCornerShape(8.dp),
             ) {
                 Text(
-                    stringResource(R.string.filters_save),
+                    L10n.get(Strings.filters_save),
                     color = AdGuardOnAccent,
                     fontWeight = FontWeight.Bold,
                 )
@@ -1627,7 +1613,7 @@ private fun EditCustomFilterDialog(
         dismissButton = {
             TextButton(onClick = onDismiss) {
                 Text(
-                    stringResource(R.string.common_cancel),
+                    L10n.get(Strings.common_cancel),
                     fontSize = 13.sp,
                     color = AdGuardTextSecondary,
                 )
@@ -1652,7 +1638,7 @@ fun FilterDetailSheet(
     onOpenSource: (String) -> Unit,
 ) {
     val clipboard = LocalClipboardManager.current
-    val context = LocalContext.current
+    val platform = currentPlatformHost()
     val displayName = filterDisplayName(list)
     val displayDescription = filterDisplayDescription(list)
     Column(
@@ -1670,22 +1656,22 @@ fun FilterDetailSheet(
         val features = buildList {
             add(
                 if (list.format.equals("hosts", ignoreCase = true)) {
-                    R.string.filters_feature_hosts
+                    Strings.filters_feature_hosts
                 } else {
-                    R.string.filters_feature_rule_syntax
+                    Strings.filters_feature_rule_syntax
                 },
             )
             add(
                 if (!list.subscriptionUrl.isNullOrBlank()) {
-                    R.string.filters_feature_auto_update
+                    Strings.filters_feature_auto_update
                 } else {
-                    R.string.filters_feature_static
+                    Strings.filters_feature_static
                 },
             )
             if (list.isUserAdded) {
                 add(
-                    if (list.trusted) R.string.filters_feature_trusted
-                    else R.string.filters_feature_untrusted,
+                    if (list.trusted) Strings.filters_feature_trusted
+                    else Strings.filters_feature_untrusted,
                 )
             }
         }
@@ -1701,7 +1687,7 @@ fun FilterDetailSheet(
                     modifier = Modifier.size(13.dp),
                 )
                 Spacer(modifier = Modifier.width(6.dp))
-                Text(stringResource(feature), fontSize = 11.sp, color = AdGuardTextSecondary)
+                Text(L10n.get(feature), fontSize = 11.sp, color = AdGuardTextSecondary)
             }
         }
 
@@ -1710,7 +1696,7 @@ fun FilterDetailSheet(
         Row(verticalAlignment = Alignment.CenterVertically) {
             Column(modifier = Modifier.weight(1f)) {
                 Text(
-                    stringResource(R.string.filters_detail_enable_title),
+                    L10n.get(Strings.filters_detail_enable_title),
                     fontSize = 13.sp,
                     fontWeight = FontWeight.Bold,
                     color = AdGuardTextPrimary,
@@ -1720,9 +1706,9 @@ fun FilterDetailSheet(
                         // The switch follows the engine, so an in-flight compile
                         // has to be said out loud or the user wonders why a
                         // freshly enabled list is not filtering yet.
-                        isBuilding -> stringResource(R.string.filters_detail_building)
-                        list.isEnabled -> stringResource(R.string.home_status_filtering)
-                        else -> stringResource(R.string.ext_detail_off)
+                        isBuilding -> L10n.get(Strings.filters_detail_building)
+                        list.isEnabled -> L10n.get(Strings.home_status_filtering)
+                        else -> L10n.get(Strings.ext_detail_off)
                     },
                     fontSize = 11.sp,
                     color = AdGuardTextMuted,
@@ -1740,13 +1726,13 @@ fun FilterDetailSheet(
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Column(modifier = Modifier.weight(1f)) {
                     Text(
-                        stringResource(R.string.filters_trusted_title),
+                        L10n.get(Strings.filters_trusted_title),
                         fontSize = 13.sp,
                         fontWeight = FontWeight.Bold,
                         color = AdGuardTextPrimary,
                     )
                     Text(
-                        text = stringResource(R.string.filters_trusted_body),
+                        text = L10n.get(Strings.filters_trusted_body),
                         fontSize = 11.sp,
                         color = AdGuardTextMuted,
                     )
@@ -1762,28 +1748,28 @@ fun FilterDetailSheet(
         Spacer(modifier = Modifier.height(12.dp))
 
         InfoRow(
-            stringResource(R.string.filters_info_group),
+            L10n.get(Strings.filters_info_group),
             FilterGroup.fromId(list.groupId)?.let { L10n.get(it.titleKey) }
-                ?: stringResource(R.string.filters_info_custom_group),
+                ?: L10n.get(Strings.filters_info_custom_group),
         )
         InfoRow(
-            stringResource(R.string.filters_info_format),
+            L10n.get(Strings.filters_info_format),
             if (list.format.equals("hosts", ignoreCase = true)) "Hosts" else "AdGuard / EasyList",
         )
-        InfoRow(stringResource(R.string.filters_info_rules), "%,d".format(list.ruleCount))
+        InfoRow(L10n.get(Strings.filters_info_rules), "%,d".format(list.ruleCount))
         if (list.sizeBytes > 0L) {
-            InfoRow(stringResource(R.string.filters_info_size), assetSizeLabel(list.sizeBytes))
+            InfoRow(L10n.get(Strings.filters_info_size), assetSizeLabel(list.sizeBytes))
         }
         InfoRow(
-            stringResource(R.string.ext_detail_updated),
-            list.lastUpdatedText.ifBlank { stringResource(R.string.filter_not_updated) },
+            L10n.get(Strings.ext_detail_updated),
+            list.lastUpdatedText.ifBlank { L10n.get(Strings.filter_not_updated) },
         )
         if (list.version.isNotBlank()) {
-            InfoRow(stringResource(R.string.ext_detail_version), list.version.take(24))
+            InfoRow(L10n.get(Strings.ext_detail_version), list.version.take(24))
         }
         if (list.lastError.isNotBlank()) {
             InfoRow(
-                stringResource(R.string.filters_info_error),
+                L10n.get(Strings.filters_info_error),
                 list.lastError.take(160),
                 AdGuardRedBlocked,
             )
@@ -1806,17 +1792,13 @@ fun FilterDetailSheet(
                 IconButton(
                     onClick = {
                         clipboard.setText(AnnotatedString(url))
-                        Toast.makeText(
-                            context,
-                            context.getString(R.string.filters_copy_url),
-                            Toast.LENGTH_SHORT,
-                        ).show()
+                        platform.toast(L10n.get(Strings.filters_copy_url))
                     },
                     modifier = Modifier.size(32.dp),
                 ) {
                     Icon(
                         Icons.Default.ContentCopy,
-                        contentDescription = stringResource(R.string.filters_copy_source),
+                        contentDescription = L10n.get(Strings.filters_copy_source),
                         tint = AdGuardTextSecondary,
                         modifier = Modifier.size(16.dp),
                     )
@@ -1827,7 +1809,7 @@ fun FilterDetailSheet(
                 ) {
                     Icon(
                         Icons.Default.OpenInBrowser,
-                        contentDescription = stringResource(R.string.filters_open_source),
+                        contentDescription = L10n.get(Strings.filters_open_source),
                         tint = AdGuardTextSecondary,
                         modifier = Modifier.size(16.dp),
                     )
@@ -1836,8 +1818,8 @@ fun FilterDetailSheet(
         } else if (list.ruleCount > 0) {
             Spacer(modifier = Modifier.height(8.dp))
             InfoRow(
-                stringResource(R.string.filters_info_source),
-                stringResource(R.string.filters_source_local),
+                L10n.get(Strings.filters_info_source),
+                L10n.get(Strings.filters_source_local),
             )
         }
 
@@ -1848,19 +1830,19 @@ fun FilterDetailSheet(
                 OutlinedButton(onClick = onRefresh, shape = RoundedCornerShape(10.dp)) {
                     Icon(Icons.Default.Sync, contentDescription = null, tint = AdGuardGreenLight, modifier = Modifier.size(16.dp))
                     Spacer(modifier = Modifier.width(6.dp))
-                    Text(stringResource(R.string.ext_update), fontSize = 12.sp, color = AdGuardGreenLight)
+                    Text(L10n.get(Strings.ext_update), fontSize = 12.sp, color = AdGuardGreenLight)
                 }
             }
             if (list.isUserAdded) {
                 OutlinedButton(onClick = onEdit, shape = RoundedCornerShape(10.dp)) {
                     Icon(Icons.Default.Edit, contentDescription = null, tint = AdGuardGreenLight, modifier = Modifier.size(16.dp))
                     Spacer(modifier = Modifier.width(6.dp))
-                    Text(stringResource(R.string.filters_edit), fontSize = 12.sp, color = AdGuardGreenLight)
+                    Text(L10n.get(Strings.filters_edit), fontSize = 12.sp, color = AdGuardGreenLight)
                 }
                 OutlinedButton(onClick = onDelete, shape = RoundedCornerShape(10.dp)) {
                     Icon(Icons.Default.Delete, contentDescription = null, tint = AdGuardRedBlocked, modifier = Modifier.size(16.dp))
                     Spacer(modifier = Modifier.width(6.dp))
-                    Text(stringResource(R.string.ext_delete), fontSize = 12.sp, color = AdGuardRedBlocked)
+                    Text(L10n.get(Strings.ext_delete), fontSize = 12.sp, color = AdGuardRedBlocked)
                 }
             }
             val homepage = list.homepage
@@ -1868,7 +1850,7 @@ fun FilterDetailSheet(
                 OutlinedButton(onClick = { onOpenHomepage(homepage) }, shape = RoundedCornerShape(10.dp)) {
                     Icon(Icons.Default.Public, contentDescription = null, tint = AdGuardBlueDns, modifier = Modifier.size(16.dp))
                     Spacer(modifier = Modifier.width(6.dp))
-                    Text(stringResource(R.string.filters_homepage), fontSize = 12.sp, color = AdGuardBlueDns)
+                    Text(L10n.get(Strings.filters_homepage), fontSize = 12.sp, color = AdGuardBlueDns)
                 }
             }
         }

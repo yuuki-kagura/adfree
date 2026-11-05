@@ -1,9 +1,9 @@
 package git.shin.adfree.ui.screens
 
-import android.content.Intent
-import android.net.Uri
-import androidx.activity.compose.rememberLauncherForActivityResult
-import androidx.activity.result.contract.ActivityResultContracts
+import git.shin.adfree.l10n.Strings
+import git.shin.adfree.l10n.L10n
+import git.shin.adfree.platform.currentFileHost
+import git.shin.adfree.platform.currentPlatformHost
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Spacer
@@ -24,19 +24,17 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import git.shin.adfree.AdGuardApplication
-import git.shin.adfree.R
 import git.shin.adfree.model.UserScriptInfo
 import git.shin.adfree.ui.AdGuardIntent
 import git.shin.adfree.ui.AdGuardViewModel
 import git.shin.adfree.ui.theme.AdGuardDarkBg
+import kotlinx.coroutines.launch
 import git.shin.adfree.ui.theme.AdGuardDarkSurface
 import git.shin.adfree.ui.theme.AdGuardRedBlocked
 import git.shin.adfree.ui.theme.AdGuardTextMuted
@@ -56,20 +54,18 @@ fun ExtensionsScreen(
     modifier: Modifier = Modifier,
 ) {
     val state by viewModel.uiState.collectAsState()
-    val context = LocalContext.current
+    val files = currentFileHost()
+    val platform = currentPlatformHost()
+    val pickerScope = rememberCoroutineScope()
     var showCreateScript by remember { mutableStateOf(false) }
     var editScriptTarget by remember { mutableStateOf<UserScriptInfo?>(null) }
     var deleteScriptTarget by remember { mutableStateOf<UserScriptInfo?>(null) }
 
-    val scriptFilePicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
-        if (uri != null) {
-            runCatching {
-                context.contentResolver.takePersistableUriPermission(
-                    uri,
-                    Intent.FLAG_GRANT_READ_URI_PERMISSION,
-                )
-            }
-            viewModel.onIntent(AdGuardIntent.ImportLocalScript(uri.toString()))
+    fun pickScriptFile() {
+        pickerScope.launch {
+            val uriText = files.openText() ?: return@launch
+            files.persistRead(uriText)
+            viewModel.onIntent(AdGuardIntent.ImportLocalScript(uriText))
         }
     }
 
@@ -80,8 +76,8 @@ fun ExtensionsScreen(
     ) {
         Column(modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)) {
             HubDestinationHeader(
-                title = stringResource(R.string.hub_extensions_title),
-                subtitle = stringResource(R.string.ext_screen_subtitle),
+                title = L10n.get(Strings.hub_extensions_title),
+                subtitle = L10n.get(Strings.ext_screen_subtitle),
                 onBack = onBack,
             )
         }
@@ -93,7 +89,7 @@ fun ExtensionsScreen(
                 .padding(horizontal = 16.dp),
         ) {
             Text(
-                text = stringResource(R.string.ext_screen_intro),
+                text = L10n.get(Strings.ext_screen_intro),
                 fontSize = 11.sp,
                 color = AdGuardTextMuted,
             )
@@ -123,7 +119,7 @@ fun ExtensionsScreen(
             onAdd = { name, url -> viewModel.onIntent(AdGuardIntent.AddScript(name, url)) },
             onImportFile = {
                 viewModel.onIntent(AdGuardIntent.ShowAddScriptDialog(false))
-                scriptFilePicker.launch(arrayOf("text/javascript", "application/x-javascript", "text/plain", "application/javascript", "*/*"))
+                pickScriptFile()
             },
             onCreate = {
                 viewModel.onIntent(AdGuardIntent.ShowAddScriptDialog(false))
@@ -134,10 +130,10 @@ fun ExtensionsScreen(
 
     if (showCreateScript) {
         ScriptTextEditorDialog(
-            title = stringResource(R.string.ext_create_title),
+            title = L10n.get(Strings.ext_create_title),
             initialName = "",
-            initialText = stringResource(R.string.ext_create_template),
-            confirmText = stringResource(R.string.ext_create_confirm),
+            initialText = L10n.get(Strings.ext_create_template),
+            confirmText = L10n.get(Strings.ext_create_confirm),
             onDismiss = { showCreateScript = false },
             onConfirm = { name, text ->
                 showCreateScript = false
@@ -149,16 +145,16 @@ fun ExtensionsScreen(
     editScriptTarget?.let { target ->
         if (target.isUserAdded) {
             ScriptTextEditorDialog(
-                title = stringResource(R.string.ext_edit_title),
+                title = L10n.get(Strings.ext_edit_title),
                 initialName = target.name,
                 initialText = "",
-                confirmText = stringResource(R.string.ext_save),
+                confirmText = L10n.get(Strings.ext_save),
                 onDismiss = { editScriptTarget = null },
                 onConfirm = { name, text ->
                     editScriptTarget = null
                     viewModel.onIntent(AdGuardIntent.UpdateScriptText(target.id, name, text))
                 },
-                loadText = { AdGuardApplication.instance.container.coreEngine.scriptText(target.id).orEmpty() },
+                loadText = { viewModel.scriptText(target.id) },
             )
         }
     }
@@ -168,7 +164,7 @@ fun ExtensionsScreen(
             onDismissRequest = { deleteScriptTarget = null },
             title = {
                 Text(
-                    stringResource(R.string.ext_delete_title),
+                    L10n.get(Strings.ext_delete_title),
                     fontSize = 17.sp,
                     fontWeight = FontWeight.Bold,
                     color = AdGuardTextPrimary,
@@ -176,7 +172,7 @@ fun ExtensionsScreen(
             },
             text = {
                 Text(
-                    stringResource(R.string.ext_delete_body, target.name),
+                    L10n.format(Strings.ext_delete_body, target.name),
                     fontSize = 12.sp,
                     color = AdGuardTextSecondary,
                 )
@@ -187,7 +183,7 @@ fun ExtensionsScreen(
                     viewModel.onIntent(AdGuardIntent.DeleteScript(target.id))
                 }) {
                     Text(
-                        stringResource(R.string.ext_delete),
+                        L10n.get(Strings.ext_delete),
                         fontSize = 13.sp,
                         fontWeight = FontWeight.Bold,
                         color = AdGuardRedBlocked,
@@ -197,7 +193,7 @@ fun ExtensionsScreen(
             dismissButton = {
                 TextButton(onClick = { deleteScriptTarget = null }) {
                     Text(
-                        stringResource(R.string.common_cancel),
+                        L10n.get(Strings.common_cancel),
                         fontSize = 13.sp,
                         color = AdGuardTextSecondary,
                     )
@@ -234,9 +230,7 @@ fun ExtensionsScreen(
                 onEnable = { script -> viewModel.onIntent(AdGuardIntent.ToggleScript(script.id, true)) },
                 onOpenPage = { url ->
                     if (url.startsWith("https://") || url.startsWith("http://")) {
-                        runCatching {
-                            context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)))
-                        }
+                        platform.openUrl(url)
                     }
                 },
                 onRetry = {

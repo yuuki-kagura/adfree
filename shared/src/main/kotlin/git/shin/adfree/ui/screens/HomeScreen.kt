@@ -1,15 +1,9 @@
 package git.shin.adfree.ui.screens
 
-import android.Manifest
-import android.content.Context
-import android.content.Intent
-import android.content.pm.PackageManager
-import android.net.Uri
-import android.os.Build
-import android.os.PowerManager
-import android.provider.Settings
-import androidx.activity.compose.rememberLauncherForActivityResult
-import androidx.activity.result.contract.ActivityResultContracts
+import git.shin.adfree.l10n.Strings
+import git.shin.adfree.l10n.L10n
+import git.shin.adfree.platform.OnResumeTick
+import git.shin.adfree.platform.currentPlatformHost
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
@@ -60,24 +54,16 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
-import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.core.app.NotificationManagerCompat
-import androidx.core.content.ContextCompat
-import androidx.lifecycle.Lifecycle
-import androidx.lifecycle.compose.LifecycleEventEffect
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
-import git.shin.adfree.R
 import git.shin.adfree.model.ProtectionStats
 import git.shin.adfree.ui.AdGuardIntent
 import git.shin.adfree.ui.AdGuardTab
 import git.shin.adfree.ui.AdGuardViewModel
-import git.shin.adfree.vpn.PrivateDns
 import git.shin.adfree.ui.theme.AdGuardBlueDns
 import git.shin.adfree.ui.theme.AdGuardDarkBg
 import git.shin.adfree.ui.theme.AdGuardDarkOutline
@@ -105,11 +91,11 @@ fun HomeScreen(
 ) {
     val state by viewModel.uiState.collectAsState()
     val privateDnsOn by viewModel.privateDnsOn.collectAsState()
-    val context = LocalContext.current
+    val platform = currentPlatformHost()
 
     // The switch lives in the system settings, so re-read it on every return;
     // the same call re-pushes the effective DoT policy to the core.
-    LifecycleEventEffect(Lifecycle.Event.ON_RESUME) { viewModel.refreshPrivateDnsState() }
+    OnResumeTick { viewModel.refreshPrivateDnsState() }
 
     Column(
         modifier = modifier
@@ -151,14 +137,12 @@ fun HomeScreen(
 
             Spacer(modifier = Modifier.height(14.dp))
 
-            HomeSystemStatusRow(
-                onPermissionGranted = { viewModel.refreshStatusNotification() },
-            )
+            HomeSystemStatusRow()
 
             if (privateDnsOn) {
                 Spacer(modifier = Modifier.height(16.dp))
                 PrivateDnsWarningCard(
-                    onOpenSettings = { PrivateDns.openSettings(context) }
+                    onOpenSettings = { platform.openPrivateDnsSettings() }
                 )
             }
 
@@ -193,7 +177,7 @@ private fun HomeHeader(isActive: Boolean) {
             )
             Spacer(modifier = Modifier.width(8.dp))
             Text(
-                text = stringResource(R.string.app_name),
+                text = L10n.get(Strings.app_name),
                 fontWeight = FontWeight.Bold,
                 fontSize = 19.sp,
                 color = AdGuardTextPrimary
@@ -214,8 +198,8 @@ private fun StatusChip(isActive: Boolean) {
             .padding(horizontal = 10.dp, vertical = 5.dp)
     ) {
         Text(
-            text = if (isActive) stringResource(R.string.home_status_filtering)
-            else stringResource(R.string.home_status_paused),
+            text = if (isActive) L10n.get(Strings.home_status_filtering)
+            else L10n.get(Strings.home_status_paused),
             fontSize = 11.sp,
             fontWeight = FontWeight.Bold,
             color = tint
@@ -230,33 +214,18 @@ private fun StatusChip(isActive: Boolean) {
  * Each chip opens the system screen that changes the answer.
  */
 @Composable
-private fun HomeSystemStatusRow(onPermissionGranted: () -> Unit) {
-    val context = LocalContext.current
+private fun HomeSystemStatusRow() {
+    val platform = currentPlatformHost()
     val scope = rememberCoroutineScope()
-    var notificationsOn by remember { mutableStateOf(notificationsEnabled(context)) }
-    var batteryOptimized by remember { mutableStateOf(!isIgnoringBatteryOptimizations(context)) }
-
-    val permissionLauncher = rememberLauncherForActivityResult(
-        ActivityResultContracts.RequestPermission(),
-    ) { granted ->
-        notificationsOn = notificationsEnabled(context)
-        if (granted) {
-            // The service's ongoing notification was dropped while the
-            // permission was missing; ask it to post again.
-            onPermissionGranted()
-        } else {
-            // Android stops showing the dialog after two refusals and returns
-            // "denied" silently; the settings page is the only way back.
-            openNotificationSettings(context)
-        }
-    }
+    var notificationsOn by remember { mutableStateOf(platform.notificationsEnabled()) }
+    var batteryOptimized by remember { mutableStateOf(!platform.ignoringBatteryOptimizations()) }
 
     fun refresh() {
-        notificationsOn = notificationsEnabled(context)
-        batteryOptimized = !isIgnoringBatteryOptimizations(context)
+        notificationsOn = platform.notificationsEnabled()
+        batteryOptimized = !platform.ignoringBatteryOptimizations()
     }
 
-    LifecycleEventEffect(Lifecycle.Event.ON_RESUME) {
+    OnResumeTick {
         refresh()
         // MIUI and other OEMs persist their per-app power policy slightly
         // after the settings activity closes, so the read taken on resume can
@@ -265,7 +234,7 @@ private fun HomeSystemStatusRow(onPermissionGranted: () -> Unit) {
             scope.launch {
                 repeat(3) {
                     delay(1_000)
-                    batteryOptimized = !isIgnoringBatteryOptimizations(context)
+                    batteryOptimized = !platform.ignoringBatteryOptimizations()
                     if (!batteryOptimized) return@launch
                 }
             }
@@ -279,37 +248,27 @@ private fun HomeSystemStatusRow(onPermissionGranted: () -> Unit) {
         SystemStatusChip(
             icon = if (notificationsOn) Icons.Default.NotificationsActive
             else Icons.Default.NotificationsOff,
-            title = stringResource(R.string.home_health_notifications),
-            value = stringResource(
-                if (notificationsOn) R.string.home_health_notifications_on
-                else R.string.home_health_notifications_off
+            title = L10n.get(Strings.home_health_notifications),
+            value = L10n.get(if (notificationsOn) Strings.home_health_notifications_on
+                else Strings.home_health_notifications_off
             ),
             ok = notificationsOn,
-            onClick = {
-                val needsPermission = Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
-                    ContextCompat.checkSelfPermission(
-                        context,
-                        Manifest.permission.POST_NOTIFICATIONS,
-                    ) != PackageManager.PERMISSION_GRANTED
-                if (needsPermission) {
-                    permissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
-                } else {
-                    openNotificationSettings(context)
-                }
-            },
+            onClick = { platform.requestNotificationPermission() },
             modifier = Modifier
                 .weight(1f)
                 .testTag("home_status_notifications"),
         )
         SystemStatusChip(
             icon = Icons.Default.BatteryChargingFull,
-            title = stringResource(R.string.home_health_battery),
-            value = stringResource(
-                if (batteryOptimized) R.string.home_health_battery_on
-                else R.string.home_health_battery_ok
+            title = L10n.get(Strings.home_health_battery),
+            value = L10n.get(if (batteryOptimized) Strings.home_health_battery_on
+                else Strings.home_health_battery_ok
             ),
             ok = !batteryOptimized,
-            onClick = { requestIgnoreBatteryOptimizations(context) },
+            onClick = {
+                    if (batteryOptimized) platform.requestIgnoreBatteryOptimizations()
+                    else platform.openBatterySettings()
+                },
             modifier = Modifier
                 .weight(1f)
                 .testTag("home_status_battery"),
@@ -369,56 +328,6 @@ private fun SystemStatusChip(
     }
 }
 
-private fun notificationsEnabled(context: Context): Boolean =
-    NotificationManagerCompat.from(context).areNotificationsEnabled()
-
-private fun openNotificationSettings(context: Context) {
-    val intent = Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS)
-        .putExtra(Settings.EXTRA_APP_PACKAGE, context.packageName)
-    runCatching { context.startActivity(intent) }
-}
-
-/**
- * Battery-optimization exemption. MIUI keeps its own no-restrict list and
- * never syncs it to the AOSP deviceidle whitelist, so
- * [PowerManager.isIgnoringBatteryOptimizations] reports false even after the
- * user picks "Không hạn chế"; [MIUI_NO_RESTRICT_APPS] is that list.
- */
-private fun isIgnoringBatteryOptimizations(context: Context): Boolean {
-    val power = context.getSystemService(PowerManager::class.java)
-    if (power?.isIgnoringBatteryOptimizations(context.packageName) == true) return true
-    if (!Build.MANUFACTURER.equals("xiaomi", ignoreCase = true)) return false
-    val listed = runCatching {
-        Settings.System.getString(context.contentResolver, MIUI_NO_RESTRICT_APPS)
-    }.getOrNull() ?: return false
-    return listed.split(',').any { it.trim() == context.packageName }
-}
-
-private const val MIUI_NO_RESTRICT_APPS = "MILLET_NO_RESTRICT_APP"
-
-private fun requestIgnoreBatteryOptimizations(context: Context) {
-    val exempt = isIgnoringBatteryOptimizations(context)
-    // MIUI routes the request straight to its PowerDetailActivity, which is
-    // also the only screen that can undo a "Không hạn chế" choice.
-    val xiaomi = Build.MANUFACTURER.equals("xiaomi", ignoreCase = true)
-    if (exempt && !xiaomi) {
-        // Already exempt: the system list is where the user could undo it.
-        runCatching {
-            context.startActivity(Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS))
-        }
-        return
-    }
-    val direct = Intent(
-        Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS,
-        Uri.parse("package:${context.packageName}"),
-    )
-    // OEMs that do not implement the direct request fall back to the list.
-    if (runCatching { context.startActivity(direct) }.isFailure) {
-        runCatching {
-            context.startActivity(Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS))
-        }
-    }
-}
 
 /**
  * Shown while Android's Private DNS is on. The core stops resetting port 853
@@ -445,7 +354,7 @@ private fun PrivateDnsWarningCard(onOpenSettings: () -> Unit) {
                 )
                 Spacer(modifier = Modifier.width(8.dp))
                 Text(
-                    text = stringResource(R.string.home_private_dns_title),
+                    text = L10n.get(Strings.home_private_dns_title),
                     fontSize = 13.sp,
                     fontWeight = FontWeight.Bold,
                     color = AdGuardTextPrimary,
@@ -453,7 +362,7 @@ private fun PrivateDnsWarningCard(onOpenSettings: () -> Unit) {
             }
             Spacer(modifier = Modifier.height(6.dp))
             Text(
-                text = stringResource(R.string.home_private_dns_body),
+                text = L10n.get(Strings.home_private_dns_body),
                 fontSize = 11.sp,
                 color = AdGuardTextSecondary,
             )
@@ -462,7 +371,7 @@ private fun PrivateDnsWarningCard(onOpenSettings: () -> Unit) {
                 onClick = onOpenSettings,
                 shape = RoundedCornerShape(8.dp),
             ) {
-                Text(stringResource(R.string.home_private_dns_open), fontSize = 11.sp)
+                Text(L10n.get(Strings.home_private_dns_open), fontSize = 11.sp)
             }
         }
     }
@@ -496,7 +405,7 @@ private fun QuickModuleRow(
     ) {
         QuickModuleToggle(
             icon = Icons.Default.Block,
-            label = stringResource(R.string.home_quick_ads),
+            label = L10n.get(Strings.home_quick_ads),
             active = adBlocking,
             accent = AdGuardGreenPrimary,
             onClick = onAdBlocking,
@@ -504,7 +413,7 @@ private fun QuickModuleRow(
         )
         QuickModuleToggle(
             icon = Icons.Default.TrackChanges,
-            label = stringResource(R.string.home_quick_tracking),
+            label = L10n.get(Strings.home_quick_tracking),
             active = tracking,
             accent = AdGuardOrangeWarning,
             onClick = onTracking,
@@ -512,7 +421,7 @@ private fun QuickModuleRow(
         )
         QuickModuleToggle(
             icon = Icons.Default.Dns,
-            label = stringResource(R.string.home_quick_dns),
+            label = L10n.get(Strings.home_quick_dns),
             active = dns,
             accent = AdGuardBlueDns,
             onClick = onDns,
@@ -520,7 +429,7 @@ private fun QuickModuleRow(
         )
         QuickModuleToggle(
             icon = Icons.Default.Lock,
-            label = stringResource(R.string.home_quick_https),
+            label = L10n.get(Strings.home_quick_https),
             active = https,
             accent = Color(0xFFB48CFF),
             onClick = onHttps,
@@ -528,7 +437,7 @@ private fun QuickModuleRow(
         )
         QuickModuleToggle(
             icon = Icons.Default.Shield,
-            label = stringResource(R.string.home_quick_firewall),
+            label = L10n.get(Strings.home_quick_firewall),
             active = firewall,
             accent = AdGuardGreenPrimary,
             onClick = onFirewall,
@@ -536,7 +445,7 @@ private fun QuickModuleRow(
         )
         QuickModuleToggle(
             icon = Icons.Default.BatteryChargingFull,
-            label = stringResource(R.string.home_quick_eco),
+            label = L10n.get(Strings.home_quick_eco),
             active = eco,
             accent = AdGuardGreenLight,
             onClick = onEco,
@@ -652,7 +561,7 @@ fun AdGuardShieldHero(
             ) {
                 Icon(
                     imageVector = Icons.Default.PowerSettingsNew,
-                    contentDescription = stringResource(R.string.home_shield_toggle),
+                    contentDescription = L10n.get(Strings.home_shield_toggle),
                     tint = if (isActive) Color.Black else Color(0xFF8B9DAF),
                     modifier = Modifier.size(44.dp)
                 )
@@ -662,8 +571,8 @@ fun AdGuardShieldHero(
         Spacer(modifier = Modifier.height(10.dp))
 
         Text(
-            text = if (isActive) stringResource(R.string.home_shield_protected)
-            else stringResource(R.string.home_shield_off),
+            text = if (isActive) L10n.get(Strings.home_shield_protected)
+            else L10n.get(Strings.home_shield_off),
             fontSize = 15.sp,
             fontWeight = FontWeight.SemiBold,
             color = if (isActive) AdGuardGreenLight else AdGuardTextMuted
@@ -685,7 +594,7 @@ private fun StatsGrid(
             horizontalArrangement = Arrangement.spacedBy(10.dp)
         ) {
             StatCard(
-                title = stringResource(R.string.home_stat_ads),
+                title = L10n.get(Strings.home_stat_ads),
                 value = stats.adsBlocked.toString(),
                 icon = Icons.Default.Block,
                 accentColor = AdGuardGreenPrimary,
@@ -693,7 +602,7 @@ private fun StatsGrid(
                 modifier = Modifier.weight(1f)
             )
             StatCard(
-                title = stringResource(R.string.home_stat_trackers),
+                title = L10n.get(Strings.home_stat_trackers),
                 value = stats.trackersBlocked.toString(),
                 icon = Icons.Default.TrackChanges,
                 accentColor = AdGuardOrangeWarning,
@@ -709,17 +618,16 @@ private fun StatsGrid(
             horizontalArrangement = Arrangement.spacedBy(10.dp)
         ) {
             StatCard(
-                title = stringResource(R.string.home_stat_data),
-                value = stringResource(R.string.home_stat_data_value, dataMb),
+                title = L10n.get(Strings.home_stat_data),
+                value = L10n.format(Strings.home_stat_data_value, dataMb),
                 icon = Icons.Default.CloudDownload,
                 accentColor = AdGuardBlueDns,
                 onClick = onCardClick,
                 modifier = Modifier.weight(1f)
             )
             StatCard(
-                title = stringResource(R.string.home_stat_battery),
-                value = stringResource(
-                    R.string.home_stat_battery_value,
+                title = L10n.get(Strings.home_stat_battery),
+                value = L10n.format(Strings.home_stat_battery_value,
                     stats.estimatedBatterySavedPercent,
                 ),
                 icon = Icons.Default.BatteryChargingFull,

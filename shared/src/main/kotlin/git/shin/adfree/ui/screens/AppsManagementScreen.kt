@@ -1,5 +1,7 @@
 package git.shin.adfree.ui.screens
 
+import git.shin.adfree.l10n.L10n
+import git.shin.adfree.l10n.Strings
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -68,13 +70,11 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.testTag
-import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import git.shin.adfree.R
 import git.shin.adfree.model.AppCategory
 import git.shin.adfree.model.AppCategoryFilter
 import git.shin.adfree.model.AppFirewallRule
@@ -104,14 +104,14 @@ import git.shin.adfree.ui.theme.AdGuardTextSecondary
 private enum class AppSort { NAME, BLOCKED, SAVED, ADS, TRACKERS, REQUESTS }
 
 /** Chip code (null = all) paired with its label. */
-private val appCategoryChips: List<Pair<String?, Int>> = listOf(
-    null to R.string.apps_cat_all,
-    AppCategoryFilter.BLOCKED to R.string.apps_cat_blocked,
-    AppCategoryFilter.FILTERED to R.string.apps_cat_filtered,
-    AppCategoryFilter.UNFILTERED to R.string.apps_cat_unfiltered,
-    AppCategory.BROWSER to R.string.apps_cat_browser,
-    AppCategory.SOCIAL to R.string.apps_cat_social,
-    AppCategory.VIDEO to R.string.apps_cat_media,
+private val appCategoryChips: List<Pair<String?, String>> = listOf(
+    null to Strings.apps_cat_all,
+    AppCategoryFilter.BLOCKED to Strings.apps_cat_blocked,
+    AppCategoryFilter.FILTERED to Strings.apps_cat_filtered,
+    AppCategoryFilter.UNFILTERED to Strings.apps_cat_unfiltered,
+    AppCategory.BROWSER to Strings.apps_cat_browser,
+    AppCategory.SOCIAL to Strings.apps_cat_social,
+    AppCategory.VIDEO to Strings.apps_cat_media,
 )
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -130,23 +130,23 @@ fun AppsManagementScreen(
     var appSort by rememberSaveable { mutableStateOf(AppSort.NAME) }
     var showFilterSheet by rememberSaveable { mutableStateOf(false) }
     val rangeLabelRes = when (usageRange) {
-        AppUsageRange.TODAY -> R.string.apps_range_today
-        AppUsageRange.WEEK -> R.string.apps_range_week
-        AppUsageRange.MONTH -> R.string.apps_range_month
-        AppUsageRange.ALL -> R.string.apps_range_all
+        AppUsageRange.TODAY -> Strings.apps_range_today
+        AppUsageRange.WEEK -> Strings.apps_range_week
+        AppUsageRange.MONTH -> Strings.apps_range_month
+        AppUsageRange.ALL -> Strings.apps_range_all
     }
     val transportLabelRes = when (usageTransport) {
-        AppUsageTransport.ALL -> R.string.apps_transport_all
-        AppUsageTransport.CELLULAR -> R.string.apps_transport_cellular
-        AppUsageTransport.WIFI -> R.string.apps_transport_wifi
+        AppUsageTransport.ALL -> Strings.apps_transport_all
+        AppUsageTransport.CELLULAR -> Strings.apps_transport_cellular
+        AppUsageTransport.WIFI -> Strings.apps_transport_wifi
     }
     val sortLabelRes = when (appSort) {
-        AppSort.NAME -> R.string.apps_sort_name
-        AppSort.BLOCKED -> R.string.apps_sort_blocked
-        AppSort.SAVED -> R.string.apps_sort_saved
-        AppSort.ADS -> R.string.apps_sort_ads
-        AppSort.TRACKERS -> R.string.apps_sort_trackers
-        AppSort.REQUESTS -> R.string.apps_sort_requests
+        AppSort.NAME -> Strings.apps_sort_name
+        AppSort.BLOCKED -> Strings.apps_sort_blocked
+        AppSort.SAVED -> Strings.apps_sort_saved
+        AppSort.ADS -> Strings.apps_sort_ads
+        AppSort.TRACKERS -> Strings.apps_sort_trackers
+        AppSort.REQUESTS -> Strings.apps_sort_requests
     }
     val sortedApps = remember(state.appFirewallRules, appSort) {
         when (appSort) {
@@ -173,16 +173,16 @@ fun AppsManagementScreen(
         ) {
             Column {
                 Text(
-                    text = stringResource(R.string.apps_title),
+                    text = L10n.get(Strings.apps_title),
                     fontSize = 19.sp,
                     fontWeight = FontWeight.Bold,
                     color = AdGuardTextPrimary
                 )
                 Text(
                     text = if (state.settings.isFirewallEnabled) {
-                        stringResource(R.string.apps_subtitle, state.appFirewallRules.size)
+                        L10n.format(Strings.apps_subtitle, state.appFirewallRules.size)
                     } else {
-                        stringResource(R.string.apps_firewall_off)
+                        L10n.get(Strings.apps_firewall_off)
                     },
                     fontSize = 12.sp,
                     color = if (state.settings.isFirewallEnabled) AdGuardTextMuted else AdGuardOrangeWarning
@@ -196,12 +196,12 @@ fun AppsManagementScreen(
         OutlinedTextField(
             value = state.appSearchQuery,
             onValueChange = { viewModel.onIntent(AdGuardIntent.AppSearchQueryChanged(it)) },
-            placeholder = { Text(stringResource(R.string.apps_search_hint), color = AdGuardTextMuted, fontSize = 13.sp) },
+            placeholder = { Text(L10n.get(Strings.apps_search_hint), color = AdGuardTextMuted, fontSize = 13.sp) },
             leadingIcon = { Icon(Icons.Default.Search, contentDescription = null, tint = AdGuardTextMuted) },
             trailingIcon = {
                 if (state.appSearchQuery.isNotEmpty()) {
                     IconButton(onClick = { viewModel.onIntent(AdGuardIntent.AppSearchQueryChanged("")) }) {
-                        Icon(Icons.Default.Clear, contentDescription = stringResource(R.string.common_clear_search), tint = AdGuardTextMuted)
+                        Icon(Icons.Default.Clear, contentDescription = L10n.get(Strings.common_clear_search), tint = AdGuardTextMuted)
                     }
                 }
             },
@@ -238,7 +238,7 @@ fun AppsManagementScreen(
                     onClick = {
                         viewModel.onIntent(AdGuardIntent.AppCategoryFilterChanged(code))
                     },
-                    label = { Text(stringResource(labelRes), fontSize = 11.sp) },
+                    label = { Text(L10n.get(labelRes), fontSize = 11.sp) },
                     colors = FilterChipDefaults.filterChipColors(
                         selectedContainerColor = AdGuardGreenPrimary,
                         selectedLabelColor = AdGuardOnAccent,
@@ -271,16 +271,16 @@ fun AppsManagementScreen(
             )
             Spacer(modifier = Modifier.width(8.dp))
             Text(
-                text = stringResource(R.string.apps_filter_sheet_button),
+                text = L10n.get(Strings.apps_filter_sheet_button),
                 fontSize = 12.sp,
                 fontWeight = FontWeight.Bold,
                 color = AdGuardTextPrimary
             )
             Spacer(modifier = Modifier.width(10.dp))
             Text(
-                text = stringResource(rangeLabelRes) + " • " +
-                    stringResource(transportLabelRes) + " • " +
-                    stringResource(sortLabelRes),
+                text = L10n.get(rangeLabelRes) + " • " +
+                    L10n.get(transportLabelRes) + " • " +
+                    L10n.get(sortLabelRes),
                 fontSize = 11.sp,
                 color = AdGuardTextMuted,
                 maxLines = 1,
@@ -317,21 +317,21 @@ fun AppsManagementScreen(
                             Row(verticalAlignment = Alignment.CenterVertically) {
                                 Icon(Icons.Default.CellTower, contentDescription = null, tint = AdGuardGreenLight, modifier = Modifier.size(14.dp))
                                 Spacer(modifier = Modifier.width(4.dp))
-                                Text(stringResource(R.string.apps_legend_cellular), fontSize = 11.sp, color = AdGuardTextSecondary)
+                                Text(L10n.get(Strings.apps_legend_cellular), fontSize = 11.sp, color = AdGuardTextSecondary)
                             }
                             Row(verticalAlignment = Alignment.CenterVertically) {
                                 Icon(Icons.Default.Wifi, contentDescription = null, tint = AdGuardGreenLight, modifier = Modifier.size(14.dp))
                                 Spacer(modifier = Modifier.width(4.dp))
-                                Text(stringResource(R.string.apps_legend_wifi), fontSize = 11.sp, color = AdGuardTextSecondary)
+                                Text(L10n.get(Strings.apps_legend_wifi), fontSize = 11.sp, color = AdGuardTextSecondary)
                             }
                             Row(verticalAlignment = Alignment.CenterVertically) {
                                 Icon(Icons.Default.Shield, contentDescription = null, tint = AdGuardGreenPrimary, modifier = Modifier.size(14.dp))
                                 Spacer(modifier = Modifier.width(4.dp))
-                                Text(stringResource(R.string.apps_legend_filter), fontSize = 11.sp, color = AdGuardTextSecondary)
+                                Text(L10n.get(Strings.apps_legend_filter), fontSize = 11.sp, color = AdGuardTextSecondary)
                             }
                         }
                         Text(
-                            stringResource(R.string.apps_legend_tap),
+                            L10n.get(Strings.apps_legend_tap),
                             fontSize = 10.sp,
                             color = AdGuardTextMuted,
                             modifier = Modifier
@@ -437,7 +437,7 @@ fun AppsManagementScreen(
                     .testTag("app_filter_sheet")
             ) {
                 Text(
-                    text = stringResource(R.string.apps_filter_sheet_title),
+                    text = L10n.get(Strings.apps_filter_sheet_title),
                     fontSize = 15.sp,
                     fontWeight = FontWeight.Bold,
                     color = AdGuardTextPrimary
@@ -446,7 +446,7 @@ fun AppsManagementScreen(
                 Spacer(modifier = Modifier.height(12.dp))
 
                 Text(
-                    text = stringResource(R.string.apps_sheet_range_title),
+                    text = L10n.get(Strings.apps_sheet_range_title),
                     fontSize = 12.sp,
                     fontWeight = FontWeight.Bold,
                     color = AdGuardTextSecondary
@@ -459,10 +459,10 @@ fun AppsManagementScreen(
                     horizontalArrangement = Arrangement.spacedBy(6.dp)
                 ) {
                     listOf(
-                        AppUsageRange.TODAY to R.string.apps_range_today,
-                        AppUsageRange.WEEK to R.string.apps_range_week,
-                        AppUsageRange.MONTH to R.string.apps_range_month,
-                        AppUsageRange.ALL to R.string.apps_range_all,
+                        AppUsageRange.TODAY to Strings.apps_range_today,
+                        AppUsageRange.WEEK to Strings.apps_range_week,
+                        AppUsageRange.MONTH to Strings.apps_range_month,
+                        AppUsageRange.ALL to Strings.apps_range_all,
                     ).forEach { (range, labelRes) ->
                         FilterChip(
                             selected = usageRange == range,
@@ -470,7 +470,7 @@ fun AppsManagementScreen(
                                 usageRange = range
                                 viewModel.onIntent(AdGuardIntent.SetAppUsageRange(range))
                             },
-                            label = { Text(stringResource(labelRes), fontSize = 11.sp) },
+                            label = { Text(L10n.get(labelRes), fontSize = 11.sp) },
                             colors = FilterChipDefaults.filterChipColors(
                                 selectedContainerColor = AdGuardBlueDns,
                                 selectedLabelColor = AdGuardOnAccent,
@@ -485,7 +485,7 @@ fun AppsManagementScreen(
 
                 // AdGuard's statistics header splits the same window by network.
                 Text(
-                    text = stringResource(R.string.apps_sheet_transport_title),
+                    text = L10n.get(Strings.apps_sheet_transport_title),
                     fontSize = 12.sp,
                     fontWeight = FontWeight.Bold,
                     color = AdGuardTextSecondary
@@ -498,9 +498,9 @@ fun AppsManagementScreen(
                     horizontalArrangement = Arrangement.spacedBy(6.dp)
                 ) {
                     listOf(
-                        AppUsageTransport.ALL to R.string.apps_transport_all,
-                        AppUsageTransport.CELLULAR to R.string.apps_transport_cellular,
-                        AppUsageTransport.WIFI to R.string.apps_transport_wifi,
+                        AppUsageTransport.ALL to Strings.apps_transport_all,
+                        AppUsageTransport.CELLULAR to Strings.apps_transport_cellular,
+                        AppUsageTransport.WIFI to Strings.apps_transport_wifi,
                     ).forEach { (transport, labelRes) ->
                         FilterChip(
                             selected = usageTransport == transport,
@@ -508,7 +508,7 @@ fun AppsManagementScreen(
                                 usageTransport = transport
                                 viewModel.onIntent(AdGuardIntent.SetAppUsageTransport(transport))
                             },
-                            label = { Text(stringResource(labelRes), fontSize = 11.sp) },
+                            label = { Text(L10n.get(labelRes), fontSize = 11.sp) },
                             colors = FilterChipDefaults.filterChipColors(
                                 selectedContainerColor = AdGuardGreenPrimary,
                                 selectedLabelColor = AdGuardOnAccent,
@@ -522,7 +522,7 @@ fun AppsManagementScreen(
                 Spacer(modifier = Modifier.height(12.dp))
 
                 Text(
-                    text = stringResource(R.string.apps_sheet_sort_title),
+                    text = L10n.get(Strings.apps_sheet_sort_title),
                     fontSize = 12.sp,
                     fontWeight = FontWeight.Bold,
                     color = AdGuardTextSecondary
@@ -535,17 +535,17 @@ fun AppsManagementScreen(
                     horizontalArrangement = Arrangement.spacedBy(6.dp)
                 ) {
                     listOf(
-                        AppSort.NAME to R.string.apps_sort_name,
-                        AppSort.BLOCKED to R.string.apps_sort_blocked,
-                        AppSort.SAVED to R.string.apps_sort_saved,
-                        AppSort.ADS to R.string.apps_sort_ads,
-                        AppSort.TRACKERS to R.string.apps_sort_trackers,
-                        AppSort.REQUESTS to R.string.apps_sort_requests,
+                        AppSort.NAME to Strings.apps_sort_name,
+                        AppSort.BLOCKED to Strings.apps_sort_blocked,
+                        AppSort.SAVED to Strings.apps_sort_saved,
+                        AppSort.ADS to Strings.apps_sort_ads,
+                        AppSort.TRACKERS to Strings.apps_sort_trackers,
+                        AppSort.REQUESTS to Strings.apps_sort_requests,
                     ).forEach { (sort, labelRes) ->
                         FilterChip(
                             selected = appSort == sort,
                             onClick = { appSort = sort },
-                            label = { Text(stringResource(labelRes), fontSize = 11.sp) },
+                            label = { Text(L10n.get(labelRes), fontSize = 11.sp) },
                             colors = FilterChipDefaults.filterChipColors(
                                 selectedContainerColor = AdGuardPurpleAI,
                                 selectedLabelColor = AdGuardOnAccent,
@@ -634,8 +634,7 @@ fun AppFirewallCard(
                     )
                     Spacer(modifier = Modifier.height(2.dp))
                     Text(
-                        text = stringResource(
-                            R.string.apps_card_meta,
+                        text = L10n.format(Strings.apps_card_meta,
                             app.blockedRequestsToday,
                             app.dataTransferredBytes / (1024 * 1024)
                         ),
@@ -648,8 +647,7 @@ fun AppFirewallCard(
                     if (app.requestsToday > 0) {
                         Spacer(modifier = Modifier.height(2.dp))
                         Text(
-                            text = stringResource(
-                                R.string.apps_card_breakdown,
+                            text = L10n.format(Strings.apps_card_breakdown,
                                 app.blockedAdsToday,
                                 app.blockedTrackersToday,
                                 app.requestsToday,
@@ -666,8 +664,7 @@ fun AppFirewallCard(
 
                 AppQuickAction(
                     icon = Icons.Default.Shield,
-                    description = stringResource(
-                        if (app.isFilterRouted) R.string.apps_action_filter_off else R.string.apps_action_filter_on,
+                    description = L10n.format(if (app.isFilterRouted) Strings.apps_action_filter_off else Strings.apps_action_filter_on,
                         app.appName
                     ),
                     tint = if (app.isFilterRouted) AdGuardGreenPrimary else AdGuardOrangeWarning,
@@ -690,7 +687,7 @@ fun AppFirewallCard(
             ) {
                 AppQuickAction(
                     icon = Icons.Default.FilterList,
-                    description = stringResource(R.string.apps_action_logs, app.appName),
+                    description = L10n.format(Strings.apps_action_logs, app.appName),
                     tint = AdGuardGreenLight,
                     background = AdGuardDarkSurfaceVariant,
                     onClick = onViewLogs,
@@ -701,7 +698,7 @@ fun AppFirewallCard(
                 )
                 AppQuickAction(
                     icon = Icons.Default.CellTower,
-                    description = stringResource(R.string.apps_action_cellular),
+                    description = L10n.get(Strings.apps_action_cellular),
                     tint = if (app.cellularAccess != FirewallAccess.BLOCK) AdGuardGreenLight else AdGuardRedBlocked,
                     background = if (app.cellularAccess != FirewallAccess.BLOCK) Color(0x2200D06C) else Color(0x22FF435A),
                     onClick = onToggleCellular,
@@ -712,7 +709,7 @@ fun AppFirewallCard(
                 )
                 AppQuickAction(
                     icon = Icons.Default.Wifi,
-                    description = stringResource(R.string.apps_action_wifi),
+                    description = L10n.get(Strings.apps_action_wifi),
                     tint = if (app.wifiAccess != FirewallAccess.BLOCK) AdGuardGreenLight else AdGuardRedBlocked,
                     background = if (app.wifiAccess != FirewallAccess.BLOCK) Color(0x2200D06C) else Color(0x22FF435A),
                     onClick = onToggleWifi,
@@ -744,16 +741,16 @@ private fun formatTraffic(bytes: Long): String {
 /** Localized label for the stable category code stored on a rule. */
 @Composable
 private fun appCategoryLabel(code: String): String = when (code) {
-    AppCategory.BROWSER -> stringResource(R.string.apps_category_browser)
-    AppCategory.GAME -> stringResource(R.string.apps_category_game)
-    AppCategory.SOCIAL -> stringResource(R.string.apps_category_social)
-    AppCategory.VIDEO -> stringResource(R.string.apps_category_video)
-    AppCategory.AUDIO -> stringResource(R.string.apps_category_audio)
-    AppCategory.NEWS -> stringResource(R.string.apps_category_news)
-    AppCategory.MAPS -> stringResource(R.string.apps_category_maps)
-    AppCategory.PRODUCTIVITY -> stringResource(R.string.apps_category_productivity)
-    AppCategory.IMAGE -> stringResource(R.string.apps_category_image)
-    else -> stringResource(R.string.apps_category_other)
+    AppCategory.BROWSER -> L10n.get(Strings.apps_category_browser)
+    AppCategory.GAME -> L10n.get(Strings.apps_category_game)
+    AppCategory.SOCIAL -> L10n.get(Strings.apps_category_social)
+    AppCategory.VIDEO -> L10n.get(Strings.apps_category_video)
+    AppCategory.AUDIO -> L10n.get(Strings.apps_category_audio)
+    AppCategory.NEWS -> L10n.get(Strings.apps_category_news)
+    AppCategory.MAPS -> L10n.get(Strings.apps_category_maps)
+    AppCategory.PRODUCTIVITY -> L10n.get(Strings.apps_category_productivity)
+    AppCategory.IMAGE -> L10n.get(Strings.apps_category_image)
+    else -> L10n.get(Strings.apps_category_other)
 }
 
 /** One compact, centre-aligned icon button of an app row. */
@@ -850,7 +847,7 @@ private fun AppDetailsFirewallSheet(
             }
 
             IconButton(onClick = onClose) {
-                Icon(Icons.Default.Close, contentDescription = stringResource(R.string.apps_detail_close), tint = AdGuardTextSecondary)
+                Icon(Icons.Default.Close, contentDescription = L10n.get(Strings.apps_detail_close), tint = AdGuardTextSecondary)
             }
         }
 
@@ -876,14 +873,13 @@ private fun AppDetailsFirewallSheet(
             ) {
                 Column(modifier = Modifier.weight(1f)) {
                     Text(
-                        text = stringResource(R.string.apps_detail_protect_title),
+                        text = L10n.get(Strings.apps_detail_protect_title),
                         fontSize = 14.sp,
                         fontWeight = FontWeight.Bold,
                         color = AdGuardTextPrimary
                     )
                     Text(
-                        text = stringResource(
-                            if (app.isFilterRouted) R.string.apps_detail_protect_on else R.string.apps_detail_protect_off
+                        text = L10n.get(if (app.isFilterRouted) Strings.apps_detail_protect_on else Strings.apps_detail_protect_off
                         ),
                         fontSize = 11.sp,
                         color = if (app.isFilterRouted) AdGuardGreenLight else AdGuardOrangeWarning
@@ -918,20 +914,20 @@ private fun AppDetailsFirewallSheet(
                 Icon(Icons.Default.PowerSettingsNew, contentDescription = null, modifier = Modifier.size(16.dp))
                 Spacer(modifier = Modifier.width(8.dp))
                 Text(
-                    text = stringResource(R.string.apps_detail_restart_vpn),
+                    text = L10n.get(Strings.apps_detail_restart_vpn),
                     fontSize = 12.sp,
                     fontWeight = FontWeight.SemiBold
                 )
             }
             Spacer(modifier = Modifier.height(4.dp))
             Text(
-                text = stringResource(R.string.apps_detail_vpn_running),
+                text = L10n.get(Strings.apps_detail_vpn_running),
                 fontSize = 11.sp,
                 color = AdGuardTextMuted
             )
         } else {
             Text(
-                text = stringResource(R.string.apps_detail_vpn_next),
+                text = L10n.get(Strings.apps_detail_vpn_next),
                 fontSize = 11.sp,
                 color = AdGuardTextMuted
             )
@@ -941,14 +937,13 @@ private fun AppDetailsFirewallSheet(
 
         // The only per-app switch with a live effect on the tunnel today.
         Text(
-            text = stringResource(R.string.apps_detail_https_header),
+            text = L10n.get(Strings.apps_detail_https_header),
             fontSize = 11.sp,
             fontWeight = FontWeight.Bold,
             color = AdGuardTextMuted,
         )
         Text(
-            text = stringResource(
-                if (httpsFilteringEnabled) R.string.apps_detail_https_on else R.string.apps_detail_https_off
+            text = L10n.get(if (httpsFilteringEnabled) Strings.apps_detail_https_on else Strings.apps_detail_https_off
             ),
             fontSize = 11.sp,
             color = if (httpsFilteringEnabled) AdGuardTextMuted else AdGuardOrangeWarning,
@@ -969,14 +964,13 @@ private fun AppDetailsFirewallSheet(
             ) {
                 Column(modifier = Modifier.weight(1f)) {
                     Text(
-                        text = stringResource(R.string.apps_detail_decrypt_title),
+                        text = L10n.get(Strings.apps_detail_decrypt_title),
                         fontSize = 13.sp,
                         fontWeight = FontWeight.SemiBold,
                         color = AdGuardTextPrimary
                     )
                     Text(
-                        text = stringResource(
-                            if (app.isHttpsFiltered) R.string.apps_detail_decrypt_on else R.string.apps_detail_decrypt_off
+                        text = L10n.get(if (app.isHttpsFiltered) Strings.apps_detail_decrypt_on else Strings.apps_detail_decrypt_off
                         ),
                         fontSize = 11.sp,
                         color = if (app.isHttpsFiltered) AdGuardTextSecondary else AdGuardOrangeWarning
@@ -1002,7 +996,7 @@ private fun AppDetailsFirewallSheet(
 
         // Section: SOCKS5 routing. Mirrors AdGuard's per-app proxy rule.
         Text(
-            text = stringResource(R.string.apps_detail_proxy_header),
+            text = L10n.get(Strings.apps_detail_proxy_header),
             fontSize = 11.sp,
             fontWeight = FontWeight.Bold,
             color = AdGuardTextMuted,
@@ -1016,9 +1010,8 @@ private fun AppDetailsFirewallSheet(
         ) {
             Column(modifier = Modifier.padding(14.dp)) {
                 ProxyAccessRow(
-                    subtitle = stringResource(
-                        if (proxyEnabled) R.string.apps_detail_proxy_on
-                        else R.string.apps_detail_proxy_off
+                    subtitle = L10n.get(if (proxyEnabled) Strings.apps_detail_proxy_on
+                        else Strings.apps_detail_proxy_off
                     ),
                     access = app.proxyAccess,
                     onSelect = {
@@ -1032,13 +1025,13 @@ private fun AppDetailsFirewallSheet(
 
         // Section: Firewall Rules
         Text(
-            text = stringResource(R.string.apps_detail_firewall_header),
+            text = L10n.get(Strings.apps_detail_firewall_header),
             fontSize = 11.sp,
             fontWeight = FontWeight.Bold,
             color = AdGuardTextMuted,
         )
         Text(
-            text = stringResource(R.string.apps_detail_firewall_body),
+            text = L10n.get(Strings.apps_detail_firewall_body),
             fontSize = 11.sp,
             color = AdGuardOrangeWarning,
         )
@@ -1052,8 +1045,8 @@ private fun AppDetailsFirewallSheet(
         ) {
             Column(modifier = Modifier.padding(14.dp)) {
                 FirewallAccessRow(
-                    title = stringResource(R.string.firewall_rule_wifi),
-                    subtitle = stringResource(R.string.firewall_rule_wifi_body),
+                    title = L10n.get(Strings.firewall_rule_wifi),
+                    subtitle = L10n.get(Strings.firewall_rule_wifi_body),
                     access = app.wifiAccess,
                     onSelect = { onUpdate(FirewallSheetUpdate(app.packageName, wifi = it)) },
                 )
@@ -1061,8 +1054,8 @@ private fun AppDetailsFirewallSheet(
                 Spacer(modifier = Modifier.height(14.dp))
 
                 FirewallAccessRow(
-                    title = stringResource(R.string.firewall_rule_wifi_screen_off),
-                    subtitle = stringResource(R.string.firewall_rule_screen_off_body),
+                    title = L10n.get(Strings.firewall_rule_wifi_screen_off),
+                    subtitle = L10n.get(Strings.firewall_rule_screen_off_body),
                     access = app.wifiScreenOffAccess,
                     onSelect = {
                         onUpdate(FirewallSheetUpdate(app.packageName, wifiScreenOff = it))
@@ -1072,8 +1065,8 @@ private fun AppDetailsFirewallSheet(
                 Spacer(modifier = Modifier.height(14.dp))
 
                 FirewallAccessRow(
-                    title = stringResource(R.string.firewall_rule_cellular),
-                    subtitle = stringResource(R.string.firewall_rule_cellular_body),
+                    title = L10n.get(Strings.firewall_rule_cellular),
+                    subtitle = L10n.get(Strings.firewall_rule_cellular_body),
                     access = app.cellularAccess,
                     onSelect = { onUpdate(FirewallSheetUpdate(app.packageName, cellular = it)) },
                 )
@@ -1081,8 +1074,8 @@ private fun AppDetailsFirewallSheet(
                 Spacer(modifier = Modifier.height(14.dp))
 
                 FirewallAccessRow(
-                    title = stringResource(R.string.firewall_rule_cellular_screen_off),
-                    subtitle = stringResource(R.string.firewall_rule_screen_off_body),
+                    title = L10n.get(Strings.firewall_rule_cellular_screen_off),
+                    subtitle = L10n.get(Strings.firewall_rule_screen_off_body),
                     access = app.cellularScreenOffAccess,
                     onSelect = {
                         onUpdate(FirewallSheetUpdate(app.packageName, cellularScreenOff = it))
@@ -1092,8 +1085,8 @@ private fun AppDetailsFirewallSheet(
                 Spacer(modifier = Modifier.height(14.dp))
 
                 FirewallAccessRow(
-                    title = stringResource(R.string.firewall_rule_roaming),
-                    subtitle = stringResource(R.string.firewall_rule_roaming_body),
+                    title = L10n.get(Strings.firewall_rule_roaming),
+                    subtitle = L10n.get(Strings.firewall_rule_roaming_body),
                     access = app.roamingAccess,
                     onSelect = { onUpdate(FirewallSheetUpdate(app.packageName, roaming = it)) },
                 )
@@ -1103,7 +1096,7 @@ private fun AppDetailsFirewallSheet(
         if (!app.isFilterRouted && app.hasNetworkRules) {
             Spacer(modifier = Modifier.height(10.dp))
             Text(
-                text = stringResource(R.string.apps_detail_bypass_warning),
+                text = L10n.get(Strings.apps_detail_bypass_warning),
                 fontSize = 11.sp,
                 color = AdGuardOrangeWarning,
             )
@@ -1124,10 +1117,10 @@ private fun AppDetailsFirewallSheet(
                     .padding(12.dp)
             ) {
                 Column {
-                    Text(stringResource(R.string.apps_detail_data_today), fontSize = 11.sp, color = AdGuardTextSecondary)
+                    Text(L10n.get(Strings.apps_detail_data_today), fontSize = 11.sp, color = AdGuardTextSecondary)
                     Spacer(modifier = Modifier.height(2.dp))
                     Text(
-                        stringResource(R.string.apps_detail_data_value, app.dataTransferredBytes / (1024 * 1024)),
+                        L10n.format(Strings.apps_detail_data_value, app.dataTransferredBytes / (1024 * 1024)),
                         fontSize = 16.sp,
                         fontWeight = FontWeight.Bold,
                         color = AdGuardTextPrimary
@@ -1143,7 +1136,7 @@ private fun AppDetailsFirewallSheet(
                     .padding(12.dp)
             ) {
                 Column {
-                    Text(stringResource(R.string.apps_detail_data_used), fontSize = 11.sp, color = AdGuardTextSecondary)
+                    Text(L10n.get(Strings.apps_detail_data_used), fontSize = 11.sp, color = AdGuardTextSecondary)
                     Spacer(modifier = Modifier.height(2.dp))
                     Text(
                         formatTraffic(app.dataUsedBytes),
@@ -1162,13 +1155,12 @@ private fun AppDetailsFirewallSheet(
                     .padding(12.dp)
             ) {
                 Column {
-                    Text(stringResource(R.string.apps_detail_blocked_queries), fontSize = 11.sp, color = AdGuardTextSecondary)
+                    Text(L10n.get(Strings.apps_detail_blocked_queries), fontSize = 11.sp, color = AdGuardTextSecondary)
                     Spacer(modifier = Modifier.height(2.dp))
                     Text("${app.blockedRequestsToday}", fontSize = 16.sp, fontWeight = FontWeight.Bold, color = AdGuardRedBlocked)
                     if (app.blockedRequestsToday > 0) {
                         Text(
-                            stringResource(
-                                R.string.apps_card_breakdown,
+                            L10n.format(Strings.apps_card_breakdown,
                                 app.blockedAdsToday,
                                 app.blockedTrackersToday,
                                 app.requestsToday,
@@ -1199,7 +1191,7 @@ private fun AppDetailsFirewallSheet(
             Icon(Icons.Default.FilterList, contentDescription = null, tint = AdGuardOnAccent)
             Spacer(modifier = Modifier.width(8.dp))
             Text(
-                text = stringResource(R.string.apps_detail_view_logs, app.appName),
+                text = L10n.format(Strings.apps_detail_view_logs, app.appName),
                 color = AdGuardOnAccent,
                 fontWeight = FontWeight.Bold,
                 fontSize = 13.sp
@@ -1216,7 +1208,7 @@ private fun AppDetailsFirewallSheet(
         if (appLogs.isNotEmpty()) {
             Spacer(modifier = Modifier.height(16.dp))
             Text(
-                text = stringResource(R.string.apps_detail_recent),
+                text = L10n.get(Strings.apps_detail_recent),
                 fontSize = 11.sp,
                 fontWeight = FontWeight.Bold,
                 color = AdGuardTextMuted
@@ -1263,9 +1255,8 @@ private fun AppDetailsFirewallSheet(
                                 .padding(horizontal = 6.dp, vertical = 2.dp)
                         ) {
                             Text(
-                                text = stringResource(
-                                    if (logItem.status == FilterStatus.BLOCKED) R.string.apps_log_status_blocked
-                                    else R.string.apps_log_status_allowed
+                                text = L10n.get(if (logItem.status == FilterStatus.BLOCKED) Strings.apps_log_status_blocked
+                                    else Strings.apps_log_status_allowed
                                 ),
                                 fontSize = 10.sp,
                                 fontWeight = FontWeight.Bold,
@@ -1301,7 +1292,7 @@ private fun AppDetailsFirewallSheet(
                 modifier = Modifier.weight(1f),
                 shape = RoundedCornerShape(8.dp)
             ) {
-                Text(stringResource(R.string.apps_preset_open), fontSize = 11.sp, color = AdGuardOrangeWarning)
+                Text(L10n.get(Strings.apps_preset_open), fontSize = 11.sp, color = AdGuardOrangeWarning)
             }
 
             Button(
@@ -1318,7 +1309,7 @@ private fun AppDetailsFirewallSheet(
                 colors = ButtonDefaults.buttonColors(containerColor = AdGuardDarkSurfaceVariant),
                 shape = RoundedCornerShape(8.dp)
             ) {
-                Text(stringResource(R.string.apps_preset_default), fontSize = 11.sp, color = AdGuardGreenLight, fontWeight = FontWeight.Bold)
+                Text(L10n.get(Strings.apps_preset_default), fontSize = 11.sp, color = AdGuardGreenLight, fontWeight = FontWeight.Bold)
             }
         }
 

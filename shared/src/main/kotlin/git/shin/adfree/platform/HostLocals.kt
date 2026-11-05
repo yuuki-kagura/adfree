@@ -2,7 +2,10 @@ package git.shin.adfree.platform
 
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.staticCompositionLocalOf
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -48,6 +51,40 @@ class BackRegistry {
 private val NO_BACK = BackRegistry()
 
 val LocalBackRegistry = staticCompositionLocalOf { NO_BACK }
+
+/**
+ * The seams screens reach for. A host that provides none of them gets the
+ * honest no-op answers instead of a crash: the UI stays renderable and every
+ * action reports that the platform cannot honour it.
+ */
+@Composable
+fun currentPlatformHost(): PlatformHost = LocalPlatformHost.current ?: NoopPlatformHost()
+
+@Composable
+fun currentFileHost(): FileHost = LocalFileHost.current ?: NoopFileHost()
+
+@Composable
+fun currentAppInventory(): AppInventory = LocalAppInventory.current ?: NoopAppInventory()
+
+/**
+ * Runs [block] each time the host reports a foreground resume, and never on
+ * first composition — the multiplatform stand-in for
+ * `LifecycleEventEffect(Lifecycle.Event.ON_RESUME)`.
+ */
+@Composable
+fun OnResumeTick(block: () -> Unit) {
+    val tick = LocalResumeTick.current
+    val latest by rememberUpdatedState(block)
+    LaunchedEffect(tick) {
+        var last = tick.value
+        tick.collect { value ->
+            if (value != last) {
+                last = value
+                latest()
+            }
+        }
+    }
+}
 
 /** The multiplatform replacement for `androidx.activity.compose.BackHandler`. */
 @Composable

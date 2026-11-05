@@ -1,5 +1,7 @@
 package git.shin.adfree.ui.screens
 
+import git.shin.adfree.l10n.L10n
+import git.shin.adfree.l10n.Strings
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
@@ -51,13 +53,11 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import git.shin.adfree.R
 import git.shin.adfree.model.DnsBackup
 import git.shin.adfree.model.DnsBackupMode
 import git.shin.adfree.model.DnsBlockMode
@@ -101,7 +101,7 @@ fun NetworkScreen(
         IconButton(onClick = onBack) {
             Icon(
                 imageVector = Icons.AutoMirrored.Filled.ArrowBack,
-                contentDescription = stringResource(R.string.hub_back),
+                contentDescription = L10n.get(Strings.hub_back),
                 tint = AdGuardTextPrimary,
             )
         }
@@ -115,14 +115,14 @@ fun NetworkScreen(
             ModuleDetailHero(
                 icon = Icons.Default.Dns,
                 tint = AdGuardBlueDns,
-                title = stringResource(R.string.network_title),
-                subtitle = stringResource(R.string.network_subtitle),
+                title = L10n.get(Strings.network_title),
+                subtitle = L10n.get(Strings.network_subtitle),
             )
 
             SettingsSwitch(
                 icon = Icons.Default.Dns,
-                title = stringResource(R.string.home_module_dns_title),
-                subtitle = stringResource(R.string.home_module_dns_subtitle),
+                title = L10n.get(Strings.home_module_dns_title),
+                subtitle = L10n.get(Strings.home_module_dns_subtitle),
                 checked = state.settings.isDnsProtectionEnabled,
                 onCheckedChange = { viewModel.onIntent(AdGuardIntent.ToggleDns) },
             )
@@ -154,7 +154,7 @@ fun NetworkScreen(
             Spacer(modifier = Modifier.height(18.dp))
 
             Text(
-                text = stringResource(R.string.settings_block_mode_title),
+                text = L10n.get(Strings.settings_block_mode_title),
                 fontSize = 12.sp,
                 fontWeight = FontWeight.Bold,
                 color = AdGuardTextSecondary,
@@ -183,8 +183,8 @@ fun NetworkScreen(
 
             SettingsSwitch(
                 icon = Icons.Default.Bolt,
-                title = stringResource(R.string.network_quic_title),
-                subtitle = stringResource(R.string.network_quic_subtitle),
+                title = L10n.get(Strings.network_quic_title),
+                subtitle = L10n.get(Strings.network_quic_subtitle),
                 checked = state.settings.blockQuic,
                 onCheckedChange = { viewModel.onIntent(AdGuardIntent.ToggleBlockQuic(it)) },
             )
@@ -193,8 +193,8 @@ fun NetworkScreen(
 
             SettingsSwitch(
                 icon = Icons.Default.Lock,
-                title = stringResource(R.string.network_doh_title),
-                subtitle = stringResource(R.string.network_doh_subtitle),
+                title = L10n.get(Strings.network_doh_title),
+                subtitle = L10n.get(Strings.network_doh_subtitle),
                 checked = state.settings.blockDoh,
                 onCheckedChange = { viewModel.onIntent(AdGuardIntent.ToggleBlockDoh(it)) },
             )
@@ -203,11 +203,11 @@ fun NetworkScreen(
 
             SettingsSwitch(
                 icon = Icons.Default.Dns,
-                title = stringResource(R.string.network_dot_title),
+                title = L10n.get(Strings.network_dot_title),
                 subtitle = if (privateDnsOn) {
-                    stringResource(R.string.network_dot_private_dns)
+                    L10n.get(Strings.network_dot_private_dns)
                 } else {
-                    stringResource(R.string.network_dot_subtitle)
+                    L10n.get(Strings.network_dot_subtitle)
                 },
                 checked = state.settings.blockDot,
                 onCheckedChange = { viewModel.onIntent(AdGuardIntent.ToggleBlockDot(it)) },
@@ -217,8 +217,8 @@ fun NetworkScreen(
 
             SettingsSwitch(
                 icon = Icons.Default.Search,
-                title = stringResource(R.string.network_safe_search_title),
-                subtitle = stringResource(R.string.network_safe_search_subtitle),
+                title = L10n.get(Strings.network_safe_search_title),
+                subtitle = L10n.get(Strings.network_safe_search_subtitle),
                 checked = state.settings.safeSearch,
                 onCheckedChange = { viewModel.onIntent(AdGuardIntent.ToggleSafeSearch(it)) },
             )
@@ -247,11 +247,10 @@ fun NetworkScreen(
 }
 
 @Composable
-private fun blockModeLabel(mode: DnsBlockMode): String = stringResource(
-    when (mode) {
-        DnsBlockMode.NXDOMAIN -> R.string.settings_block_mode_nxdomain
-        DnsBlockMode.ZERO_IP -> R.string.settings_block_mode_zero
-        DnsBlockMode.REFUSED -> R.string.settings_block_mode_refused
+private fun blockModeLabel(mode: DnsBlockMode): String = L10n.get(when (mode) {
+        DnsBlockMode.NXDOMAIN -> Strings.settings_block_mode_nxdomain
+        DnsBlockMode.ZERO_IP -> Strings.settings_block_mode_zero
+        DnsBlockMode.REFUSED -> Strings.settings_block_mode_refused
     }
 )
 
@@ -273,7 +272,7 @@ private fun DnsBackupSection(
 
     Column {
         Text(
-            text = stringResource(R.string.network_backup_title),
+            text = L10n.get(Strings.network_backup_title),
             fontSize = 12.sp,
             fontWeight = FontWeight.Bold,
             color = AdGuardTextSecondary,
@@ -310,11 +309,11 @@ private fun DnsBackupSection(
                 Column(modifier = Modifier.weight(1f)) {
                     Text(
                         text = when (mode) {
-                            DnsBackupMode.SYSTEM -> stringResource(R.string.network_backup_system)
-                            DnsBackupMode.OFF -> stringResource(R.string.network_backup_off)
+                            DnsBackupMode.SYSTEM -> L10n.get(Strings.network_backup_system)
+                            DnsBackupMode.OFF -> L10n.get(Strings.network_backup_off)
                             DnsBackupMode.FIXED -> selected?.name
                                 ?: backup?.let { "${it.address}:${it.port}" }
-                                ?: stringResource(R.string.network_backup_off)
+                                ?: L10n.get(Strings.network_backup_off)
                         },
                         fontSize = 13.sp,
                         fontWeight = FontWeight.Bold,
@@ -323,11 +322,10 @@ private fun DnsBackupSection(
                     Text(
                         text = when (mode) {
                             DnsBackupMode.SYSTEM ->
-                                stringResource(R.string.network_backup_system_subtitle)
+                                L10n.get(Strings.network_backup_system_subtitle)
                             DnsBackupMode.OFF ->
-                                stringResource(R.string.network_backup_off_subtitle)
-                            DnsBackupMode.FIXED -> stringResource(
-                                R.string.network_backup_summary,
+                                L10n.get(Strings.network_backup_off_subtitle)
+                            DnsBackupMode.FIXED -> L10n.format(Strings.network_backup_summary,
                                 selected?.address ?: backup?.address.orEmpty(),
                             )
                         },
@@ -336,7 +334,7 @@ private fun DnsBackupSection(
                     )
                 }
                 Text(
-                    text = stringResource(R.string.settings_dns_change),
+                    text = L10n.get(Strings.settings_dns_change),
                     fontSize = 12.sp,
                     color = AdGuardBlueDns,
                 )
@@ -347,7 +345,7 @@ private fun DnsBackupSection(
     if (showDialog) {
         AlertDialog(
             onDismissRequest = { showDialog = false },
-            title = { Text(stringResource(R.string.network_backup_title), fontSize = 18.sp) },
+            title = { Text(L10n.get(Strings.network_backup_title), fontSize = 18.sp) },
             text = {
                 Column(
                     modifier = Modifier
@@ -355,15 +353,15 @@ private fun DnsBackupSection(
                         .verticalScroll(rememberScrollState()),
                 ) {
                     Text(
-                        text = stringResource(R.string.network_backup_body),
+                        text = L10n.get(Strings.network_backup_body),
                         fontSize = 13.sp,
                         color = AdGuardTextMuted,
                     )
                     Spacer(modifier = Modifier.height(8.dp))
                     BackupOptionRow(
                         selected = mode == DnsBackupMode.SYSTEM,
-                        title = stringResource(R.string.network_backup_system),
-                        subtitle = stringResource(R.string.network_backup_system_subtitle),
+                        title = L10n.get(Strings.network_backup_system),
+                        subtitle = L10n.get(Strings.network_backup_system_subtitle),
                         onSelect = {
                             onSelect(DnsBackupMode.SYSTEM, null)
                             showDialog = false
@@ -371,8 +369,8 @@ private fun DnsBackupSection(
                     )
                     BackupOptionRow(
                         selected = mode == DnsBackupMode.OFF,
-                        title = stringResource(R.string.network_backup_off),
-                        subtitle = stringResource(R.string.network_backup_off_subtitle),
+                        title = L10n.get(Strings.network_backup_off),
+                        subtitle = L10n.get(Strings.network_backup_off_subtitle),
                         onSelect = {
                             onSelect(DnsBackupMode.OFF, null)
                             showDialog = false
@@ -392,7 +390,7 @@ private fun DnsBackupSection(
                     }
                     Spacer(modifier = Modifier.height(6.dp))
                     Text(
-                        text = stringResource(R.string.network_backup_udp_only),
+                        text = L10n.get(Strings.network_backup_udp_only),
                         fontSize = 11.sp,
                         color = AdGuardTextMuted,
                     )
@@ -400,7 +398,7 @@ private fun DnsBackupSection(
             },
             confirmButton = {
                 TextButton(onClick = { showDialog = false }) {
-                    Text(stringResource(R.string.common_close))
+                    Text(L10n.get(Strings.common_close))
                 }
             },
         )
@@ -444,7 +442,7 @@ private fun ProxySection(
 ) {
     var draft by remember(saved) { mutableStateOf(saved) }
     var portText by remember(saved) { mutableStateOf(saved.port.toString()) }
-    var error by remember(saved) { mutableStateOf<Int?>(null) }
+    var error by remember(saved) { mutableStateOf<String?>(null) }
 
     val host = normalizeProxyHost(draft.host)
     val port = portText.toIntOrNull()
@@ -452,11 +450,11 @@ private fun ProxySection(
     fun save() {
         if (draft.enabled) {
             if (host == null) {
-                error = R.string.network_proxy_host_error
+                error = Strings.network_proxy_host_error
                 return
             }
             if (port == null || port !in 1..65535) {
-                error = R.string.network_proxy_port_error
+                error = Strings.network_proxy_port_error
                 return
             }
         }
@@ -472,13 +470,13 @@ private fun ProxySection(
 
     Column {
         Text(
-            text = stringResource(R.string.network_proxy_title),
+            text = L10n.get(Strings.network_proxy_title),
             fontSize = 14.sp,
             fontWeight = FontWeight.Bold,
             color = AdGuardTextPrimary,
         )
         Text(
-            text = stringResource(R.string.network_proxy_subtitle),
+            text = L10n.get(Strings.network_proxy_subtitle),
             fontSize = 11.sp,
             color = AdGuardTextMuted,
         )
@@ -486,8 +484,8 @@ private fun ProxySection(
 
         SettingsSwitch(
             icon = Icons.Default.Public,
-            title = stringResource(R.string.network_socks_title),
-            subtitle = stringResource(R.string.network_socks_subtitle),
+            title = L10n.get(Strings.network_socks_title),
+            subtitle = L10n.get(Strings.network_socks_subtitle),
             checked = draft.enabled,
             onCheckedChange = { enabled ->
                 draft = draft.copy(enabled = enabled)
@@ -499,8 +497,8 @@ private fun ProxySection(
 
         SettingsSwitch(
             icon = Icons.Default.Language,
-            title = stringResource(R.string.network_proxy_auto_title),
-            subtitle = stringResource(R.string.network_proxy_auto_subtitle),
+            title = L10n.get(Strings.network_proxy_auto_title),
+            subtitle = L10n.get(Strings.network_proxy_auto_subtitle),
             checked = draft.automatic,
             onCheckedChange = { automatic ->
                 draft = draft.copy(automatic = automatic)
@@ -522,8 +520,8 @@ private fun ProxySection(
                         draft = draft.copy(host = it)
                         error = null
                     },
-                    label = { Text(stringResource(R.string.network_proxy_host_label), fontSize = 11.sp) },
-                    placeholder = { Text(stringResource(R.string.network_proxy_host_hint), fontSize = 11.sp) },
+                    label = { Text(L10n.get(Strings.network_proxy_host_label), fontSize = 11.sp) },
+                    placeholder = { Text(L10n.get(Strings.network_proxy_host_hint), fontSize = 11.sp) },
                     singleLine = true,
                     isError = error != null,
                     modifier = Modifier.fillMaxWidth(),
@@ -537,7 +535,7 @@ private fun ProxySection(
                         portText = it.filter(Char::isDigit).take(5)
                         error = null
                     },
-                    label = { Text(stringResource(R.string.network_proxy_port_label), fontSize = 11.sp) },
+                    label = { Text(L10n.get(Strings.network_proxy_port_label), fontSize = 11.sp) },
                     placeholder = { Text("1080", fontSize = 11.sp) },
                     singleLine = true,
                     isError = error != null,
@@ -553,7 +551,7 @@ private fun ProxySection(
                         draft = draft.copy(username = it)
                         error = null
                     },
-                    label = { Text(stringResource(R.string.network_proxy_username_label), fontSize = 11.sp) },
+                    label = { Text(L10n.get(Strings.network_proxy_username_label), fontSize = 11.sp) },
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth(),
                     shape = RoundedCornerShape(10.dp),
@@ -566,7 +564,7 @@ private fun ProxySection(
                         draft = draft.copy(password = it)
                         error = null
                     },
-                    label = { Text(stringResource(R.string.network_proxy_password_label), fontSize = 11.sp) },
+                    label = { Text(L10n.get(Strings.network_proxy_password_label), fontSize = 11.sp) },
                     singleLine = true,
                     visualTransformation = PasswordVisualTransformation(),
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
@@ -576,11 +574,11 @@ private fun ProxySection(
                 )
                 error?.let {
                     Spacer(modifier = Modifier.height(6.dp))
-                    Text(stringResource(it), fontSize = 11.sp, color = AdGuardRedBlocked)
+                    Text(L10n.get(it), fontSize = 11.sp, color = AdGuardRedBlocked)
                 }
                 Spacer(modifier = Modifier.height(8.dp))
                 Text(
-                    text = stringResource(R.string.network_proxy_note),
+                    text = L10n.get(Strings.network_proxy_note),
                     fontSize = 11.sp,
                     color = AdGuardTextMuted,
                 )
@@ -592,7 +590,7 @@ private fun ProxySection(
                     colors = ButtonDefaults.buttonColors(containerColor = AdGuardBlueDns),
                 ) {
                     Text(
-                        stringResource(R.string.network_proxy_save),
+                        L10n.get(Strings.network_proxy_save),
                         color = AdGuardOnAccent,
                         fontWeight = FontWeight.Bold,
                     )
@@ -600,13 +598,12 @@ private fun ProxySection(
                 Spacer(modifier = Modifier.height(8.dp))
                 Text(
                     text = when {
-                        !saved.enabled -> stringResource(R.string.network_proxy_off)
-                        saved.isUsable -> stringResource(
-                            R.string.network_proxy_active,
+                        !saved.enabled -> L10n.get(Strings.network_proxy_off)
+                        saved.isUsable -> L10n.format(Strings.network_proxy_active,
                             saved.host,
                             saved.port,
                         )
-                        else -> stringResource(R.string.network_proxy_invalid)
+                        else -> L10n.get(Strings.network_proxy_invalid)
                     },
                     fontSize = 11.sp,
                     color = when {

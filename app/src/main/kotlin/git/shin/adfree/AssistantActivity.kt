@@ -44,6 +44,7 @@ import androidx.compose.material3.TabRow
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -64,6 +65,8 @@ import git.shin.adfree.data.AdGuardRepository
 import git.shin.adfree.model.FilterStatus
 import git.shin.adfree.model.NetworkRequestLog
 import git.shin.adfree.model.ThemeMode
+import git.shin.adfree.platform.LocalAppInventory
+import git.shin.adfree.platform.LocalPlatformHost
 import git.shin.adfree.ui.rememberAppIcon
 import git.shin.adfree.ui.theme.MyApplicationTheme
 import git.shin.adfree.vpn.VpnController
@@ -90,6 +93,12 @@ class AssistantActivity : AppCompatActivity() {
                 ThemeMode.LIGHT -> false
             }
             MyApplicationTheme(darkTheme) {
+                // The shared panel widgets read their seams from locals; this
+                // overlay has no file work to do, only icons and toasts.
+                CompositionLocalProvider(
+                    LocalAppInventory provides container.appInventory,
+                    LocalPlatformHost provides container.platformHost,
+                ) {
                 LaunchedEffect(Unit) {
                     // The overlay is short-lived: pull the log on demand
                     // instead of driving the Activity's visibility poller.
@@ -106,6 +115,7 @@ class AssistantActivity : AppCompatActivity() {
                     onOpenAppDetails = ::openAppDetails,
                     onDismiss = ::finish,
                 )
+                }
             }
         }
     }

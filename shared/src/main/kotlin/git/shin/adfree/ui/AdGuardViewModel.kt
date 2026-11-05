@@ -927,6 +927,9 @@ class AdGuardViewModel(
     /** True when the CA is present in the device trust store. */
     fun isCaTrusted(): Boolean = coreEngine.isCaTrusted()
 
+    /** The stored body of a user script; screens never hold the engine. */
+    fun scriptText(id: String): String = coreEngine.scriptText(id).orEmpty()
+
     /**
      * Turns HTTPS filtering on or off.
      *

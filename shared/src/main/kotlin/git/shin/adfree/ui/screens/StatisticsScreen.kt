@@ -1,5 +1,7 @@
 package git.shin.adfree.ui.screens
 
+import git.shin.adfree.l10n.L10n
+import git.shin.adfree.l10n.Strings
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -42,13 +44,11 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.testTag
-import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import git.shin.adfree.R
 import git.shin.adfree.data.serviceSubtitle
 import git.shin.adfree.data.servicesKnownByCompany
 import git.shin.adfree.model.AppFirewallRule
@@ -123,7 +123,7 @@ fun StatisticsScreen(
             )
             Spacer(modifier = Modifier.width(8.dp))
             Text(
-                text = stringResource(R.string.nav_statistics),
+                text = L10n.get(Strings.nav_statistics),
                 fontSize = 19.sp,
                 fontWeight = FontWeight.Bold,
                 color = AdGuardTextPrimary,
@@ -140,10 +140,10 @@ fun StatisticsScreen(
         ) {
             FilterChipsRow {
                 listOf(
-                    AppUsageRange.TODAY to R.string.apps_range_today,
-                    AppUsageRange.WEEK to R.string.apps_range_week,
-                    AppUsageRange.MONTH to R.string.apps_range_month,
-                    AppUsageRange.ALL to R.string.apps_range_all,
+                    AppUsageRange.TODAY to Strings.apps_range_today,
+                    AppUsageRange.WEEK to Strings.apps_range_week,
+                    AppUsageRange.MONTH to Strings.apps_range_month,
+                    AppUsageRange.ALL to Strings.apps_range_all,
                 ).forEach { (option, labelRes) ->
                     FilterChip(
                         selected = range == option,
@@ -151,7 +151,7 @@ fun StatisticsScreen(
                             range = option
                             viewModel.onIntent(AdGuardIntent.SetAppUsageRange(option))
                         },
-                        label = { Text(stringResource(labelRes), fontSize = 11.sp) },
+                        label = { Text(L10n.get(labelRes), fontSize = 11.sp) },
                         colors = FilterChipDefaults.filterChipColors(
                             selectedContainerColor = AdGuardBlueDns,
                             selectedLabelColor = AdGuardOnAccent,
@@ -167,9 +167,9 @@ fun StatisticsScreen(
 
             FilterChipsRow {
                 listOf(
-                    AppUsageTransport.ALL to R.string.apps_transport_all,
-                    AppUsageTransport.CELLULAR to R.string.apps_transport_cellular,
-                    AppUsageTransport.WIFI to R.string.apps_transport_wifi,
+                    AppUsageTransport.ALL to Strings.apps_transport_all,
+                    AppUsageTransport.CELLULAR to Strings.apps_transport_cellular,
+                    AppUsageTransport.WIFI to Strings.apps_transport_wifi,
                 ).forEach { (option, labelRes) ->
                     FilterChip(
                         selected = transport == option,
@@ -177,7 +177,7 @@ fun StatisticsScreen(
                             transport = option
                             viewModel.onIntent(AdGuardIntent.SetAppUsageTransport(option))
                         },
-                        label = { Text(stringResource(labelRes), fontSize = 11.sp) },
+                        label = { Text(L10n.get(labelRes), fontSize = 11.sp) },
                         colors = FilterChipDefaults.filterChipColors(
                             selectedContainerColor = AdGuardGreenPrimary,
                             selectedLabelColor = AdGuardOnAccent,
@@ -193,7 +193,7 @@ fun StatisticsScreen(
 
             SectionCard {
                 Text(
-                    text = stringResource(R.string.stats_requests_title),
+                    text = L10n.get(Strings.stats_requests_title),
                     fontSize = 13.sp,
                     fontWeight = FontWeight.Bold,
                     color = AdGuardTextPrimary,
@@ -202,19 +202,19 @@ fun StatisticsScreen(
                 Row(modifier = Modifier.fillMaxWidth()) {
                     StatFigure(
                         value = totals.ads,
-                        label = stringResource(R.string.stats_ads),
+                        label = L10n.get(Strings.stats_ads),
                         color = AdGuardOrangeWarning,
                         modifier = Modifier.weight(1f),
                     )
                     StatFigure(
                         value = totals.trackers,
-                        label = stringResource(R.string.stats_trackers),
+                        label = L10n.get(Strings.stats_trackers),
                         color = TrackerAmber,
                         modifier = Modifier.weight(1f),
                     )
                     StatFigure(
                         value = totals.requests,
-                        label = stringResource(R.string.stats_requests),
+                        label = L10n.get(Strings.stats_requests),
                         color = AdGuardTextPrimary,
                         modifier = Modifier.weight(1f),
                     )
@@ -234,7 +234,7 @@ fun StatisticsScreen(
             Spacer(modifier = Modifier.height(10.dp))
 
             NavigationRow(
-                title = stringResource(R.string.stats_recent_activity),
+                title = L10n.get(Strings.stats_recent_activity),
                 icon = Icons.AutoMirrored.Filled.ListAlt,
                 testTag = "stats_recent_activity",
                 onClick = { viewModel.onIntent(AdGuardIntent.SelectTab(AdGuardTab.ACTIVITY)) },
@@ -244,7 +244,7 @@ fun StatisticsScreen(
 
             SectionCard {
                 Text(
-                    text = stringResource(R.string.stats_data_title),
+                    text = L10n.get(Strings.stats_data_title),
                     fontSize = 13.sp,
                     fontWeight = FontWeight.Bold,
                     color = AdGuardTextPrimary,
@@ -253,19 +253,19 @@ fun StatisticsScreen(
                 Row(modifier = Modifier.fillMaxWidth()) {
                     DataFigure(
                         bytes = totals.bytesSaved,
-                        label = stringResource(R.string.stats_data_saved),
+                        label = L10n.get(Strings.stats_data_saved),
                         color = AdGuardGreenPrimary,
                         modifier = Modifier.weight(1f),
                     )
                     DataFigure(
                         bytes = totals.bytesSent,
-                        label = stringResource(R.string.stats_data_uploaded),
+                        label = L10n.get(Strings.stats_data_uploaded),
                         color = AdGuardPurpleAI,
                         modifier = Modifier.weight(1f),
                     )
                     DataFigure(
                         bytes = totals.bytesReceived,
-                        label = stringResource(R.string.stats_data_downloaded),
+                        label = L10n.get(Strings.stats_data_downloaded),
                         color = AdGuardBlueDns,
                         modifier = Modifier.weight(1f),
                     )
@@ -284,7 +284,7 @@ fun StatisticsScreen(
             Spacer(modifier = Modifier.height(16.dp))
 
             Text(
-                text = stringResource(R.string.stats_apps_title),
+                text = L10n.get(Strings.stats_apps_title),
                 fontSize = 13.sp,
                 fontWeight = FontWeight.Bold,
                 color = AdGuardTextPrimary,
@@ -293,14 +293,14 @@ fun StatisticsScreen(
 
             FilterChipsRow {
                 listOf(
-                    StatsAppSort.ADS to R.string.apps_sort_ads,
-                    StatsAppSort.TRACKERS to R.string.apps_sort_trackers,
-                    StatsAppSort.REQUESTS to R.string.apps_sort_requests,
+                    StatsAppSort.ADS to Strings.apps_sort_ads,
+                    StatsAppSort.TRACKERS to Strings.apps_sort_trackers,
+                    StatsAppSort.REQUESTS to Strings.apps_sort_requests,
                 ).forEach { (option, labelRes) ->
                     FilterChip(
                         selected = sort == option,
                         onClick = { sort = option },
-                        label = { Text(stringResource(labelRes), fontSize = 11.sp) },
+                        label = { Text(L10n.get(labelRes), fontSize = 11.sp) },
                         colors = FilterChipDefaults.filterChipColors(
                             selectedContainerColor = AdGuardPurpleAI,
                             selectedLabelColor = AdGuardOnAccent,
@@ -316,7 +316,7 @@ fun StatisticsScreen(
 
             if (topApps.isEmpty()) {
                 Text(
-                    text = stringResource(R.string.stats_no_activity),
+                    text = L10n.get(Strings.stats_no_activity),
                     fontSize = 12.sp,
                     color = AdGuardTextMuted,
                     modifier = Modifier.padding(vertical = 10.dp),
@@ -333,7 +333,7 @@ fun StatisticsScreen(
             Spacer(modifier = Modifier.height(4.dp))
 
             NavigationRow(
-                title = stringResource(R.string.stats_view_all_apps),
+                title = L10n.get(Strings.stats_view_all_apps),
                 icon = Icons.Default.Apps,
                 testTag = "stats_view_all_apps",
                 onClick = { viewModel.onIntent(AdGuardIntent.SelectTab(AdGuardTab.APPS)) },
@@ -346,8 +346,7 @@ fun StatisticsScreen(
                 Spacer(modifier = Modifier.height(16.dp))
                 val known = servicesKnownByCompany(state.serviceUsage)
                 Text(
-                    text = stringResource(
-                        if (known) R.string.stats_services_title else R.string.stats_domains_title,
+                    text = L10n.get(if (known) Strings.stats_services_title else Strings.stats_domains_title,
                     ),
                     fontSize = 13.sp,
                     fontWeight = FontWeight.Bold,
@@ -361,8 +360,7 @@ fun StatisticsScreen(
                     ServiceStatRow(row = row)
                 }
                 Text(
-                    text = stringResource(
-                        if (known) R.string.stats_services_note else R.string.stats_domains_note,
+                    text = L10n.get(if (known) Strings.stats_services_note else Strings.stats_domains_note,
                     ),
                     fontSize = 11.sp,
                     color = AdGuardTextMuted,
@@ -556,8 +554,7 @@ private fun AppStatRow(app: AppFirewallRule, onClick: () -> Unit) {
             modifier = Modifier.weight(1f),
         )
         Text(
-            text = stringResource(
-                R.string.stats_app_counts,
+            text = L10n.format(Strings.stats_app_counts,
                 compactCount(app.blockedAdsToday.toLong()),
                 compactCount(app.blockedTrackersToday.toLong()),
                 compactCount(app.requestsToday.toLong()),
@@ -619,8 +616,7 @@ private fun ServiceStatRow(row: ServiceUsage) {
             }
         }
         Text(
-            text = stringResource(
-                R.string.stats_service_counts,
+            text = L10n.format(Strings.stats_service_counts,
                 compactCount(row.blocked.toLong()),
                 compactCount(row.requests.toLong()),
             ),

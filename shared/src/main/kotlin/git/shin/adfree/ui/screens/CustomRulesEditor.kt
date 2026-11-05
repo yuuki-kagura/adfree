@@ -1,7 +1,8 @@
 package git.shin.adfree.ui.screens
 
-import androidx.activity.compose.rememberLauncherForActivityResult
-import androidx.activity.result.contract.ActivityResultContracts
+import git.shin.adfree.l10n.Strings
+import git.shin.adfree.l10n.L10n
+import git.shin.adfree.platform.currentFileHost
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -45,20 +46,19 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import git.shin.adfree.R
 import git.shin.adfree.ui.theme.AdGuardDarkOutline
+import kotlinx.coroutines.launch
 import git.shin.adfree.ui.theme.AdGuardDarkSurfaceVariant
 import git.shin.adfree.ui.theme.AdGuardGreenLight
 import git.shin.adfree.ui.theme.AdGuardGreenPrimary
@@ -94,59 +94,58 @@ fun FriendlyCustomRuleEditorSheet(
     var searchQuery by remember { mutableStateOf("") }
     var newWhitelistDomain by remember { mutableStateOf("") }
 
-    val context = LocalContext.current
+    val files = currentFileHost()
+    val pickerScope = rememberCoroutineScope()
     var notice by remember { mutableStateOf<String?>(null) }
     var noticeIsError by remember { mutableStateOf(false) }
     var exportText by remember { mutableStateOf("") }
 
     // Files come from anywhere: AdGuard's export, a hosts file, or a plain
     // editor. Parse on import so comments and duplicates never reach the core.
-    val importPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
-        if (uri == null) return@rememberLauncherForActivityResult
-        val text = runCatching {
-            context.contentResolver.openInputStream(uri)?.bufferedReader()?.use { it.readText() }
-        }.getOrNull()
-        if (text == null) {
-            notice = context.getString(R.string.filter_file_unreadable)
-            noticeIsError = true
-            return@rememberLauncherForActivityResult
+    fun importRules() {
+        pickerScope.launch {
+            val uriText = files.openText() ?: return@launch
+            val text = files.readText(uriText)
+            if (text == null) {
+                notice = L10n.get(Strings.filter_file_unreadable)
+                noticeIsError = true
+                return@launch
+            }
+            val imported = parseUserRulesText(text)
+            if (imported.isEmpty()) {
+                notice = L10n.get(Strings.rules_import_invalid)
+                noticeIsError = true
+                return@launch
+            }
+            val before = rulesList.toSet()
+            val merged = (rulesList + imported).distinct()
+            val added = merged.count { it !in before }
+            rulesList = merged
+            rawText = merged.joinToString("\n")
+            onSaveAll(merged)
+            notice = if (added == 0) {
+                L10n.get(Strings.rules_import_duplicate)
+            } else {
+                L10n.format(Strings.rules_imported, added)
+            }
+            noticeIsError = added == 0
         }
-        val imported = parseUserRulesText(text)
-        if (imported.isEmpty()) {
-            notice = context.getString(R.string.rules_import_invalid)
-            noticeIsError = true
-            return@rememberLauncherForActivityResult
-        }
-        val before = rulesList.toSet()
-        val merged = (rulesList + imported).distinct()
-        val added = merged.count { it !in before }
-        rulesList = merged
-        rawText = merged.joinToString("\n")
-        onSaveAll(merged)
-        notice = if (added == 0) {
-            context.getString(R.string.rules_import_duplicate)
-        } else {
-            context.getString(R.string.rules_imported, added)
-        }
-        noticeIsError = added == 0
     }
 
-    // CreateDocument writes the current rules, including unsaved edits in the
-    // raw tab, so an export never silently drops what the user just typed.
-    val exportPicker = rememberLauncherForActivityResult(
-        ActivityResultContracts.CreateDocument("text/plain"),
-    ) { uri ->
-        if (uri == null) return@rememberLauncherForActivityResult
-        val written = runCatching {
-            context.contentResolver.openOutputStream(uri)?.bufferedWriter()?.use { it.write(exportText) }
-                ?: error("no output stream")
-        }.isSuccess
-        notice = if (written) {
-            context.getString(R.string.rules_export_done, parseUserRulesText(exportText).size)
-        } else {
-            context.getString(R.string.rules_export_failed)
+    // Creating the document writes the current rules, including unsaved edits
+    // in the raw tab, so an export never silently drops what the user just typed.
+    fun exportRules() {
+        pickerScope.launch {
+            val uriText = files.createDocument("adfree-user-rules.txt", "text/plain")
+                ?: return@launch
+            val written = files.writeText(uriText, exportText)
+            notice = if (written) {
+                L10n.format(Strings.rules_export_done, parseUserRulesText(exportText).size)
+            } else {
+                L10n.get(Strings.rules_export_failed)
+            }
+            noticeIsError = !written
         }
-        noticeIsError = !written
     }
 
     val whitelistCount = rulesList.count { it.startsWith("@@") }
@@ -163,14 +162,13 @@ fun FriendlyCustomRuleEditorSheet(
         ) {
             Column {
                 Text(
-                    text = stringResource(R.string.filters_user_rules_title),
+                    text = L10n.get(Strings.filters_user_rules_title),
                     fontSize = 16.sp,
                     fontWeight = FontWeight.Black,
                     color = AdGuardTextPrimary,
                 )
                 Text(
-                    text = stringResource(
-                        R.string.filters_user_rules_meta,
+                    text = L10n.format(Strings.filters_user_rules_meta,
                         rulesList.size,
                         whitelistCount,
                     ),
@@ -182,7 +180,7 @@ fun FriendlyCustomRuleEditorSheet(
             IconButton(onClick = onClose) {
                 Icon(
                     Icons.Default.Close,
-                    contentDescription = stringResource(R.string.rules_close),
+                    contentDescription = L10n.get(Strings.rules_close),
                     tint = AdGuardTextSecondary,
                 )
             }
@@ -196,11 +194,11 @@ fun FriendlyCustomRuleEditorSheet(
             TextButton(
                 onClick = {
                     notice = null
-                    importPicker.launch(arrayOf("text/plain", "text/*", "*/*"))
+                    importRules()
                 },
             ) {
                 Text(
-                    stringResource(R.string.rules_import),
+                    L10n.get(Strings.rules_import),
                     fontSize = 12.sp,
                     fontWeight = FontWeight.Bold,
                     color = AdGuardGreenLight,
@@ -215,15 +213,15 @@ fun FriendlyCustomRuleEditorSheet(
                         parseUserRulesText(rawText).joinToString("\n")
                     }
                     if (exportText.isBlank()) {
-                        notice = context.getString(R.string.rules_export_empty)
+                        notice = L10n.get(Strings.rules_export_empty)
                         noticeIsError = true
                     } else {
-                        exportPicker.launch("adfree-user-rules.txt")
+                        exportRules()
                     }
                 },
             ) {
                 Text(
-                    stringResource(R.string.rules_export),
+                    L10n.get(Strings.rules_export),
                     fontSize = 12.sp,
                     fontWeight = FontWeight.Bold,
                     color = AdGuardGreenLight,
@@ -265,7 +263,7 @@ fun FriendlyCustomRuleEditorSheet(
                 },
                 text = {
                     Text(
-                        stringResource(R.string.rules_tab_visual),
+                        L10n.get(Strings.rules_tab_visual),
                         fontSize = 12.sp,
                         fontWeight = FontWeight.Bold,
                     )
@@ -280,7 +278,7 @@ fun FriendlyCustomRuleEditorSheet(
                 },
                 text = {
                     Text(
-                        stringResource(R.string.rules_tab_raw),
+                        L10n.get(Strings.rules_tab_raw),
                         fontSize = 12.sp,
                         fontWeight = FontWeight.Bold,
                     )
@@ -297,7 +295,7 @@ fun FriendlyCustomRuleEditorSheet(
                 },
                 text = {
                     Text(
-                        stringResource(R.string.rules_tab_allow, whitelistCount),
+                        L10n.format(Strings.rules_tab_allow, whitelistCount),
                         fontSize = 12.sp,
                         fontWeight = FontWeight.Bold,
                     )
@@ -320,7 +318,7 @@ fun FriendlyCustomRuleEditorSheet(
                     },
                     placeholder = {
                         Text(
-                            stringResource(R.string.rules_input_hint),
+                            L10n.get(Strings.rules_input_hint),
                             color = AdGuardTextMuted,
                             fontSize = 12.sp,
                         )
@@ -347,14 +345,14 @@ fun FriendlyCustomRuleEditorSheet(
                         when {
                             rule == null -> {
                                 notice = if (newSingleRule.isBlank()) {
-                                    context.getString(R.string.rules_blank_rule)
+                                    L10n.get(Strings.rules_blank_rule)
                                 } else {
-                                    context.getString(R.string.rules_invalid_rule)
+                                    L10n.get(Strings.rules_invalid_rule)
                                 }
                                 noticeIsError = true
                             }
                             rule in rulesList -> {
-                                notice = context.getString(R.string.rules_exists)
+                                notice = L10n.get(Strings.rules_exists)
                                 noticeIsError = true
                             }
                             else -> {
@@ -362,7 +360,7 @@ fun FriendlyCustomRuleEditorSheet(
                                 rawText = rulesList.joinToString("\n")
                                 newSingleRule = ""
                                 onSaveAll(rulesList)
-                                notice = context.getString(R.string.rules_added, rule)
+                                notice = L10n.format(Strings.rules_added, rule)
                                 noticeIsError = false
                             }
                         }
@@ -382,7 +380,7 @@ fun FriendlyCustomRuleEditorSheet(
                 onValueChange = { searchQuery = it },
                 placeholder = {
                     Text(
-                        stringResource(R.string.rules_search_hint),
+                        L10n.get(Strings.rules_search_hint),
                         color = AdGuardTextMuted,
                         fontSize = 12.sp,
                     )
@@ -418,9 +416,9 @@ fun FriendlyCustomRuleEditorSheet(
                     val isRegex = rule.startsWith("/") && rule.endsWith("/")
                     val badgeColor = if (isWhitelist) AdGuardGreenLight else if (isRegex) AdGuardPurpleAI else AdGuardRedBlocked
                     val badgeText = when {
-                        isWhitelist -> stringResource(R.string.rules_badge_allow)
-                        isRegex -> stringResource(R.string.rules_badge_regex)
-                        else -> stringResource(R.string.rules_badge_block)
+                        isWhitelist -> L10n.get(Strings.rules_badge_allow)
+                        isRegex -> L10n.get(Strings.rules_badge_regex)
+                        else -> L10n.get(Strings.rules_badge_block)
                     }
 
                     Card(
@@ -461,14 +459,14 @@ fun FriendlyCustomRuleEditorSheet(
                                     rulesList = rulesList.filter { it != rule }
                                     rawText = rulesList.joinToString("\n")
                                     onSaveAll(rulesList)
-                                    notice = context.getString(R.string.rules_deleted, rule)
+                                    notice = L10n.format(Strings.rules_deleted, rule)
                                     noticeIsError = false
                                 },
                                 modifier = Modifier.size(28.dp),
                             ) {
                                 Icon(
                                     Icons.Default.Delete,
-                                    contentDescription = stringResource(R.string.ext_delete),
+                                    contentDescription = L10n.get(Strings.ext_delete),
                                     tint = AdGuardTextMuted,
                                     modifier = Modifier.size(16.dp),
                                 )
@@ -529,7 +527,7 @@ fun FriendlyCustomRuleEditorSheet(
                     Icon(Icons.Default.AutoFixHigh, contentDescription = null, tint = AdGuardTextSecondary, modifier = Modifier.size(14.dp))
                     Spacer(modifier = Modifier.width(4.dp))
                     Text(
-                        stringResource(R.string.rules_dedupe),
+                        L10n.get(Strings.rules_dedupe),
                         fontSize = 11.sp,
                         color = AdGuardTextSecondary,
                     )
@@ -541,7 +539,7 @@ fun FriendlyCustomRuleEditorSheet(
                         rulesList = newRules
                         rawText = newRules.joinToString("\n")
                         onSaveAll(newRules)
-                        notice = context.getString(R.string.rules_saved, newRules.size)
+                        notice = L10n.format(Strings.rules_saved, newRules.size)
                         noticeIsError = false
                     },
                     colors = ButtonDefaults.buttonColors(containerColor = AdGuardGreenPrimary),
@@ -550,7 +548,7 @@ fun FriendlyCustomRuleEditorSheet(
                     Icon(Icons.Default.Check, contentDescription = null, tint = AdGuardOnAccent, modifier = Modifier.size(16.dp))
                     Spacer(modifier = Modifier.width(6.dp))
                     Text(
-                        stringResource(R.string.rules_save_count, linesCount),
+                        L10n.format(Strings.rules_save_count, linesCount),
                         color = AdGuardOnAccent,
                         fontWeight = FontWeight.Bold,
                         fontSize = 12.sp,
@@ -570,7 +568,7 @@ fun FriendlyCustomRuleEditorSheet(
                     },
                     placeholder = {
                         Text(
-                            stringResource(R.string.rules_allow_hint),
+                            L10n.get(Strings.rules_allow_hint),
                             color = AdGuardTextMuted,
                             fontSize = 12.sp,
                         )
@@ -593,10 +591,10 @@ fun FriendlyCustomRuleEditorSheet(
                     onClick = {
                         val rule = userWhitelistRule(newWhitelistDomain)
                         if (rule == null) {
-                            notice = context.getString(R.string.rules_invalid_domain)
+                            notice = L10n.get(Strings.rules_invalid_domain)
                             noticeIsError = true
                         } else if (rule in rulesList) {
-                            notice = context.getString(R.string.rules_exception_exists)
+                            notice = L10n.get(Strings.rules_exception_exists)
                             noticeIsError = true
                         } else {
                             val merged = rulesList + rule
@@ -604,7 +602,7 @@ fun FriendlyCustomRuleEditorSheet(
                             rawText = merged.joinToString("\n")
                             newWhitelistDomain = ""
                             onSaveAll(merged)
-                            notice = context.getString(R.string.rules_exception_added, rule)
+                            notice = L10n.format(Strings.rules_exception_added, rule)
                             noticeIsError = false
                         }
                     },
@@ -619,7 +617,7 @@ fun FriendlyCustomRuleEditorSheet(
             Spacer(modifier = Modifier.height(10.dp))
 
             Text(
-                text = stringResource(R.string.rules_allow_note),
+                text = L10n.get(Strings.rules_allow_note),
                 fontSize = 11.sp,
                 color = AdGuardTextMuted,
             )
@@ -635,7 +633,7 @@ fun FriendlyCustomRuleEditorSheet(
                     contentAlignment = Alignment.Center,
                 ) {
                     Text(
-                        text = stringResource(R.string.rules_allow_empty),
+                        text = L10n.get(Strings.rules_allow_empty),
                         fontSize = 12.sp,
                         color = AdGuardTextMuted,
                     )
@@ -666,7 +664,7 @@ fun FriendlyCustomRuleEditorSheet(
                                         .padding(horizontal = 6.dp, vertical = 2.dp),
                                 ) {
                                     Text(
-                                        text = stringResource(R.string.rules_badge_allow),
+                                        text = L10n.get(Strings.rules_badge_allow),
                                         fontSize = 10.sp,
                                         fontWeight = FontWeight.Bold,
                                         color = AdGuardGreenLight,
@@ -685,8 +683,7 @@ fun FriendlyCustomRuleEditorSheet(
                                         rulesList = rulesList.filterNot { it == rule }
                                         rawText = rulesList.joinToString("\n")
                                         onSaveAll(rulesList)
-                                        notice = context.getString(
-                                            R.string.rules_exception_deleted,
+                                        notice = L10n.format(Strings.rules_exception_deleted,
                                             rule,
                                         )
                                         noticeIsError = false
@@ -695,8 +692,7 @@ fun FriendlyCustomRuleEditorSheet(
                                 ) {
                                     Icon(
                                         Icons.Default.Delete,
-                                        contentDescription = stringResource(
-                                            R.string.rules_delete_exception,
+                                        contentDescription = L10n.format(Strings.rules_delete_exception,
                                         ),
                                         tint = AdGuardTextMuted,
                                         modifier = Modifier.size(16.dp),

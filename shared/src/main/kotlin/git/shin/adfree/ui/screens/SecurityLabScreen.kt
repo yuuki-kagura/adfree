@@ -1,5 +1,7 @@
 package git.shin.adfree.ui.screens
 
+import git.shin.adfree.l10n.L10n
+import git.shin.adfree.l10n.Strings
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -51,13 +53,11 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.testTag
-import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import git.shin.adfree.R
 import git.shin.adfree.model.ThreatAnalysisResult
 import git.shin.adfree.model.ThreatCategory
 import git.shin.adfree.model.ThreatRiskLevel
@@ -115,13 +115,13 @@ fun SecurityLabScreen(
             Spacer(modifier = Modifier.width(8.dp))
             Column {
                 Text(
-                    text = stringResource(R.string.lab_title),
+                    text = L10n.get(Strings.lab_title),
                     fontSize = 19.sp,
                     fontWeight = FontWeight.Bold,
                     color = AdGuardTextPrimary
                 )
                 Text(
-                    text = stringResource(R.string.lab_subtitle),
+                    text = L10n.get(Strings.lab_subtitle),
                     fontSize = 12.sp,
                     color = AdGuardTextMuted
                 )
@@ -156,13 +156,13 @@ fun SecurityLabScreen(
                     Spacer(modifier = Modifier.width(8.dp))
                     Column {
                         Text(
-                            text = stringResource(R.string.lab_on_device_title),
+                            text = L10n.get(Strings.lab_on_device_title),
                             fontSize = 12.sp,
                             fontWeight = FontWeight.Bold,
                             color = AdGuardTextPrimary,
                         )
                         Text(
-                            text = stringResource(R.string.lab_on_device_body),
+                            text = L10n.get(Strings.lab_on_device_body),
                             fontSize = 11.sp,
                             color = AdGuardTextMuted,
                         )
@@ -174,8 +174,8 @@ fun SecurityLabScreen(
         OutlinedTextField(
             value = domainInput,
             onValueChange = { domainInput = it },
-            label = { Text(stringResource(R.string.lab_input_label)) },
-            placeholder = { Text(stringResource(R.string.lab_input_hint)) },
+            label = { Text(L10n.get(Strings.lab_input_label)) },
+            placeholder = { Text(L10n.get(Strings.lab_input_hint)) },
             singleLine = true,
             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri),
             modifier = Modifier
@@ -237,7 +237,7 @@ fun SecurityLabScreen(
             )
             Spacer(modifier = Modifier.width(8.dp))
             Text(
-                text = stringResource(R.string.lab_scan),
+                text = L10n.get(Strings.lab_scan),
                 fontWeight = FontWeight.Bold,
                 color = AdGuardOnAccent,
             )
@@ -275,7 +275,7 @@ fun SecurityLabScreen(
                         )
                         Spacer(modifier = Modifier.height(6.dp))
                         Text(
-                            text = stringResource(R.string.lab_analyzing),
+                            text = L10n.get(Strings.lab_analyzing),
                             fontSize = 11.sp,
                             color = AdGuardTextMuted
                         )
@@ -330,7 +330,7 @@ fun ScienceLabIntroCard() {
                 Icon(Icons.Default.Lightbulb, contentDescription = null, tint = AdGuardGreenLight, modifier = Modifier.size(20.dp))
                 Spacer(modifier = Modifier.width(8.dp))
                 Text(
-                    text = stringResource(R.string.lab_how_title),
+                    text = L10n.get(Strings.lab_how_title),
                     fontSize = 14.sp,
                     fontWeight = FontWeight.Bold,
                     color = AdGuardTextPrimary
@@ -340,7 +340,7 @@ fun ScienceLabIntroCard() {
             Spacer(modifier = Modifier.height(10.dp))
 
             Text(
-                text = stringResource(R.string.lab_how_body),
+                text = L10n.get(Strings.lab_how_body),
                 fontSize = 12.sp,
                 color = AdGuardTextSecondary,
                 lineHeight = 18.sp
@@ -350,48 +350,44 @@ fun ScienceLabIntroCard() {
 }
 
 @Composable
-private fun threatRiskLabel(level: ThreatRiskLevel): String = stringResource(
-    when (level) {
-        ThreatRiskLevel.UNKNOWN -> R.string.lab_risk_unknown
-        ThreatRiskLevel.SAFE -> R.string.lab_risk_safe
-        ThreatRiskLevel.LOW -> R.string.lab_risk_low
-        ThreatRiskLevel.MEDIUM -> R.string.lab_risk_medium
-        ThreatRiskLevel.HIGH -> R.string.lab_risk_high
+private fun threatRiskLabel(level: ThreatRiskLevel): String = L10n.get(when (level) {
+        ThreatRiskLevel.UNKNOWN -> Strings.lab_risk_unknown
+        ThreatRiskLevel.SAFE -> Strings.lab_risk_safe
+        ThreatRiskLevel.LOW -> Strings.lab_risk_low
+        ThreatRiskLevel.MEDIUM -> Strings.lab_risk_medium
+        ThreatRiskLevel.HIGH -> Strings.lab_risk_high
     }
 )
 
 @Composable
-private fun threatCategoryLabel(category: ThreatCategory): String = stringResource(
-    when (category) {
-        ThreatCategory.EMPTY -> R.string.lab_category_empty
-        ThreatCategory.FILTER_BLOCKED -> R.string.lab_category_blocked
-        ThreatCategory.SUSPICIOUS -> R.string.lab_category_suspicious
-        ThreatCategory.UNKNOWN -> R.string.lab_category_unknown
+private fun threatCategoryLabel(category: ThreatCategory): String = L10n.get(when (category) {
+        ThreatCategory.EMPTY -> Strings.lab_category_empty
+        ThreatCategory.FILTER_BLOCKED -> Strings.lab_category_blocked
+        ThreatCategory.SUSPICIOUS -> Strings.lab_category_suspicious
+        ThreatCategory.UNKNOWN -> Strings.lab_category_unknown
     }
 )
 
 @Composable
 private fun threatSummary(result: ThreatAnalysisResult): String {
     if (result.category == ThreatCategory.EMPTY) {
-        return stringResource(R.string.lab_summary_empty)
+        return L10n.get(Strings.lab_summary_empty)
     }
     val parts = buildList {
         add(
-            stringResource(
-                if (result.isBlockedByFilters) R.string.lab_summary_blocked
-                else R.string.lab_summary_not_blocked,
+            L10n.get(if (result.isBlockedByFilters) Strings.lab_summary_blocked
+                else Strings.lab_summary_not_blocked,
             ),
         )
         // Details read as a short list, not one long semicolon sentence.
-        result.matchedRule?.let { add("• " + stringResource(R.string.lab_summary_rule, it)) }
-        result.matchedList?.let { add("• " + stringResource(R.string.lab_summary_list, it)) }
+        result.matchedRule?.let { add("• " + L10n.format(Strings.lab_summary_rule, it)) }
+        result.matchedList?.let { add("• " + L10n.format(Strings.lab_summary_list, it)) }
         add(
-            "• " + stringResource(
-                when (result.riskLevel) {
-                    ThreatRiskLevel.HIGH -> R.string.lab_trait_high
-                    ThreatRiskLevel.MEDIUM -> R.string.lab_trait_medium
-                    ThreatRiskLevel.LOW -> R.string.lab_trait_low
-                    else -> R.string.lab_trait_none
+            "• " + L10n.get(when (result.riskLevel) {
+                    ThreatRiskLevel.HIGH -> Strings.lab_trait_high
+                    ThreatRiskLevel.MEDIUM -> Strings.lab_trait_medium
+                    ThreatRiskLevel.LOW -> Strings.lab_trait_low
+                    else -> Strings.lab_trait_none
                 },
             ),
         )
@@ -467,7 +463,7 @@ fun ThreatResultCard(
 
             // Summary Explanation
             Text(
-                text = stringResource(R.string.lab_assessment),
+                text = L10n.get(Strings.lab_assessment),
                 fontSize = 11.sp,
                 fontWeight = FontWeight.Bold,
                 color = AdGuardTextMuted,
@@ -486,7 +482,7 @@ fun ThreatResultCard(
             if (result.suggestedRules.isNotEmpty()) {
                 Spacer(modifier = Modifier.height(14.dp))
                 Text(
-                    text = stringResource(R.string.lab_suggested_rules),
+                    text = L10n.get(Strings.lab_suggested_rules),
                     fontSize = 11.sp,
                     fontWeight = FontWeight.Bold,
                     color = AdGuardTextMuted,
@@ -521,7 +517,7 @@ fun ThreatResultCard(
                             Icon(Icons.Default.Add, contentDescription = null, tint = AdGuardOnAccent, modifier = Modifier.size(14.dp))
                             Spacer(modifier = Modifier.width(4.dp))
                             Text(
-                                stringResource(R.string.lab_add),
+                                L10n.get(Strings.lab_add),
                                 fontSize = 12.sp,
                                 color = AdGuardOnAccent,
                                 fontWeight = FontWeight.Bold,

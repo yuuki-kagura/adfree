@@ -1,7 +1,8 @@
 package git.shin.adfree.ui.screens
 
+import git.shin.adfree.l10n.Strings
 import git.shin.adfree.l10n.L10n
-import androidx.activity.compose.BackHandler
+import git.shin.adfree.platform.BackHandler
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
@@ -74,12 +75,10 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
-import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import git.shin.adfree.R
 import git.shin.adfree.model.AppFirewallRule
 import git.shin.adfree.model.StealthPreset
 import git.shin.adfree.model.normalizeMaskIp
@@ -298,7 +297,7 @@ private fun ProtectionLanding(
     val dnsName = state.dnsProviders
         .firstOrNull { it.id == settings.selectedDnsProviderId }
         ?.name
-        ?: stringResource(R.string.hub_dns_unset)
+        ?: L10n.get(Strings.hub_dns_unset)
     val limitedApps = state.allAppFirewallRules.count { it.hasNetworkRules }
 
     Column(
@@ -308,13 +307,13 @@ private fun ProtectionLanding(
     ) {
         Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp)) {
             Text(
-                text = stringResource(R.string.nav_protection),
+                text = L10n.get(Strings.nav_protection),
                 fontSize = 19.sp,
                 fontWeight = FontWeight.Bold,
                 color = AdGuardTextPrimary,
             )
             Text(
-                text = stringResource(R.string.protection_subtitle),
+                text = L10n.get(Strings.protection_subtitle),
                 fontSize = 12.sp,
                 color = AdGuardTextMuted,
             )
@@ -332,12 +331,11 @@ private fun ProtectionLanding(
             ModuleRow(
                 icon = Icons.Default.Block,
                 accent = AdGuardGreenPrimary,
-                title = stringResource(R.string.home_module_adblock_title),
+                title = L10n.get(Strings.home_module_adblock_title),
                 subtitle = if (enabledFilters == 0) {
-                    stringResource(R.string.protection_filters_empty)
+                    L10n.get(Strings.protection_filters_empty)
                 } else {
-                    stringResource(
-                        R.string.protection_filters_summary,
+                    L10n.format(Strings.protection_filters_summary,
                         enabledFilters,
                         "%,d".format(enabledRules),
                     )
@@ -350,8 +348,8 @@ private fun ProtectionLanding(
             ModuleRow(
                 icon = Icons.Default.NotificationsOff,
                 accent = AdGuardOrangeWarning,
-                title = stringResource(R.string.home_module_annoyances_title),
-                subtitle = stringResource(R.string.home_module_annoyances_subtitle),
+                title = L10n.get(Strings.home_module_annoyances_title),
+                subtitle = L10n.get(Strings.home_module_annoyances_subtitle),
                 checked = settings.isAnnoyancesEnabled,
                 onCheckedChange = { viewModel.onIntent(AdGuardIntent.ToggleAnnoyances) },
                 onClick = { onOpen(ProtectionRoute.ANNOYANCES) },
@@ -360,8 +358,8 @@ private fun ProtectionLanding(
             ModuleRow(
                 icon = Icons.Default.TrackChanges,
                 accent = AdGuardOrangeWarning,
-                title = stringResource(R.string.home_module_tracking_title),
-                subtitle = stringResource(R.string.home_module_tracking_subtitle),
+                title = L10n.get(Strings.home_module_tracking_title),
+                subtitle = L10n.get(Strings.home_module_tracking_subtitle),
                 checked = settings.isTrackingProtectionEnabled,
                 onCheckedChange = { viewModel.onIntent(AdGuardIntent.ToggleTracking) },
                 onClick = { onOpen(ProtectionRoute.TRACKING) },
@@ -370,7 +368,7 @@ private fun ProtectionLanding(
             ModuleRow(
                 icon = Icons.Default.Dns,
                 accent = AdGuardBlueDns,
-                title = stringResource(R.string.home_module_dns_title),
+                title = L10n.get(Strings.home_module_dns_title),
                 subtitle = dnsName,
                 checked = settings.isDnsProtectionEnabled,
                 onCheckedChange = { viewModel.onIntent(AdGuardIntent.ToggleDns) },
@@ -380,8 +378,8 @@ private fun ProtectionLanding(
             ModuleRow(
                 icon = Icons.Default.Lock,
                 accent = AdGuardPurpleAI,
-                title = stringResource(R.string.settings_https_title),
-                subtitle = stringResource(R.string.settings_https_enable_subtitle),
+                title = L10n.get(Strings.settings_https_title),
+                subtitle = L10n.get(Strings.settings_https_enable_subtitle),
                 checked = settings.isHttpsFilteringEnabled,
                 onCheckedChange = { viewModel.onIntent(AdGuardIntent.ToggleHttps) },
                 onClick = { onOpen(ProtectionRoute.HTTPS) },
@@ -390,11 +388,11 @@ private fun ProtectionLanding(
             ModuleRow(
                 icon = Icons.Default.Shield,
                 accent = AdGuardGreenPrimary,
-                title = stringResource(R.string.home_module_firewall_title),
+                title = L10n.get(Strings.home_module_firewall_title),
                 subtitle = if (limitedApps == 0) {
-                    stringResource(R.string.protection_firewall_apps_none)
+                    L10n.get(Strings.protection_firewall_apps_none)
                 } else {
-                    stringResource(R.string.protection_firewall_apps_summary, limitedApps)
+                    L10n.format(Strings.protection_firewall_apps_summary, limitedApps)
                 },
                 checked = settings.isFirewallEnabled,
                 onCheckedChange = { viewModel.onIntent(AdGuardIntent.ToggleFirewall) },
@@ -404,8 +402,8 @@ private fun ProtectionLanding(
             ModuleRow(
                 icon = Icons.Default.Security,
                 accent = AdGuardBlueDns,
-                title = stringResource(R.string.home_module_browsing_security_title),
-                subtitle = stringResource(R.string.home_module_browsing_security_subtitle),
+                title = L10n.get(Strings.home_module_browsing_security_title),
+                subtitle = L10n.get(Strings.home_module_browsing_security_subtitle),
                 checked = settings.isBrowsingSecurityEnabled,
                 onCheckedChange = { viewModel.onIntent(AdGuardIntent.ToggleBrowsingSecurity) },
                 onClick = { onOpen(ProtectionRoute.BROWSING_SECURITY) },
@@ -414,8 +412,8 @@ private fun ProtectionLanding(
             ModuleRow(
                 icon = Icons.Default.BatteryChargingFull,
                 accent = AdGuardGreenLight,
-                title = stringResource(R.string.home_module_eco_title),
-                subtitle = stringResource(R.string.home_module_eco_subtitle),
+                title = L10n.get(Strings.home_module_eco_title),
+                subtitle = L10n.get(Strings.home_module_eco_subtitle),
                 checked = settings.isEcoBatteryModeEnabled,
                 onCheckedChange = { viewModel.onIntent(AdGuardIntent.ToggleEcoMode) },
                 onClick = { onOpen(ProtectionRoute.ECO) },
@@ -452,14 +450,14 @@ private fun AdBlockingDetail(
         ModuleDetailHero(
             icon = Icons.Default.Block,
             tint = AdGuardGreenPrimary,
-            title = stringResource(R.string.home_module_adblock_title),
-            subtitle = stringResource(R.string.home_module_adblock_subtitle),
+            title = L10n.get(Strings.home_module_adblock_title),
+            subtitle = L10n.get(Strings.home_module_adblock_subtitle),
         )
 
         SettingsSwitch(
             icon = Icons.Default.Block,
-            title = stringResource(R.string.home_module_adblock_title),
-            subtitle = stringResource(R.string.home_module_adblock_subtitle),
+            title = L10n.get(Strings.home_module_adblock_title),
+            subtitle = L10n.get(Strings.home_module_adblock_subtitle),
             checked = settings.isAdBlockingEnabled,
             onCheckedChange = { viewModel.onIntent(AdGuardIntent.ToggleAdBlocking) },
         )
@@ -469,12 +467,11 @@ private fun AdBlockingDetail(
         NavigationRow(
             icon = Icons.Default.Layers,
             accent = AdGuardGreenLight,
-            title = stringResource(R.string.protection_filters_row),
+            title = L10n.get(Strings.protection_filters_row),
             subtitle = if (enabledFilters == 0) {
-                stringResource(R.string.protection_filters_empty)
+                L10n.get(Strings.protection_filters_empty)
             } else {
-                stringResource(
-                    R.string.protection_filters_summary,
+                L10n.format(Strings.protection_filters_summary,
                     enabledFilters,
                     "%,d".format(enabledRules),
                 )
@@ -487,8 +484,8 @@ private fun AdBlockingDetail(
         NavigationRow(
             icon = Icons.Default.CheckCircle,
             accent = AdGuardGreenLight,
-            title = stringResource(R.string.allowlist_title),
-            subtitle = stringResource(R.string.allowlist_subtitle, exceptionCount),
+            title = L10n.get(Strings.allowlist_title),
+            subtitle = L10n.format(Strings.allowlist_subtitle, exceptionCount),
             onClick = onAllowlist,
         )
 
@@ -497,12 +494,11 @@ private fun AdBlockingDetail(
         NavigationRow(
             icon = Icons.Default.Extension,
             accent = AdGuardPurpleAI,
-            title = stringResource(R.string.hub_extensions_title),
+            title = L10n.get(Strings.hub_extensions_title),
             subtitle = when {
-                state.userscripts.isEmpty() -> stringResource(R.string.hub_extensions_none)
-                !state.scriptsMasterEnabled -> stringResource(R.string.hub_extensions_master_off)
-                else -> stringResource(
-                    R.string.hub_extensions_count,
+                state.userscripts.isEmpty() -> L10n.get(Strings.hub_extensions_none)
+                !state.scriptsMasterEnabled -> L10n.get(Strings.hub_extensions_master_off)
+                else -> L10n.format(Strings.hub_extensions_count,
                     scriptsOn,
                     state.userscripts.size,
                 )
@@ -514,8 +510,8 @@ private fun AdBlockingDetail(
 
         SettingsSwitch(
             icon = Icons.Default.VisibilityOff,
-            title = stringResource(R.string.settings_cosmetic_title),
-            subtitle = stringResource(R.string.settings_cosmetic_subtitle),
+            title = L10n.get(Strings.settings_cosmetic_title),
+            subtitle = L10n.get(Strings.settings_cosmetic_subtitle),
             checked = settings.cosmeticFiltering,
             onCheckedChange = { viewModel.onIntent(AdGuardIntent.ToggleCosmeticFiltering(it)) },
         )
@@ -524,8 +520,8 @@ private fun AdBlockingDetail(
 
         SettingsSwitch(
             icon = Icons.Default.BatteryChargingFull,
-            title = stringResource(R.string.settings_smart_filtering_title),
-            subtitle = stringResource(R.string.settings_smart_filtering_subtitle),
+            title = L10n.get(Strings.settings_smart_filtering_title),
+            subtitle = L10n.get(Strings.settings_smart_filtering_subtitle),
             checked = settings.isSmartFilteringEnabled,
             onCheckedChange = { viewModel.onIntent(AdGuardIntent.ToggleSmartFiltering(it)) },
         )
@@ -533,13 +529,13 @@ private fun AdBlockingDetail(
         Spacer(modifier = Modifier.height(18.dp))
 
         Text(
-            text = stringResource(R.string.settings_auto_update_title),
+            text = L10n.get(Strings.settings_auto_update_title),
             fontSize = 12.sp,
             fontWeight = FontWeight.Bold,
             color = AdGuardTextSecondary,
         )
         Text(
-            text = stringResource(R.string.settings_auto_update_subtitle),
+            text = L10n.get(Strings.settings_auto_update_subtitle),
             fontSize = 11.sp,
             color = AdGuardTextMuted,
             modifier = Modifier.padding(top = 2.dp, bottom = 6.dp),
@@ -578,14 +574,14 @@ private fun TrackingDetail(
         ModuleDetailHero(
             icon = Icons.Default.TrackChanges,
             tint = AdGuardOrangeWarning,
-            title = stringResource(R.string.home_module_tracking_title),
-            subtitle = stringResource(R.string.home_module_tracking_subtitle),
+            title = L10n.get(Strings.home_module_tracking_title),
+            subtitle = L10n.get(Strings.home_module_tracking_subtitle),
         )
 
         SettingsSwitch(
             icon = Icons.Default.TrackChanges,
-            title = stringResource(R.string.home_module_tracking_title),
-            subtitle = stringResource(R.string.home_module_tracking_subtitle),
+            title = L10n.get(Strings.home_module_tracking_title),
+            subtitle = L10n.get(Strings.home_module_tracking_subtitle),
             checked = settings.isTrackingProtectionEnabled,
             onCheckedChange = { viewModel.onIntent(AdGuardIntent.ToggleTracking) },
         )
@@ -593,7 +589,7 @@ private fun TrackingDetail(
         Spacer(modifier = Modifier.height(18.dp))
 
         Text(
-            text = stringResource(R.string.settings_stealth_title),
+            text = L10n.get(Strings.settings_stealth_title),
             fontSize = 12.sp,
             fontWeight = FontWeight.Bold,
             color = AdGuardTextSecondary,
@@ -603,8 +599,8 @@ private fun TrackingDetail(
 
         SettingsSwitch(
             icon = Icons.Default.VisibilityOff,
-            title = stringResource(R.string.settings_stealth_master_title),
-            subtitle = stringResource(R.string.settings_stealth_master_subtitle),
+            title = L10n.get(Strings.settings_stealth_master_title),
+            subtitle = L10n.get(Strings.settings_stealth_master_subtitle),
             checked = settings.isStealthModeEnabled,
             onCheckedChange = { viewModel.onIntent(AdGuardIntent.ToggleStealth) },
         )
@@ -612,13 +608,13 @@ private fun TrackingDetail(
         Spacer(modifier = Modifier.height(10.dp))
 
         Text(
-            text = stringResource(R.string.settings_stealth_preset_title),
+            text = L10n.get(Strings.settings_stealth_preset_title),
             fontSize = 12.sp,
             fontWeight = FontWeight.Bold,
             color = AdGuardTextSecondary,
         )
         Text(
-            text = stringResource(R.string.settings_stealth_preset_note),
+            text = L10n.get(Strings.settings_stealth_preset_note),
             fontSize = 11.sp,
             color = AdGuardTextMuted,
             modifier = Modifier.padding(top = 2.dp, bottom = 8.dp),
@@ -654,12 +650,12 @@ private fun TrackingDetail(
                             Spacer(modifier = Modifier.width(10.dp))
                             Column(modifier = Modifier.weight(1f)) {
                                 Text(
-                                    text = stringResource(level.titleRes()),
+                                    text = L10n.get(level.titleRes()),
                                     fontSize = 15.sp,
                                     color = AdGuardTextPrimary,
                                 )
                                 Text(
-                                    text = stringResource(level.bodyRes()),
+                                    text = L10n.get(level.bodyRes()),
                                     fontSize = 12.sp,
                                     color = AdGuardTextMuted,
                                 )
@@ -669,7 +665,7 @@ private fun TrackingDetail(
                 if (preset == StealthPreset.CUSTOM) {
                     Spacer(modifier = Modifier.height(10.dp))
                     Text(
-                        text = stringResource(R.string.settings_stealth_preset_custom),
+                        text = L10n.get(Strings.settings_stealth_preset_custom),
                         fontSize = 12.sp,
                         color = AdGuardBlueDns,
                     )
@@ -686,8 +682,8 @@ private fun TrackingDetail(
         ) {
             Column(modifier = Modifier.padding(14.dp)) {
                 StealthToggleRow(
-                    title = stringResource(R.string.settings_stealth_utm_title),
-                    subtitle = stringResource(R.string.settings_stealth_utm_subtitle),
+                    title = L10n.get(Strings.settings_stealth_utm_title),
+                    subtitle = L10n.get(Strings.settings_stealth_utm_subtitle),
                     isChecked = settings.stripUtmTracking,
                     enabled = settings.isStealthModeEnabled,
                     onCheckedChange = {
@@ -696,8 +692,8 @@ private fun TrackingDetail(
                 )
                 Spacer(modifier = Modifier.height(12.dp))
                 StealthToggleRow(
-                    title = stringResource(R.string.settings_stealth_webrtc_title),
-                    subtitle = stringResource(R.string.settings_stealth_webrtc_subtitle),
+                    title = L10n.get(Strings.settings_stealth_webrtc_title),
+                    subtitle = L10n.get(Strings.settings_stealth_webrtc_subtitle),
                     isChecked = settings.blockWebRtcLeaks,
                     enabled = settings.isStealthModeEnabled,
                     onCheckedChange = {
@@ -706,8 +702,8 @@ private fun TrackingDetail(
                 )
                 Spacer(modifier = Modifier.height(12.dp))
                 StealthToggleRow(
-                    title = stringResource(R.string.settings_stealth_ua_title),
-                    subtitle = stringResource(R.string.settings_stealth_ua_subtitle),
+                    title = L10n.get(Strings.settings_stealth_ua_title),
+                    subtitle = L10n.get(Strings.settings_stealth_ua_subtitle),
                     isChecked = settings.disguiseUserAgent,
                     enabled = settings.isStealthModeEnabled,
                     onCheckedChange = {
@@ -716,8 +712,8 @@ private fun TrackingDetail(
                 )
                 Spacer(modifier = Modifier.height(12.dp))
                 StealthToggleRow(
-                    title = stringResource(R.string.settings_stealth_cookies_title),
-                    subtitle = stringResource(R.string.settings_stealth_cookies_subtitle),
+                    title = L10n.get(Strings.settings_stealth_cookies_title),
+                    subtitle = L10n.get(Strings.settings_stealth_cookies_subtitle),
                     isChecked = settings.blockThirdPartyCookies,
                     enabled = settings.isStealthModeEnabled,
                     onCheckedChange = {
@@ -730,13 +726,13 @@ private fun TrackingDetail(
         Spacer(modifier = Modifier.height(16.dp))
 
         Text(
-            text = stringResource(R.string.settings_stealth_advanced_title),
+            text = L10n.get(Strings.settings_stealth_advanced_title),
             fontSize = 12.sp,
             fontWeight = FontWeight.Bold,
             color = AdGuardTextSecondary,
         )
         Text(
-            text = stringResource(R.string.settings_stealth_advanced_subtitle),
+            text = L10n.get(Strings.settings_stealth_advanced_subtitle),
             fontSize = 11.sp,
             color = AdGuardTextMuted,
             modifier = Modifier.padding(top = 2.dp, bottom = 8.dp),
@@ -749,8 +745,8 @@ private fun TrackingDetail(
         ) {
             Column(modifier = Modifier.padding(14.dp)) {
                 StealthToggleRow(
-                    title = stringResource(R.string.settings_stealth_all_cookies_title),
-                    subtitle = stringResource(R.string.settings_stealth_all_cookies_subtitle),
+                    title = L10n.get(Strings.settings_stealth_all_cookies_title),
+                    subtitle = L10n.get(Strings.settings_stealth_all_cookies_subtitle),
                     isChecked = settings.blockAllCookies,
                     enabled = settings.isStealthModeEnabled,
                     onCheckedChange = {
@@ -759,8 +755,8 @@ private fun TrackingDetail(
                 )
                 Spacer(modifier = Modifier.height(12.dp))
                 StealthToggleRow(
-                    title = stringResource(R.string.settings_stealth_etag_title),
-                    subtitle = stringResource(R.string.settings_stealth_etag_subtitle),
+                    title = L10n.get(Strings.settings_stealth_etag_title),
+                    subtitle = L10n.get(Strings.settings_stealth_etag_subtitle),
                     isChecked = settings.stripEtag,
                     enabled = settings.isStealthModeEnabled,
                     onCheckedChange = {
@@ -769,8 +765,8 @@ private fun TrackingDetail(
                 )
                 Spacer(modifier = Modifier.height(12.dp))
                 StealthToggleRow(
-                    title = stringResource(R.string.settings_stealth_auth_title),
-                    subtitle = stringResource(R.string.settings_stealth_auth_subtitle),
+                    title = L10n.get(Strings.settings_stealth_auth_title),
+                    subtitle = L10n.get(Strings.settings_stealth_auth_subtitle),
                     isChecked = settings.stripThirdPartyAuthorization,
                     enabled = settings.isStealthModeEnabled,
                     onCheckedChange = {
@@ -781,8 +777,8 @@ private fun TrackingDetail(
                 )
                 Spacer(modifier = Modifier.height(12.dp))
                 StealthToggleRow(
-                    title = stringResource(R.string.settings_stealth_referer_title),
-                    subtitle = stringResource(R.string.settings_stealth_referer_subtitle),
+                    title = L10n.get(Strings.settings_stealth_referer_title),
+                    subtitle = L10n.get(Strings.settings_stealth_referer_subtitle),
                     isChecked = settings.hideThirdPartyReferer,
                     enabled = settings.isStealthModeEnabled,
                     onCheckedChange = {
@@ -791,8 +787,8 @@ private fun TrackingDetail(
                 )
                 Spacer(modifier = Modifier.height(12.dp))
                 StealthToggleRow(
-                    title = stringResource(R.string.settings_stealth_gpc_title),
-                    subtitle = stringResource(R.string.settings_stealth_gpc_subtitle),
+                    title = L10n.get(Strings.settings_stealth_gpc_title),
+                    subtitle = L10n.get(Strings.settings_stealth_gpc_subtitle),
                     isChecked = settings.injectGpcDnt,
                     enabled = settings.isStealthModeEnabled,
                     onCheckedChange = {
@@ -801,8 +797,8 @@ private fun TrackingDetail(
                 )
                 Spacer(modifier = Modifier.height(12.dp))
                 StealthToggleRow(
-                    title = stringResource(R.string.settings_stealth_search_title),
-                    subtitle = stringResource(R.string.settings_stealth_search_subtitle),
+                    title = L10n.get(Strings.settings_stealth_search_title),
+                    subtitle = L10n.get(Strings.settings_stealth_search_subtitle),
                     isChecked = settings.hideSearchQuery,
                     enabled = settings.isStealthModeEnabled,
                     onCheckedChange = {
@@ -811,8 +807,8 @@ private fun TrackingDetail(
                 )
                 Spacer(modifier = Modifier.height(12.dp))
                 StealthToggleRow(
-                    title = stringResource(R.string.settings_stealth_push_title),
-                    subtitle = stringResource(R.string.settings_stealth_push_subtitle),
+                    title = L10n.get(Strings.settings_stealth_push_title),
+                    subtitle = L10n.get(Strings.settings_stealth_push_subtitle),
                     isChecked = settings.blockPushApi,
                     enabled = settings.isStealthModeEnabled,
                     onCheckedChange = {
@@ -821,8 +817,8 @@ private fun TrackingDetail(
                 )
                 Spacer(modifier = Modifier.height(12.dp))
                 StealthToggleRow(
-                    title = stringResource(R.string.settings_stealth_geo_title),
-                    subtitle = stringResource(R.string.settings_stealth_geo_subtitle),
+                    title = L10n.get(Strings.settings_stealth_geo_title),
+                    subtitle = L10n.get(Strings.settings_stealth_geo_subtitle),
                     isChecked = settings.blockGeolocationApi,
                     enabled = settings.isStealthModeEnabled,
                     onCheckedChange = {
@@ -831,8 +827,8 @@ private fun TrackingDetail(
                 )
                 Spacer(modifier = Modifier.height(12.dp))
                 StealthToggleRow(
-                    title = stringResource(R.string.settings_stealth_dpi_title),
-                    subtitle = stringResource(R.string.settings_stealth_dpi_subtitle),
+                    title = L10n.get(Strings.settings_stealth_dpi_title),
+                    subtitle = L10n.get(Strings.settings_stealth_dpi_subtitle),
                     isChecked = settings.antiDpi,
                     enabled = settings.isStealthModeEnabled,
                     onCheckedChange = {
@@ -879,21 +875,21 @@ private fun StealthMaskIpRow(
     ) {
         Column(modifier = Modifier.weight(1f)) {
             Text(
-                text = stringResource(R.string.settings_stealth_mask_title),
+                text = L10n.get(Strings.settings_stealth_mask_title),
                 fontSize = 13.sp,
                 fontWeight = FontWeight.SemiBold,
                 color = if (enabled) AdGuardTextPrimary else AdGuardTextMuted,
             )
             Text(
-                text = stringResource(R.string.settings_stealth_mask_subtitle),
+                text = L10n.get(Strings.settings_stealth_mask_subtitle),
                 fontSize = 11.sp,
                 color = AdGuardTextSecondary,
             )
             Text(
                 text = if (value.isEmpty()) {
-                    stringResource(R.string.settings_stealth_mask_unset)
+                    L10n.get(Strings.settings_stealth_mask_unset)
                 } else {
-                    stringResource(R.string.settings_stealth_mask_set, value)
+                    L10n.format(Strings.settings_stealth_mask_set, value)
                 },
                 fontSize = 11.sp,
                 color = if (value.isEmpty()) AdGuardTextMuted else AdGuardGreenLight,
@@ -909,8 +905,7 @@ private fun StealthMaskIpRow(
             }
         }) {
             Text(
-                text = stringResource(
-                    if (editing) R.string.common_cancel else R.string.settings_stealth_mask_change
+                text = L10n.get(if (editing) Strings.common_cancel else Strings.settings_stealth_mask_change
                 ),
                 fontSize = 11.sp,
                 color = AdGuardGreenLight,
@@ -923,7 +918,7 @@ private fun StealthMaskIpRow(
         OutlinedTextField(
             value = draft,
             onValueChange = { draft = it },
-            label = { Text(stringResource(R.string.settings_stealth_mask_label), fontSize = 12.sp) },
+            label = { Text(L10n.get(Strings.settings_stealth_mask_label), fontSize = 12.sp) },
             placeholder = { Text("203.0.113.9", fontSize = 12.sp, color = AdGuardTextMuted) },
             singleLine = true,
             isError = candidate == null,
@@ -949,11 +944,11 @@ private fun StealthMaskIpRow(
                     contentColor = AdGuardOnAccent,
                 ),
             ) {
-                Text(stringResource(R.string.settings_stealth_mask_apply), fontSize = 12.sp)
+                Text(L10n.get(Strings.settings_stealth_mask_apply), fontSize = 12.sp)
             }
             if (candidate == null) {
                 Text(
-                    text = stringResource(R.string.settings_stealth_mask_invalid),
+                    text = L10n.get(Strings.settings_stealth_mask_invalid),
                     fontSize = 11.sp,
                     color = AdGuardRedBlocked,
                     modifier = Modifier.align(Alignment.CenterVertically),
@@ -964,19 +959,19 @@ private fun StealthMaskIpRow(
 }
 
 /** The label the radio shows for a level. */
-private fun StealthPreset.titleRes(): Int = when (this) {
-    StealthPreset.STANDARD -> R.string.settings_stealth_preset_standard_title
-    StealthPreset.HIGH -> R.string.settings_stealth_preset_high_title
-    StealthPreset.ULTRA -> R.string.settings_stealth_preset_ultra_title
-    StealthPreset.CUSTOM -> R.string.settings_stealth_preset_custom_title
+private fun StealthPreset.titleRes(): String = when (this) {
+    StealthPreset.STANDARD -> Strings.settings_stealth_preset_standard_title
+    StealthPreset.HIGH -> Strings.settings_stealth_preset_high_title
+    StealthPreset.ULTRA -> Strings.settings_stealth_preset_ultra_title
+    StealthPreset.CUSTOM -> Strings.settings_stealth_preset_custom_title
 }
 
 /** What the level turns on, and what it costs. */
-private fun StealthPreset.bodyRes(): Int = when (this) {
-    StealthPreset.STANDARD -> R.string.settings_stealth_preset_standard_body
-    StealthPreset.HIGH -> R.string.settings_stealth_preset_high_body
-    StealthPreset.ULTRA -> R.string.settings_stealth_preset_ultra_body
-    StealthPreset.CUSTOM -> R.string.settings_stealth_preset_custom_body
+private fun StealthPreset.bodyRes(): String = when (this) {
+    StealthPreset.STANDARD -> Strings.settings_stealth_preset_standard_body
+    StealthPreset.HIGH -> Strings.settings_stealth_preset_high_body
+    StealthPreset.ULTRA -> Strings.settings_stealth_preset_ultra_body
+    StealthPreset.CUSTOM -> Strings.settings_stealth_preset_custom_body
 }
 
 @Composable
@@ -995,14 +990,14 @@ private fun AnnoyancesDetail(
         ModuleDetailHero(
             icon = Icons.Default.NotificationsOff,
             tint = AdGuardOrangeWarning,
-            title = stringResource(R.string.home_module_annoyances_title),
-            subtitle = stringResource(R.string.home_module_annoyances_subtitle),
+            title = L10n.get(Strings.home_module_annoyances_title),
+            subtitle = L10n.get(Strings.home_module_annoyances_subtitle),
         )
 
         SettingsSwitch(
             icon = Icons.Default.NotificationsOff,
-            title = stringResource(R.string.home_module_annoyances_title),
-            subtitle = stringResource(R.string.home_module_annoyances_subtitle),
+            title = L10n.get(Strings.home_module_annoyances_title),
+            subtitle = L10n.get(Strings.home_module_annoyances_subtitle),
             checked = settings.isAnnoyancesEnabled,
             onCheckedChange = { viewModel.onIntent(AdGuardIntent.ToggleAnnoyances) },
         )
@@ -1010,13 +1005,13 @@ private fun AnnoyancesDetail(
         Spacer(modifier = Modifier.height(18.dp))
 
         Text(
-            text = stringResource(R.string.protection_annoyances_lists_title),
+            text = L10n.get(Strings.protection_annoyances_lists_title),
             fontSize = 12.sp,
             fontWeight = FontWeight.Bold,
             color = AdGuardTextSecondary,
         )
         Text(
-            text = stringResource(R.string.protection_annoyances_lists_body),
+            text = L10n.get(Strings.protection_annoyances_lists_body),
             fontSize = 11.sp,
             color = AdGuardTextMuted,
             modifier = Modifier.padding(top = 2.dp, bottom = 8.dp),
@@ -1024,7 +1019,7 @@ private fun AnnoyancesDetail(
 
         if (lists.isEmpty()) {
             Text(
-                text = stringResource(R.string.protection_annoyances_empty),
+                text = L10n.get(Strings.protection_annoyances_empty),
                 fontSize = 12.sp,
                 color = AdGuardTextMuted,
             )
@@ -1056,8 +1051,8 @@ private fun AnnoyancesDetail(
         NavigationRow(
             icon = Icons.Default.Layers,
             accent = AdGuardOrangeWarning,
-            title = stringResource(R.string.protection_filters_row),
-            subtitle = stringResource(R.string.protection_annoyances_summary, active),
+            title = L10n.get(Strings.protection_filters_row),
+            subtitle = L10n.format(Strings.protection_annoyances_summary, active),
             onClick = onFilters,
         )
     }
@@ -1076,8 +1071,8 @@ private fun HttpsDetail(
         ModuleDetailHero(
             icon = Icons.Default.Lock,
             tint = AdGuardPurpleAI,
-            title = stringResource(R.string.settings_https_title),
-            subtitle = stringResource(R.string.settings_https_body),
+            title = L10n.get(Strings.settings_https_title),
+            subtitle = L10n.get(Strings.settings_https_body),
         )
 
         HttpsFilterSection(
@@ -1124,7 +1119,7 @@ private fun FirewallDetail(
                 )
                 Spacer(modifier = Modifier.width(4.dp))
                 Text(
-                    text = stringResource(R.string.firewall_reset_action),
+                    text = L10n.get(Strings.firewall_reset_action),
                     fontSize = 12.sp,
                     fontWeight = FontWeight.SemiBold,
                     color = AdGuardOrangeWarning,
@@ -1135,14 +1130,14 @@ private fun FirewallDetail(
         ModuleDetailHero(
             icon = Icons.Default.Shield,
             tint = AdGuardGreenPrimary,
-            title = stringResource(R.string.home_module_firewall_title),
-            subtitle = stringResource(R.string.home_module_firewall_subtitle),
+            title = L10n.get(Strings.home_module_firewall_title),
+            subtitle = L10n.get(Strings.home_module_firewall_subtitle),
         )
 
         SettingsSwitch(
             icon = Icons.Default.Shield,
-            title = stringResource(R.string.home_module_firewall_title),
-            subtitle = stringResource(R.string.home_module_firewall_subtitle),
+            title = L10n.get(Strings.home_module_firewall_title),
+            subtitle = L10n.get(Strings.home_module_firewall_subtitle),
             checked = settings.isFirewallEnabled,
             onCheckedChange = { viewModel.onIntent(AdGuardIntent.ToggleFirewall) },
         )
@@ -1152,11 +1147,11 @@ private fun FirewallDetail(
         FirewallToggleRow(
             icon = Icons.Default.Shield,
             accent = AdGuardGreenPrimary,
-            title = stringResource(R.string.firewall_global_title),
+            title = L10n.get(Strings.firewall_global_title),
             subtitle = if (settings.firewallGlobalRules && blockedGlobals > 0) {
-                stringResource(R.string.firewall_global_some_blocked, blockedGlobals)
+                L10n.format(Strings.firewall_global_some_blocked, blockedGlobals)
             } else {
-                stringResource(R.string.firewall_global_all_allowed)
+                L10n.get(Strings.firewall_global_all_allowed)
             },
             checked = settings.firewallGlobalRules,
             onCheckedChange = {
@@ -1175,11 +1170,11 @@ private fun FirewallDetail(
         FirewallToggleRow(
             icon = Icons.Default.Apps,
             accent = AdGuardGreenLight,
-            title = stringResource(R.string.firewall_custom_title),
+            title = L10n.get(Strings.firewall_custom_title),
             subtitle = if (overrides == 0) {
-                stringResource(R.string.firewall_custom_empty)
+                L10n.get(Strings.firewall_custom_empty)
             } else {
-                stringResource(R.string.firewall_custom_summary, overrides)
+                L10n.format(Strings.firewall_custom_summary, overrides)
             },
             checked = settings.firewallCustomRules,
             onCheckedChange = {
@@ -1193,8 +1188,8 @@ private fun FirewallDetail(
         NavigationRow(
             icon = Icons.Default.History,
             accent = AdGuardOrangeWarning,
-            title = stringResource(R.string.firewall_quick_title),
-            subtitle = stringResource(R.string.firewall_quick_subtitle),
+            title = L10n.get(Strings.firewall_quick_title),
+            subtitle = L10n.get(Strings.firewall_quick_subtitle),
             onClick = onQuick,
         )
 
@@ -1203,8 +1198,8 @@ private fun FirewallDetail(
         FirewallToggleRow(
             icon = Icons.Default.NotificationsOff,
             accent = AdGuardOrangeWarning,
-            title = stringResource(R.string.firewall_notifications_title),
-            subtitle = stringResource(R.string.firewall_notifications_body),
+            title = L10n.get(Strings.firewall_notifications_title),
+            subtitle = L10n.get(Strings.firewall_notifications_body),
             checked = settings.firewallNotifications,
             onCheckedChange = {
                 viewModel.onIntent(AdGuardIntent.UpdateFirewallSettings(notifications = it))
@@ -1227,7 +1222,7 @@ private fun FirewallDetail(
                 horizontalAlignment = Alignment.CenterHorizontally,
             ) {
                 Text(
-                    text = stringResource(R.string.firewall_reset_title),
+                    text = L10n.get(Strings.firewall_reset_title),
                     fontSize = 18.sp,
                     fontWeight = FontWeight.Bold,
                     color = AdGuardTextPrimary,
@@ -1235,7 +1230,7 @@ private fun FirewallDetail(
                 )
                 Spacer(modifier = Modifier.height(8.dp))
                 Text(
-                    text = stringResource(R.string.firewall_reset_body),
+                    text = L10n.get(Strings.firewall_reset_body),
                     fontSize = 12.sp,
                     color = AdGuardTextSecondary,
                     textAlign = TextAlign.Center,
@@ -1256,7 +1251,7 @@ private fun FirewallDetail(
                     ),
                 ) {
                     Text(
-                        text = stringResource(R.string.firewall_reset_confirm),
+                        text = L10n.get(Strings.firewall_reset_confirm),
                         fontSize = 13.sp,
                         fontWeight = FontWeight.Bold,
                     )
@@ -1343,14 +1338,14 @@ private fun BrowsingSecurityDetail(
         ModuleDetailHero(
             icon = Icons.Default.Security,
             tint = AdGuardBlueDns,
-            title = stringResource(R.string.home_module_browsing_security_title),
-            subtitle = stringResource(R.string.home_module_browsing_security_subtitle),
+            title = L10n.get(Strings.home_module_browsing_security_title),
+            subtitle = L10n.get(Strings.home_module_browsing_security_subtitle),
         )
 
         SettingsSwitch(
             icon = Icons.Default.Security,
-            title = stringResource(R.string.home_module_browsing_security_title),
-            subtitle = stringResource(R.string.home_module_browsing_security_subtitle),
+            title = L10n.get(Strings.home_module_browsing_security_title),
+            subtitle = L10n.get(Strings.home_module_browsing_security_subtitle),
             checked = state.settings.isBrowsingSecurityEnabled,
             onCheckedChange = { viewModel.onIntent(AdGuardIntent.ToggleBrowsingSecurity) },
         )
@@ -1363,7 +1358,7 @@ private fun BrowsingSecurityDetail(
             colors = CardDefaults.cardColors(containerColor = AdGuardDarkSurface),
         ) {
             Text(
-                text = stringResource(R.string.protection_browsing_security_body),
+                text = L10n.get(Strings.protection_browsing_security_body),
                 fontSize = 12.sp,
                 color = AdGuardTextMuted,
                 modifier = Modifier.padding(14.dp),
@@ -1384,14 +1379,14 @@ private fun EcoDetail(
         ModuleDetailHero(
             icon = Icons.Default.BatteryChargingFull,
             tint = AdGuardGreenLight,
-            title = stringResource(R.string.home_module_eco_title),
-            subtitle = stringResource(R.string.home_module_eco_subtitle),
+            title = L10n.get(Strings.home_module_eco_title),
+            subtitle = L10n.get(Strings.home_module_eco_subtitle),
         )
 
         SettingsSwitch(
             icon = Icons.Default.BatteryChargingFull,
-            title = stringResource(R.string.home_module_eco_title),
-            subtitle = stringResource(R.string.home_module_eco_subtitle),
+            title = L10n.get(Strings.home_module_eco_title),
+            subtitle = L10n.get(Strings.home_module_eco_subtitle),
             checked = state.settings.isEcoBatteryModeEnabled,
             onCheckedChange = { viewModel.onIntent(AdGuardIntent.ToggleEcoMode) },
         )
@@ -1399,7 +1394,7 @@ private fun EcoDetail(
         Spacer(modifier = Modifier.height(12.dp))
 
         Text(
-            text = stringResource(R.string.protection_eco_body),
+            text = L10n.get(Strings.protection_eco_body),
             fontSize = 12.sp,
             color = AdGuardTextMuted,
         )
@@ -1423,7 +1418,7 @@ internal fun DetailScaffold(
             IconButton(onClick = onBack) {
                 Icon(
                     imageVector = Icons.AutoMirrored.Filled.ArrowBack,
-                    contentDescription = stringResource(R.string.hub_back),
+                    contentDescription = L10n.get(Strings.hub_back),
                     tint = AdGuardTextPrimary,
                 )
             }
@@ -1600,8 +1595,8 @@ internal fun NavigationRow(
 /** Label for the auto-update chips; 0 means "off". */
 @Composable
 private fun autoUpdateLabel(hours: Int): String =
-    if (hours <= 0) stringResource(R.string.settings_auto_update_off)
-    else stringResource(R.string.settings_auto_update_hours, hours)
+    if (hours <= 0) L10n.get(Strings.settings_auto_update_off)
+    else L10n.format(Strings.settings_auto_update_hours, hours)
 
 /** Header for destinations that still show a title bar instead of a hero. */
 @Composable
@@ -1617,7 +1612,7 @@ internal fun HubDestinationHeader(
         IconButton(onClick = onBack) {
             Icon(
                 imageVector = Icons.AutoMirrored.Filled.ArrowBack,
-                contentDescription = stringResource(R.string.hub_back),
+                contentDescription = L10n.get(Strings.hub_back),
                 tint = AdGuardTextPrimary,
             )
         }

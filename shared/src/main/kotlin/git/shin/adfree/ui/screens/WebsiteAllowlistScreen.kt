@@ -1,5 +1,7 @@
 package git.shin.adfree.ui.screens
 
+import git.shin.adfree.l10n.L10n
+import git.shin.adfree.l10n.Strings
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
@@ -45,14 +47,12 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.testTag
-import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import git.shin.adfree.R
 import git.shin.adfree.model.allowlistHost
 import git.shin.adfree.model.allowlistRuleBody
 import git.shin.adfree.model.allowlistRuleEnabled
@@ -92,7 +92,7 @@ fun WebsiteAllowlistScreen(
     val state by viewModel.uiState.collectAsState()
     var query by rememberSaveable { mutableStateOf("") }
     var draft by rememberSaveable { mutableStateOf("") }
-    var problem by rememberSaveable { mutableStateOf(0) }
+    var problem by rememberSaveable { mutableStateOf<String?>(null) }
 
     val rules = state.filterLists.firstOrNull { it.isCustom }?.customRules.orEmpty()
     val exceptions = rules.filter { isAllowlistRule(it) }
@@ -114,13 +114,13 @@ fun WebsiteAllowlistScreen(
                 IconButton(onClick = onBack) {
                     Icon(
                         imageVector = Icons.AutoMirrored.Filled.ArrowBack,
-                        contentDescription = stringResource(R.string.hub_back),
+                        contentDescription = L10n.get(Strings.hub_back),
                         tint = AdGuardTextPrimary,
                     )
                 }
                 Column(modifier = Modifier.weight(1f)) {
                     Text(
-                        text = stringResource(R.string.allowlist_title),
+                        text = L10n.get(Strings.allowlist_title),
                         fontSize = 19.sp,
                         fontWeight = FontWeight.Bold,
                         color = AdGuardTextPrimary,
@@ -128,12 +128,12 @@ fun WebsiteAllowlistScreen(
                     // Only the switched-on rules bypass anything, so that is the
                     // number the subtitle carries; parked ones are counted apart.
                     val parkedNote = if (parked > 0) {
-                        " · " + stringResource(R.string.allowlist_parked_count, parked)
+                        " · " + L10n.format(Strings.allowlist_parked_count, parked)
                     } else {
                         ""
                     }
                     Text(
-                        text = stringResource(R.string.allowlist_subtitle, switchedOn) + parkedNote,
+                        text = L10n.format(Strings.allowlist_subtitle, switchedOn) + parkedNote,
                         fontSize = 12.sp,
                         color = AdGuardTextMuted,
                     )
@@ -146,7 +146,7 @@ fun WebsiteAllowlistScreen(
                 value = draft,
                 onValueChange = {
                     draft = it
-                    problem = 0
+                    problem = null
                 },
                 modifier = Modifier
                     .fillMaxWidth()
@@ -154,17 +154,17 @@ fun WebsiteAllowlistScreen(
                 singleLine = true,
                 placeholder = {
                     Text(
-                        stringResource(R.string.rules_allow_hint),
+                        L10n.get(Strings.rules_allow_hint),
                         color = AdGuardTextMuted,
                         fontSize = 13.sp,
                     )
                 },
                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri),
-                isError = problem != 0,
-                supportingText = if (problem == 0) null else {
-                    {
+                isError = problem != null,
+                supportingText = problem?.let { message ->
+                    @Composable {
                         Text(
-                            stringResource(problem),
+                            L10n.get(message),
                             fontSize = 11.sp,
                             color = AdGuardRedBlocked,
                         )
@@ -192,20 +192,20 @@ fun WebsiteAllowlistScreen(
                         !allowlistRuleEnabled(it) && allowlistRuleBody(it) == rule
                     }
                     when {
-                        rule == null -> problem = R.string.rules_invalid_domain
+                        rule == null -> problem = Strings.rules_invalid_domain
                         parkedRule != null -> {
                             viewModel.onIntent(AdGuardIntent.ReplaceCustomRule(parkedRule, rule))
                             draft = ""
-                            problem = 0
+                            problem = null
                         }
 
-                        rule in exceptions -> problem = R.string.rules_exception_exists
+                        rule in exceptions -> problem = Strings.rules_exception_exists
                         else -> {
                             viewModel.onIntent(AdGuardIntent.AddCustomRule(rule))
                             // The new row appears from the store, so the field is
                             // cleared rather than left showing what was just added.
                             draft = ""
-                            problem = 0
+                            problem = null
                         }
                     }
                 },
@@ -223,7 +223,7 @@ fun WebsiteAllowlistScreen(
                 )
                 Spacer(modifier = Modifier.width(6.dp))
                 Text(
-                    stringResource(R.string.allowlist_add_action),
+                    L10n.get(Strings.allowlist_add_action),
                     fontSize = 13.sp,
                     fontWeight = FontWeight.Bold,
                 )
@@ -240,7 +240,7 @@ fun WebsiteAllowlistScreen(
                 singleLine = true,
                 placeholder = {
                     Text(
-                        stringResource(R.string.allowlist_search_hint),
+                        L10n.get(Strings.allowlist_search_hint),
                         color = AdGuardTextMuted,
                         fontSize = 13.sp,
                     )
@@ -263,7 +263,7 @@ fun WebsiteAllowlistScreen(
                         ) {
                             Icon(
                                 Icons.Default.Close,
-                                contentDescription = stringResource(R.string.filters_clear_search),
+                                contentDescription = L10n.get(Strings.filters_clear_search),
                                 tint = AdGuardTextMuted,
                                 modifier = Modifier.size(16.dp),
                             )
@@ -291,9 +291,8 @@ fun WebsiteAllowlistScreen(
                     contentAlignment = Alignment.Center,
                 ) {
                     Text(
-                        text = stringResource(
-                            if (exceptions.isEmpty()) R.string.rules_allow_empty
-                            else R.string.allowlist_no_match,
+                        text = L10n.get(if (exceptions.isEmpty()) Strings.rules_allow_empty
+                            else Strings.allowlist_no_match,
                         ),
                         fontSize = 12.sp,
                         color = AdGuardTextMuted,
@@ -325,7 +324,7 @@ fun WebsiteAllowlistScreen(
             }
 
             Text(
-                text = stringResource(R.string.allowlist_https_note),
+                text = L10n.get(Strings.allowlist_https_note),
                 fontSize = 11.sp,
                 color = AdGuardTextMuted,
                 modifier = Modifier.padding(top = 10.dp),
@@ -366,8 +365,7 @@ private fun AllowlistRow(
                     .padding(horizontal = 6.dp, vertical = 2.dp),
             ) {
                 Text(
-                    text = stringResource(
-                        if (enabled) R.string.rules_badge_allow else R.string.allowlist_off_badge,
+                    text = L10n.get(if (enabled) Strings.rules_badge_allow else Strings.allowlist_off_badge,
                     ),
                     fontSize = 10.sp,
                     fontWeight = FontWeight.Bold,
@@ -411,7 +409,7 @@ private fun AllowlistRow(
             ) {
                 Icon(
                     Icons.Default.Delete,
-                    contentDescription = stringResource(R.string.allowlist_delete_action),
+                    contentDescription = L10n.get(Strings.allowlist_delete_action),
                     tint = AdGuardRedBlocked,
                     modifier = Modifier.size(18.dp),
                 )

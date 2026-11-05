@@ -1,14 +1,10 @@
 package git.shin.adfree.ui.screens
 
-import android.content.Intent
-import android.net.Uri
-import android.os.Build
-import android.provider.Settings as AndroidSettings
-import android.widget.Toast
-import androidx.compose.ui.res.stringResource
-import git.shin.adfree.R
-import androidx.activity.compose.rememberLauncherForActivityResult
-import androidx.activity.result.contract.ActivityResultContracts
+import git.shin.adfree.l10n.Strings
+import git.shin.adfree.l10n.L10n
+import git.shin.adfree.platform.OnResumeTick
+import git.shin.adfree.platform.currentFileHost
+import git.shin.adfree.platform.currentPlatformHost
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
@@ -64,13 +60,14 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import kotlinx.coroutines.launch
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalClipboardManager
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.graphics.vector.ImageVector
@@ -79,8 +76,6 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.lifecycle.Lifecycle
-import androidx.lifecycle.compose.LifecycleEventEffect
 import git.shin.adfree.core.DnsRewriteValidation
 import git.shin.adfree.core.MitmStatus
 import git.shin.adfree.data.AutomationControl
@@ -134,20 +129,10 @@ fun SettingsScreen(
     val appUpdateState by viewModel.appUpdateState.collectAsState()
     val scrollState = rememberScrollState()
     val uriHandler = LocalUriHandler.current
-    val context = LocalContext.current
+    val files = currentFileHost()
+    val platform = currentPlatformHost()
+    val backupScope = rememberCoroutineScope()
     var pendingRestoreUri by remember { mutableStateOf<String?>(null) }
-
-    val exportLauncher = rememberLauncherForActivityResult(
-        ActivityResultContracts.CreateDocument("application/json"),
-    ) { uri ->
-        uri?.let { viewModel.onIntent(AdGuardIntent.ExportBackup(it.toString())) }
-    }
-    val importLauncher = rememberLauncherForActivityResult(
-        ActivityResultContracts.OpenDocument(),
-    ) { uri ->
-        // Ask before overwriting; the actual read happens after confirmation.
-        uri?.let { pendingRestoreUri = it.toString() }
-    }
 
     // The header lives outside the scrolling column on purpose: it describes
     // where you are, and should not slide away as soon as the list moves.
@@ -158,13 +143,13 @@ fun SettingsScreen(
     ) {
         Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp)) {
             Text(
-                text = stringResource(R.string.nav_settings),
+                text = L10n.get(Strings.nav_settings),
                 fontSize = 19.sp,
                 fontWeight = FontWeight.Bold,
                 color = AdGuardTextPrimary,
             )
             Text(
-                text = stringResource(R.string.settings_subtitle),
+                text = L10n.get(Strings.settings_subtitle),
                 fontSize = 12.sp,
                 color = AdGuardTextMuted
             )
@@ -178,7 +163,7 @@ fun SettingsScreen(
         ) {
         Spacer(modifier = Modifier.height(8.dp))
 
-            SettingsGroupHeader(stringResource(R.string.settings_group_general))
+            SettingsGroupHeader(L10n.get(Strings.settings_group_general))
 
             LanguageSection(
                 selected = state.settings.appLanguage,
@@ -196,24 +181,23 @@ fun SettingsScreen(
 
             SettingsSwitch(
                 icon = Icons.Default.PowerSettingsNew,
-                title = stringResource(R.string.settings_autostart_title),
-                subtitle = stringResource(R.string.settings_autostart_subtitle),
+                title = L10n.get(Strings.settings_autostart_title),
+                subtitle = L10n.get(Strings.settings_autostart_subtitle),
                 checked = state.settings.autoStart,
                 onCheckedChange = { viewModel.onIntent(AdGuardIntent.ToggleAutoStart(it)) },
             )
 
             Spacer(modifier = Modifier.height(20.dp))
 
-            SettingsGroupHeader(stringResource(R.string.settings_group_network))
+            SettingsGroupHeader(L10n.get(Strings.settings_group_network))
 
             val proxy = state.settings.proxy
             val proxyActive = proxy.enabled && proxy.isUsable
             SettingsValueRow(
                 icon = Icons.Default.Route,
-                title = stringResource(R.string.settings_routing_mode_title),
-                subtitle = stringResource(
-                    if (proxyActive) R.string.settings_routing_socks5
-                    else R.string.settings_routing_local_vpn,
+                title = L10n.get(Strings.settings_routing_mode_title),
+                subtitle = L10n.get(if (proxyActive) Strings.settings_routing_socks5
+                    else Strings.settings_routing_local_vpn,
                 ),
                 value = if (proxyActive) "${proxy.host}:${proxy.port}" else null,
             )
@@ -222,42 +206,23 @@ fun SettingsScreen(
 
             SettingsLink(
                 icon = Icons.Default.NotificationsActive,
-                title = stringResource(R.string.settings_notifications_title),
-                subtitle = stringResource(R.string.settings_notifications_subtitle),
+                title = L10n.get(Strings.settings_notifications_title),
+                subtitle = L10n.get(Strings.settings_notifications_subtitle),
                 onClick = {
                     // Per-channel switches live in the OS, one per feature
                     // (protection, firewall, updates, HTTPS reminder).
-                    val opened = Build.VERSION.SDK_INT >= Build.VERSION_CODES.O &&
-                        runCatching {
-                            context.startActivity(
-                                Intent(AndroidSettings.ACTION_APP_NOTIFICATION_SETTINGS)
-                                    .putExtra(
-                                        AndroidSettings.EXTRA_APP_PACKAGE,
-                                        context.packageName,
-                                    ),
-                            )
-                        }.isSuccess
-                    if (!opened) {
-                        runCatching {
-                            context.startActivity(
-                                Intent(
-                                    AndroidSettings.ACTION_APPLICATION_DETAILS_SETTINGS,
-                                    Uri.fromParts("package", context.packageName, null),
-                                ),
-                            )
-                        }
-                    }
+                    platform.openNotificationSettings()
                 },
             )
 
             Spacer(modifier = Modifier.height(20.dp))
 
-            SettingsGroupHeader(stringResource(R.string.settings_group_logging))
+            SettingsGroupHeader(L10n.get(Strings.settings_group_logging))
 
             SettingsSwitch(
                 icon = Icons.Default.Visibility,
-                title = stringResource(R.string.settings_log_allowed_title),
-                subtitle = stringResource(R.string.settings_log_allowed_subtitle),
+                title = L10n.get(Strings.settings_log_allowed_title),
+                subtitle = L10n.get(Strings.settings_log_allowed_subtitle),
                 checked = state.settings.logAllowedRequests,
                 onCheckedChange = { viewModel.onIntent(AdGuardIntent.ToggleLogAllowed(it)) }
             )
@@ -271,7 +236,7 @@ fun SettingsScreen(
 
             Spacer(modifier = Modifier.height(20.dp))
 
-            SettingsGroupHeader(stringResource(R.string.settings_group_automation))
+            SettingsGroupHeader(L10n.get(Strings.settings_group_automation))
 
             AutomationSection(
                 control = automation,
@@ -281,18 +246,27 @@ fun SettingsScreen(
 
             Spacer(modifier = Modifier.height(20.dp))
 
-            SettingsGroupHeader(stringResource(R.string.settings_group_data))
+            SettingsGroupHeader(L10n.get(Strings.settings_group_data))
 
             BackupSection(
-                onExport = { exportLauncher.launch("adfree-backup.json") },
+                onExport = {
+                    backupScope.launch {
+                        files.createDocument("adfree-backup.json", "application/json")?.let {
+                            viewModel.onIntent(AdGuardIntent.ExportBackup(it))
+                        }
+                    }
+                },
                 onImport = {
-                    importLauncher.launch(arrayOf("application/json", "text/plain", "*/*"))
+                    // Ask before overwriting; the actual read happens after confirmation.
+                    backupScope.launch {
+                        files.openText()?.let { pendingRestoreUri = it }
+                    }
                 },
             )
 
             Spacer(modifier = Modifier.height(20.dp))
 
-            SettingsGroupHeader(stringResource(R.string.settings_group_about))
+            SettingsGroupHeader(L10n.get(Strings.settings_group_about))
 
             EngineInfoSection(state.stats.filterBuildMs)
 
@@ -306,8 +280,8 @@ fun SettingsScreen(
 
             SettingsLink(
                 icon = Icons.AutoMirrored.Filled.HelpOutline,
-                title = stringResource(R.string.settings_help_title),
-                subtitle = stringResource(R.string.settings_help_subtitle),
+                title = L10n.get(Strings.settings_help_title),
+                subtitle = L10n.get(Strings.settings_help_subtitle),
                 onClick = {
                     runCatching { uriHandler.openUri(HELP_URL) }
                 },
@@ -318,8 +292,8 @@ fun SettingsScreen(
             // A diagnostic screen rather than a daily tab: reachable from here.
             SettingsLink(
                 icon = Icons.Default.Science,
-                title = stringResource(R.string.settings_lab_title),
-                subtitle = stringResource(R.string.settings_lab_subtitle),
+                title = L10n.get(Strings.settings_lab_title),
+                subtitle = L10n.get(Strings.settings_lab_subtitle),
                 onClick = { viewModel.onIntent(AdGuardIntent.SelectTab(AdGuardTab.AI_LAB)) }
             )
 
@@ -330,10 +304,10 @@ fun SettingsScreen(
     pendingRestoreUri?.let { uri ->
         AlertDialog(
             onDismissRequest = { pendingRestoreUri = null },
-            title = { Text(stringResource(R.string.settings_restore_title)) },
+            title = { Text(L10n.get(Strings.settings_restore_title)) },
             text = {
                 Text(
-                    stringResource(R.string.settings_restore_body),
+                    L10n.get(Strings.settings_restore_body),
                     fontSize = 12.sp,
                 )
             },
@@ -344,12 +318,12 @@ fun SettingsScreen(
                         viewModel.onIntent(AdGuardIntent.ImportBackup(uri))
                     },
                 ) {
-                    Text(stringResource(R.string.settings_restore_confirm), color = AdGuardOrangeWarning)
+                    Text(L10n.get(Strings.settings_restore_confirm), color = AdGuardOrangeWarning)
                 }
             },
             dismissButton = {
                 TextButton(onClick = { pendingRestoreUri = null }) {
-                    Text(stringResource(R.string.common_cancel))
+                    Text(L10n.get(Strings.common_cancel))
                 }
             },
         )
@@ -375,7 +349,7 @@ private fun LanguageSection(
     onSelect: (AppLanguage) -> Unit,
 ) {
     Text(
-        text = stringResource(R.string.settings_language_title),
+        text = L10n.get(Strings.settings_language_title),
         fontSize = 12.sp,
         fontWeight = FontWeight.Bold,
         color = AdGuardTextSecondary,
@@ -403,11 +377,10 @@ private fun LanguageSection(
 }
 
 @Composable
-private fun appLanguageLabel(language: AppLanguage): String = stringResource(
-    when (language) {
-        AppLanguage.SYSTEM -> R.string.settings_language_system
-        AppLanguage.ENGLISH -> R.string.settings_language_english
-        AppLanguage.VIETNAMESE -> R.string.settings_language_vietnamese
+private fun appLanguageLabel(language: AppLanguage): String = L10n.get(when (language) {
+        AppLanguage.SYSTEM -> Strings.settings_language_system
+        AppLanguage.ENGLISH -> Strings.settings_language_english
+        AppLanguage.VIETNAMESE -> Strings.settings_language_vietnamese
     }
 )
 
@@ -417,7 +390,7 @@ private fun ThemeSection(
     onSelect: (ThemeMode) -> Unit,
 ) {
     Text(
-        text = stringResource(R.string.settings_theme_title),
+        text = L10n.get(Strings.settings_theme_title),
         fontSize = 12.sp,
         fontWeight = FontWeight.Bold,
         color = AdGuardTextSecondary,
@@ -445,11 +418,10 @@ private fun ThemeSection(
 }
 
 @Composable
-private fun themeModeLabel(mode: ThemeMode): String = stringResource(
-    when (mode) {
-        ThemeMode.SYSTEM -> R.string.settings_theme_system
-        ThemeMode.LIGHT -> R.string.settings_theme_light
-        ThemeMode.DARK -> R.string.settings_theme_dark
+private fun themeModeLabel(mode: ThemeMode): String = L10n.get(when (mode) {
+        ThemeMode.SYSTEM -> Strings.settings_theme_system
+        ThemeMode.LIGHT -> Strings.settings_theme_light
+        ThemeMode.DARK -> Strings.settings_theme_dark
     }
 )
 
@@ -459,14 +431,14 @@ private fun LogLevelSection(
     onSelect: (LogLevel) -> Unit,
 ) {
     Text(
-        text = stringResource(R.string.settings_log_level_title),
+        text = L10n.get(Strings.settings_log_level_title),
         fontSize = 12.sp,
         fontWeight = FontWeight.Bold,
         color = AdGuardTextSecondary,
         modifier = Modifier.padding(bottom = 2.dp),
     )
     Text(
-        text = stringResource(R.string.settings_log_level_subtitle),
+        text = L10n.get(Strings.settings_log_level_subtitle),
         fontSize = 11.sp,
         color = AdGuardTextMuted,
         modifier = Modifier.padding(bottom = 6.dp),
@@ -493,12 +465,11 @@ private fun LogLevelSection(
 }
 
 @Composable
-private fun logLevelLabel(level: LogLevel): String = stringResource(
-    when (level) {
-        LogLevel.OFF -> R.string.settings_log_off
-        LogLevel.ERROR -> R.string.settings_log_error
-        LogLevel.WARN -> R.string.settings_log_warn
-        LogLevel.DEBUG -> R.string.settings_log_debug
+private fun logLevelLabel(level: LogLevel): String = L10n.get(when (level) {
+        LogLevel.OFF -> Strings.settings_log_off
+        LogLevel.ERROR -> Strings.settings_log_error
+        LogLevel.WARN -> Strings.settings_log_warn
+        LogLevel.DEBUG -> Strings.settings_log_debug
     }
 )
 
@@ -518,8 +489,8 @@ private fun AutomationSection(
 ) {
     SettingsSwitch(
         icon = Icons.Default.Lock,
-        title = stringResource(R.string.settings_external_control_title),
-        subtitle = stringResource(R.string.settings_external_control_subtitle),
+        title = L10n.get(Strings.settings_external_control_title),
+        subtitle = L10n.get(Strings.settings_external_control_subtitle),
         checked = control.enabled,
         onCheckedChange = onToggle,
     )
@@ -527,7 +498,7 @@ private fun AutomationSection(
     Spacer(modifier = Modifier.height(8.dp))
 
     Text(
-        text = stringResource(R.string.settings_external_control_hint),
+        text = L10n.get(Strings.settings_external_control_hint),
         fontSize = 11.sp,
         color = AdGuardTextMuted,
     )
@@ -535,7 +506,7 @@ private fun AutomationSection(
     Spacer(modifier = Modifier.height(8.dp))
 
     Text(
-        text = stringResource(R.string.settings_external_control_warning),
+        text = L10n.get(Strings.settings_external_control_warning),
         fontSize = 11.sp,
         color = AdGuardOrangeWarning,
     )
@@ -563,7 +534,7 @@ private fun AutomationSection(
         ) {
             Icon(
                 imageVector = Icons.Default.ContentCopy,
-                contentDescription = stringResource(R.string.settings_external_control_copy),
+                contentDescription = L10n.get(Strings.settings_external_control_copy),
                 tint = AdGuardTextSecondary,
                 modifier = Modifier.size(16.dp),
             )
@@ -573,7 +544,7 @@ private fun AutomationSection(
             modifier = Modifier.testTag("settings_external_control_rotate"),
         ) {
             Text(
-                text = stringResource(R.string.settings_external_control_rotate),
+                text = L10n.get(Strings.settings_external_control_rotate),
                 fontSize = 11.sp,
             )
         }
@@ -593,13 +564,13 @@ private fun BackupSection(
     ) {
         Column(modifier = Modifier.padding(14.dp)) {
             Text(
-                text = stringResource(R.string.settings_backup_title),
+                text = L10n.get(Strings.settings_backup_title),
                 fontSize = 13.sp,
                 fontWeight = FontWeight.Bold,
                 color = AdGuardTextPrimary,
             )
             Text(
-                text = stringResource(R.string.settings_backup_body),
+                text = L10n.get(Strings.settings_backup_body),
                 fontSize = 11.sp,
                 color = AdGuardTextMuted,
                 modifier = Modifier.padding(top = 2.dp),
@@ -611,14 +582,14 @@ private fun BackupSection(
                     modifier = Modifier.weight(1f),
                     shape = RoundedCornerShape(8.dp),
                 ) {
-                    Text(stringResource(R.string.rules_export), fontSize = 11.sp, color = AdGuardGreenLight)
+                    Text(L10n.get(Strings.rules_export), fontSize = 11.sp, color = AdGuardGreenLight)
                 }
                 OutlinedButton(
                     onClick = onImport,
                     modifier = Modifier.weight(1f),
                     shape = RoundedCornerShape(8.dp),
                 ) {
-                    Text(stringResource(R.string.settings_restore_confirm), fontSize = 11.sp, color = AdGuardOrangeWarning)
+                    Text(L10n.get(Strings.settings_restore_confirm), fontSize = 11.sp, color = AdGuardOrangeWarning)
                 }
             }
         }
@@ -795,7 +766,7 @@ internal fun HttpsFilterSection(
     var addTarget by remember { mutableStateOf<HttpsListTarget?>(null) }
     val ui by viewModel.uiState.collectAsState()
 
-    val context = LocalContext.current
+    val platform = currentPlatformHost()
 
     // Lazily load the status; the core is cheap to query.
     androidx.compose.runtime.LaunchedEffect(Unit) {
@@ -806,7 +777,7 @@ internal fun HttpsFilterSection(
 
     // The system certificate installer lives in another activity: re-check the
     // store and honour the pending enable when we come back to the app.
-    LifecycleEventEffect(Lifecycle.Event.ON_RESUME) {
+    OnResumeTick {
         status = viewModel.readMitmStatus()
         caTrusted = viewModel.isCaTrusted()
         rootTrust = viewModel.rootTrustStatus()
@@ -820,8 +791,8 @@ internal fun HttpsFilterSection(
     Column {
         SettingsSwitch(
             icon = Icons.Default.Lock,
-            title = stringResource(R.string.settings_https_enable_title),
-            subtitle = stringResource(R.string.settings_https_enable_subtitle),
+            title = L10n.get(Strings.settings_https_enable_title),
+            subtitle = L10n.get(Strings.settings_https_enable_subtitle),
             checked = httpsEnabled,
             onCheckedChange = { enabled ->
                 if (enabled && !caTrusted) {
@@ -844,8 +815,8 @@ internal fun HttpsFilterSection(
         // being filtered instead of falling back to TCP or being dropped.
         SettingsSwitch(
             icon = Icons.Default.Bolt,
-            title = stringResource(R.string.settings_http3_title),
-            subtitle = stringResource(R.string.settings_http3_subtitle),
+            title = L10n.get(Strings.settings_http3_title),
+            subtitle = L10n.get(Strings.settings_http3_subtitle),
             checked = ui.settings.filterHttp3,
             enabled = httpsEnabled,
             onCheckedChange = { viewModel.onIntent(AdGuardIntent.ToggleFilterHttp3(it)) }
@@ -855,8 +826,8 @@ internal fun HttpsFilterSection(
 
         SettingsSwitch(
             icon = Icons.Default.VisibilityOff,
-            title = stringResource(R.string.settings_cosmetic_title),
-            subtitle = stringResource(R.string.settings_cosmetic_subtitle),
+            title = L10n.get(Strings.settings_cosmetic_title),
+            subtitle = L10n.get(Strings.settings_cosmetic_subtitle),
             checked = ui.settings.cosmeticFiltering,
             onCheckedChange = {
                 viewModel.onIntent(AdGuardIntent.ToggleCosmeticFiltering(it))
@@ -874,8 +845,8 @@ internal fun HttpsFilterSection(
         // next tap.
         SettingsSwitch(
             icon = Icons.Default.VisibilityOff,
-            title = stringResource(R.string.settings_ech_title),
-            subtitle = stringResource(R.string.settings_ech_subtitle),
+            title = L10n.get(Strings.settings_ech_title),
+            subtitle = L10n.get(Strings.settings_ech_subtitle),
             checked = echBlockingEnabled,
             onCheckedChange = { enabled -> viewModel.setEchBlocking(enabled) }
         )
@@ -909,23 +880,22 @@ internal fun HttpsFilterSection(
                 ) {
                     Column {
                         Text(
-                            text = if (status?.hasCa == true) stringResource(R.string.settings_ca_created)
-                            else stringResource(R.string.settings_ca_missing),
+                            text = if (status?.hasCa == true) L10n.get(Strings.settings_ca_created)
+                            else L10n.get(Strings.settings_ca_missing),
                             fontSize = 13.sp,
                             fontWeight = FontWeight.Bold,
                             color = if (status?.hasCa == true) AdGuardGreenLight else AdGuardTextSecondary,
                         )
                         Text(
                             text = status?.fingerprint?.take(23)?.let {
-                                stringResource(R.string.settings_ca_fingerprint, it)
-                            } ?: stringResource(R.string.settings_ca_create_hint),
+                                L10n.format(Strings.settings_ca_fingerprint, it)
+                            } ?: L10n.get(Strings.settings_ca_create_hint),
                             fontSize = 10.sp,
                             color = AdGuardTextMuted,
                             fontFamily = FontFamily.Monospace,
                         )
                         Text(
-                            text = stringResource(
-                                if (caTrusted) R.string.settings_ca_trusted else R.string.settings_ca_untrusted
+                            text = L10n.get(if (caTrusted) Strings.settings_ca_trusted else Strings.settings_ca_untrusted
                             ),
                             fontSize = 11.sp,
                             color = if (caTrusted) AdGuardGreenLight else AdGuardOrangeWarning,
@@ -939,9 +909,9 @@ internal fun HttpsFilterSection(
                             val daysLeft = (caExpiryMs - now) / 86_400_000L
                             Text(
                                 text = if (expired) {
-                                    stringResource(R.string.settings_ca_expired, formatCertDate(caExpiryMs))
+                                    L10n.format(Strings.settings_ca_expired, formatCertDate(caExpiryMs))
                                 } else {
-                                    stringResource(R.string.settings_ca_expiry, formatCertDate(caExpiryMs), daysLeft)
+                                    L10n.format(Strings.settings_ca_expiry, formatCertDate(caExpiryMs), daysLeft)
                                 },
                                 fontSize = 11.sp,
                                 color = when {
@@ -963,8 +933,8 @@ internal fun HttpsFilterSection(
                         shape = RoundedCornerShape(8.dp),
                     ) {
                         Text(
-                            if (status?.hasCa == true) stringResource(R.string.settings_ca_recreate)
-                            else stringResource(R.string.settings_ca_create),
+                            if (status?.hasCa == true) L10n.get(Strings.settings_ca_recreate)
+                            else L10n.get(Strings.settings_ca_create),
                             fontSize = 11.sp,
                         )
                     }
@@ -982,13 +952,13 @@ internal fun HttpsFilterSection(
                             },
                             shape = RoundedCornerShape(8.dp),
                         ) {
-                            Text(stringResource(R.string.settings_ca_install), fontSize = 11.sp)
+                            Text(L10n.get(Strings.settings_ca_install), fontSize = 11.sp)
                         }
                         OutlinedButton(
                             onClick = { showCert = true },
                             shape = RoundedCornerShape(8.dp),
                         ) {
-                            Text(stringResource(R.string.settings_ca_view_pem), fontSize = 11.sp)
+                            Text(L10n.get(Strings.settings_ca_view_pem), fontSize = 11.sp)
                         }
                     }
 
@@ -998,9 +968,9 @@ internal fun HttpsFilterSection(
                     // them without splicing their traffic verbatim.
                     Spacer(modifier = Modifier.height(10.dp))
                     Text(
-                        text = if (rootBusy) stringResource(R.string.trust_working)
+                        text = if (rootBusy) L10n.get(Strings.trust_working)
                         else rootTrust?.detailCode?.let { CoreText.trustDetail(it)?.asString() }
-                            ?: stringResource(R.string.trust_checking_root),
+                            ?: L10n.get(Strings.trust_checking_root),
                         fontSize = 11.sp,
                         color = when {
                             rootBusy -> AdGuardTextMuted
@@ -1025,11 +995,7 @@ internal fun HttpsFilterSection(
                                             caTrusted = viewModel.isCaTrusted()
                                                 result?.detailCode?.let { code ->
                                                     CoreText.trustDetail(code)?.let {
-                                                        Toast.makeText(
-                                                            context,
-                                                            it.asString(),
-                                                            Toast.LENGTH_LONG,
-                                                        ).show()
+                                                        platform.toast(it.asString())
                                                     }
                                                 }
                                         }
@@ -1037,9 +1003,8 @@ internal fun HttpsFilterSection(
                                     shape = RoundedCornerShape(8.dp),
                                 ) {
                                     Text(
-                                        stringResource(
-                                            if (trust.installed) R.string.settings_ca_reinstall_system
-                                            else R.string.settings_ca_install_system
+                                        L10n.get(if (trust.installed) Strings.settings_ca_reinstall_system
+                                            else Strings.settings_ca_install_system
                                         ),
                                         fontSize = 11.sp,
                                     )
@@ -1055,18 +1020,14 @@ internal fun HttpsFilterSection(
                                                 caTrusted = viewModel.isCaTrusted()
                                                 result?.detailCode?.let { code ->
                                                     CoreText.trustDetail(code)?.let {
-                                                        Toast.makeText(
-                                                            context,
-                                                            it.asString(),
-                                                            Toast.LENGTH_LONG,
-                                                        ).show()
+                                                        platform.toast(it.asString())
                                                     }
                                                 }
                                             }
                                         },
                                         shape = RoundedCornerShape(8.dp),
                                     ) {
-                                        Text(stringResource(R.string.settings_ca_remove_system), fontSize = 11.sp)
+                                        Text(L10n.get(Strings.settings_ca_remove_system), fontSize = 11.sp)
                                     }
                                 }
                             }
@@ -1076,8 +1037,7 @@ internal fun HttpsFilterSection(
 
                 Spacer(modifier = Modifier.height(8.dp))
                 Text(
-                    text = stringResource(
-                        R.string.settings_ca_stage,
+                    text = L10n.format(Strings.settings_ca_stage,
                         status?.stage ?: "—",
                         status?.scriptCount?.toLong() ?: 0L,
                         status?.leavesIssued?.toLong() ?: 0L
@@ -1091,7 +1051,7 @@ internal fun HttpsFilterSection(
                     modifier = Modifier.padding(top = 8.dp),
                     shape = RoundedCornerShape(8.dp),
                 ) {
-                    Text(stringResource(R.string.settings_manage_scripts), fontSize = 11.sp)
+                    Text(L10n.get(Strings.settings_manage_scripts), fontSize = 11.sp)
                 }
             }
         }
@@ -1102,9 +1062,8 @@ internal fun HttpsFilterSection(
     }
     addTarget?.let { target ->
         HttpsHostDialog(
-            title = stringResource(
-                if (target == HttpsListTarget.SKIP) R.string.settings_https_dialog_title_skip
-                else R.string.settings_https_dialog_title_only
+            title = L10n.get(if (target == HttpsListTarget.SKIP) Strings.settings_https_dialog_title_skip
+                else Strings.settings_https_dialog_title_only
             ),
             onDismiss = { addTarget = null },
             onAdd = { host ->
@@ -1122,17 +1081,17 @@ internal fun HttpsFilterSection(
                 pendingEnable = false
                 showCertGate = false
             },
-            title = { Text(stringResource(R.string.settings_cert_gate_title), fontSize = 16.sp) },
+            title = { Text(L10n.get(Strings.settings_cert_gate_title), fontSize = 16.sp) },
             text = {
                 Column {
                     Text(
-                        stringResource(R.string.settings_cert_gate_body),
+                        L10n.get(Strings.settings_cert_gate_body),
                         fontSize = 12.sp,
                         color = AdGuardTextSecondary,
                     )
                     Spacer(modifier = Modifier.height(8.dp))
                     Text(
-                        stringResource(R.string.settings_cert_gate_steps),
+                        L10n.get(Strings.settings_cert_gate_steps),
                         fontSize = 12.sp,
                         color = AdGuardTextSecondary,
                     )
@@ -1142,17 +1101,13 @@ internal fun HttpsFilterSection(
                 TextButton(onClick = {
                     showCertGate = false
                     val saved = viewModel.installCertificate()
-                    Toast.makeText(
-                        context,
-                        if (saved != null) {
-                            context.getString(R.string.settings_cert_saved, saved)
+                    platform.toast(if (saved != null) {
+                            L10n.format(Strings.settings_cert_saved, saved)
                         } else {
-                            context.getString(R.string.settings_cert_save_failed)
-                        },
-                        Toast.LENGTH_SHORT,
-                    ).show()
+                            L10n.get(Strings.settings_cert_save_failed)
+                        })
                 }) {
-                    Text(stringResource(R.string.settings_cert_gate_open))
+                    Text(L10n.get(Strings.settings_cert_gate_open))
                 }
             },
             dismissButton = {
@@ -1160,7 +1115,7 @@ internal fun HttpsFilterSection(
                     pendingEnable = false
                     showCertGate = false
                 }) {
-                    Text(stringResource(R.string.settings_cert_gate_later))
+                    Text(L10n.get(Strings.settings_cert_gate_later))
                 }
             },
         )
@@ -1172,11 +1127,11 @@ private fun CertificateDialog(pem: String, onDismiss: () -> Unit) {
     val clipboard = LocalClipboardManager.current
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text(stringResource(R.string.settings_cert_dialog_title), fontSize = 16.sp) },
+        title = { Text(L10n.get(Strings.settings_cert_dialog_title), fontSize = 16.sp) },
         text = {
             Column {
                 Text(
-                    text = stringResource(R.string.settings_cert_dialog_body),
+                    text = L10n.get(Strings.settings_cert_dialog_body),
                     fontSize = 12.sp,
                     color = AdGuardTextSecondary,
                 )
@@ -1196,9 +1151,9 @@ private fun CertificateDialog(pem: String, onDismiss: () -> Unit) {
             TextButton(onClick = {
                 clipboard.setText(AnnotatedString(pem))
                 onDismiss()
-            }) { Text(stringResource(R.string.settings_copy)) }
+            }) { Text(L10n.get(Strings.settings_copy)) }
         },
-        dismissButton = { TextButton(onClick = onDismiss) { Text(stringResource(R.string.common_close)) } },
+        dismissButton = { TextButton(onClick = onDismiss) { Text(L10n.get(Strings.common_close)) } },
     )
 }
 
@@ -1224,13 +1179,13 @@ internal fun DnsProviderSection(
 
     Column {
         Text(
-            text = stringResource(R.string.settings_dns_title),
+            text = L10n.get(Strings.settings_dns_title),
             fontSize = 14.sp,
             fontWeight = FontWeight.Bold,
             color = AdGuardTextPrimary,
         )
         Text(
-            text = stringResource(R.string.settings_dns_body),
+            text = L10n.get(Strings.settings_dns_body),
             fontSize = 11.sp,
             color = AdGuardTextMuted,
         )
@@ -1257,15 +1212,14 @@ internal fun DnsProviderSection(
                 Spacer(modifier = Modifier.width(12.dp))
                 Column(modifier = Modifier.weight(1f)) {
                     Text(
-                        text = selected?.name ?: stringResource(R.string.settings_dns_unset_name),
+                        text = selected?.name ?: L10n.get(Strings.settings_dns_unset_name),
                         fontSize = 13.sp,
                         fontWeight = FontWeight.Bold,
                         color = AdGuardTextPrimary,
                     )
                     if (selected != null) {
                         Text(
-                            text = stringResource(
-                                R.string.settings_dns_summary,
+                            text = L10n.format(Strings.settings_dns_summary,
                                 protocolLabel(selected.type),
                                 selected.address,
                             ),
@@ -1274,17 +1228,17 @@ internal fun DnsProviderSection(
                         )
                     } else {
                         Text(
-                            text = stringResource(R.string.settings_dns_unset_address),
+                            text = L10n.get(Strings.settings_dns_unset_address),
                             fontSize = 11.sp,
                             color = AdGuardTextMuted,
                         )
                     }
                     if (selected?.isCustom == true) {
-                        Text(stringResource(R.string.settings_dns_custom), fontSize = 10.sp, color = AdGuardBlueDns)
+                        Text(L10n.get(Strings.settings_dns_custom), fontSize = 10.sp, color = AdGuardBlueDns)
                     }
                 }
                 Column(horizontalAlignment = Alignment.End) {
-                    Text(stringResource(R.string.settings_dns_change), fontSize = 12.sp, color = AdGuardBlueDns)
+                    Text(L10n.get(Strings.settings_dns_change), fontSize = 12.sp, color = AdGuardBlueDns)
                     if (selected != null) {
                         TextButton(
                             onClick = { onProbe(selected.id) },
@@ -1299,7 +1253,7 @@ internal fun DnsProviderSection(
                                 )
                             } else {
                                 Text(
-                                    text = stringResource(R.string.settings_dns_test),
+                                    text = L10n.get(Strings.settings_dns_test),
                                     fontSize = 11.sp,
                                     color = AdGuardBlueDns,
                                 )
@@ -1342,7 +1296,7 @@ private fun DnsProviderDialog(
 
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text(stringResource(R.string.settings_dns_title), fontSize = 18.sp) },
+        title = { Text(L10n.get(Strings.settings_dns_title), fontSize = 18.sp) },
         text = {
             Column(
                 modifier = Modifier
@@ -1368,8 +1322,7 @@ private fun DnsProviderDialog(
                                 color = AdGuardTextPrimary,
                             )
                             Text(
-                                text = stringResource(
-                                    R.string.settings_dns_summary,
+                                text = L10n.format(Strings.settings_dns_summary,
                                     protocolLabel(provider.type),
                                     provider.address,
                                 ),
@@ -1378,7 +1331,7 @@ private fun DnsProviderDialog(
                                 fontFamily = FontFamily.Monospace,
                             )
                             if (provider.isCustom) {
-                                Text(stringResource(R.string.settings_dns_custom), fontSize = 11.sp, color = AdGuardBlueDns)
+                                Text(L10n.get(Strings.settings_dns_custom), fontSize = 11.sp, color = AdGuardBlueDns)
                             }
                         }
                     }
@@ -1386,14 +1339,14 @@ private fun DnsProviderDialog(
 
                 Spacer(modifier = Modifier.height(12.dp))
                 Text(
-                    text = stringResource(R.string.settings_dns_add_title),
+                    text = L10n.get(Strings.settings_dns_add_title),
                     fontSize = 14.sp,
                     fontWeight = FontWeight.Bold,
                     color = AdGuardTextSecondary,
                 )
                 Spacer(modifier = Modifier.height(6.dp))
                 Text(
-                    text = stringResource(R.string.settings_dns_protocol_label),
+                    text = L10n.get(Strings.settings_dns_protocol_label),
                     fontSize = 13.sp,
                     color = AdGuardTextMuted,
                 )
@@ -1423,7 +1376,7 @@ private fun DnsProviderDialog(
                 OutlinedTextField(
                     value = name,
                     onValueChange = { name = it },
-                    label = { Text(stringResource(R.string.settings_dns_name_label), fontSize = 13.sp) },
+                    label = { Text(L10n.get(Strings.settings_dns_name_label), fontSize = 13.sp) },
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth(),
                 )
@@ -1431,14 +1384,13 @@ private fun DnsProviderDialog(
                 OutlinedTextField(
                     value = address,
                     onValueChange = { address = it },
-                    label = { Text(stringResource(R.string.settings_dns_address_label), fontSize = 13.sp) },
+                    label = { Text(L10n.get(Strings.settings_dns_address_label), fontSize = 13.sp) },
                     placeholder = {
                         Text(
-                            text = stringResource(
-                                when (protocol) {
-                                    ProtocolType.DNS_DOT -> R.string.settings_dns_address_hint_dot
-                                    ProtocolType.DNS_DOH -> R.string.settings_dns_address_hint_doh
-                                    else -> R.string.settings_dns_address_hint
+                            text = L10n.get(when (protocol) {
+                                    ProtocolType.DNS_DOT -> Strings.settings_dns_address_hint_dot
+                                    ProtocolType.DNS_DOH -> Strings.settings_dns_address_hint_doh
+                                    else -> Strings.settings_dns_address_hint
                                 },
                             ),
                             fontSize = 13.sp,
@@ -1455,22 +1407,21 @@ private fun DnsProviderDialog(
                     enabled = address.isNotBlank(),
                     modifier = Modifier.fillMaxWidth(),
                 ) {
-                    Text(stringResource(R.string.settings_dns_add), fontSize = 14.sp)
+                    Text(L10n.get(Strings.settings_dns_add), fontSize = 14.sp)
                 }
             }
         },
         confirmButton = {
-            TextButton(onClick = onDismiss) { Text(stringResource(R.string.common_close)) }
+            TextButton(onClick = onDismiss) { Text(L10n.get(Strings.common_close)) }
         },
     )
 }
 
 @Composable
-private fun protocolLabel(type: ProtocolType): String = stringResource(
-    when (type) {
-        ProtocolType.DNS_DOT -> R.string.dns_protocol_dot
-        ProtocolType.DNS_DOH -> R.string.dns_protocol_doh
-        else -> R.string.dns_protocol_udp
+private fun protocolLabel(type: ProtocolType): String = L10n.get(when (type) {
+        ProtocolType.DNS_DOT -> Strings.dns_protocol_dot
+        ProtocolType.DNS_DOH -> Strings.dns_protocol_doh
+        else -> Strings.dns_protocol_udp
     },
 )
 
@@ -1496,19 +1447,19 @@ internal fun DnsRewriteSection(
         ) {
             Column(modifier = Modifier.weight(1f)) {
                 Text(
-                    text = stringResource(R.string.network_rewrites_title),
+                    text = L10n.get(Strings.network_rewrites_title),
                     fontSize = 14.sp,
                     fontWeight = FontWeight.Bold,
                     color = AdGuardTextPrimary,
                 )
                 Text(
-                    text = stringResource(R.string.network_rewrites_subtitle),
+                    text = L10n.get(Strings.network_rewrites_subtitle),
                     fontSize = 11.sp,
                     color = AdGuardTextMuted,
                 )
             }
             TextButton(onClick = { showDialog = true }) {
-                Text(stringResource(R.string.network_rewrites_add), fontSize = 12.sp)
+                Text(L10n.get(Strings.network_rewrites_add), fontSize = 12.sp)
             }
         }
         Spacer(modifier = Modifier.height(6.dp))
@@ -1520,7 +1471,7 @@ internal fun DnsRewriteSection(
             Column(modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp)) {
                 if (rewrites.isEmpty()) {
                     Text(
-                        text = stringResource(R.string.network_rewrites_empty),
+                        text = L10n.get(Strings.network_rewrites_empty),
                         fontSize = 11.sp,
                         color = AdGuardTextMuted,
                         modifier = Modifier.padding(vertical = 6.dp),
@@ -1547,7 +1498,7 @@ internal fun DnsRewriteSection(
                             }
                             TextButton(onClick = { onRemove(rule.host) }) {
                                 Text(
-                                    text = stringResource(R.string.network_rewrites_remove),
+                                    text = L10n.get(Strings.network_rewrites_remove),
                                     fontSize = 11.sp,
                                     color = AdGuardRedBlocked,
                                 )
@@ -1592,7 +1543,7 @@ private fun DnsRewriteDialog(
     AlertDialog(
         onDismissRequest = onDismiss,
         title = {
-            Text(stringResource(R.string.network_rewrites_add_title), fontSize = 16.sp)
+            Text(L10n.get(Strings.network_rewrites_add_title), fontSize = 16.sp)
         },
         text = {
             Column {
@@ -1603,10 +1554,10 @@ private fun DnsRewriteDialog(
                         error = null
                     },
                     label = {
-                        Text(stringResource(R.string.network_rewrites_host_label), fontSize = 11.sp)
+                        Text(L10n.get(Strings.network_rewrites_host_label), fontSize = 11.sp)
                     },
                     placeholder = {
-                        Text(stringResource(R.string.network_rewrites_host_hint), fontSize = 11.sp)
+                        Text(L10n.get(Strings.network_rewrites_host_hint), fontSize = 11.sp)
                     },
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth(),
@@ -1619,10 +1570,10 @@ private fun DnsRewriteDialog(
                         error = null
                     },
                     label = {
-                        Text(stringResource(R.string.network_rewrites_answer_label), fontSize = 11.sp)
+                        Text(L10n.get(Strings.network_rewrites_answer_label), fontSize = 11.sp)
                     },
                     placeholder = {
-                        Text(stringResource(R.string.network_rewrites_answer_hint), fontSize = 11.sp)
+                        Text(L10n.get(Strings.network_rewrites_answer_hint), fontSize = 11.sp)
                     },
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth(),
@@ -1642,12 +1593,12 @@ private fun DnsRewriteDialog(
                 onClick = { save() },
                 enabled = host.isNotBlank() && answer.isNotBlank(),
             ) {
-                Text(stringResource(R.string.network_rewrites_save), fontSize = 12.sp)
+                Text(L10n.get(Strings.network_rewrites_save), fontSize = 12.sp)
             }
         },
         dismissButton = {
             TextButton(onClick = onDismiss) {
-                Text(stringResource(R.string.common_close))
+                Text(L10n.get(Strings.common_close))
             }
         },
     )
@@ -1663,14 +1614,14 @@ private fun EngineInfoSection(buildMs: Long) {
     ) {
         Column(modifier = Modifier.padding(14.dp)) {
             Text(
-                text = stringResource(R.string.settings_engine_title),
+                text = L10n.get(Strings.settings_engine_title),
                 fontSize = 11.sp,
                 fontWeight = FontWeight.Bold,
                 color = AdGuardTextSecondary,
             )
             Spacer(modifier = Modifier.height(6.dp))
             Text(
-                text = stringResource(R.string.settings_engine_build, buildMs),
+                text = L10n.format(Strings.settings_engine_build, buildMs),
                 fontSize = 12.sp,
                 color = AdGuardTextPrimary,
             )
@@ -1705,29 +1656,29 @@ private fun AppUpdateSection(
                 verticalArrangement = Arrangement.spacedBy(4.dp),
             ) {
                 Text(
-                    text = stringResource(R.string.settings_update_title),
+                    text = L10n.get(Strings.settings_update_title),
                     fontSize = 11.sp,
                     fontWeight = FontWeight.Bold,
                     color = AdGuardTextSecondary,
                 )
                 when (state) {
                     UpdateUiState.Idle -> Text(
-                        text = stringResource(R.string.settings_update_idle),
+                        text = L10n.get(Strings.settings_update_idle),
                         fontSize = 12.sp,
                         color = AdGuardTextPrimary,
                     )
                     UpdateUiState.Checking -> Text(
-                        text = stringResource(R.string.settings_update_checking),
+                        text = L10n.get(Strings.settings_update_checking),
                         fontSize = 12.sp,
                         color = AdGuardTextPrimary,
                     )
                     is UpdateUiState.Available -> Text(
-                        text = stringResource(R.string.settings_update_available, state.info.version),
+                        text = L10n.format(Strings.settings_update_available, state.info.version),
                         fontSize = 12.sp,
                         color = AdGuardGreenPrimary,
                     )
                     is UpdateUiState.Downloading -> Text(
-                        text = stringResource(R.string.settings_update_downloading, state.progress),
+                        text = L10n.format(Strings.settings_update_downloading, state.progress),
                         fontSize = 12.sp,
                         color = AdGuardTextPrimary,
                     )
@@ -1742,14 +1693,14 @@ private fun AppUpdateSection(
             Spacer(modifier = Modifier.width(12.dp))
             when (state) {
                 UpdateUiState.Idle -> OutlinedButton(onClick = onCheck) {
-                    Text(stringResource(R.string.settings_update_check))
+                    Text(L10n.get(Strings.settings_update_check))
                 }
                 UpdateUiState.Checking -> CircularProgressIndicator(
                     modifier = Modifier.size(20.dp),
                     strokeWidth = 2.dp,
                 )
                 is UpdateUiState.Available -> Button(onClick = { onInstall(state.info) }) {
-                    Text(stringResource(R.string.settings_update_install))
+                    Text(L10n.get(Strings.settings_update_install))
                 }
                 is UpdateUiState.Downloading -> CircularProgressIndicator(
                     modifier = Modifier.size(20.dp),
@@ -1900,13 +1851,13 @@ private fun HttpsWebsiteSection(
     ) {
         Column(modifier = Modifier.padding(14.dp)) {
             Text(
-                text = stringResource(R.string.settings_https_sites_title),
+                text = L10n.get(Strings.settings_https_sites_title),
                 fontSize = 13.sp,
                 fontWeight = FontWeight.Bold,
                 color = AdGuardTextPrimary,
             )
             Text(
-                text = stringResource(R.string.settings_https_sites_body),
+                text = L10n.get(Strings.settings_https_sites_body),
                 fontSize = 11.sp,
                 color = AdGuardTextMuted,
             )
@@ -1916,13 +1867,13 @@ private fun HttpsWebsiteSection(
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Column(modifier = Modifier.weight(1f)) {
                     Text(
-                        text = stringResource(R.string.settings_https_only_title),
+                        text = L10n.get(Strings.settings_https_only_title),
                         fontSize = 12.sp,
                         fontWeight = FontWeight.Bold,
                         color = AdGuardTextPrimary,
                     )
                     Text(
-                        text = stringResource(R.string.settings_https_only_subtitle),
+                        text = L10n.get(Strings.settings_https_only_subtitle),
                         fontSize = 11.sp,
                         color = AdGuardTextMuted,
                     )
@@ -1935,13 +1886,11 @@ private fun HttpsWebsiteSection(
             }
 
             HttpsHostList(
-                label = stringResource(
-                    if (settings.httpsOnlyMode) R.string.settings_https_only_list
-                    else R.string.settings_https_skip_list
+                label = L10n.get(if (settings.httpsOnlyMode) Strings.settings_https_only_list
+                    else Strings.settings_https_skip_list
                 ),
-                hint = stringResource(
-                    if (settings.httpsOnlyMode) R.string.settings_https_only_hint
-                    else R.string.settings_https_skip_hint
+                hint = L10n.get(if (settings.httpsOnlyMode) Strings.settings_https_only_hint
+                    else Strings.settings_https_skip_hint
                 ),
                 hosts = if (settings.httpsOnlyMode) settings.httpsOnlyHosts else settings.httpsSkipHosts,
                 onAdd = if (settings.httpsOnlyMode) onAddOnly else onAddSkip,
@@ -1950,15 +1899,15 @@ private fun HttpsWebsiteSection(
 
             if (settings.httpsOnlyMode) {
                 HttpsHostList(
-                    label = stringResource(R.string.settings_https_always_skip),
-                    hint = stringResource(R.string.settings_https_always_skip_hint),
+                    label = L10n.get(Strings.settings_https_always_skip),
+                    hint = L10n.get(Strings.settings_https_always_skip_hint),
                     hosts = settings.httpsSkipHosts,
                     onAdd = onAddSkip,
                     onRemove = onRemoveSkip,
                 )
             } else if (settings.httpsOnlyHosts.isNotEmpty()) {
                 Text(
-                    text = stringResource(R.string.settings_https_pending, settings.httpsOnlyHosts.size),
+                    text = L10n.format(Strings.settings_https_pending, settings.httpsOnlyHosts.size),
                     fontSize = 11.sp,
                     color = AdGuardTextMuted,
                     modifier = Modifier.padding(top = 8.dp),
@@ -1979,20 +1928,20 @@ private fun HttpsHostList(
     Column(modifier = Modifier.padding(top = 10.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text(
-                text = stringResource(R.string.settings_list_header, label, hosts.size),
+                text = L10n.format(Strings.settings_list_header, label, hosts.size),
                 fontSize = 11.sp,
                 fontWeight = FontWeight.Bold,
                 color = AdGuardTextSecondary,
                 modifier = Modifier.weight(1f),
             )
             TextButton(onClick = onAdd) {
-                Text(stringResource(R.string.settings_https_add), fontSize = 11.sp, color = AdGuardGreenLight)
+                Text(L10n.get(Strings.settings_https_add), fontSize = 11.sp, color = AdGuardGreenLight)
             }
         }
         Text(hint, fontSize = 11.sp, color = AdGuardTextMuted)
         if (hosts.isEmpty()) {
             Text(
-                text = stringResource(R.string.settings_https_empty),
+                text = L10n.get(Strings.settings_https_empty),
                 fontSize = 11.sp,
                 color = AdGuardTextMuted,
                 modifier = Modifier.padding(top = 4.dp),
@@ -2015,7 +1964,7 @@ private fun HttpsHostList(
                     IconButton(onClick = { onRemove(host) }, modifier = Modifier.size(28.dp)) {
                         Icon(
                             Icons.Default.Close,
-                            contentDescription = stringResource(R.string.settings_https_remove, host),
+                            contentDescription = L10n.format(Strings.settings_https_remove, host),
                             tint = AdGuardTextMuted,
                             modifier = Modifier.size(14.dp),
                         )
@@ -2040,7 +1989,7 @@ private fun HttpsHostDialog(
         text = {
             Column {
                 Text(
-                    text = stringResource(R.string.settings_https_dialog_body),
+                    text = L10n.get(Strings.settings_https_dialog_body),
                     fontSize = 12.sp,
                     color = AdGuardTextSecondary,
                 )
@@ -2062,7 +2011,7 @@ private fun HttpsHostDialog(
                 )
                 if (value.isNotBlank() && normalized == null) {
                     Text(
-                        text = stringResource(R.string.settings_https_dialog_invalid),
+                        text = L10n.get(Strings.settings_https_dialog_invalid),
                         fontSize = 11.sp,
                         color = AdGuardOrangeWarning,
                         modifier = Modifier.padding(top = 4.dp),
@@ -2080,11 +2029,11 @@ private fun HttpsHostDialog(
                 },
                 enabled = normalized != null,
             ) {
-                Text(stringResource(R.string.settings_https_add), color = AdGuardGreenLight)
+                Text(L10n.get(Strings.settings_https_add), color = AdGuardGreenLight)
             }
         },
         dismissButton = {
-            TextButton(onClick = onDismiss) { Text(stringResource(R.string.common_cancel), color = AdGuardTextSecondary) }
+            TextButton(onClick = onDismiss) { Text(L10n.get(Strings.common_cancel), color = AdGuardTextSecondary) }
         },
     )
 }

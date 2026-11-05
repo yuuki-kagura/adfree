@@ -1,5 +1,6 @@
 package git.shin.adfree.ui.screens
 
+import git.shin.adfree.l10n.Strings
 import git.shin.adfree.l10n.L10n
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
@@ -58,13 +59,11 @@ import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.testTag
-import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import git.shin.adfree.R
 import git.shin.adfree.model.UserScriptInfo
 import git.shin.adfree.model.UserScriptStoreItem
 import git.shin.adfree.model.UserScriptStoreSort
@@ -129,7 +128,7 @@ fun ScriptTextEditorDialog(
             OutlinedTextField(
                 value = name,
                 onValueChange = { name = it },
-                label = { Text(stringResource(R.string.ext_editor_name_label), fontSize = 12.sp) },
+                label = { Text(L10n.get(Strings.ext_editor_name_label), fontSize = 12.sp) },
                 singleLine = true,
                 modifier = Modifier.fillMaxWidth(),
                 shape = RoundedCornerShape(10.dp),
@@ -144,7 +143,7 @@ fun ScriptTextEditorDialog(
             OutlinedTextField(
                 value = text,
                 onValueChange = { text = it },
-                label = { Text(stringResource(R.string.ext_editor_code_label), fontSize = 12.sp) },
+                label = { Text(L10n.get(Strings.ext_editor_code_label), fontSize = 12.sp) },
                 modifier = Modifier
                     .fillMaxWidth()
                     .heightIn(min = 260.dp),
@@ -167,7 +166,7 @@ fun ScriptTextEditorDialog(
                     Text(confirmText, color = AdGuardOnAccent, fontWeight = FontWeight.Bold)
                 }
                 TextButton(onClick = onDismiss) {
-                    Text(stringResource(R.string.common_cancel), color = AdGuardTextSecondary)
+                    Text(L10n.get(Strings.common_cancel), color = AdGuardTextSecondary)
                 }
             }
             Spacer(modifier = Modifier.height(24.dp))
@@ -221,13 +220,13 @@ fun ExtensionsSection(
                 Spacer(modifier = Modifier.width(12.dp))
                 Column(modifier = Modifier.weight(1f)) {
                     Text(
-                        stringResource(R.string.hub_extensions_title),
+                        L10n.get(Strings.hub_extensions_title),
                         fontSize = 13.sp,
                         fontWeight = FontWeight.Bold,
                         color = AdGuardTextPrimary,
                     )
                     Text(
-                        stringResource(R.string.ext_section_subtitle),
+                        L10n.get(Strings.ext_section_subtitle),
                         fontSize = 11.sp,
                         color = AdGuardTextMuted,
                     )
@@ -237,13 +236,12 @@ fun ExtensionsSection(
                     if (scripts.isNotEmpty()) {
                         Text(
                             text = if (masterEnabled) {
-                                stringResource(
-                                    R.string.ext_enabled_count,
+                                L10n.format(Strings.ext_enabled_count,
                                     scripts.count { it.isEnabled },
                                     scripts.size,
                                 )
                             } else {
-                                stringResource(R.string.hub_extensions_master_off)
+                                L10n.get(Strings.hub_extensions_master_off)
                             },
                             fontSize = 11.sp,
                             color = AdGuardTextMuted,
@@ -266,7 +264,7 @@ fun ExtensionsSection(
 
             if (scripts.isEmpty()) {
                 Text(
-                    text = stringResource(R.string.ext_empty),
+                    text = L10n.get(Strings.ext_empty),
                     fontSize = 11.sp,
                     color = AdGuardTextMuted,
                     modifier = Modifier.padding(horizontal = 14.dp, vertical = 12.dp),
@@ -293,7 +291,7 @@ fun ExtensionsSection(
                     Icon(Icons.Default.Add, contentDescription = null, tint = AdGuardGreenLight, modifier = Modifier.size(16.dp))
                     Spacer(modifier = Modifier.width(6.dp))
                     Text(
-                        stringResource(R.string.ext_add),
+                        L10n.get(Strings.ext_add),
                         fontSize = 12.sp,
                         fontWeight = FontWeight.Bold,
                         color = AdGuardGreenLight,
@@ -306,7 +304,7 @@ fun ExtensionsSection(
                     Icon(Icons.Default.Search, contentDescription = null, tint = AdGuardBlueDns, modifier = Modifier.size(16.dp))
                     Spacer(modifier = Modifier.width(6.dp))
                     Text(
-                        stringResource(R.string.ext_store),
+                        L10n.get(Strings.ext_store),
                         fontSize = 12.sp,
                         fontWeight = FontWeight.Bold,
                         color = AdGuardBlueDns,
@@ -345,13 +343,13 @@ fun UserScriptStoreSheet(
             Spacer(modifier = Modifier.width(8.dp))
             Column {
                 Text(
-                    stringResource(R.string.ext_store),
+                    L10n.get(Strings.ext_store),
                     fontSize = 17.sp,
                     fontWeight = FontWeight.Bold,
                     color = AdGuardTextPrimary,
                 )
                 Text(
-                    stringResource(R.string.ext_store_subtitle),
+                    L10n.get(Strings.ext_store_subtitle),
                     fontSize = 11.sp,
                     color = AdGuardTextMuted,
                 )
@@ -360,7 +358,7 @@ fun UserScriptStoreSheet(
 
         Spacer(modifier = Modifier.height(10.dp))
         Text(
-            stringResource(R.string.ext_store_note),
+            L10n.get(Strings.ext_store_note),
             fontSize = 11.sp,
             color = AdGuardTextMuted,
         )
@@ -371,7 +369,7 @@ fun UserScriptStoreSheet(
             onValueChange = onQueryChange,
             placeholder = {
                 Text(
-                    stringResource(R.string.ext_store_search_hint),
+                    L10n.get(Strings.ext_store_search_hint),
                     fontSize = 12.sp,
                     color = AdGuardTextMuted,
                 )
@@ -399,17 +397,17 @@ fun UserScriptStoreSheet(
             horizontalArrangement = Arrangement.spacedBy(6.dp),
         ) {
             listOf(
-                UserScriptStoreSort.RELEVANCE to R.string.ext_sort_relevance,
-                UserScriptStoreSort.DAILY_INSTALLS to R.string.ext_sort_daily,
-                UserScriptStoreSort.TOTAL_INSTALLS to R.string.ext_sort_total,
-                UserScriptStoreSort.RATINGS to R.string.ext_sort_ratings,
-                UserScriptStoreSort.UPDATED to R.string.ext_sort_updated,
-                UserScriptStoreSort.NAME to R.string.ext_sort_name,
+                UserScriptStoreSort.RELEVANCE to Strings.ext_sort_relevance,
+                UserScriptStoreSort.DAILY_INSTALLS to Strings.ext_sort_daily,
+                UserScriptStoreSort.TOTAL_INSTALLS to Strings.ext_sort_total,
+                UserScriptStoreSort.RATINGS to Strings.ext_sort_ratings,
+                UserScriptStoreSort.UPDATED to Strings.ext_sort_updated,
+                UserScriptStoreSort.NAME to Strings.ext_sort_name,
             ).forEach { (sort, label) ->
                 FilterChip(
                     selected = state.sort == sort,
                     onClick = { onSortChange(sort) },
-                    label = { Text(stringResource(label), fontSize = 10.sp) },
+                    label = { Text(L10n.get(label), fontSize = 10.sp) },
                     colors = FilterChipDefaults.filterChipColors(
                         selectedContainerColor = AdGuardGreenPrimary,
                         selectedLabelColor = AdGuardOnAccent,
@@ -427,7 +425,7 @@ fun UserScriptStoreSheet(
                 horizontalArrangement = Arrangement.SpaceBetween,
             ) {
                 Text(
-                    stringResource(R.string.ext_store_page, state.page),
+                    L10n.format(Strings.ext_store_page, state.page),
                     fontSize = 10.sp,
                     color = AdGuardTextMuted,
                 )
@@ -436,7 +434,7 @@ fun UserScriptStoreSheet(
                     modifier = Modifier.testTag("script_store_first_page"),
                 ) {
                     Text(
-                        stringResource(R.string.ext_store_first_page),
+                        L10n.get(Strings.ext_store_first_page),
                         fontSize = 11.sp,
                         color = AdGuardGreenLight,
                     )
@@ -466,7 +464,7 @@ fun UserScriptStoreSheet(
                 Text(state.error ?: "", fontSize = 11.sp, color = AdGuardRedBlocked)
                 TextButton(onClick = onRetry) {
                     Text(
-                        stringResource(R.string.ext_retry),
+                        L10n.get(Strings.ext_retry),
                         fontSize = 12.sp,
                         color = AdGuardGreenLight,
                     )
@@ -475,7 +473,7 @@ fun UserScriptStoreSheet(
 
             state.items.isEmpty() -> {
                 Text(
-                    stringResource(R.string.ext_store_empty),
+                    L10n.get(Strings.ext_store_empty),
                     fontSize = 11.sp,
                     color = AdGuardTextMuted,
                     modifier = Modifier.padding(vertical = 16.dp),
@@ -530,7 +528,7 @@ fun UserScriptStoreSheet(
                                         modifier = Modifier.testTag("script_store_load_more"),
                                     ) {
                                         Text(
-                                            stringResource(R.string.ext_load_more),
+                                            L10n.get(Strings.ext_load_more),
                                             fontSize = 12.sp,
                                             color = AdGuardGreenLight,
                                         )
@@ -586,8 +584,7 @@ private fun StoreScriptRow(
                     val bits = buildList {
                         if (item.version.isNotBlank()) add("v${item.version}")
                         if (item.totalInstalls > 0) add(
-                            stringResource(
-                                R.string.ext_installs,
+                            L10n.format(Strings.ext_installs,
                                 storeInstallsText(item.totalInstalls),
                             )
                         )
@@ -612,7 +609,7 @@ private fun StoreScriptRow(
                         shape = RoundedCornerShape(8.dp),
                     ) {
                         Text(
-                            stringResource(R.string.ext_install),
+                            L10n.get(Strings.ext_install),
                             color = AdGuardOnAccent,
                             fontSize = 12.sp,
                             fontWeight = FontWeight.Bold,
@@ -624,7 +621,7 @@ private fun StoreScriptRow(
                         enabled = false,
                         shape = RoundedCornerShape(8.dp),
                     ) {
-                        Text(stringResource(R.string.ext_enabled), fontSize = 11.sp)
+                        Text(L10n.get(Strings.ext_enabled), fontSize = 11.sp)
                     }
 
                     else -> OutlinedButton(
@@ -632,8 +629,8 @@ private fun StoreScriptRow(
                         shape = RoundedCornerShape(8.dp),
                     ) {
                         Text(
-                            if (installed.isEnabled) stringResource(R.string.ext_reload)
-                            else stringResource(R.string.ext_turn_on),
+                            if (installed.isEnabled) L10n.get(Strings.ext_reload)
+                            else L10n.get(Strings.ext_turn_on),
                             fontSize = 11.sp,
                             color = AdGuardGreenLight,
                         )
@@ -643,7 +640,7 @@ private fun StoreScriptRow(
             if (item.pageUrl.isNotBlank()) {
                 Spacer(modifier = Modifier.height(4.dp))
                 Text(
-                    text = stringResource(R.string.ext_store_source),
+                    text = L10n.get(Strings.ext_store_source),
                     fontSize = 10.sp,
                     color = AdGuardBlueDns,
                     modifier = Modifier.clickable { onOpenPage() },
@@ -677,16 +674,15 @@ private fun ScriptRow(
     onClick: () -> Unit,
 ) {
     val updatedText = script.lastUpdatedText.ifBlank {
-        stringResource(R.string.filter_not_loaded)
+        L10n.get(Strings.filter_not_loaded)
     }
     val meta = when {
-        script.isBuiltin -> stringResource(R.string.ext_builtin_meta, updatedText)
-        script.sizeBytes > 0 -> stringResource(
-            R.string.ext_size_meta,
+        script.isBuiltin -> L10n.format(Strings.ext_builtin_meta, updatedText)
+        script.sizeBytes > 0 -> L10n.format(Strings.ext_size_meta,
             script.sizeBytes / 1024,
             updatedText,
         )
-        else -> stringResource(R.string.ext_not_downloaded_meta)
+        else -> L10n.get(Strings.ext_not_downloaded_meta)
     }
 
     Row(
@@ -734,7 +730,7 @@ fun AddScriptDialog(
                 Icon(Icons.Default.Extension, contentDescription = null, tint = AdGuardPurpleAI, modifier = Modifier.size(22.dp))
                 Spacer(modifier = Modifier.width(8.dp))
                 Text(
-                    stringResource(R.string.ext_add),
+                    L10n.get(Strings.ext_add),
                     fontSize = 17.sp,
                     fontWeight = FontWeight.Bold,
                     color = AdGuardTextPrimary,
@@ -744,7 +740,7 @@ fun AddScriptDialog(
         text = {
             Column {
                 Text(
-                    text = stringResource(R.string.ext_add_body),
+                    text = L10n.get(Strings.ext_add_body),
                     fontSize = 12.sp,
                     color = AdGuardTextSecondary,
                 )
@@ -760,7 +756,7 @@ fun AddScriptDialog(
                     )
                     Spacer(modifier = Modifier.width(6.dp))
                     Text(
-                        text = stringResource(R.string.ext_security_warning),
+                        text = L10n.get(Strings.ext_security_warning),
                         fontSize = 11.sp,
                         color = AdGuardOrangeWarning,
                     )
@@ -769,7 +765,7 @@ fun AddScriptDialog(
                 OutlinedTextField(
                     value = name,
                     onValueChange = { name = it },
-                    label = { Text(stringResource(R.string.ext_name_optional), fontSize = 12.sp) },
+                    label = { Text(L10n.get(Strings.ext_name_optional), fontSize = 12.sp) },
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth(),
                     shape = RoundedCornerShape(10.dp),
@@ -784,7 +780,7 @@ fun AddScriptDialog(
                 OutlinedTextField(
                     value = url,
                     onValueChange = { url = it },
-                    label = { Text(stringResource(R.string.ext_url_label), fontSize = 12.sp) },
+                    label = { Text(L10n.get(Strings.ext_url_label), fontSize = 12.sp) },
                     placeholder = { Text("https://…", fontSize = 12.sp, color = AdGuardTextMuted) },
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth(),
@@ -800,21 +796,21 @@ fun AddScriptDialog(
                 Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                     OutlinedButton(onClick = onImportFile, shape = RoundedCornerShape(8.dp)) {
                         Text(
-                            stringResource(R.string.ext_pick_file),
+                            L10n.get(Strings.ext_pick_file),
                             fontSize = 11.sp,
                             color = AdGuardGreenLight,
                         )
                     }
                     OutlinedButton(onClick = onCreate, shape = RoundedCornerShape(8.dp)) {
                         Text(
-                            stringResource(R.string.ext_create_new),
+                            L10n.get(Strings.ext_create_new),
                             fontSize = 11.sp,
                             color = AdGuardBlueDns,
                         )
                     }
                 }
                 Text(
-                    stringResource(R.string.ext_add_footnote),
+                    L10n.get(Strings.ext_add_footnote),
                     fontSize = 11.sp,
                     color = AdGuardTextMuted,
                 )
@@ -828,7 +824,7 @@ fun AddScriptDialog(
                 shape = RoundedCornerShape(8.dp),
             ) {
                 Text(
-                    stringResource(R.string.ext_add_download),
+                    L10n.get(Strings.ext_add_download),
                     color = AdGuardOnAccent,
                     fontWeight = FontWeight.Bold,
                 )
@@ -836,7 +832,7 @@ fun AddScriptDialog(
         },
         dismissButton = {
             OutlinedButton(onClick = onDismiss, shape = RoundedCornerShape(8.dp)) {
-                Text(stringResource(R.string.common_cancel), color = AdGuardTextSecondary)
+                Text(L10n.get(Strings.common_cancel), color = AdGuardTextSecondary)
             }
         },
     )
@@ -875,7 +871,7 @@ fun ScriptDetailSheet(
         Row(verticalAlignment = Alignment.CenterVertically) {
             Column(modifier = Modifier.weight(1f)) {
                 Text(
-                    stringResource(R.string.ext_detail_enable_title),
+                    L10n.get(Strings.ext_detail_enable_title),
                     fontSize = 13.sp,
                     fontWeight = FontWeight.Bold,
                     color = AdGuardTextPrimary,
@@ -884,9 +880,9 @@ fun ScriptDetailSheet(
                     text = when {
                         // The master gate beats the per-script flag: say it
                         // out loud instead of "Đang chạy" with nothing running.
-                        !masterEnabled -> stringResource(R.string.ext_detail_master_off)
-                        script.isEnabled -> stringResource(R.string.ext_detail_running)
-                        else -> stringResource(R.string.ext_detail_off)
+                        !masterEnabled -> L10n.get(Strings.ext_detail_master_off)
+                        script.isEnabled -> L10n.get(Strings.ext_detail_running)
+                        else -> L10n.get(Strings.ext_detail_off)
                     },
                     fontSize = 11.sp,
                     color = AdGuardTextMuted,
@@ -903,23 +899,23 @@ fun ScriptDetailSheet(
         Spacer(modifier = Modifier.height(12.dp))
 
         ScriptInfoRow(
-            stringResource(R.string.ext_detail_size),
+            L10n.get(Strings.ext_detail_size),
             if (script.sizeBytes > 0) "${script.sizeBytes / 1024} KB"
-            else stringResource(R.string.filter_not_loaded),
+            else L10n.get(Strings.filter_not_loaded),
         )
         ScriptInfoRow(
-            stringResource(R.string.ext_detail_updated),
-            script.lastUpdatedText.ifBlank { stringResource(R.string.filter_not_loaded) },
+            L10n.get(Strings.ext_detail_updated),
+            script.lastUpdatedText.ifBlank { L10n.get(Strings.filter_not_loaded) },
         )
 
         // Header fields are what tells a user whether a script touches more
         // than the page it was installed for. Show them only when present.
         if (script.metadata.version.isNotBlank()) {
-            ScriptInfoRow(stringResource(R.string.ext_detail_version), script.metadata.version)
+            ScriptInfoRow(L10n.get(Strings.ext_detail_version), script.metadata.version)
         }
         if (script.metadata.runAt.isNotBlank()) {
             ScriptInfoRow(
-                stringResource(R.string.ext_detail_run_at),
+                L10n.get(Strings.ext_detail_run_at),
                 runAtLabel(script.metadata.runAt),
             )
         }
@@ -927,19 +923,19 @@ fun ScriptDetailSheet(
             val shown = script.metadata.patterns.take(3)
             val extra = script.metadata.patterns.size - shown.size
             ScriptInfoRow(
-                stringResource(R.string.ext_detail_patterns),
+                L10n.get(Strings.ext_detail_patterns),
                 buildString {
                     append(shown.joinToString("\n"))
                     if (extra > 0) {
                         append('\n')
-                        append(stringResource(R.string.ext_detail_more_patterns, extra))
+                        append(L10n.format(Strings.ext_detail_more_patterns, extra))
                     }
                 },
             )
         }
         val grants = script.metadata.grants.filter { it != "none" }
         if (grants.isNotEmpty()) {
-            ScriptInfoRow(stringResource(R.string.ext_detail_grants), grants.joinToString(" · "))
+            ScriptInfoRow(L10n.get(Strings.ext_detail_grants), grants.joinToString(" · "))
         }
         if (script.metadata.hasBroadAccess) {
             Spacer(modifier = Modifier.height(6.dp))
@@ -952,7 +948,7 @@ fun ScriptDetailSheet(
                 )
                 Spacer(modifier = Modifier.width(6.dp))
                 Text(
-                    text = stringResource(R.string.ext_broad_warning),
+                    text = L10n.get(Strings.ext_broad_warning),
                     fontSize = 11.sp,
                     color = AdGuardOrangeWarning,
                 )
@@ -962,7 +958,7 @@ fun ScriptDetailSheet(
         Spacer(modifier = Modifier.height(6.dp))
         if (script.isBuiltin) {
             Text(
-                text = stringResource(R.string.ext_bundled),
+                text = L10n.get(Strings.ext_bundled),
                 fontSize = 11.sp,
                 color = AdGuardTextMuted,
             )
@@ -985,7 +981,7 @@ fun ScriptDetailSheet(
                     Icon(Icons.Default.Sync, contentDescription = null, tint = AdGuardGreenLight, modifier = Modifier.size(16.dp))
                     Spacer(modifier = Modifier.width(6.dp))
                     Text(
-                        stringResource(R.string.ext_update),
+                        L10n.get(Strings.ext_update),
                         fontSize = 12.sp,
                         color = AdGuardGreenLight,
                     )
@@ -996,7 +992,7 @@ fun ScriptDetailSheet(
                     Icon(Icons.Default.Edit, contentDescription = null, tint = AdGuardBlueDns, modifier = Modifier.size(16.dp))
                     Spacer(modifier = Modifier.width(6.dp))
                     Text(
-                        stringResource(R.string.ext_edit_code),
+                        L10n.get(Strings.ext_edit_code),
                         fontSize = 12.sp,
                         color = AdGuardBlueDns,
                     )
@@ -1005,7 +1001,7 @@ fun ScriptDetailSheet(
                     Icon(Icons.Default.Delete, contentDescription = null, tint = AdGuardRedBlocked, modifier = Modifier.size(16.dp))
                     Spacer(modifier = Modifier.width(6.dp))
                     Text(
-                        stringResource(R.string.ext_delete),
+                        L10n.get(Strings.ext_delete),
                         fontSize = 12.sp,
                         color = AdGuardRedBlocked,
                     )
@@ -1030,9 +1026,9 @@ private fun ScriptInfoRow(label: String, value: String) {
 /** `@run-at` value → words a user can act on. */
 @Composable
 private fun runAtLabel(value: String): String = when (value.lowercase()) {
-    "document-start" -> stringResource(R.string.ext_run_at_start)
-    "document-end" -> stringResource(R.string.ext_run_at_end)
-    "document-idle" -> stringResource(R.string.ext_run_at_idle)
-    "document-body" -> stringResource(R.string.ext_run_at_body)
+    "document-start" -> L10n.get(Strings.ext_run_at_start)
+    "document-end" -> L10n.get(Strings.ext_run_at_end)
+    "document-idle" -> L10n.get(Strings.ext_run_at_idle)
+    "document-body" -> L10n.get(Strings.ext_run_at_body)
     else -> value
 }

@@ -64,6 +64,8 @@ import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -85,6 +87,17 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LifecycleEventEffect
 import git.shin.adfree.l10n.Strings
 import git.shin.adfree.model.ThemeMode
+import git.shin.adfree.platform.AndroidFileHost
+import git.shin.adfree.platform.AppInventory
+import git.shin.adfree.platform.BackRegistry
+import git.shin.adfree.platform.FileHost
+import git.shin.adfree.platform.LocalAppInventory
+import git.shin.adfree.platform.LocalBackRegistry
+import git.shin.adfree.platform.LocalFileHost
+import git.shin.adfree.platform.LocalPlatformHost
+import git.shin.adfree.platform.LocalReminders
+import git.shin.adfree.platform.LocalResumeTick
+import git.shin.adfree.platform.PlatformHost
 import git.shin.adfree.R
 import git.shin.adfree.ui.AdGuardEffect
 import git.shin.adfree.ui.AdGuardIntent
@@ -109,6 +122,11 @@ import git.shin.adfree.ui.theme.AdGuardTextMuted
 import git.shin.adfree.ui.theme.AdGuardTextPrimary
 import git.shin.adfree.ui.theme.AdGuardTextSecondary
 import git.shin.adfree.ui.theme.MyApplicationTheme
+import java.util.concurrent.atomic.AtomicReference
+import kotlinx.coroutines.CancellableContinuation
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.suspendCancellableCoroutine
 
 class MainActivity : AppCompatActivity() {
 
@@ -117,6 +135,12 @@ class MainActivity : AppCompatActivity() {
 
     /** Container kept for the Activity's lifetime so MainActivity can read it. */
     private val container get() = AdGuardApplication.instance.container
+
+    /** Bumped on every foreground resume; shared screens refresh from this. */
+    private val resumeTick = MutableStateFlow(0L)
+
+    /** The back stack the moved screens register their dialogs/sub-routes on. */
+    private val backRegistry = BackRegistry()
 
     /**
      * Android 13+ gates the ongoing protection notification and the result of
@@ -127,8 +151,18 @@ class MainActivity : AppCompatActivity() {
     ) { granted ->
         // The service posted its notification before this grant; Android
         // dropped it then, so ask for a redraw now.
-        if (granted) container.vpnController.refreshStatusNotification()
+        if (granted) {
+            container.vpnController.refreshStatusNotification()
+        } else if (userInitiatedNotificationAsk) {
+            // Android stops showing the dialog after two refusals and returns
+            // "denied" silently; the settings page is the only way back.
+            container.platformHost.openNotificationSettings()
+        }
+        userInitiatedNotificationAsk = false
     }
+
+    /** True while the Home chip's permission dialog is the pending one. */
+    private var userInitiatedNotificationAsk = false
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -136,6 +170,12 @@ class MainActivity : AppCompatActivity() {
         // intent, and asking for consent again there would look like a bug.
         if (savedInstanceState == null) handleLaunchAction(intent)
         requestNotificationPermissionOnce()
+        // The moved HomeScreen asks for the permission through the platform
+        // seam; the launcher itself can only live here, in the Activity.
+        container.platformHost.onNotificationPermission = {
+            userInitiatedNotificationAsk = true
+            notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+        }
 
         setContent {
             val state by viewModel.uiState.collectAsState()
@@ -156,6 +196,14 @@ class MainActivity : AppCompatActivity() {
                 enableEdgeToEdge(statusBarStyle = statusBar, navigationBarStyle = statusBar)
             }
             MyApplicationTheme(darkTheme = darkTheme) {
+            AdFreeHosts(
+                platform = container.platformHost,
+                files = container.fileHost,
+                inventory = container.appInventory,
+                resumeTick = resumeTick,
+                backRegistry = backRegistry,
+            ) {
+                FilePickerWiring(fileHost = container.fileHost)
                 val snackbarHostState = remember { SnackbarHostState() }
                 val context = LocalContext.current
                 // The persisted choice is applied once at startup; this keeps
@@ -189,6 +237,7 @@ class MainActivity : AppCompatActivity() {
                 // Foreground-only stale-list check. No worker/alarm: opening
                 // the app after a day in Recents is the catch-up point.
                 LifecycleEventEffect(Lifecycle.Event.ON_RESUME) {
+                    resumeTick.value += 1
                     container.repository.autoUpdateIfStale()
                     // The app release check rides the same pass, with its own
                     // day gate and its own silence.
@@ -220,10 +269,15 @@ class MainActivity : AppCompatActivity() {
                     }
                 }
 
-                // BackHandler: Return to Home if on another tab
-                if (state.currentTab != AdGuardTab.HOME) {
-                    BackHandler {
-                        viewModel.onIntent(AdGuardIntent.SelectTab(AdGuardTab.HOME))
+                // Back goes to the screens' own stack first (open dialogs,
+                // sub-routes); only when nothing claims it does a tab hop
+                // back to Home, and Home lets the task go background.
+                BackHandler {
+                    when {
+                        backRegistry.onBack() -> Unit
+                        state.currentTab != AdGuardTab.HOME ->
+                            viewModel.onIntent(AdGuardIntent.SelectTab(AdGuardTab.HOME))
+                        else -> moveTaskToBack(true)
                     }
                 }
 
@@ -324,6 +378,7 @@ class MainActivity : AppCompatActivity() {
                     }
                 }
             }
+            }
         }
     }
 
@@ -340,6 +395,12 @@ class MainActivity : AppCompatActivity() {
     override fun onStop() {
         container.repository.setUiVisible(false)
         super.onStop()
+    }
+
+    /** The container outlives the Activity; drop the back-reference to it. */
+    override fun onDestroy() {
+        container.platformHost.onNotificationPermission = null
+        super.onDestroy()
     }
 
     /** Tile and update-notification deep links arrive here while we are alive. */
@@ -556,5 +617,70 @@ private fun HttpsOffBar(onEnable: () -> Unit) {
             fontWeight = FontWeight.Bold,
             color = AdGuardOrangeWarning,
         )
+    }
+}
+
+/** Gives the moved screens their platform seams through composition locals. */
+@Composable
+private fun AdFreeHosts(
+    platform: PlatformHost,
+    files: FileHost,
+    inventory: AppInventory,
+    resumeTick: StateFlow<Long>,
+    backRegistry: BackRegistry,
+    content: @Composable () -> Unit,
+) {
+    CompositionLocalProvider(
+        LocalPlatformHost provides platform,
+        LocalFileHost provides files,
+        LocalAppInventory provides inventory,
+        LocalResumeTick provides resumeTick,
+        LocalBackRegistry provides backRegistry,
+    ) { content() }
+}
+
+/**
+ * Registers the two SAF launchers once and hands them to the file host the
+ * moved screens pick from: openText()/createDocument() suspend on these
+ * callbacks instead of every screen owning its own launcher.
+ */
+@Composable
+private fun FilePickerWiring(fileHost: AndroidFileHost) {
+    val pendingOpen = remember { AtomicReference<CancellableContinuation<String?>?>(null) }
+    val pendingCreate = remember { AtomicReference<CancellableContinuation<String?>?>(null) }
+    val openLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.OpenDocument(),
+    ) { uri ->
+        val cont = pendingOpen.getAndSet(null) ?: return@rememberLauncherForActivityResult
+        if (uri != null) {
+            fileHost.persistRead(uri.toString())
+            cont.resume(uri.toString(), onCancellation = null)
+        } else {
+            cont.resume(null, onCancellation = null)
+        }
+    }
+    val createLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.CreateDocument("text/plain"),
+    ) { uri ->
+        val cont = pendingCreate.getAndSet(null) ?: return@rememberLauncherForActivityResult
+        cont.resume(uri?.toString(), onCancellation = null)
+    }
+    DisposableEffect(fileHost) {
+        fileHost.openPicker = {
+            suspendCancellableCoroutine { cont ->
+                pendingOpen.set(cont)
+                openLauncher.launch(arrayOf("*/*"))
+            }
+        }
+        fileHost.createPicker = { name ->
+            suspendCancellableCoroutine { cont ->
+                pendingCreate.set(cont)
+                createLauncher.launch(name)
+            }
+        }
+        onDispose {
+            fileHost.openPicker = null
+            fileHost.createPicker = null
+        }
     }
 }

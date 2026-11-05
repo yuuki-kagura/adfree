@@ -57,17 +57,30 @@ class AndroidPlatformHost(private val context: Context) : PlatformHost {
         context.getSystemService(NotificationManager::class.java)?.areNotificationsEnabled() == true
 
     override fun openNotificationSettings() {
-        val intent = Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS)
-            .putExtra(Settings.EXTRA_APP_PACKAGE, context.packageName)
-            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-        runCatching { context.startActivity(intent) }
+        val opened = runCatching {
+            context.startActivity(
+                Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS)
+                    .putExtra(Settings.EXTRA_APP_PACKAGE, context.packageName)
+                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+            )
+        }.isSuccess
+        // Pre-O devices (and OEMs that strip the screen) land on app details.
+        if (!opened) {
+            openAppDetails(context.packageName)
+        }
     }
 
     override fun requestNotificationPermission() {
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) return
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) {
+            openNotificationSettings()
+            return
+        }
         if (ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) ==
             PackageManager.PERMISSION_GRANTED
         ) {
+            // Already granted: the only thing left to change is the app's
+            // notification switch, which lives in the settings screen.
+            openNotificationSettings()
             return
         }
         onNotificationPermission?.invoke() ?: openNotificationSettings()

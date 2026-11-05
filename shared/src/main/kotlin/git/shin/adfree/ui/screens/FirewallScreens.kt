@@ -1,5 +1,7 @@
 package git.shin.adfree.ui.screens
 
+import git.shin.adfree.l10n.L10n
+import git.shin.adfree.l10n.Strings
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -67,14 +69,12 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
-import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import git.shin.adfree.R
 import git.shin.adfree.model.AppFirewallRule
 import git.shin.adfree.model.FirewallAccess
 import git.shin.adfree.model.FirewallAppChoice
@@ -98,32 +98,32 @@ import kotlinx.coroutines.withContext
 
 /** One of the five per-network answers the firewall tracks for every app. */
 private enum class FirewallDimension(
-    val titleRes: Int,
-    val bodyRes: Int,
+    val titleRes: String,
+    val bodyRes: String,
     val icon: ImageVector,
     val screenOff: Boolean = false,
 ) {
-    WIFI(R.string.firewall_rule_wifi, R.string.firewall_rule_wifi_body, Icons.Default.Wifi),
+    WIFI(Strings.firewall_rule_wifi, Strings.firewall_rule_wifi_body, Icons.Default.Wifi),
     WIFI_SCREEN_OFF(
-        R.string.firewall_rule_wifi_screen_off,
-        R.string.firewall_rule_screen_off_body,
+        Strings.firewall_rule_wifi_screen_off,
+        Strings.firewall_rule_screen_off_body,
         Icons.Default.Wifi,
         screenOff = true,
     ),
     CELLULAR(
-        R.string.firewall_rule_cellular,
-        R.string.firewall_rule_cellular_body,
+        Strings.firewall_rule_cellular,
+        Strings.firewall_rule_cellular_body,
         Icons.Default.CellTower,
     ),
     CELLULAR_SCREEN_OFF(
-        R.string.firewall_rule_cellular_screen_off,
-        R.string.firewall_rule_screen_off_body,
+        Strings.firewall_rule_cellular_screen_off,
+        Strings.firewall_rule_screen_off_body,
         Icons.Default.CellTower,
         screenOff = true,
     ),
     ROAMING(
-        R.string.firewall_rule_roaming,
-        R.string.firewall_rule_roaming_body,
+        Strings.firewall_rule_roaming,
+        Strings.firewall_rule_roaming_body,
         Icons.Default.FlightTakeoff,
     ),
 }
@@ -205,14 +205,14 @@ internal fun FirewallGlobalDetail(
         ModuleDetailHero(
             icon = Icons.Default.Shield,
             tint = AdGuardGreenPrimary,
-            title = stringResource(R.string.firewall_global_title),
-            subtitle = stringResource(R.string.firewall_global_subtitle),
+            title = L10n.get(Strings.firewall_global_title),
+            subtitle = L10n.get(Strings.firewall_global_subtitle),
         )
 
         SettingsSwitch(
             icon = Icons.Default.Shield,
-            title = stringResource(R.string.firewall_global_title),
-            subtitle = stringResource(R.string.firewall_global_subtitle),
+            title = L10n.get(Strings.firewall_global_title),
+            subtitle = L10n.get(Strings.firewall_global_subtitle),
             checked = settings.firewallGlobalRules,
             onCheckedChange = {
                 viewModel.onIntent(AdGuardIntent.UpdateFirewallSettings(globalRules = it))
@@ -225,8 +225,8 @@ internal fun FirewallGlobalDetail(
             if (index > 0) Spacer(modifier = Modifier.height(10.dp))
             SettingsSwitch(
                 icon = dimension.icon,
-                title = stringResource(dimension.titleRes),
-                subtitle = stringResource(dimension.bodyRes),
+                title = L10n.get(dimension.titleRes),
+                subtitle = L10n.get(dimension.bodyRes),
                 checked = dimension.globalAllowed(settings),
                 enabled = settings.firewallGlobalRules,
                 onCheckedChange = { viewModel.onIntent(dimension.globalIntent(it)) },
@@ -253,14 +253,14 @@ internal fun FirewallCustomDetail(
         ModuleDetailHero(
             icon = Icons.Default.Apps,
             tint = AdGuardGreenLight,
-            title = stringResource(R.string.firewall_custom_title),
-            subtitle = stringResource(R.string.firewall_custom_subtitle),
+            title = L10n.get(Strings.firewall_custom_title),
+            subtitle = L10n.get(Strings.firewall_custom_subtitle),
         )
 
         SettingsSwitch(
             icon = Icons.Default.Apps,
-            title = stringResource(R.string.firewall_custom_master),
-            subtitle = stringResource(R.string.firewall_custom_subtitle),
+            title = L10n.get(Strings.firewall_custom_master),
+            subtitle = L10n.get(Strings.firewall_custom_subtitle),
             checked = settings.firewallCustomRules,
             onCheckedChange = {
                 viewModel.onIntent(AdGuardIntent.UpdateFirewallSettings(customRules = it))
@@ -270,7 +270,7 @@ internal fun FirewallCustomDetail(
         Spacer(modifier = Modifier.height(18.dp))
 
         Text(
-            text = stringResource(R.string.firewall_custom_apps_header),
+            text = L10n.get(Strings.firewall_custom_apps_header),
             fontSize = 13.sp,
             fontWeight = FontWeight.Bold,
             color = AdGuardTextSecondary,
@@ -280,7 +280,7 @@ internal fun FirewallCustomDetail(
 
         if (overrides.isEmpty()) {
             Text(
-                text = stringResource(R.string.firewall_custom_empty),
+                text = L10n.get(Strings.firewall_custom_empty),
                 fontSize = 12.sp,
                 color = AdGuardTextMuted,
             )
@@ -298,8 +298,8 @@ internal fun FirewallCustomDetail(
         NavigationRow(
             icon = Icons.Default.Add,
             accent = AdGuardGreenPrimary,
-            title = stringResource(R.string.firewall_add_app),
-            subtitle = stringResource(R.string.firewall_picker_body),
+            title = L10n.get(Strings.firewall_add_app),
+            subtitle = L10n.get(Strings.firewall_picker_body),
             onClick = { showPicker = true },
         )
     }
@@ -366,7 +366,7 @@ private fun overrideSummary(app: AppFirewallRule): String {
         FirewallDimension.entries.forEach { dimension ->
             val access = dimension.accessIn(app)
             if (access != FirewallAccess.INHERIT) {
-                add("${stringResource(dimension.titleRes)}: ${firewallAccessLabel(access)}")
+                add("${L10n.get(dimension.titleRes)}: ${firewallAccessLabel(access)}")
             }
         }
     }
@@ -409,7 +409,7 @@ private fun FirewallAppPickerSheet(
                 .padding(bottom = 24.dp),
         ) {
             Text(
-                text = stringResource(R.string.firewall_picker_title),
+                text = L10n.get(Strings.firewall_picker_title),
                 fontSize = 19.sp,
                 fontWeight = FontWeight.Bold,
                 color = AdGuardTextPrimary,
@@ -417,7 +417,7 @@ private fun FirewallAppPickerSheet(
                 modifier = Modifier.fillMaxWidth(),
             )
             Text(
-                text = stringResource(R.string.firewall_picker_body),
+                text = L10n.get(Strings.firewall_picker_body),
                 fontSize = 12.sp,
                 color = AdGuardTextMuted,
                 textAlign = TextAlign.Center,
@@ -432,7 +432,7 @@ private fun FirewallAppPickerSheet(
                 value = query,
                 onValueChange = { query = it },
                 placeholder = {
-                    Text(stringResource(R.string.firewall_picker_search), color = AdGuardTextMuted)
+                    Text(L10n.get(Strings.firewall_picker_search), color = AdGuardTextMuted)
                 },
                 leadingIcon = {
                     Icon(Icons.Default.Search, contentDescription = null, tint = AdGuardTextMuted)
@@ -442,7 +442,7 @@ private fun FirewallAppPickerSheet(
                         IconButton(onClick = { query = "" }) {
                             Icon(
                                 Icons.Default.Clear,
-                                contentDescription = stringResource(R.string.common_clear_search),
+                                contentDescription = L10n.get(Strings.common_clear_search),
                                 tint = AdGuardTextMuted,
                             )
                         }
@@ -488,7 +488,7 @@ private fun FirewallAppPickerSheet(
                 if (filtered.isEmpty()) {
                     item(key = "empty") {
                         Text(
-                            text = stringResource(R.string.firewall_picker_empty),
+                            text = L10n.get(Strings.firewall_picker_empty),
                             fontSize = 12.sp,
                             color = AdGuardTextMuted,
                             modifier = Modifier.padding(vertical = 16.dp),
@@ -513,7 +513,7 @@ private fun SystemAppsHeader(expanded: Boolean, onClick: () -> Unit) {
         Icon(Icons.Default.Apps, contentDescription = null, tint = AdGuardTextMuted)
         Spacer(modifier = Modifier.width(12.dp))
         Text(
-            text = stringResource(R.string.firewall_picker_system),
+            text = L10n.get(Strings.firewall_picker_system),
             fontSize = 13.sp,
             fontWeight = FontWeight.SemiBold,
             color = AdGuardTextSecondary,
@@ -521,8 +521,7 @@ private fun SystemAppsHeader(expanded: Boolean, onClick: () -> Unit) {
         )
         Icon(
             imageVector = if (expanded) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
-            contentDescription = stringResource(
-                if (expanded) R.string.firewall_picker_collapse else R.string.firewall_picker_expand,
+            contentDescription = L10n.get(if (expanded) Strings.firewall_picker_collapse else Strings.firewall_picker_expand,
             ),
             tint = AdGuardTextMuted,
         )
@@ -573,7 +572,7 @@ internal fun FirewallAppRuleDetail(
     DetailScaffold(onBack = onBack, modifier = modifier) {
         if (app == null) {
             Text(
-                text = stringResource(R.string.firewall_custom_empty),
+                text = L10n.get(Strings.firewall_custom_empty),
                 fontSize = 12.sp,
                 color = AdGuardTextMuted,
             )
@@ -587,8 +586,8 @@ internal fun FirewallAppRuleDetail(
 
         SettingsSwitch(
             icon = Icons.Default.Notifications,
-            title = stringResource(R.string.firewall_app_notify_title),
-            subtitle = stringResource(R.string.firewall_app_notify_body),
+            title = L10n.get(Strings.firewall_app_notify_title),
+            subtitle = L10n.get(Strings.firewall_app_notify_body),
             checked = app.notifyBlocked,
             onCheckedChange = {
                 viewModel.onIntent(
@@ -604,7 +603,7 @@ internal fun FirewallAppRuleDetail(
         Spacer(modifier = Modifier.height(18.dp))
 
         Text(
-            text = stringResource(R.string.firewall_app_applied_header),
+            text = L10n.get(Strings.firewall_app_applied_header),
             fontSize = 13.sp,
             fontWeight = FontWeight.Bold,
             color = AdGuardTextSecondary,
@@ -616,7 +615,7 @@ internal fun FirewallAppRuleDetail(
         }
         if (applied.isEmpty()) {
             Text(
-                text = stringResource(R.string.firewall_app_applied_empty),
+                text = L10n.get(Strings.firewall_app_applied_empty),
                 fontSize = 12.sp,
                 color = AdGuardTextMuted,
             )
@@ -630,8 +629,8 @@ internal fun FirewallAppRuleDetail(
                     applied.forEachIndexed { index, dimension ->
                         if (index > 0) Spacer(modifier = Modifier.height(14.dp))
                         FirewallAccessRow(
-                            title = stringResource(dimension.titleRes),
-                            subtitle = stringResource(dimension.bodyRes),
+                            title = L10n.get(dimension.titleRes),
+                            subtitle = L10n.get(dimension.bodyRes),
                             access = dimension.accessIn(app),
                             onSelect = {
                                 viewModel.onIntent(
@@ -647,7 +646,7 @@ internal fun FirewallAppRuleDetail(
         Spacer(modifier = Modifier.height(18.dp))
 
         Text(
-            text = stringResource(R.string.firewall_app_available_header),
+            text = L10n.get(Strings.firewall_app_available_header),
             fontSize = 13.sp,
             fontWeight = FontWeight.Bold,
             color = AdGuardTextSecondary,
@@ -659,7 +658,7 @@ internal fun FirewallAppRuleDetail(
         }
         if (available.isEmpty()) {
             Text(
-                text = stringResource(R.string.firewall_app_applied_empty),
+                text = L10n.get(Strings.firewall_app_applied_empty),
                 fontSize = 12.sp,
                 color = AdGuardTextMuted,
             )
@@ -672,7 +671,7 @@ internal fun FirewallAppRuleDetail(
                 Column {
                     available.forEach { dimension ->
                         AvailableRuleRow(
-                            title = stringResource(dimension.titleRes),
+                            title = L10n.get(dimension.titleRes),
                             onClick = {
                                 viewModel.onIntent(
                                     dimension.updateIntent(
@@ -729,7 +728,7 @@ private fun AppRuleHeader(app: AppFirewallRule) {
             color = AdGuardTextMuted,
         )
         Text(
-            text = stringResource(R.string.firewall_app_subtitle),
+            text = L10n.get(Strings.firewall_app_subtitle),
             fontSize = 12.sp,
             color = AdGuardTextSecondary,
             textAlign = TextAlign.Center,
@@ -762,7 +761,7 @@ internal fun FirewallNetworkStrip(
                 icon = dimension.icon,
                 screenOff = dimension.screenOff,
                 tint = if (allowed) AdGuardGreenLight else AdGuardRedBlocked,
-                description = stringResource(dimension.titleRes),
+                description = L10n.get(dimension.titleRes),
             )
             Spacer(modifier = Modifier.width(14.dp))
         }
@@ -876,8 +875,8 @@ internal fun FirewallQuickActionsDetail(
             ModuleDetailHero(
                 icon = Icons.Default.History,
                 tint = AdGuardGreenPrimary,
-                title = stringResource(R.string.firewall_quick_title),
-                subtitle = stringResource(R.string.firewall_quick_subtitle),
+                title = L10n.get(Strings.firewall_quick_title),
+                subtitle = L10n.get(Strings.firewall_quick_subtitle),
             )
         }
         item(key = "search") {
@@ -885,7 +884,7 @@ internal fun FirewallQuickActionsDetail(
                 value = query,
                 onValueChange = { query = it },
                 placeholder = {
-                    Text(stringResource(R.string.firewall_quick_search), color = AdGuardTextMuted)
+                    Text(L10n.get(Strings.firewall_quick_search), color = AdGuardTextMuted)
                 },
                 leadingIcon = {
                     Icon(Icons.Default.Search, contentDescription = null, tint = AdGuardTextMuted)
@@ -895,7 +894,7 @@ internal fun FirewallQuickActionsDetail(
                         IconButton(onClick = { query = "" }) {
                             Icon(
                                 Icons.Default.Clear,
-                                contentDescription = stringResource(R.string.common_clear_search),
+                                contentDescription = L10n.get(Strings.common_clear_search),
                                 tint = AdGuardTextMuted,
                             )
                         }
@@ -925,13 +924,13 @@ internal fun FirewallQuickActionsDetail(
                     horizontalAlignment = Alignment.CenterHorizontally,
                 ) {
                     Text(
-                        text = stringResource(R.string.firewall_quick_empty_title),
+                        text = L10n.get(Strings.firewall_quick_empty_title),
                         fontSize = 15.sp,
                         fontWeight = FontWeight.SemiBold,
                         color = AdGuardTextPrimary,
                     )
                     Text(
-                        text = stringResource(R.string.firewall_quick_empty_body),
+                        text = L10n.get(Strings.firewall_quick_empty_body),
                         fontSize = 12.sp,
                         color = AdGuardTextMuted,
                         textAlign = TextAlign.Center,
@@ -1038,8 +1037,7 @@ private fun QuickActionCard(
                     ) {
                         Icon(
                             Icons.Default.MoreVert,
-                            contentDescription = stringResource(
-                                R.string.firewall_quick_overflow,
+                            contentDescription = L10n.format(Strings.firewall_quick_overflow,
                                 entry.appName,
                             ),
                             tint = AdGuardTextMuted,
@@ -1050,21 +1048,21 @@ private fun QuickActionCard(
                         onDismissRequest = { menuOpen = false },
                     ) {
                         DropdownMenuItem(
-                            text = { Text(stringResource(R.string.firewall_quick_recent_activity)) },
+                            text = { Text(L10n.get(Strings.firewall_quick_recent_activity)) },
                             onClick = {
                                 menuOpen = false
                                 onOpenActivity()
                             },
                         )
                         DropdownMenuItem(
-                            text = { Text(stringResource(R.string.firewall_quick_app_rule)) },
+                            text = { Text(L10n.get(Strings.firewall_quick_app_rule)) },
                             onClick = {
                                 menuOpen = false
                                 onOpenRule()
                             },
                         )
                         DropdownMenuItem(
-                            text = { Text(stringResource(R.string.firewall_quick_manage_app)) },
+                            text = { Text(L10n.get(Strings.firewall_quick_manage_app)) },
                             onClick = {
                                 menuOpen = false
                                 onOpenManagement()
@@ -1073,11 +1071,10 @@ private fun QuickActionCard(
                         DropdownMenuItem(
                             text = {
                                 Text(
-                                    stringResource(
-                                        if (rule.notifyBlocked) {
-                                            R.string.firewall_quick_mute
+                                    L10n.get(if (rule.notifyBlocked) {
+                                            Strings.firewall_quick_mute
                                         } else {
-                                            R.string.firewall_quick_unmute
+                                            Strings.firewall_quick_unmute
                                         },
                                     ),
                                 )
@@ -1118,11 +1115,10 @@ private fun QuickActionCard(
                 Spacer(modifier = Modifier.width(8.dp))
                 Column {
                     Text(
-                        text = stringResource(
-                            if (wifiAllowed) {
-                                R.string.firewall_quick_has_wifi
+                        text = L10n.get(if (wifiAllowed) {
+                                Strings.firewall_quick_has_wifi
                             } else {
-                                R.string.firewall_quick_no_wifi
+                                Strings.firewall_quick_no_wifi
                             },
                         ),
                         fontSize = 12.sp,
@@ -1150,8 +1146,7 @@ private fun QuickActionCard(
                 ),
             ) {
                 Text(
-                    text = stringResource(
-                        if (blocked) R.string.firewall_quick_unblock else R.string.firewall_quick_block,
+                    text = L10n.get(if (blocked) Strings.firewall_quick_unblock else Strings.firewall_quick_block,
                     ),
                     fontSize = 13.sp,
                     fontWeight = FontWeight.Bold,
@@ -1163,20 +1158,20 @@ private fun QuickActionCard(
 
 @Composable
 private fun quickRuleReason(rule: AppFirewallRule, settings: ProtectionSettings): String = when {
-    !settings.isFirewallEnabled -> stringResource(R.string.firewall_quick_firewall_off)
+    !settings.isFirewallEnabled -> L10n.get(Strings.firewall_quick_firewall_off)
     settings.firewallCustomRules && rule.wifiAccess == FirewallAccess.BLOCK ->
-        stringResource(R.string.firewall_quick_rule_blocked)
-    else -> stringResource(R.string.firewall_quick_allowed_global)
+        L10n.get(Strings.firewall_quick_rule_blocked)
+    else -> L10n.get(Strings.firewall_quick_allowed_global)
 }
 
 @Composable
 private fun relativeAge(timestampMs: Long): String {
     val minutes = ((System.currentTimeMillis() - timestampMs) / 60_000L).coerceAtLeast(0L)
     return when {
-        minutes < 1 -> stringResource(R.string.firewall_quick_ago_now)
-        minutes < 60 -> stringResource(R.string.firewall_quick_ago_minutes, minutes)
-        minutes < 24 * 60 -> stringResource(R.string.firewall_quick_ago_hours, minutes / 60)
-        else -> stringResource(R.string.firewall_quick_ago_days, minutes / (24 * 60))
+        minutes < 1 -> L10n.get(Strings.firewall_quick_ago_now)
+        minutes < 60 -> L10n.format(Strings.firewall_quick_ago_minutes, minutes)
+        minutes < 24 * 60 -> L10n.format(Strings.firewall_quick_ago_hours, minutes / 60)
+        else -> L10n.format(Strings.firewall_quick_ago_days, minutes / (24 * 60))
     }
 }
 
@@ -1212,15 +1207,15 @@ internal fun FirewallNotificationsDetail(
             ModuleDetailHero(
                 icon = Icons.Default.Notifications,
                 tint = AdGuardOrangeWarning,
-                title = stringResource(R.string.firewall_notifications_title),
-                subtitle = stringResource(R.string.firewall_notifications_body),
+                title = L10n.get(Strings.firewall_notifications_title),
+                subtitle = L10n.get(Strings.firewall_notifications_body),
             )
         }
         item(key = "master") {
             SettingsSwitch(
                 icon = Icons.Default.Notifications,
-                title = stringResource(R.string.firewall_notifications_title),
-                subtitle = stringResource(R.string.firewall_notifications_body),
+                title = L10n.get(Strings.firewall_notifications_title),
+                subtitle = L10n.get(Strings.firewall_notifications_body),
                 checked = settings.firewallNotifications,
                 onCheckedChange = {
                     viewModel.onIntent(AdGuardIntent.UpdateFirewallSettings(notifications = it))
@@ -1307,7 +1302,7 @@ private fun FirewallListScaffold(
             IconButton(onClick = onBack) {
                 Icon(
                     imageVector = Icons.AutoMirrored.Filled.ArrowBack,
-                    contentDescription = stringResource(R.string.hub_back),
+                    contentDescription = L10n.get(Strings.hub_back),
                     tint = AdGuardTextPrimary,
                 )
             }

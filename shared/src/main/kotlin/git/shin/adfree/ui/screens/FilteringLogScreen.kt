@@ -1,11 +1,12 @@
 package git.shin.adfree.ui.screens
 
+import git.shin.adfree.l10n.Strings
+import git.shin.adfree.l10n.L10n
+import git.shin.adfree.platform.currentFileHost
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
-import androidx.activity.compose.rememberLauncherForActivityResult
-import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -60,6 +61,7 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
@@ -68,13 +70,11 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.testTag
-import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import git.shin.adfree.R
 import git.shin.adfree.data.AdGuardRepository
 import git.shin.adfree.model.FilterStatus
 import git.shin.adfree.model.NetworkRequestLog
@@ -103,6 +103,7 @@ import git.shin.adfree.ui.theme.AdGuardTextPrimary
 import git.shin.adfree.ui.theme.AdGuardOnAccent
 import git.shin.adfree.ui.theme.AdGuardTextSecondary
 import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -126,11 +127,8 @@ fun FilteringLogScreen(
     val state by viewModel.uiState.collectAsState()
     val listState = rememberLazyListState()
     var showClearConfirm by remember { mutableStateOf(false) }
-    val exportLauncher = rememberLauncherForActivityResult(
-        ActivityResultContracts.CreateDocument("text/csv"),
-    ) { uri ->
-        uri?.let { viewModel.onIntent(AdGuardIntent.ExportLogs(it.toString())) }
-    }
+    val files = currentFileHost()
+    val exportScope = rememberCoroutineScope()
 
     // While the list sits at its top it follows incoming rows; scrolling into
     // history tells the repository to freeze the window instead, or fresh rows
@@ -173,10 +171,10 @@ fun FilteringLogScreen(
             containerColor = AdGuardDarkSurface,
             titleContentColor = AdGuardTextPrimary,
             textContentColor = AdGuardTextSecondary,
-            title = { Text(stringResource(R.string.log_clear_title)) },
+            title = { Text(L10n.get(Strings.log_clear_title)) },
             text = {
                 Text(
-                    stringResource(R.string.log_clear_body, state.logTotal),
+                    L10n.format(Strings.log_clear_body, state.logTotal),
                     fontSize = 13.sp,
                 )
             },
@@ -185,12 +183,12 @@ fun FilteringLogScreen(
                     showClearConfirm = false
                     viewModel.onIntent(AdGuardIntent.ClearLogs)
                 }) {
-                    Text(stringResource(R.string.log_clear_confirm), fontSize = 13.sp, fontWeight = FontWeight.Bold, color = AdGuardRedBlocked)
+                    Text(L10n.get(Strings.log_clear_confirm), fontSize = 13.sp, fontWeight = FontWeight.Bold, color = AdGuardRedBlocked)
                 }
             },
             dismissButton = {
                 TextButton(onClick = { showClearConfirm = false }) {
-                    Text(stringResource(R.string.common_cancel), fontSize = 13.sp, color = AdGuardTextSecondary)
+                    Text(L10n.get(Strings.common_cancel), fontSize = 13.sp, color = AdGuardTextSecondary)
                 }
             },
         )
@@ -210,13 +208,13 @@ fun FilteringLogScreen(
         ) {
             Column(modifier = Modifier.weight(1f)) {
                 Text(
-                    text = stringResource(R.string.log_title),
+                    text = L10n.get(Strings.log_title),
                     fontSize = 19.sp,
                     fontWeight = FontWeight.Bold,
                     color = AdGuardTextPrimary
                 )
                 Text(
-                    text = stringResource(R.string.log_subtitle),
+                    text = L10n.get(Strings.log_subtitle),
                     fontSize = 12.sp,
                     color = AdGuardTextMuted
                 )
@@ -225,8 +223,7 @@ fun FilteringLogScreen(
                 // newest 10k requests" and this list loads fewer rows than
                 // that, which reads as a shorter history than there is.
                 Text(
-                    text = stringResource(
-                        R.string.log_retention_note,
+                    text = L10n.format(Strings.log_retention_note,
                         AdGuardRepository.LOG_DB_MAX_ROWS,
                         AdGuardRepository.LOG_DB_KEEP_DAYS,
                     ),
@@ -242,12 +239,18 @@ fun FilteringLogScreen(
             // children would strand the download button mid-header.
             Row {
                 IconButton(
-                    onClick = { exportLauncher.launch("adfree-activity.csv") },
+                    onClick = {
+                        exportScope.launch {
+                            files.createDocument("adfree-activity.csv", "text/csv")?.let {
+                                viewModel.onIntent(AdGuardIntent.ExportLogs(it))
+                            }
+                        }
+                    },
                     modifier = Modifier.testTag("export_logs_button")
                 ) {
                     Icon(
                         imageVector = Icons.Default.FileDownload,
-                        contentDescription = stringResource(R.string.log_export_action),
+                        contentDescription = L10n.get(Strings.log_export_action),
                         tint = AdGuardTextSecondary
                     )
                 }
@@ -258,7 +261,7 @@ fun FilteringLogScreen(
                 ) {
                     Icon(
                         imageVector = Icons.Default.DeleteSweep,
-                        contentDescription = stringResource(R.string.log_clear_action),
+                        contentDescription = L10n.get(Strings.log_clear_action),
                         tint = AdGuardTextSecondary
                     )
                 }
@@ -271,14 +274,14 @@ fun FilteringLogScreen(
         OutlinedTextField(
             value = state.searchQuery,
             onValueChange = { viewModel.onIntent(AdGuardIntent.SearchQueryChanged(it)) },
-            placeholder = { Text(stringResource(R.string.log_search_hint), color = AdGuardTextMuted, fontSize = 13.sp) },
+            placeholder = { Text(L10n.get(Strings.log_search_hint), color = AdGuardTextMuted, fontSize = 13.sp) },
             leadingIcon = {
                 Icon(Icons.Default.Search, contentDescription = null, tint = AdGuardTextMuted)
             },
             trailingIcon = {
                 if (state.searchQuery.isNotEmpty()) {
                     IconButton(onClick = { viewModel.onIntent(AdGuardIntent.SearchQueryChanged("")) }) {
-                        Icon(Icons.Default.Clear, contentDescription = stringResource(R.string.common_clear_search), tint = AdGuardTextMuted)
+                        Icon(Icons.Default.Clear, contentDescription = L10n.get(Strings.common_clear_search), tint = AdGuardTextMuted)
                     }
                 }
             },
@@ -309,7 +312,7 @@ fun FilteringLogScreen(
             FilterChip(
                 selected = state.statusFilter == null,
                 onClick = { viewModel.onIntent(AdGuardIntent.FilterStatusChanged(null)) },
-                label = { Text(stringResource(R.string.log_filter_all, state.logTotal), fontSize = 12.sp) },
+                label = { Text(L10n.format(Strings.log_filter_all, state.logTotal), fontSize = 12.sp) },
                 colors = FilterChipDefaults.filterChipColors(
                     selectedContainerColor = AdGuardGreenPrimary,
                     selectedLabelColor = AdGuardOnAccent,
@@ -321,7 +324,7 @@ fun FilteringLogScreen(
             FilterChip(
                 selected = state.statusFilter == FilterStatus.BLOCKED,
                 onClick = { viewModel.onIntent(AdGuardIntent.FilterStatusChanged(FilterStatus.BLOCKED)) },
-                label = { Text(stringResource(R.string.log_filter_blocked, state.logBlockedTotal), fontSize = 12.sp) },
+                label = { Text(L10n.format(Strings.log_filter_blocked, state.logBlockedTotal), fontSize = 12.sp) },
                 colors = FilterChipDefaults.filterChipColors(
                     selectedContainerColor = AdGuardRedBlocked,
                     selectedLabelColor = Color.White,
@@ -333,7 +336,7 @@ fun FilteringLogScreen(
             FilterChip(
                 selected = state.statusFilter == FilterStatus.ALLOWED,
                 onClick = { viewModel.onIntent(AdGuardIntent.FilterStatusChanged(FilterStatus.ALLOWED)) },
-                label = { Text(stringResource(R.string.log_filter_allowed, state.logAllowedTotal), fontSize = 12.sp) },
+                label = { Text(L10n.format(Strings.log_filter_allowed, state.logAllowedTotal), fontSize = 12.sp) },
                 colors = FilterChipDefaults.filterChipColors(
                     selectedContainerColor = AdGuardGreenLight,
                     selectedLabelColor = AdGuardOnAccent,
@@ -379,7 +382,7 @@ fun FilteringLogScreen(
                         )
                         Spacer(modifier = Modifier.width(8.dp))
                         Text(
-                            text = stringResource(R.string.log_filter_by_app, appDisplayName),
+                            text = L10n.format(Strings.log_filter_by_app, appDisplayName),
                             fontSize = 12.sp,
                             fontWeight = FontWeight.Bold,
                             color = AdGuardGreenLight,
@@ -393,7 +396,7 @@ fun FilteringLogScreen(
                     ) {
                         Icon(
                             imageVector = Icons.Default.Close,
-                            contentDescription = stringResource(R.string.log_filter_by_app_clear),
+                            contentDescription = L10n.get(Strings.log_filter_by_app_clear),
                             tint = AdGuardTextMuted,
                             modifier = Modifier.size(16.dp)
                         )
@@ -423,18 +426,16 @@ fun FilteringLogScreen(
                     // "No traffic yet" is wrong when rows exist but the query
                     // filters them all out; say which case this is.
                     Text(
-                        text = stringResource(
-                            if (filterActive) R.string.log_empty_filtered_title
-                            else R.string.log_empty_title
+                        text = L10n.get(if (filterActive) Strings.log_empty_filtered_title
+                            else Strings.log_empty_title
                         ),
                         fontSize = 15.sp,
                         fontWeight = FontWeight.SemiBold,
                         color = AdGuardTextSecondary
                     )
                     Text(
-                        text = stringResource(
-                            if (filterActive) R.string.log_empty_filtered_body
-                            else R.string.log_empty_body
+                        text = L10n.get(if (filterActive) Strings.log_empty_filtered_body
+                            else Strings.log_empty_body
                         ),
                         fontSize = 12.sp,
                         color = AdGuardTextMuted
@@ -469,8 +470,7 @@ fun FilteringLogScreen(
                         ) {
                             if (state.logs.size >= AdGuardRepository.LOG_ROW_CAP) {
                                 Text(
-                                    text = stringResource(
-                                        R.string.log_window_capped,
+                                    text = L10n.format(Strings.log_window_capped,
                                         state.logs.size,
                                         state.logTotal,
                                     ),
@@ -552,40 +552,39 @@ fun FilteringLogScreen(
 
 @Composable
 private fun logStatusLabel(status: FilterStatus): String = when (status) {
-    FilterStatus.BLOCKED -> stringResource(R.string.log_status_blocked)
-    FilterStatus.ALLOWED -> stringResource(R.string.log_status_allowed)
-    FilterStatus.WHITELISTED -> stringResource(R.string.log_status_whitelisted)
+    FilterStatus.BLOCKED -> L10n.get(Strings.log_status_blocked)
+    FilterStatus.ALLOWED -> L10n.get(Strings.log_status_allowed)
+    FilterStatus.WHITELISTED -> L10n.get(Strings.log_status_whitelisted)
 }
 
 @Composable
 private fun logActionLabel(status: FilterStatus): String = when (status) {
-    FilterStatus.BLOCKED -> stringResource(R.string.log_action_blocked)
-    FilterStatus.ALLOWED -> stringResource(R.string.log_action_allowed)
-    FilterStatus.WHITELISTED -> stringResource(R.string.log_action_whitelisted)
+    FilterStatus.BLOCKED -> L10n.get(Strings.log_action_blocked)
+    FilterStatus.ALLOWED -> L10n.get(Strings.log_action_allowed)
+    FilterStatus.WHITELISTED -> L10n.get(Strings.log_action_whitelisted)
 }
 
 @Composable
-private fun protocolLabel(protocol: ProtocolType): String = stringResource(
-    when (protocol) {
-        ProtocolType.DNS_UDP -> R.string.protocol_dns_udp
-        ProtocolType.DNS_DOT -> R.string.protocol_dns_dot
-        ProtocolType.DNS_DOH -> R.string.protocol_dns_doh
-        ProtocolType.HTTPS -> R.string.protocol_https
-        ProtocolType.QUIC -> R.string.protocol_quic
-        ProtocolType.TCP -> R.string.protocol_tcp
-        ProtocolType.UDP -> R.string.protocol_udp
+private fun protocolLabel(protocol: ProtocolType): String = L10n.get(when (protocol) {
+        ProtocolType.DNS_UDP -> Strings.protocol_dns_udp
+        ProtocolType.DNS_DOT -> Strings.protocol_dns_dot
+        ProtocolType.DNS_DOH -> Strings.protocol_dns_doh
+        ProtocolType.HTTPS -> Strings.protocol_https
+        ProtocolType.QUIC -> Strings.protocol_quic
+        ProtocolType.TCP -> Strings.protocol_tcp
+        ProtocolType.UDP -> Strings.protocol_udp
     }
 )
 
 @Composable
 private fun requestCategoryLabel(category: RequestCategory): String = when (category) {
-    RequestCategory.AD -> stringResource(R.string.log_category_ad)
-    RequestCategory.TRACKER -> stringResource(R.string.log_category_tracker)
-    RequestCategory.ANALYTICS -> stringResource(R.string.log_category_analytics)
-    RequestCategory.SOCIAL -> stringResource(R.string.log_category_social)
-    RequestCategory.ANNOYANCE -> stringResource(R.string.log_category_annoyance)
-    RequestCategory.MALWARE -> stringResource(R.string.log_category_malware)
-    RequestCategory.CUSTOM -> stringResource(R.string.log_category_custom)
+    RequestCategory.AD -> L10n.get(Strings.log_category_ad)
+    RequestCategory.TRACKER -> L10n.get(Strings.log_category_tracker)
+    RequestCategory.ANALYTICS -> L10n.get(Strings.log_category_analytics)
+    RequestCategory.SOCIAL -> L10n.get(Strings.log_category_social)
+    RequestCategory.ANNOYANCE -> L10n.get(Strings.log_category_annoyance)
+    RequestCategory.MALWARE -> L10n.get(Strings.log_category_malware)
+    RequestCategory.CUSTOM -> L10n.get(Strings.log_category_custom)
 }
 
 @Composable
@@ -765,13 +764,13 @@ fun PacketInspectionSheetContent(
             verticalAlignment = Alignment.CenterVertically
         ) {
             Text(
-                text = stringResource(R.string.log_detail_title),
+                text = L10n.get(Strings.log_detail_title),
                 fontSize = 17.sp,
                 fontWeight = FontWeight.Bold,
                 color = AdGuardTextPrimary
             )
             IconButton(onClick = onClose) {
-                Icon(Icons.Default.Close, contentDescription = stringResource(R.string.common_close), tint = AdGuardTextSecondary)
+                Icon(Icons.Default.Close, contentDescription = L10n.get(Strings.common_close), tint = AdGuardTextSecondary)
             }
         }
 
@@ -785,7 +784,7 @@ fun PacketInspectionSheetContent(
         ) {
             Column(modifier = Modifier.padding(14.dp)) {
                 Text(
-                    text = stringResource(R.string.log_dest_header),
+                    text = L10n.get(Strings.log_dest_header),
                     fontSize = 11.sp,
                     fontWeight = FontWeight.Bold,
                     color = AdGuardTextMuted
@@ -799,8 +798,7 @@ fun PacketInspectionSheetContent(
                 )
                 Spacer(modifier = Modifier.height(4.dp))
                 Text(
-                    text = stringResource(
-                        R.string.log_ip_protocol,
+                    text = L10n.format(Strings.log_ip_protocol,
                         log.ipAddress,
                         protocolLabel(log.protocol),
                     ),
@@ -814,14 +812,14 @@ fun PacketInspectionSheetContent(
 
         // Detailed Metadata Grid
         Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            DetailRow(label = stringResource(R.string.log_detail_domain), value = log.domain)
+            DetailRow(label = L10n.get(Strings.log_detail_domain), value = log.domain)
             DetailRow(
-                label = stringResource(R.string.log_detail_time),
+                label = L10n.get(Strings.log_detail_time),
                 value = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault())
                     .format(Date(log.timestampMs)),
             )
             DetailRow(
-                label = stringResource(R.string.log_detail_latency),
+                label = L10n.get(Strings.log_detail_latency),
                 value = if (log.latencyMicros >= 1_000) {
                     "%.1f ms".format(log.latencyMicros / 1_000.0)
                 } else {
@@ -829,20 +827,20 @@ fun PacketInspectionSheetContent(
                 },
             )
             DetailRow(
-                label = stringResource(R.string.log_detail_action),
+                label = L10n.get(Strings.log_detail_action),
                 value = logActionLabel(log.status)
             )
-            DetailRow(label = stringResource(R.string.log_detail_category), value = requestCategoryLabel(log.category))
+            DetailRow(label = L10n.get(Strings.log_detail_category), value = requestCategoryLabel(log.category))
             val transportLabel = when (log.transport) {
-                NetworkTransport.WIFI -> stringResource(R.string.log_transport_wifi)
-                NetworkTransport.CELLULAR -> stringResource(R.string.log_transport_cellular)
+                NetworkTransport.WIFI -> L10n.get(Strings.log_transport_wifi)
+                NetworkTransport.CELLULAR -> L10n.get(Strings.log_transport_cellular)
                 NetworkTransport.UNKNOWN -> null
             }
             if (transportLabel != null) {
                 DetailRow(
-                    label = stringResource(R.string.log_detail_transport),
+                    label = L10n.get(Strings.log_detail_transport),
                     value = if (log.roaming) {
-                        stringResource(R.string.log_transport_roaming, transportLabel)
+                        L10n.format(Strings.log_transport_roaming, transportLabel)
                     } else {
                         transportLabel
                     },
@@ -854,7 +852,7 @@ fun PacketInspectionSheetContent(
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 Text(
-                    text = stringResource(R.string.log_detail_app),
+                    text = L10n.get(Strings.log_detail_app),
                     fontSize = 12.sp,
                     color = AdGuardTextSecondary,
                 )
@@ -869,7 +867,7 @@ fun PacketInspectionSheetContent(
                         Spacer(modifier = Modifier.width(6.dp))
                     }
                     Text(
-                        text = appLabel ?: stringResource(R.string.log_app_unknown),
+                        text = appLabel ?: L10n.get(Strings.log_app_unknown),
                         fontSize = 12.sp,
                         fontWeight = FontWeight.SemiBold,
                         color = AdGuardTextPrimary,
@@ -878,28 +876,27 @@ fun PacketInspectionSheetContent(
                 }
             }
             log.matchedRule?.let { matchedRule ->
-                DetailRow(label = stringResource(R.string.log_detail_rule), value = matchedRule)
+                DetailRow(label = L10n.get(Strings.log_detail_rule), value = matchedRule)
             }
             log.filterListName?.let { filterListName ->
-                DetailRow(label = stringResource(R.string.log_detail_list), value = filterListName)
+                DetailRow(label = L10n.get(Strings.log_detail_list), value = filterListName)
             }
             log.url?.let { url ->
-                DetailRow(label = stringResource(R.string.log_detail_url), value = url)
+                DetailRow(label = L10n.get(Strings.log_detail_url), value = url)
             }
             log.dnsAnswer?.let { dnsAnswer ->
-                DetailRow(label = stringResource(R.string.log_detail_dns_answer), value = dnsAnswer)
+                DetailRow(label = L10n.get(Strings.log_detail_dns_answer), value = dnsAnswer)
             }
             if (log.flowId > 0) {
                 DetailRow(
-                    label = stringResource(R.string.log_detail_connection),
+                    label = L10n.get(Strings.log_detail_connection),
                     value = "#${log.flowId}",
                 )
             }
             if (log.bytesSent > 0 || log.bytesReceived > 0) {
                 DetailRow(
-                    label = stringResource(R.string.log_detail_transfer),
-                    value = stringResource(
-                        R.string.log_transfer_value,
+                    label = L10n.get(Strings.log_detail_transfer),
+                    value = L10n.format(Strings.log_transfer_value,
                         assetSizeLabel(log.bytesSent),
                         assetSizeLabel(log.bytesReceived),
                     ),
@@ -907,8 +904,8 @@ fun PacketInspectionSheetContent(
             }
             if (log.dataSavedBytes > 0) {
                 DetailRow(
-                    label = stringResource(R.string.log_detail_saved),
-                    value = stringResource(R.string.log_saved_value, log.dataSavedBytes / 1024)
+                    label = L10n.get(Strings.log_detail_saved),
+                    value = L10n.format(Strings.log_saved_value, log.dataSavedBytes / 1024)
                 )
             }
         }
@@ -928,7 +925,7 @@ fun PacketInspectionSheetContent(
                 shape = RoundedCornerShape(10.dp),
                 border = androidx.compose.foundation.BorderStroke(1.dp, AdGuardBlueDns)
             ) {
-                Text(stringResource(R.string.log_allowlist), color = AdGuardBlueDns, fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                Text(L10n.get(Strings.log_allowlist), color = AdGuardBlueDns, fontWeight = FontWeight.Bold, fontSize = 12.sp)
             }
 
             OutlinedButton(
@@ -939,7 +936,7 @@ fun PacketInspectionSheetContent(
                 shape = RoundedCornerShape(10.dp),
                 border = androidx.compose.foundation.BorderStroke(1.dp, AdGuardRedBlocked)
             ) {
-                Text(stringResource(R.string.log_block_domain), color = AdGuardRedBlocked, fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                Text(L10n.get(Strings.log_block_domain), color = AdGuardRedBlocked, fontWeight = FontWeight.Bold, fontSize = 12.sp)
             }
         }
 
@@ -955,7 +952,7 @@ fun PacketInspectionSheetContent(
         ) {
             Icon(Icons.Default.Search, contentDescription = null, tint = AdGuardOnAccent)
             Spacer(modifier = Modifier.width(8.dp))
-            Text(stringResource(R.string.log_check_safety), color = AdGuardOnAccent, fontWeight = FontWeight.Bold)
+            Text(L10n.get(Strings.log_check_safety), color = AdGuardOnAccent, fontWeight = FontWeight.Bold)
         }
 
         Spacer(modifier = Modifier.height(16.dp))
