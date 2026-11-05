@@ -358,7 +358,8 @@ app/src/main/kotlin/
   git/shin/adfree/security/  ThreatAnalyzer (offline analysis)
   git/shin/adfree/ui/     ViewModel/MVI + 5 tabs (Compose)
   git/shin/adfree/vpn/    VpnService + controller
-desktop/src/main/kotlin/  Linux console smoke test for :shared (no Android)
+desktop/src/main/kotlin/  Linux desktop over :shared (no Android): console engine
+                          probe + Compose UI (rail, engine status, host check)
 tools/install-emulator-ca.sh   install the CA into a rooted emulator (dev)
 app/src/test/kotlin/      JVM unit tests
 shared/src/test/kotlin/   version-rule unit tests (JVM)

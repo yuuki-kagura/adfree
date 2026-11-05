@@ -29,4 +29,8 @@ fun main() {
 
     val state: UpdateUiState = UpdateUiState.Idle
     println("UpdateUiState -> $state")
+
+    if (!runEngineProbe()) {
+        System.exit(1)
+    }
 }

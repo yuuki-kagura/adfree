@@ -90,8 +90,10 @@ Requirements:
 ./gradlew :app:assembleDebug                # build the Rust core + APK
 ./gradlew :app:verifyBindings               # regenerate Kotlin bindings after Rust API changes
 ./gradlew :app:assembleDebug -PskipNative   # UI only, no native build
-./gradlew :desktop:installDist              # Linux smoke test of the shared core
-./desktop/build/install/desktop/bin/desktop # run it on the host JVM
+./gradlew :desktop:installDist              # Linux console probe: the Rust engine through :shared (no Android)
+./desktop/build/install/desktop/bin/desktop # run the probe on the host JVM
+cd rust && cargo build --release            # build libadfree_core.so for the desktop UI
+./gradlew :desktop:runUi                    # Compose desktop window (uses that .so, or set ADFREE_CORE_LIB)
 ```
 
 The company table ships at `rust/assets/services.tsv`. To rebuild it from
