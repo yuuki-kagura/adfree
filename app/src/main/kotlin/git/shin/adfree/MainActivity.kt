@@ -83,6 +83,7 @@ import androidx.core.content.ContextCompat
 import androidx.core.content.edit
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LifecycleEventEffect
+import git.shin.adfree.l10n.Strings
 import git.shin.adfree.model.ThemeMode
 import git.shin.adfree.R
 import git.shin.adfree.ui.AdGuardEffect
@@ -180,7 +181,7 @@ class MainActivity : AppCompatActivity() {
                     viewModel.effect.collect { effect ->
                         when (effect) {
                             is AdGuardEffect.ShowSnackbar -> {
-                                snackbarHostState.showSnackbar(effect.message.resolve(context))
+                                snackbarHostState.showSnackbar(effect.message.asString())
                             }
                             is AdGuardEffect.RequestVpnPermission -> {
                                 // Handled via launcher
@@ -435,12 +436,12 @@ data class NavItem(
 
 /** The bottom bar and the wide-layout side rail show the same six destinations. */
 private fun defaultNavItems(): List<NavItem> = listOf(
-    NavItem(AdGuardTab.HOME, UiText.Resource(R.string.nav_home), Icons.Filled.Home, Icons.Outlined.Home, "nav_home"),
-    NavItem(AdGuardTab.PROTECTION, UiText.Resource(R.string.nav_protection), Icons.Filled.Shield, Icons.Outlined.Shield, "nav_protection"),
-    NavItem(AdGuardTab.APPS, UiText.Resource(R.string.nav_apps), Icons.Filled.Apps, Icons.Outlined.Apps, "nav_apps"),
-    NavItem(AdGuardTab.ACTIVITY, UiText.Resource(R.string.nav_activity), Icons.AutoMirrored.Filled.ListAlt, Icons.AutoMirrored.Outlined.ListAlt, "nav_activity"),
-    NavItem(AdGuardTab.STATISTICS, UiText.Resource(R.string.nav_statistics), Icons.Filled.PieChart, Icons.Outlined.PieChart, "nav_statistics"),
-    NavItem(AdGuardTab.SETTINGS, UiText.Resource(R.string.nav_settings), Icons.Filled.Settings, Icons.Outlined.Settings, "nav_settings")
+    NavItem(AdGuardTab.HOME, UiText.Resource(Strings.nav_home), Icons.Filled.Home, Icons.Outlined.Home, "nav_home"),
+    NavItem(AdGuardTab.PROTECTION, UiText.Resource(Strings.nav_protection), Icons.Filled.Shield, Icons.Outlined.Shield, "nav_protection"),
+    NavItem(AdGuardTab.APPS, UiText.Resource(Strings.nav_apps), Icons.Filled.Apps, Icons.Outlined.Apps, "nav_apps"),
+    NavItem(AdGuardTab.ACTIVITY, UiText.Resource(Strings.nav_activity), Icons.AutoMirrored.Filled.ListAlt, Icons.AutoMirrored.Outlined.ListAlt, "nav_activity"),
+    NavItem(AdGuardTab.STATISTICS, UiText.Resource(Strings.nav_statistics), Icons.Filled.PieChart, Icons.Outlined.PieChart, "nav_statistics"),
+    NavItem(AdGuardTab.SETTINGS, UiText.Resource(Strings.nav_settings), Icons.Filled.Settings, Icons.Outlined.Settings, "nav_settings")
 )
 
 @Composable

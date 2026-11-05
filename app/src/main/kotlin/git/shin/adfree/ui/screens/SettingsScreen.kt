@@ -1027,7 +1027,7 @@ internal fun HttpsFilterSection(
                                                     CoreText.trustDetail(code)?.let {
                                                         Toast.makeText(
                                                             context,
-                                                            it.resolve(context),
+                                                            it.asString(),
                                                             Toast.LENGTH_LONG,
                                                         ).show()
                                                     }
@@ -1057,7 +1057,7 @@ internal fun HttpsFilterSection(
                                                     CoreText.trustDetail(code)?.let {
                                                         Toast.makeText(
                                                             context,
-                                                            it.resolve(context),
+                                                            it.asString(),
                                                             Toast.LENGTH_LONG,
                                                         ).show()
                                                     }

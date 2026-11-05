@@ -3,6 +3,7 @@ package git.shin.adfree.ui
 import android.util.Log
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import git.shin.adfree.l10n.Strings
 import git.shin.adfree.R
 import git.shin.adfree.core.AssetState
 import git.shin.adfree.core.ConfigWarning
@@ -48,14 +49,6 @@ import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 
-enum class AdGuardTab { HOME, PROTECTION, ACTIVITY, APPS, STATISTICS, AI_LAB, SETTINGS }
-
-sealed interface AiLabUiState {
-    data object Idle : AiLabUiState
-    data class Loading(val message: UiText) : AiLabUiState
-    data class Success(val result: ThreatAnalysisResult) : AiLabUiState
-    data class Error(val message: UiText) : AiLabUiState
-}
 
 /**
  * MVI ViewModel.
@@ -414,7 +407,7 @@ class AdGuardViewModel(
                 // the certificate instead of toggling something inert.
                 val enabling = !uiState.value.settings.isHttpsFilteringEnabled
                 if (enabling && !coreEngine.isCaTrusted()) {
-                    emit(AdGuardEffect.ShowSnackbar(UiText.Resource(R.string.home_https_needs_cert)))
+                    emit(AdGuardEffect.ShowSnackbar(UiText.Resource(Strings.home_https_needs_cert)))
                     _currentTab.value = AdGuardTab.PROTECTION
                     // Land on the page that installs the CA instead of leaving
                     // the user on the landing with no idea what to do next.
@@ -464,7 +457,7 @@ class AdGuardViewModel(
                 repository.addCustomRule(intent.rule)
                 _showCustomRuleDialog.value = false
                 emit(
-                    AdGuardEffect.ShowSnackbar(UiText.Formatted(R.string.rule_added, intent.rule)),
+                    AdGuardEffect.ShowSnackbar(UiText.Formatted(Strings.rule_added, intent.rule)),
                 )
             }
 
@@ -478,14 +471,14 @@ class AdGuardViewModel(
                 // and the import notice would vanish with the sheet.
                 emit(
                     AdGuardEffect.ShowSnackbar(
-                        UiText.Formatted(R.string.rules_saved, intent.rules.size),
+                        UiText.Formatted(Strings.rules_saved, intent.rules.size),
                     ),
                 )
             }
 
             is AdGuardIntent.SelectDnsProvider -> {
                 repository.selectDnsProvider(intent.id)
-                emit(AdGuardEffect.ShowSnackbar(UiText.Resource(R.string.dns_upstream_changed)))
+                emit(AdGuardEffect.ShowSnackbar(UiText.Resource(Strings.dns_upstream_changed)))
             }
 
             is AdGuardIntent.AddCustomDnsProvider -> {
@@ -511,7 +504,7 @@ class AdGuardViewModel(
                 repository.removeDnsRewrite(intent.host)
                 emit(
                     AdGuardEffect.ShowSnackbar(
-                        UiText.Formatted(R.string.dns_rewrite_removed, intent.host),
+                        UiText.Formatted(Strings.dns_rewrite_removed, intent.host),
                     ),
                 )
             }
@@ -566,7 +559,7 @@ class AdGuardViewModel(
             is AdGuardIntent.ResetFirewall -> {
                 repository.resetFirewall()
                 _inspectedApp.value = null
-                emit(AdGuardEffect.ShowSnackbar(UiText.Resource(R.string.firewall_reset_done)))
+                emit(AdGuardEffect.ShowSnackbar(UiText.Resource(Strings.firewall_reset_done)))
             }
             is AdGuardIntent.EnsureFirewallApp ->
                 repository.ensureFirewallApp(intent.packageName, intent.appName)
@@ -578,9 +571,9 @@ class AdGuardViewModel(
             is AdGuardIntent.RestartVpn -> {
                 if (vpnController.isVpnActive.value) {
                     vpnController.restartVpnService()
-                    emit(AdGuardEffect.ShowSnackbar(UiText.Resource(R.string.vpn_restarting)))
+                    emit(AdGuardEffect.ShowSnackbar(UiText.Resource(Strings.vpn_restarting)))
                 } else {
-                    emit(AdGuardEffect.ShowSnackbar(UiText.Resource(R.string.vpn_off_changes_next)))
+                    emit(AdGuardEffect.ShowSnackbar(UiText.Resource(Strings.vpn_off_changes_next)))
                 }
             }
 
@@ -612,12 +605,12 @@ class AdGuardViewModel(
             is AdGuardIntent.AddCustomFilter -> {
                 repository.addCustomFilter(intent.name, intent.url)
                 _showAddFilterDialog.value = false
-                emit(AdGuardEffect.ShowSnackbar(UiText.Resource(R.string.filter_new_loading)))
+                emit(AdGuardEffect.ShowSnackbar(UiText.Resource(Strings.filter_new_loading)))
             }
             is AdGuardIntent.AddDnsFilter -> {
                 repository.addCustomFilter(intent.name, intent.url, dnsOnly = true)
                 _showAddDnsFilterDialog.value = false
-                emit(AdGuardEffect.ShowSnackbar(UiText.Resource(R.string.filter_new_loading)))
+                emit(AdGuardEffect.ShowSnackbar(UiText.Resource(Strings.filter_new_loading)))
             }
 
             is AdGuardIntent.ImportLocalFilter -> {
@@ -639,7 +632,7 @@ class AdGuardViewModel(
             is AdGuardIntent.InspectFilter -> _inspectedFilter.value = intent.id
             is AdGuardIntent.RestoreDefaultFilters -> {
                 repository.restoreDefaultFilters()
-                emit(AdGuardEffect.ShowSnackbar(UiText.Resource(R.string.filter_restored_defaults)))
+                emit(AdGuardEffect.ShowSnackbar(UiText.Resource(Strings.filter_restored_defaults)))
             }
 
             is AdGuardIntent.ShowAddScriptDialog -> _showAddScriptDialog.value = intent.show
@@ -670,7 +663,7 @@ class AdGuardViewModel(
                 repository.addScript(intent.name, intent.url, intent.description)
                 emit(
                     AdGuardEffect.ShowSnackbar(
-                        UiText.Formatted(R.string.script_installing, intent.name),
+                        UiText.Formatted(Strings.script_installing, intent.name),
                     ),
                 )
             }
@@ -806,8 +799,8 @@ class AdGuardViewModel(
         }
         emit(
             AdGuardEffect.ShowSnackbar(
-                if (next) UiText.Resource(R.string.protection_on)
-                else UiText.Resource(R.string.protection_off),
+                if (next) UiText.Resource(Strings.protection_on)
+                else UiText.Resource(Strings.protection_off),
             ),
         )
     }
@@ -831,7 +824,7 @@ class AdGuardViewModel(
             emit(
                 AdGuardEffect.ShowSnackbar(
                     result?.let { CoreText.dnsProbeResult(it) }
-                        ?: UiText.Resource(R.string.dns_probe_failed),
+                        ?: UiText.Resource(Strings.dns_probe_failed),
                 ),
             )
         }
@@ -841,7 +834,7 @@ class AdGuardViewModel(
         if (domain.isBlank()) return
         viewModelScope.launch {
             _aiLabState.value = AiLabUiState.Loading(
-                UiText.Formatted(R.string.threat_analyzing, domain),
+                UiText.Formatted(Strings.threat_analyzing, domain),
             )
             val result = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) {
                 threatAnalyzer.analyze(domain)
@@ -864,11 +857,11 @@ class AdGuardViewModel(
      * button, and a snackbar on top of that would cover the thing it announces.
      */
     private fun updateOutcomeMessage(outcome: UpdateOutcome): UiText? = when (outcome) {
-        UpdateOutcome.UpToDate -> UiText.Resource(R.string.update_outcome_up_to_date)
+        UpdateOutcome.UpToDate -> UiText.Resource(Strings.update_outcome_up_to_date)
         UpdateOutcome.Available -> null
-        UpdateOutcome.Failed -> UiText.Resource(R.string.update_outcome_failed)
-        UpdateOutcome.InstallStarted -> UiText.Resource(R.string.update_outcome_install_started)
-        UpdateOutcome.InstallFailed -> UiText.Resource(R.string.update_outcome_install_failed)
+        UpdateOutcome.Failed -> UiText.Resource(Strings.update_outcome_failed)
+        UpdateOutcome.InstallStarted -> UiText.Resource(Strings.update_outcome_install_started)
+        UpdateOutcome.InstallFailed -> UiText.Resource(Strings.update_outcome_install_failed)
     }
 
     /**

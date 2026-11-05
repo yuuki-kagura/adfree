@@ -40,7 +40,7 @@ import git.shin.adfree.model.ThemeMode
 
 // ------------------------------------------------------------------ settings
 
-internal fun ProtectionSettings.toCoreState(): CoreProtectionState = CoreProtectionState(
+fun ProtectionSettings.toCoreState(): CoreProtectionState = CoreProtectionState(
     isProtectionActive = isProtectionActive,
     isAdBlockingEnabled = isAdBlockingEnabled,
     isAnnoyancesEnabled = isAnnoyancesEnabled,
@@ -97,7 +97,7 @@ internal fun ProtectionSettings.toCoreState(): CoreProtectionState = CoreProtect
     logLevel = logLevel.toCore(),
 )
 
-internal fun CoreProtectionState.toModel(): ProtectionSettings = ProtectionSettings(
+fun CoreProtectionState.toModel(): ProtectionSettings = ProtectionSettings(
     isProtectionActive = isProtectionActive,
     isAdBlockingEnabled = isAdBlockingEnabled,
     isAnnoyancesEnabled = isAnnoyancesEnabled,
@@ -225,38 +225,38 @@ private fun CoreLogLevel.toModel(): LogLevel = when (this) {
 // ------------------------------------------------------------------ firewall
 
 /** True when the row must be persisted: any rule, routing or notification choice. */
-internal fun AppFirewallRule.hasOverrides(): Boolean =
+fun AppFirewallRule.hasOverrides(): Boolean =
     hasNetworkRules ||
         !isFilterRouted ||
         !isHttpsFiltered ||
         !notifyBlocked ||
         proxyAccess != ProxyAccess.INHERIT
 
-internal fun FirewallAccess.toCore(): CoreFirewallAccess = when (this) {
+fun FirewallAccess.toCore(): CoreFirewallAccess = when (this) {
     FirewallAccess.INHERIT -> CoreFirewallAccess.INHERIT
     FirewallAccess.ALLOW -> CoreFirewallAccess.ALLOW
     FirewallAccess.BLOCK -> CoreFirewallAccess.BLOCK
 }
 
-internal fun CoreFirewallAccess.toModel(): FirewallAccess = when (this) {
+fun CoreFirewallAccess.toModel(): FirewallAccess = when (this) {
     CoreFirewallAccess.INHERIT -> FirewallAccess.INHERIT
     CoreFirewallAccess.ALLOW -> FirewallAccess.ALLOW
     CoreFirewallAccess.BLOCK -> FirewallAccess.BLOCK
 }
 
-internal fun ProxyAccess.toCore(): CoreProxyAccess = when (this) {
+fun ProxyAccess.toCore(): CoreProxyAccess = when (this) {
     ProxyAccess.INHERIT -> CoreProxyAccess.INHERIT
     ProxyAccess.THROUGH -> CoreProxyAccess.THROUGH
     ProxyAccess.DIRECT -> CoreProxyAccess.DIRECT
 }
 
-internal fun CoreProxyAccess.toModel(): ProxyAccess = when (this) {
+fun CoreProxyAccess.toModel(): ProxyAccess = when (this) {
     CoreProxyAccess.INHERIT -> ProxyAccess.INHERIT
     CoreProxyAccess.THROUGH -> ProxyAccess.THROUGH
     CoreProxyAccess.DIRECT -> ProxyAccess.DIRECT
 }
 
-internal fun AppFirewallRule.toCoreRule(): CoreFirewallRule = CoreFirewallRule(
+fun AppFirewallRule.toCoreRule(): CoreFirewallRule = CoreFirewallRule(
     packageName = packageName,
     wifi = wifiAccess.toCore(),
     wifiScreenOff = wifiScreenOffAccess.toCore(),
@@ -269,7 +269,7 @@ internal fun AppFirewallRule.toCoreRule(): CoreFirewallRule = CoreFirewallRule(
     proxy = proxyAccess.toCore(),
 )
 
-internal fun CoreFirewallRule.toModel(appName: String, category: String): AppFirewallRule =
+fun CoreFirewallRule.toModel(appName: String, category: String): AppFirewallRule =
     AppFirewallRule(
         packageName = packageName,
         appName = appName,
@@ -287,7 +287,7 @@ internal fun CoreFirewallRule.toModel(appName: String, category: String): AppFir
 
 // ----------------------------------------------------------------------- DNS
 
-internal fun DnsProvider.toCoreRecord(): CoreDnsProvider = CoreDnsProvider(
+fun DnsProvider.toCoreRecord(): CoreDnsProvider = CoreDnsProvider(
     id = id,
     name = name,
     address = address,
@@ -298,7 +298,7 @@ internal fun DnsProvider.toCoreRecord(): CoreDnsProvider = CoreDnsProvider(
     isCustom = isCustom,
 )
 
-internal fun CoreDnsProvider.toModel(): DnsProvider = DnsProvider(
+fun CoreDnsProvider.toModel(): DnsProvider = DnsProvider(
     id = id,
     name = name,
     address = address,
@@ -321,37 +321,37 @@ private fun CoreDnsProtocol.toModel(): ProtocolType = when (this) {
     CoreDnsProtocol.DOH -> ProtocolType.DNS_DOH
 }
 
-internal fun CoreDnsRewrite.toModel(): DnsRewriteRule = DnsRewriteRule(
+fun CoreDnsRewrite.toModel(): DnsRewriteRule = DnsRewriteRule(
     host = host,
     answer = answer,
 )
 
-internal fun DnsBackup.toCore(): CoreDnsBackup = CoreDnsBackup(
+fun DnsBackup.toCore(): CoreDnsBackup = CoreDnsBackup(
     address = address,
     port = port.coerceIn(0, 65535).toUShort(),
 )
 
-internal fun CoreDnsBackup.toModel(): DnsBackup = DnsBackup(
+fun CoreDnsBackup.toModel(): DnsBackup = DnsBackup(
     address = address,
     port = port.toInt(),
 )
 
-internal fun DnsBackupMode.toCore(): CoreDnsBackupMode = when (this) {
+fun DnsBackupMode.toCore(): CoreDnsBackupMode = when (this) {
     DnsBackupMode.SYSTEM -> CoreDnsBackupMode.SYSTEM
     DnsBackupMode.OFF -> CoreDnsBackupMode.OFF
     DnsBackupMode.FIXED -> CoreDnsBackupMode.FIXED
 }
 
-internal fun CoreDnsBackupMode.toModel(): DnsBackupMode = when (this) {
+fun CoreDnsBackupMode.toModel(): DnsBackupMode = when (this) {
     CoreDnsBackupMode.SYSTEM -> DnsBackupMode.SYSTEM
     CoreDnsBackupMode.OFF -> DnsBackupMode.OFF
     CoreDnsBackupMode.FIXED -> DnsBackupMode.FIXED
 }
 
-internal fun DnsRewriteRule.toCore(): CoreDnsRewrite = CoreDnsRewrite(
+fun DnsRewriteRule.toCore(): CoreDnsRewrite = CoreDnsRewrite(
     host = host,
     answer = answer,
 )
 
 /** The core protocol for a resolver form; only the DNS transports are valid. */
-internal fun ProtocolType.toDnsProtocol(): CoreDnsProtocol = toCore()
+fun ProtocolType.toDnsProtocol(): CoreDnsProtocol = toCore()

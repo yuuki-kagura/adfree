@@ -27,6 +27,15 @@ import git.shin.adfree.model.UserScriptInfo
 import git.shin.adfree.model.UserScriptStoreSort
 import git.shin.adfree.model.UserScriptStoreState
 
+enum class AdGuardTab { HOME, PROTECTION, ACTIVITY, APPS, STATISTICS, AI_LAB, SETTINGS }
+
+sealed interface AiLabUiState {
+    data object Idle : AiLabUiState
+    data class Loading(val message: UiText) : AiLabUiState
+    data class Success(val result: ThreatAnalysisResult) : AiLabUiState
+    data class Error(val message: UiText) : AiLabUiState
+}
+
 /** Consolidated MVI state. */
 data class AdGuardUiState(
     val currentTab: AdGuardTab = AdGuardTab.HOME,

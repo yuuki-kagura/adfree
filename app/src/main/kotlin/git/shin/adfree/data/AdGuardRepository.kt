@@ -3,6 +3,7 @@ package git.shin.adfree.data
 import android.content.Context
 import android.content.pm.ApplicationInfo
 import android.content.pm.PackageManager
+import git.shin.adfree.l10n.Strings
 import git.shin.adfree.R
 import git.shin.adfree.core.AssetState
 import git.shin.adfree.core.CoreEngine
@@ -227,7 +228,7 @@ class AdGuardRepository(
     /** Localized wording for a download outcome; diagnostics stay behind the code. */
     private fun downloadMessage(result: DownloadResult, name: String): UiText =
         if (result.ok) {
-            UiText.Formatted(R.string.filter_downloaded_name, name, result.lineCount)
+            UiText.Formatted(Strings.filter_downloaded_name, name, result.lineCount)
         } else {
             CoreText.downloadError(result.error) ?: UiText.Raw(result.message)
         }
@@ -762,8 +763,8 @@ class AdGuardRepository(
         updateSettings { it.copy(filterAutoUpdateHours = clamped) }
         FilterUpdateScheduler.sync(context, clamped)
         showTransientStatus(
-            if (clamped == 0) UiText.Resource(R.string.filter_auto_update_off)
-            else UiText.Formatted(R.string.filter_auto_update_every_hours, clamped),
+            if (clamped == 0) UiText.Resource(Strings.filter_auto_update_off)
+            else UiText.Formatted(Strings.filter_auto_update_every_hours, clamped),
         )
     }
 
@@ -792,7 +793,7 @@ class AdGuardRepository(
         type: ProtocolType = ProtocolType.DNS_UDP,
     ): UiText {
         val trimmed = address.trim()
-        if (trimmed.isEmpty()) return UiText.Resource(R.string.dns_address_empty)
+        if (trimmed.isEmpty()) return UiText.Resource(Strings.dns_address_empty)
         // The core owns the rules for every transport, so the form and the
         // forwarder cannot disagree about what a DoT or DoH address is.
         val protocol = type.toDnsProtocol()
@@ -807,7 +808,7 @@ class AdGuardRepository(
         }
         if (existing != null) {
             selectDnsProvider(existing.id)
-            return UiText.Formatted(R.string.dns_provider_selected, existing.name)
+            return UiText.Formatted(Strings.dns_provider_selected, existing.name)
         }
         val provider = DnsProvider(
             id = "custom_" + System.currentTimeMillis(),
@@ -821,23 +822,23 @@ class AdGuardRepository(
         _dnsProviders.update { it + provider }
         persistDnsState()
         updateSettings { it.copy(selectedDnsProviderId = provider.id) }
-        return UiText.Formatted(R.string.dns_custom_added, provider.name)
+        return UiText.Formatted(Strings.dns_custom_added, provider.name)
     }
 
-    private fun providerError(type: ProtocolType, error: git.shin.adfree.core.DnsError): Int =
+    private fun providerError(type: ProtocolType, error: git.shin.adfree.core.DnsError): String =
         when (error) {
-            git.shin.adfree.core.DnsError.EMPTY -> R.string.dns_address_empty
-            git.shin.adfree.core.DnsError.INVALID_PORT -> R.string.dns_invalid_port
+            git.shin.adfree.core.DnsError.EMPTY -> Strings.dns_address_empty
+            git.shin.adfree.core.DnsError.INVALID_PORT -> Strings.dns_invalid_port
             git.shin.adfree.core.DnsError.UNSUPPORTED_SCHEME -> when (type) {
-                ProtocolType.DNS_UDP -> R.string.dns_udp_ip_only
-                ProtocolType.DNS_DOT -> R.string.dns_dot_format
-                else -> R.string.dns_doh_format
+                ProtocolType.DNS_UDP -> Strings.dns_udp_ip_only
+                ProtocolType.DNS_DOT -> Strings.dns_dot_format
+                else -> Strings.dns_doh_format
             }
-            git.shin.adfree.core.DnsError.IP_V6_UDP_UNSUPPORTED -> R.string.dns_udp_ipv4_only
+            git.shin.adfree.core.DnsError.IP_V6_UDP_UNSUPPORTED -> Strings.dns_udp_ipv4_only
             else -> when (type) {
-                ProtocolType.DNS_UDP -> R.string.dns_udp_ip_only
-                ProtocolType.DNS_DOT -> R.string.dns_dot_format
-                else -> R.string.dns_doh_format
+                ProtocolType.DNS_UDP -> Strings.dns_udp_ip_only
+                ProtocolType.DNS_DOT -> Strings.dns_dot_format
+                else -> Strings.dns_doh_format
             }
         }
 
@@ -872,14 +873,14 @@ class AdGuardRepository(
             return UiText.Resource(
                 when (checked.error) {
                     git.shin.adfree.core.DnsRewriteError.HOST_EMPTY ->
-                        R.string.dns_rewrite_error_host_empty
+                        Strings.dns_rewrite_error_host_empty
                     git.shin.adfree.core.DnsRewriteError.HOST_INVALID ->
-                        R.string.dns_rewrite_error_host_invalid
+                        Strings.dns_rewrite_error_host_invalid
                     git.shin.adfree.core.DnsRewriteError.ANSWER_EMPTY ->
-                        R.string.dns_rewrite_error_answer_empty
+                        Strings.dns_rewrite_error_answer_empty
                     git.shin.adfree.core.DnsRewriteError.ANSWER_INVALID ->
-                        R.string.dns_rewrite_error_answer_invalid
-                    else -> R.string.dns_rewrite_error_host_invalid
+                        Strings.dns_rewrite_error_answer_invalid
+                    else -> Strings.dns_rewrite_error_host_invalid
                 },
             )
         }
@@ -891,7 +892,7 @@ class AdGuardRepository(
         persistDnsState()
         onConfigApplied()
         return UiText.Formatted(
-            if (updated) R.string.dns_rewrite_updated else R.string.dns_rewrite_added,
+            if (updated) Strings.dns_rewrite_updated else Strings.dns_rewrite_added,
             rule.host,
         )
     }
@@ -1083,7 +1084,7 @@ class AdGuardRepository(
 
             if (reportToUi && stale.isNotEmpty()) {
                 _loadingMessage.value =
-                    UiText.Formatted(R.string.filter_auto_update_progress, stale.size)
+                    UiText.Formatted(Strings.filter_auto_update_progress, stale.size)
             }
             var updated = 0
             for (list in stale) {
@@ -1100,17 +1101,17 @@ class AdGuardRepository(
                 val result = downloadServicesTable()
                 if (reportToUi && result != null && !result.ok) {
                     showTransientStatus(
-                        UiText.Formatted(R.string.services_table_failed, result.message),
+                        UiText.Formatted(Strings.services_table_failed, result.message),
                     )
                 }
             }
             if (reportToUi && stale.isNotEmpty()) {
                 showTransientStatus(
                     if (updated == stale.size) {
-                        UiText.Formatted(R.string.filter_auto_update_done, stale.size)
+                        UiText.Formatted(Strings.filter_auto_update_done, stale.size)
                     } else {
                         UiText.Formatted(
-                            R.string.filter_auto_update_partial,
+                            Strings.filter_auto_update_partial,
                             updated,
                             stale.size,
                         )
@@ -1133,7 +1134,7 @@ class AdGuardRepository(
                 continue
             }
             if (!list.isEnabled || list.subscriptionUrl.isNullOrBlank()) continue
-            _loadingMessage.value = UiText.Formatted(R.string.filter_downloading, list.name)
+            _loadingMessage.value = UiText.Formatted(Strings.filter_downloading, list.name)
             val result = withContext(Dispatchers.IO) { engine.downloadList(list) }
             if (result.ok) {
                 applyDownloadResult(list.id, result)
@@ -1196,7 +1197,7 @@ class AdGuardRepository(
         // The row keeps this text until the next update, so it must follow the
         // in-app language even though the repository outlives the Activity.
         val ui = Localization.wrap(context, _settings.value.appLanguage)
-        val text = message.resolve(ui).ifBlank { ui.getString(R.string.filter_download_failed) }
+        val text = message.resolve().ifBlank { ui.getString(R.string.filter_download_failed) }
         _filterLists.update { current ->
             current.map {
                 if (it.id == listId) {
@@ -1233,7 +1234,7 @@ class AdGuardRepository(
                             lists.map { if (it.id == listId) it.copy(isEnabled = false) else it }
                         }
                         showTransientStatus(
-                            UiText.Formatted(R.string.filter_missing_body, list.name),
+                            UiText.Formatted(Strings.filter_missing_body, list.name),
                         )
                     }
                     else -> {
@@ -1242,7 +1243,7 @@ class AdGuardRepository(
                         _filterLists.update { lists ->
                             lists.map { if (it.id == listId) it.copy(isEnabled = false) else it }
                         }
-                        _loadingMessage.value = UiText.Formatted(R.string.filter_downloading, list.name)
+                        _loadingMessage.value = UiText.Formatted(Strings.filter_downloading, list.name)
                         val result = withContext(Dispatchers.IO) { engine.downloadList(list) }
                         showTransientStatus(downloadMessage(result, list.name))
                         if (result.ok) {
@@ -1280,8 +1281,8 @@ class AdGuardRepository(
             saveFilterChoices()
             pushListsToEngine()
             showTransientStatus(
-                if (trusted) UiText.Resource(R.string.filter_trusted)
-                else UiText.Resource(R.string.filter_untrusted),
+                if (trusted) UiText.Resource(Strings.filter_trusted)
+                else UiText.Resource(Strings.filter_untrusted),
             )
         }
     }
@@ -1291,10 +1292,10 @@ class AdGuardRepository(
         scope.launch {
             val list = _filterLists.value.firstOrNull { it.id == id } ?: return@launch
             if (list.subscriptionUrl.isNullOrBlank()) {
-                showTransientStatus(UiText.Resource(R.string.filter_no_url))
+                showTransientStatus(UiText.Resource(Strings.filter_no_url))
                 return@launch
             }
-            _loadingMessage.value = UiText.Formatted(R.string.filter_downloading, list.name)
+            _loadingMessage.value = UiText.Formatted(Strings.filter_downloading, list.name)
             val result = withContext(Dispatchers.IO) { engine.downloadList(list) }
             showTransientStatus(downloadMessage(result, list.name))
             if (result.ok) {
@@ -1313,10 +1314,10 @@ class AdGuardRepository(
                 it.isEnabled && !it.isCustom && !it.subscriptionUrl.isNullOrBlank()
             }
             if (targets.isEmpty()) {
-                showTransientStatus(UiText.Resource(R.string.filter_none_to_update))
+                showTransientStatus(UiText.Resource(Strings.filter_none_to_update))
                 return@launch
             }
-            _loadingMessage.value = UiText.Formatted(R.string.filter_updating_count, targets.size)
+            _loadingMessage.value = UiText.Formatted(Strings.filter_updating_count, targets.size)
             var failures = 0
             for (list in targets) {
                 val result = withContext(Dispatchers.IO) { engine.downloadList(list) }
@@ -1329,8 +1330,8 @@ class AdGuardRepository(
             }
             showTransientStatus(
                 when (failures) {
-                    0 -> UiText.Formatted(R.string.filter_updated_count, targets.size)
-                    else -> UiText.Formatted(R.string.filter_update_finished_failures, failures)
+                    0 -> UiText.Formatted(Strings.filter_updated_count, targets.size)
+                    else -> UiText.Formatted(Strings.filter_update_finished_failures, failures)
                 }
             )
             pushListsToEngine()
@@ -1357,7 +1358,7 @@ class AdGuardRepository(
                     it.subscriptionUrl?.equals(trimmedUrl, ignoreCase = true) == true
                 }
             ) {
-                showTransientStatus(UiText.Resource(R.string.filter_url_duplicate))
+                showTransientStatus(UiText.Resource(Strings.filter_url_duplicate))
                 return@launch
             }
             val list = FilterList(
@@ -1377,7 +1378,7 @@ class AdGuardRepository(
                 isDnsOnly = dnsOnly,
             )
             _filterLists.update { it + list }
-            _loadingMessage.value = UiText.Formatted(R.string.filter_downloading, list.name)
+            _loadingMessage.value = UiText.Formatted(Strings.filter_downloading, list.name)
             val result = withContext(Dispatchers.IO) { engine.downloadList(list) }
             showTransientStatus(downloadMessage(result, list.name))
             if (result.ok) {
@@ -1406,7 +1407,7 @@ class AdGuardRepository(
                 }.getOrNull()
             }
             if (text.isNullOrBlank()) {
-                showTransientStatus(UiText.Resource(R.string.filter_file_unreadable))
+                showTransientStatus(UiText.Resource(Strings.filter_file_unreadable))
                 return@launch
             }
             val displayName = withContext(Dispatchers.IO) {
@@ -1436,7 +1437,7 @@ class AdGuardRepository(
             )
             val state = withContext(Dispatchers.IO) { engine.saveListText(list.id, text) }
             if (state == null) {
-                showTransientStatus(UiText.Resource(R.string.filter_save_failed))
+                showTransientStatus(UiText.Resource(Strings.filter_save_failed))
                 return@launch
             }
             _filterLists.update {
@@ -1450,7 +1451,7 @@ class AdGuardRepository(
             saveFilterChoices()
             pushListsToEngine()
             showTransientStatus(
-                UiText.Formatted(R.string.filter_created_name, list.name, state.lineCount),
+                UiText.Formatted(Strings.filter_created_name, list.name, state.lineCount),
             )
         }
     }
@@ -1466,7 +1467,7 @@ class AdGuardRepository(
         // filters, scripts); Kotlin only moves the bytes to the SAF document.
         val payload = engine.backupExport()
         if (payload.isBlank()) {
-            return BackupResult(false, UiText.Resource(R.string.backup_export_failed_read))
+            return BackupResult(false, UiText.Resource(Strings.backup_export_failed_read))
         }
         val ok = withContext(Dispatchers.IO) {
             runCatching {
@@ -1478,9 +1479,9 @@ class AdGuardRepository(
             }.isSuccess
         }
         return if (ok) {
-            BackupResult(true, UiText.Resource(R.string.backup_export_done))
+            BackupResult(true, UiText.Resource(Strings.backup_export_done))
         } else {
-            BackupResult(false, UiText.Resource(R.string.backup_export_write_failed))
+            BackupResult(false, UiText.Resource(Strings.backup_export_write_failed))
         }
     }
 
@@ -1498,9 +1499,9 @@ class AdGuardRepository(
                 val uri = android.net.Uri.parse(uriText)
                 context.contentResolver.openInputStream(uri)?.use { it.readBytes() }
             }.getOrNull()
-        } ?: return BackupResult(false, UiText.Resource(R.string.backup_import_file_unreadable))
+        } ?: return BackupResult(false, UiText.Resource(Strings.backup_import_file_unreadable))
         if (bytes.size > MAX_BACKUP_BYTES) {
-            return BackupResult(false, UiText.Resource(R.string.backup_import_too_large))
+            return BackupResult(false, UiText.Resource(Strings.backup_import_too_large))
         }
         val raw = String(bytes, Charsets.UTF_8)
         // Rust replaces every collection in one transaction, so a rejected
@@ -1510,11 +1511,11 @@ class AdGuardRepository(
             return BackupResult(
                 false,
                 CoreText.backupError(outcome.error)
-                    ?: UiText.Resource(R.string.backup_error_malformed),
+                    ?: UiText.Resource(Strings.backup_error_malformed),
             )
         }
         reloadAfterRestore()
-        return BackupResult(true, UiText.Resource(R.string.backup_import_done))
+        return BackupResult(true, UiText.Resource(Strings.backup_import_done))
     }
 
     /** Rebuilds every in-memory flow after a restore replaced the state. */
@@ -1555,7 +1556,7 @@ class AdGuardRepository(
                         it.id != id && it.subscriptionUrl?.equals(url, ignoreCase = true) == true
                     }
                 ) {
-                    showTransientStatus(UiText.Resource(R.string.filter_url_duplicate))
+                    showTransientStatus(UiText.Resource(Strings.filter_url_duplicate))
                     return@launch
                 }
             }
@@ -1571,7 +1572,7 @@ class AdGuardRepository(
             }
             saveFilterChoices()
             pushListsToEngine()
-            showTransientStatus(UiText.Formatted(R.string.filter_name_updated, name))
+            showTransientStatus(UiText.Formatted(Strings.filter_name_updated, name))
             if (urlChanged && url.isNotBlank()) refreshSubscription(id)
         }
     }
@@ -1599,13 +1600,13 @@ class AdGuardRepository(
                     engine.filterState(it.id, withMeta = false) == null
             }
             for (list in missing) {
-                _loadingMessage.value = UiText.Formatted(R.string.filter_downloading, list.name)
+                _loadingMessage.value = UiText.Formatted(Strings.filter_downloading, list.name)
                 val result = withContext(Dispatchers.IO) { engine.downloadList(list) }
                 if (result.ok) applyDownloadResult(list.id, result)
             }
             saveFilterChoices()
             pushListsToEngine()
-            showTransientStatus(UiText.Resource(R.string.filter_restored_defaults))
+            showTransientStatus(UiText.Resource(Strings.filter_restored_defaults))
         }
     }
 
@@ -1767,9 +1768,9 @@ class AdGuardRepository(
             if (rows <= 0L && engine.logCount() > 0L) -1L else rows
         }
         return if (written >= 0) {
-            BackupResult(true, UiText.Resource(R.string.log_export_done))
+            BackupResult(true, UiText.Resource(Strings.log_export_done))
         } else {
-            BackupResult(false, UiText.Resource(R.string.log_export_failed))
+            BackupResult(false, UiText.Resource(Strings.log_export_failed))
         }
     }
 
@@ -1987,7 +1988,7 @@ class AdGuardRepository(
             servicesRefreshLastMs = 0L
             scope.launch {
                 withContext(Dispatchers.IO) { engine.servicesRemove() }
-                showTransientStatus(UiText.Resource(R.string.services_using_shipped_table))
+                showTransientStatus(UiText.Resource(Strings.services_using_shipped_table))
             }
         } else {
             refreshServicesTable()
@@ -2012,16 +2013,16 @@ class AdGuardRepository(
                 }.getOrNull()
             }
             if (text.isNullOrBlank()) {
-                showTransientStatus(UiText.Resource(R.string.filter_file_unreadable))
+                showTransientStatus(UiText.Resource(Strings.filter_file_unreadable))
                 return@launch
             }
             val result = withContext(Dispatchers.IO) { engine.saveServicesTable(text) }
             _servicesState.value = withContext(Dispatchers.IO) { engine.servicesState() }
             showTransientStatus(
                 if (result.ok) {
-                    UiText.Resource(R.string.services_table_updated)
+                    UiText.Resource(Strings.services_table_updated)
                 } else {
-                    UiText.Formatted(R.string.services_table_failed, result.message)
+                    UiText.Formatted(Strings.services_table_failed, result.message)
                 },
             )
             if (result.ok && _settings.value.showServicesBreakdown) refreshAppUsage()
@@ -2034,9 +2035,9 @@ class AdGuardRepository(
             val result = downloadServicesTable() ?: return@launch
             showTransientStatus(
                 if (result.ok) {
-                    UiText.Resource(R.string.services_table_updated)
+                    UiText.Resource(Strings.services_table_updated)
                 } else {
-                    UiText.Formatted(R.string.services_table_failed, result.message)
+                    UiText.Formatted(Strings.services_table_failed, result.message)
                 },
             )
             if (_settings.value.showServicesBreakdown) refreshAppUsage()
@@ -2396,12 +2397,12 @@ class AdGuardRepository(
                 if (missingBody) {
                     if (script.url.isBlank()) {
                         showTransientStatus(
-                            UiText.Formatted(R.string.script_missing_body, script.name),
+                            UiText.Formatted(Strings.script_missing_body, script.name),
                         )
                         nextEnabled = false
                     } else {
                         _loadingMessage.value =
-                            UiText.Formatted(R.string.script_loading, script.name)
+                            UiText.Formatted(Strings.script_loading, script.name)
                         val result = downloadScriptBody(script)
                         showTransientStatus(result.message)
                         nextEnabled = result.ok
@@ -2551,7 +2552,7 @@ class AdGuardRepository(
                     toggleScript(existing.id, true)
                 } else {
                     showTransientStatus(
-                        UiText.Formatted(R.string.script_duplicate, existing.name),
+                        UiText.Formatted(Strings.script_duplicate, existing.name),
                     )
                 }
                 return@launch
@@ -2580,12 +2581,12 @@ class AdGuardRepository(
                     toggleScript(winner.id, true)
                 } else {
                     showTransientStatus(
-                        UiText.Formatted(R.string.script_duplicate, script.name),
+                        UiText.Formatted(Strings.script_duplicate, script.name),
                     )
                 }
                 return@launch
             }
-            _loadingMessage.value = UiText.Formatted(R.string.script_loading, script.name)
+            _loadingMessage.value = UiText.Formatted(Strings.script_loading, script.name)
             val result = downloadScriptBody(script)
             showTransientStatus(result.message)
             if (result.ok) {
@@ -2601,7 +2602,7 @@ class AdGuardRepository(
     fun refreshScript(id: String) {
         scope.launch {
             val script = _userscripts.value.firstOrNull { it.id == id } ?: return@launch
-            _loadingMessage.value = UiText.Formatted(R.string.script_loading, script.name)
+            _loadingMessage.value = UiText.Formatted(Strings.script_loading, script.name)
             val result = downloadScriptBody(script)
             showTransientStatus(result.message)
             saveScripts()
@@ -2614,7 +2615,7 @@ class AdGuardRepository(
     /** Downloads one script body to the store and reports whether it is usable. */
     private suspend fun downloadScriptBody(script: UserScriptInfo): ScriptDownloadResult {
         if (script.url.isBlank()) {
-            return ScriptDownloadResult(false, UiText.Resource(R.string.script_no_url))
+            return ScriptDownloadResult(false, UiText.Resource(Strings.script_no_url))
         }
         val outcome = withContext(Dispatchers.IO) { engine.scriptFetch(script.id, script.url) }
         if (!outcome.ok) {
@@ -2622,7 +2623,7 @@ class AdGuardRepository(
                 false,
                 CoreText.downloadError(outcome.error)
                     ?: UiText.Formatted(
-                        R.string.script_download_failed,
+                        Strings.script_download_failed,
                         script.name,
                         outcome.message,
                     ),
@@ -2644,7 +2645,7 @@ class AdGuardRepository(
         return ScriptDownloadResult(
             true,
             UiText.Formatted(
-                R.string.script_downloaded,
+                Strings.script_downloaded,
                 script.name,
                 outcome.sizeBytes / 1024,
             ),
@@ -2673,7 +2674,7 @@ class AdGuardRepository(
                     .getOrNull()
             }
             if (text.isNullOrBlank()) {
-                showTransientStatus(UiText.Resource(R.string.script_file_unreadable))
+                showTransientStatus(UiText.Resource(Strings.script_file_unreadable))
                 return@launch
             }
             val displayName = withContext(Dispatchers.IO) {
@@ -2699,12 +2700,12 @@ class AdGuardRepository(
             )
             val updated = _userscripts.updateAndGet { list -> if (list.any { it.id == id }) list else list + script }
             if (updated.none { it.id == id }) {
-                showTransientStatus(UiText.Formatted(R.string.script_duplicate, base))
+                showTransientStatus(UiText.Formatted(Strings.script_duplicate, base))
                 return@launch
             }
             val state = withContext(Dispatchers.IO) { engine.scriptSave(id, text) }
             if (state == null) {
-                showTransientStatus(UiText.Resource(R.string.script_save_failed))
+                showTransientStatus(UiText.Resource(Strings.script_save_failed))
                 return@launch
             }
             _userscripts.update { list ->
@@ -2721,7 +2722,7 @@ class AdGuardRepository(
             }
             saveScripts()
             pushScriptsToCore()
-            showTransientStatus(UiText.Formatted(R.string.script_added, base))
+            showTransientStatus(UiText.Formatted(Strings.script_added, base))
         }
     }
 
@@ -2730,7 +2731,7 @@ class AdGuardRepository(
         scope.launch {
             val trimmed = text.trim()
             if (trimmed.isBlank()) {
-                showTransientStatus(UiText.Resource(R.string.script_empty_content))
+                showTransientStatus(UiText.Resource(Strings.script_empty_content))
                 return@launch
             }
             val displayName = name.trim()
@@ -2748,7 +2749,7 @@ class AdGuardRepository(
             _userscripts.update { list -> list + script }
             val state = withContext(Dispatchers.IO) { engine.scriptSave(id, trimmed) }
             if (state == null) {
-                showTransientStatus(UiText.Resource(R.string.script_save_error))
+                showTransientStatus(UiText.Resource(Strings.script_save_error))
                 _userscripts.update { list -> list.filter { it.id != id } }
                 return@launch
             }
@@ -2766,7 +2767,7 @@ class AdGuardRepository(
             }
             saveScripts()
             pushScriptsToCore()
-            showTransientStatus(UiText.Formatted(R.string.script_created, displayName))
+            showTransientStatus(UiText.Formatted(Strings.script_created, displayName))
         }
     }
 
@@ -2777,13 +2778,13 @@ class AdGuardRepository(
             if (!script.isUserAdded) return@launch
             val trimmed = text.trim()
             if (trimmed.isBlank()) {
-                showTransientStatus(UiText.Resource(R.string.script_empty_content))
+                showTransientStatus(UiText.Resource(Strings.script_empty_content))
                 return@launch
             }
             val displayName = name.trim().ifBlank { script.name }.take(60)
             val state = withContext(Dispatchers.IO) { engine.scriptSave(id, trimmed) }
             if (state == null) {
-                showTransientStatus(UiText.Resource(R.string.script_save_error))
+                showTransientStatus(UiText.Resource(Strings.script_save_error))
                 return@launch
             }
             _userscripts.update { list ->
@@ -2802,7 +2803,7 @@ class AdGuardRepository(
             }
             saveScripts()
             pushScriptsToCore()
-            showTransientStatus(UiText.Formatted(R.string.script_updated, displayName))
+            showTransientStatus(UiText.Formatted(Strings.script_updated, displayName))
         }
     }
 
