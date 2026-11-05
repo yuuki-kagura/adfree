@@ -1,16 +1,15 @@
 package git.shin.adfree.ui
 
-import android.util.Log
-import androidx.lifecycle.ViewModel
-import androidx.lifecycle.viewModelScope
 import git.shin.adfree.l10n.Strings
-import git.shin.adfree.R
 import git.shin.adfree.core.AssetState
 import git.shin.adfree.core.ConfigWarning
 import git.shin.adfree.core.CoreEngine
-import git.shin.adfree.core.installCertificateIntent
 import git.shin.adfree.data.AdGuardRepository
 import git.shin.adfree.data.AutomationControl
+import git.shin.adfree.platform.AppUpdate
+import git.shin.adfree.platform.LogSink
+import git.shin.adfree.platform.PlatformHost
+import git.shin.adfree.platform.TunnelControl
 import git.shin.adfree.model.AppCategory
 import git.shin.adfree.model.AppCategoryFilter
 import git.shin.adfree.model.AppFirewallRule
@@ -33,11 +32,12 @@ import git.shin.adfree.model.ThreatAnalysisResult
 import git.shin.adfree.model.UserScriptInfo
 import git.shin.adfree.model.UserScriptStoreState
 import git.shin.adfree.security.ThreatAnalyzer
-import git.shin.adfree.update.AppUpdateController
 import git.shin.adfree.update.UpdateInfo
 import git.shin.adfree.update.UpdateOutcome
 import git.shin.adfree.update.UpdateUiState
-import git.shin.adfree.vpn.VpnController
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -52,25 +52,32 @@ import kotlinx.coroutines.launch
 
 
 /**
- * MVI ViewModel.
+ * MVI state holder.
  *
  * Single unidirectional state. Every number comes from [AdGuardRepository]
- * (atomics read from the Rust core) — no fake data.
+ * (atomics read from the Rust core) — no fake data. A plain class with its own
+ * scope: the app-level container keeps the one instance, so rotation and
+ * desktop window changes both keep the same state.
  */
 class AdGuardViewModel(
     private val repository: AdGuardRepository,
-    private val vpnController: VpnController,
+    private val tunnel: TunnelControl,
     private val threatAnalyzer: ThreatAnalyzer,
     private val coreEngine: CoreEngine,
+    /** The device prompts the certificate installer and toasts need. */
+    private val platform: PlatformHost = git.shin.adfree.platform.NoopPlatformHost(),
+    /** Where the core's and the tunnel's logs go; the host picks the sink. */
+    private val log: LogSink = LogSink { },
     /** Callback that pushes settings down to the Rust core; supplied by DI. */
     private val onConfigChanged: () -> Unit = {},
-    /** Reads Android's strict Private DNS setting; supplied by DI. */
+    /** Reads the system's strict Private DNS setting; supplied by the host. */
     private val isPrivateDnsStrict: () -> Boolean = { false },
     /** Last fallback the core had to take; supplied by DI. */
     private val configWarning: StateFlow<ConfigWarning> = MutableStateFlow(ConfigWarning.NONE),
     /** The OTA question, supplied by DI; the Settings row renders its state. */
-    private val appUpdate: AppUpdateController,
-) : ViewModel() {
+    private val appUpdate: AppUpdate,
+) {
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
 
     // ---------------------------------------------------------------- local UI
 
@@ -137,7 +144,7 @@ class AdGuardViewModel(
     }
 
     /** Android drops the status notification when permission was missing. */
-    fun refreshStatusNotification() = vpnController.refreshStatusNotification()
+    fun refreshStatusNotification() = tunnel.refreshStatusNotification()
 
     /** Enumerates installed apps for the firewall picker (binder work). */
     fun installedAppsForFirewall(): List<FirewallAppChoice> =
@@ -196,7 +203,7 @@ class AdGuardViewModel(
             ) { providers, rewrites, backup, backupMode, probing ->
                 UiDns(providers, rewrites, backup, backupMode, probing)
             },
-            vpnController.isVpnActive,
+            tunnel.isVpnActive,
         ) { status, filters, apps, dns, active ->
             UiPartB(
                 status,
@@ -335,7 +342,7 @@ class AdGuardViewModel(
             loadingMessage = d.loadingMessage,
         )
     }.stateIn(
-        scope = viewModelScope,
+        scope = scope,
         started = SharingStarted.WhileSubscribed(5_000),
         initialValue = AdGuardUiState(),
     )
@@ -344,14 +351,14 @@ class AdGuardViewModel(
         _privateDnsOn.value = isPrivateDnsStrict()
         // A fallback the user cannot see looks like a bug: say which choice
         // the core had to replace, once per change.
-        viewModelScope.launch {
+        scope.launch {
             configWarning.collect { warning ->
                 configWarningMessage(warning)?.let { emit(AdGuardEffect.ShowSnackbar(it)) }
             }
         }
         // The OTA answer the user has to hear: a silent check that failed is
         // indistinguishable from one that never ran, so the row says which.
-        viewModelScope.launch {
+        scope.launch {
             appUpdate.outcomes.collect { outcome ->
                 updateOutcomeMessage(outcome)?.let { emit(AdGuardEffect.ShowSnackbar(it)) }
             }
@@ -361,10 +368,10 @@ class AdGuardViewModel(
         // dialog can only be raised by the Activity, hence the flag.
         if (repository.protectionWasOn()) {
             repository.toggleProtection(true)
-            if (vpnController.prepareIfNeeded() != null) {
+            if (tunnel.needsConsent()) {
                 _showVpnPermissionPrompt.value = true
             } else {
-                vpnController.startVpnService()
+                tunnel.startVpnService()
             }
         }
     }
@@ -570,8 +577,8 @@ class AdGuardViewModel(
                 _inspectedApp.value = intent.app
             }
             is AdGuardIntent.RestartVpn -> {
-                if (vpnController.isVpnActive.value) {
-                    vpnController.restartVpnService()
+                if (tunnel.isVpnActive.value) {
+                    tunnel.restartVpnService()
                     emit(AdGuardEffect.ShowSnackbar(UiText.Resource(Strings.vpn_restarting)))
                 } else {
                     emit(AdGuardEffect.ShowSnackbar(UiText.Resource(Strings.vpn_off_changes_next)))
@@ -593,7 +600,7 @@ class AdGuardViewModel(
             is AdGuardIntent.ClearLogs -> repository.clearLogs()
             is AdGuardIntent.ResetStats -> repository.resetStats()
             is AdGuardIntent.LoadMoreLogs -> repository.loadMoreLogs()
-            is AdGuardIntent.ExportLogs -> viewModelScope.launch {
+            is AdGuardIntent.ExportLogs -> scope.launch {
                 val result = repository.exportLogs(intent.uri)
                 emit(AdGuardEffect.ShowSnackbar(result.message))
             }
@@ -620,12 +627,12 @@ class AdGuardViewModel(
                 _showAddDnsFilterDialog.value = false
             }
 
-            is AdGuardIntent.ExportBackup -> viewModelScope.launch {
+            is AdGuardIntent.ExportBackup -> scope.launch {
                 val result = repository.exportBackup(intent.uri)
                 emit(AdGuardEffect.ShowSnackbar(result.message))
             }
 
-            is AdGuardIntent.ImportBackup -> viewModelScope.launch {
+            is AdGuardIntent.ImportBackup -> scope.launch {
                 val result = repository.importBackup(intent.uri)
                 emit(AdGuardEffect.ShowSnackbar(result.message))
             }
@@ -711,7 +718,7 @@ class AdGuardViewModel(
                 // The dialog is gone either way; leaving the flag set would keep
                 // the next tap from raising it again.
                 _showVpnPermissionPrompt.value = false
-                vpnController.onPermissionResult(intent.granted)
+                tunnel.onPermissionResult(intent.granted)
                 // A refusal means the tunnel cannot come up: record that as the
                 // switch being off, so a later launch does not ask again by
                 // itself (the persisted intent is what auto-start reads).
@@ -729,17 +736,17 @@ class AdGuardViewModel(
         // `isTunnelUp`, not the flag alone: a dispatched start whose establish
         // failed left the flag up, and this early return then refused every
         // following tap in silence — no log, no dialog, no tunnel.
-        if (vpnController.isTunnelUp()) {
-            Log.i("AdFree", "enable-protection shortcut: tunnel already up")
+        if (tunnel.isTunnelUp()) {
+            log.line("enable-protection shortcut: tunnel already up")
             return
         }
         repository.toggleProtection(true)
-        if (vpnController.prepareIfNeeded() != null) {
-            Log.i("AdFree", "enable-protection shortcut: VPN consent missing, raising prompt")
+        if (tunnel.needsConsent()) {
+            log.line("enable-protection shortcut: VPN consent missing, raising prompt")
             _showVpnPermissionPrompt.value = true
         } else {
-            Log.i("AdFree", "enable-protection shortcut: dispatching tunnel start")
-            vpnController.startVpnService()
+            log.line("enable-protection shortcut: dispatching tunnel start")
+            tunnel.startVpnService()
         }
     }
 
@@ -784,19 +791,19 @@ class AdGuardViewModel(
         // binder work failed left the first tap after it switching protection
         // *off* — turning off a tunnel that had never come up — and only the
         // tap after that brought the tunnel back.
-        val next = !vpnController.isTunnelUp()
+        val next = !tunnel.isTunnelUp()
         if (next) {
-            val needsPermission = vpnController.prepareIfNeeded() != null
+            val needsPermission = tunnel.needsConsent()
             if (needsPermission) {
                 _showVpnPermissionPrompt.value = true
                 repository.toggleProtection(true)
             } else {
                 repository.toggleProtection(true)
-                vpnController.startVpnService()
+                tunnel.startVpnService()
             }
         } else {
             repository.toggleProtection(false)
-            vpnController.stopVpnService()
+            tunnel.stopVpnService()
         }
         emit(
             AdGuardEffect.ShowSnackbar(
@@ -816,7 +823,7 @@ class AdGuardViewModel(
     private fun probeDnsProvider(id: String) {
         if (_dnsProbeRunning.value) return
         _dnsProbeRunning.value = true
-        viewModelScope.launch {
+        scope.launch {
             val result = try {
                 repository.probeDnsProvider(id)
             } finally {
@@ -833,7 +840,7 @@ class AdGuardViewModel(
 
     private fun handleThreatScan(domain: String) {
         if (domain.isBlank()) return
-        viewModelScope.launch {
+        scope.launch {
             _aiLabState.value = AiLabUiState.Loading(
                 UiText.Formatted(Strings.threat_analyzing, domain),
             )
@@ -899,7 +906,7 @@ class AdGuardViewModel(
      * so the call runs off the main thread.
      */
     fun installRootCa(onDone: (git.shin.adfree.core.RootTrustBinding?) -> Unit) {
-        viewModelScope.launch {
+        scope.launch {
             val result = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
                 coreEngine.installRootCa()
             }
@@ -909,7 +916,7 @@ class AdGuardViewModel(
 
     /** Removes the CA from the system store. Blocking work, off the main thread. */
     fun removeRootCa(onDone: (git.shin.adfree.core.RootTrustBinding?) -> Unit) {
-        viewModelScope.launch {
+        scope.launch {
             val result = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
                 coreEngine.removeRootCa()
             }
@@ -981,27 +988,18 @@ class AdGuardViewModel(
     }
 
     /**
-     * Exports the CA certificate to Downloads and opens the Settings screen
-     * that leads to the installer. Returns the exported file name so the
-     * caller can tell the user what to pick, or null when the export failed.
+     * Exports the CA certificate where the user can reach it and opens the
+     * system screen that leads to the installer. Returns the exported file
+     * name so the caller can tell the user what to pick, or null on failure.
      */
     fun installCertificate(): String? {
         val name = coreEngine.exportCaCertificate()
-        runCatching { containerProvider()?.startActivity(coreEngine.installCertificateIntent()) }
-            .onFailure { Log.w("AdFree", "certificate install intent failed", it) }
+        platform.openCertificateInstaller()
         return name
     }
 
-    /** Context used to launch system screens; supplied by the Activity. */
-    private var contextProvider: (() -> android.content.Context)? = null
-    private fun containerProvider(): android.content.Context? = contextProvider?.invoke()
-
-    fun attachContext(provider: () -> android.content.Context) {
-        contextProvider = provider
-    }
-
     private fun emit(effect: AdGuardEffect) {
-        viewModelScope.launch { _effect.emit(effect) }
+        scope.launch { _effect.emit(effect) }
     }
 
     private data class UiPartA(

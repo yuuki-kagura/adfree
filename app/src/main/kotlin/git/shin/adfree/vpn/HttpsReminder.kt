@@ -1,5 +1,7 @@
 package git.shin.adfree.vpn
 
+import git.shin.adfree.l10n.Strings
+import git.shin.adfree.l10n.L10n
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
@@ -10,7 +12,6 @@ import androidx.core.app.NotificationCompat
 import git.shin.adfree.MainActivity
 import git.shin.adfree.R
 import git.shin.adfree.model.AppLanguage
-import git.shin.adfree.ui.Localization
 
 /**
  * Reminds the user that HTTPS filtering needs the CA in the trust store.
@@ -37,7 +38,6 @@ object HttpsReminder {
             return
         }
         ensureChannel(context, language)
-        val ui = Localization.wrap(context, language)
         val open = PendingIntent.getActivity(
             context,
             10,
@@ -49,10 +49,10 @@ object HttpsReminder {
             },
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
         )
-        val text = ui.getString(R.string.https_reminder_text)
+        val text = L10n.get(Strings.https_reminder_text)
         val notification = NotificationCompat.Builder(context, CHANNEL_ID)
             .setSmallIcon(R.drawable.ic_qs_shield)
-            .setContentTitle(ui.getString(R.string.https_reminder_title))
+            .setContentTitle(L10n.get(Strings.https_reminder_title))
             .setContentText(text)
             .setStyle(NotificationCompat.BigTextStyle().bigText(text))
             .setContentIntent(open)
@@ -66,13 +66,12 @@ object HttpsReminder {
 
     private fun ensureChannel(context: Context, language: AppLanguage) {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
-        val ui = Localization.wrap(context, language)
         val channel = NotificationChannel(
             CHANNEL_ID,
-            ui.getString(R.string.https_reminder_channel_name),
+            L10n.get(Strings.https_reminder_channel_name),
             NotificationManager.IMPORTANCE_LOW,
         ).apply {
-            description = ui.getString(R.string.https_reminder_channel_description)
+            description = L10n.get(Strings.https_reminder_channel_description)
             setShowBadge(false)
         }
         context.getSystemService(NotificationManager::class.java)

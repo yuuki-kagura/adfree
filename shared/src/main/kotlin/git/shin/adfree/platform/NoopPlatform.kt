@@ -68,6 +68,27 @@ class NoopReminders : Reminders {
     override fun scheduleFilterUpdates(hours: Int) = Unit
 }
 
+/** No OS tunnel: consent is never missing, and nothing is ever up. */
+class NoopTunnelControl : TunnelControl {
+
+    override val isVpnActive: kotlinx.coroutines.flow.StateFlow<Boolean> =
+        kotlinx.coroutines.flow.MutableStateFlow(false)
+
+    override fun isTunnelUp(): Boolean = false
+
+    override fun needsConsent(): Boolean = false
+
+    override fun startVpnService() = Unit
+
+    override fun stopVpnService() = Unit
+
+    override fun restartVpnService() = Unit
+
+    override fun onPermissionResult(granted: Boolean) = Unit
+
+    override fun refreshStatusNotification() = Unit
+}
+
 /** Backed by maps: enough for a test to assert round-trips, gone on restart. */
 class InMemoryKeyValueStore : KeyValueStore {
 

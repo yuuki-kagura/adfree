@@ -1,5 +1,7 @@
 package git.shin.adfree.vpn
 
+import git.shin.adfree.l10n.Strings
+import git.shin.adfree.l10n.L10n
 import android.annotation.SuppressLint
 import android.app.PendingIntent
 import android.content.Intent
@@ -9,8 +11,6 @@ import android.service.quicksettings.Tile
 import android.service.quicksettings.TileService
 import git.shin.adfree.AdGuardApplication
 import git.shin.adfree.MainActivity
-import git.shin.adfree.R
-import git.shin.adfree.ui.Localization
 
 /**
  * Quick Settings tile. Tapping it toggles the tunnel without opening the app;
@@ -61,15 +61,14 @@ class AdFreeTileService : TileService() {
             active = container.vpnController.isVpnActive.value,
             paused = container.vpnController.isPaused(),
         )
-        val ui = Localization.wrap(this, container.repository.settings.value.appLanguage)
         tile.state = if (state == VpnUiState.OFF) Tile.STATE_INACTIVE else Tile.STATE_ACTIVE
-        tile.label = ui.getString(R.string.app_name)
+        tile.label = L10n.get(Strings.app_name)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            tile.subtitle = ui.getString(
+            tile.subtitle = L10n.get(
                 when (state) {
-                    VpnUiState.OFF -> R.string.tile_state_off
-                    VpnUiState.ON -> R.string.tile_state_on
-                    VpnUiState.PAUSED -> R.string.tile_state_paused
+                    VpnUiState.OFF -> Strings.tile_state_off
+                    VpnUiState.ON -> Strings.tile_state_on
+                    VpnUiState.PAUSED -> Strings.tile_state_paused
                 },
             )
         }

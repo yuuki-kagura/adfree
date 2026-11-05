@@ -59,7 +59,7 @@ class ThreatAnalyzer(
     }
 
     /** Kept internal so JVM tests can call it; used by [ThreatAnalyzerTest]. */
-    internal fun riskScore(host: String): Int {
+    fun riskScore(host: String): Int {
         var score = 0
         // 1. Technical shape of the host.
         val labels = host.split('.')

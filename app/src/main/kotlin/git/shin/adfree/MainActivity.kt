@@ -112,9 +112,8 @@ import git.shin.adfree.ui.theme.MyApplicationTheme
 
 class MainActivity : AppCompatActivity() {
 
-    private val viewModel: AdGuardViewModel by viewModels {
-        AdGuardApplication.instance.container.provideViewModelFactory()
-    }
+    /** The one state holder for the whole process, owned by the container. */
+    private val viewModel: AdGuardViewModel get() = container.viewModel
 
     /** Container kept for the Activity's lifetime so MainActivity can read it. */
     private val container get() = AdGuardApplication.instance.container
@@ -133,9 +132,6 @@ class MainActivity : AppCompatActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        // System screens (the certificate installer, consent dialogs) launch
-        // from the ViewModel, so it needs a context that can start activities.
-        viewModel.attachContext { this }
         // A launch intent is consumed once: rotation replays the original
         // intent, and asking for consent again there would look like a bug.
         if (savedInstanceState == null) handleLaunchAction(intent)

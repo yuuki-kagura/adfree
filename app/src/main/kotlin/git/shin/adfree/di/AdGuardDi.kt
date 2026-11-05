@@ -6,8 +6,6 @@ import android.net.LinkProperties
 import android.net.Network
 import android.net.NetworkCapabilities
 import android.util.Log
-import androidx.lifecycle.ViewModel
-import androidx.lifecycle.ViewModelProvider
 import git.shin.adfree.core.ConfigOutcome
 import git.shin.adfree.core.ConfigWarning
 import git.shin.adfree.core.CoreEngine
@@ -123,25 +121,24 @@ class AdGuardAppContainer(private val context: Context) {
         }
     }
 
-    fun provideViewModelFactory(): ViewModelProvider.Factory {
-        return object : ViewModelProvider.Factory {
-            @Suppress("UNCHECKED_CAST")
-            override fun <T : ViewModel> create(modelClass: Class<T>): T {
-                if (modelClass.isAssignableFrom(AdGuardViewModel::class.java)) {
-                    return AdGuardViewModel(
-                        repository = repository,
-                        vpnController = vpnController,
-                        threatAnalyzer = threatAnalyzer,
-                        coreEngine = coreEngine,
-                        onConfigChanged = { applyConfig() },
-                        isPrivateDnsStrict = { privateDnsStrict },
-                        configWarning = configWarning,
-                        appUpdate = appUpdate,
-                    ) as T
-                }
-                throw IllegalArgumentException("Unknown ViewModel: ${modelClass.name}")
-            }
-        }
+    /**
+     * The one state holder for the whole process. A plain instance rather
+     * than a ViewModel factory: the state must outlive Activities and the
+     * same object backs the desktop host's window.
+     */
+    val viewModel: AdGuardViewModel by lazy {
+        AdGuardViewModel(
+            repository = repository,
+            tunnel = git.shin.adfree.platform.AndroidTunnelControl(vpnController),
+            threatAnalyzer = threatAnalyzer,
+            coreEngine = coreEngine,
+            platform = platformHost,
+            log = git.shin.adfree.platform.LogSink { Log.i("AdFree", it) },
+            onConfigChanged = { applyConfig() },
+            isPrivateDnsStrict = { privateDnsStrict },
+            configWarning = configWarning,
+            appUpdate = appUpdate,
+        )
     }
 
     /**

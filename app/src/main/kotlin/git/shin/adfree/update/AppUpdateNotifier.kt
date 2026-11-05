@@ -1,5 +1,7 @@
 package git.shin.adfree.update
 
+import git.shin.adfree.l10n.Strings
+import git.shin.adfree.l10n.L10n
 import android.Manifest
 import android.app.NotificationChannel
 import android.app.NotificationManager
@@ -13,7 +15,6 @@ import androidx.core.content.ContextCompat
 import git.shin.adfree.MainActivity
 import git.shin.adfree.R
 import git.shin.adfree.model.AppLanguage
-import git.shin.adfree.ui.Localization
 
 /**
  * One low-priority line when a new release is found, on the same updates
@@ -43,15 +44,14 @@ object AppUpdateNotifier {
         ) {
             return
         }
-        val ui = Localization.wrap(context, language)
         val manager = context.getSystemService(NotificationManager::class.java) ?: return
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             val channel = NotificationChannel(
                 CHANNEL_ID,
-                ui.getString(R.string.notification_channel_updates),
+                L10n.get(Strings.notification_channel_updates),
                 NotificationManager.IMPORTANCE_LOW,
             ).apply {
-                description = ui.getString(R.string.notification_channel_updates_description)
+                description = L10n.get(Strings.notification_channel_updates_description)
                 setShowBadge(false)
             }
             manager.createNotificationChannel(channel)
@@ -68,8 +68,8 @@ object AppUpdateNotifier {
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
         )
         val notification = NotificationCompat.Builder(context, CHANNEL_ID)
-            .setContentTitle(ui.getString(R.string.notification_app_update_title, info.version))
-            .setContentText(ui.getString(R.string.notification_app_update_text))
+            .setContentTitle(L10n.format(Strings.notification_app_update_title, info.version))
+            .setContentText(L10n.get(Strings.notification_app_update_text))
             .setStyle(NotificationCompat.BigTextStyle().bigText(info.releaseNotes.take(500)))
             .setSmallIcon(R.drawable.ic_qs_shield)
             .setContentIntent(open)

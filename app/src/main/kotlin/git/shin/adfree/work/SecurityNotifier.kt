@@ -1,5 +1,7 @@
 package git.shin.adfree.work
 
+import git.shin.adfree.l10n.Strings
+import git.shin.adfree.l10n.L10n
 import android.Manifest
 import android.app.NotificationChannel
 import android.app.NotificationManager
@@ -13,7 +15,6 @@ import androidx.core.content.ContextCompat
 import git.shin.adfree.MainActivity
 import git.shin.adfree.R
 import git.shin.adfree.model.AppLanguage
-import git.shin.adfree.ui.Localization
 
 /**
  * One line when a security list refuses a malicious domain, so browsing
@@ -42,15 +43,14 @@ object SecurityNotifier {
         ) {
             return
         }
-        val ui = Localization.wrap(context, language)
         val manager = context.getSystemService(NotificationManager::class.java) ?: return
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             val channel = NotificationChannel(
                 CHANNEL_ID,
-                ui.getString(R.string.notification_channel_firewall),
+                L10n.get(Strings.notification_channel_firewall),
                 NotificationManager.IMPORTANCE_LOW,
             ).apply {
-                description = ui.getString(R.string.notification_channel_firewall_description)
+                description = L10n.get(Strings.notification_channel_firewall_description)
                 setShowBadge(false)
             }
             manager.createNotificationChannel(channel)
@@ -68,10 +68,10 @@ object SecurityNotifier {
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
         )
         val text = listName?.takeIf { it.isNotBlank() }?.let {
-            ui.getString(R.string.notification_security_text_list, it)
-        } ?: ui.getString(R.string.notification_security_text)
+            L10n.format(Strings.notification_security_text_list, it)
+        } ?: L10n.get(Strings.notification_security_text)
         val notification = NotificationCompat.Builder(context, CHANNEL_ID)
-            .setContentTitle(ui.getString(R.string.notification_security_title, domain))
+            .setContentTitle(L10n.format(Strings.notification_security_title, domain))
             .setContentText(text)
             .setSmallIcon(R.drawable.ic_qs_shield)
             .setContentIntent(open)

@@ -352,3 +352,25 @@ class AndroidKeyValueStore(
         store.edit().putBoolean(key, value).apply()
     }
 }
+
+/** The real VpnService behind the tunnel seam. */
+class AndroidTunnelControl(
+    private val controller: git.shin.adfree.vpn.VpnController,
+) : TunnelControl {
+
+    override val isVpnActive get() = controller.isVpnActive
+
+    override fun isTunnelUp(): Boolean = controller.isTunnelUp()
+
+    override fun needsConsent(): Boolean = controller.prepareIfNeeded() != null
+
+    override fun startVpnService() = controller.startVpnService()
+
+    override fun stopVpnService() = controller.stopVpnService()
+
+    override fun restartVpnService() = controller.restartVpnService()
+
+    override fun onPermissionResult(granted: Boolean) = controller.onPermissionResult(granted)
+
+    override fun refreshStatusNotification() = controller.refreshStatusNotification()
+}

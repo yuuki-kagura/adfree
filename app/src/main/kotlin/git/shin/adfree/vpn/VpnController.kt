@@ -1,5 +1,7 @@
 package git.shin.adfree.vpn
 
+import git.shin.adfree.l10n.Strings
+import git.shin.adfree.l10n.L10n
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
@@ -18,7 +20,6 @@ import git.shin.adfree.AdGuardApplication
 import git.shin.adfree.MainActivity
 import git.shin.adfree.R
 import git.shin.adfree.core.CoreEngine
-import git.shin.adfree.ui.Localization
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -150,18 +151,14 @@ class VpnController(
 
     private fun notifyStartRefused() {
         val manager = context.getSystemService(NotificationManager::class.java) ?: return
-        val ui = Localization.wrap(
-            context,
-            AdGuardApplication.instance.container.repository.settings.value.appLanguage,
-        )
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             manager.createNotificationChannel(
                 NotificationChannel(
                     CONFLICT_CHANNEL_ID,
-                    ui.getString(R.string.vpn_conflict_channel_name),
+                    L10n.get(Strings.vpn_conflict_channel_name),
                     NotificationManager.IMPORTANCE_DEFAULT,
                 ).apply {
-                    description = ui.getString(R.string.vpn_conflict_channel_description)
+                    description = L10n.get(Strings.vpn_conflict_channel_description)
                 },
             )
         }
@@ -180,8 +177,8 @@ class VpnController(
             context,
             CONFLICT_CHANNEL_ID,
         )
-            .setContentTitle(ui.getString(R.string.vpn_start_blocked_title))
-            .setContentText(ui.getString(R.string.vpn_start_blocked_text))
+            .setContentTitle(L10n.get(Strings.vpn_start_blocked_title))
+            .setContentText(L10n.get(Strings.vpn_start_blocked_text))
             .setSmallIcon(R.drawable.ic_qs_shield)
             .setContentIntent(open)
             .setAutoCancel(true)

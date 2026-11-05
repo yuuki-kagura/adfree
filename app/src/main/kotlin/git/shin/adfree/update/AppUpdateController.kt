@@ -27,17 +27,17 @@ import java.util.concurrent.atomic.AtomicBoolean
  */
 class AppUpdateController(
     context: Context,
-) {
+) : git.shin.adfree.platform.AppUpdate {
     private val appContext = context.applicationContext
     private val prefs = appContext.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
     private val checker = AppUpdateChecker(appContext)
 
     private val _state = MutableStateFlow<UpdateUiState>(UpdateUiState.Idle)
-    val state: StateFlow<UpdateUiState> = _state.asStateFlow()
+    override val state: StateFlow<UpdateUiState> = _state.asStateFlow()
 
     /** How the last manual check ended; the Settings row reports it as a snackbar. */
     private val _outcomes = MutableSharedFlow<UpdateOutcome>(extraBufferCapacity = 4)
-    val outcomes: SharedFlow<UpdateOutcome> = _outcomes.asSharedFlow()
+    override val outcomes: SharedFlow<UpdateOutcome> = _outcomes.asSharedFlow()
 
     // A check in flight, so the screen-on hook and a tap on the Settings row
     // cannot race two requests to the same answer.
@@ -64,7 +64,7 @@ class AppUpdateController(
     }
 
     /** Somebody tapped the row: report the outcome either way. */
-    fun manualCheck() = check(automatic = false)
+    override fun manualCheck() = check(automatic = false)
 
     private fun check(automatic: Boolean) {
         if (!inFlight.compareAndSet(false, true)) return
@@ -115,7 +115,7 @@ class AppUpdateController(
         }
     }
 
-    fun downloadAndInstall(info: UpdateInfo) {
+    override fun downloadAndInstall(info: UpdateInfo) {
         if (_state.value is UpdateUiState.Downloading) return
         _state.value = UpdateUiState.Downloading(info, 0)
         scope.launch {

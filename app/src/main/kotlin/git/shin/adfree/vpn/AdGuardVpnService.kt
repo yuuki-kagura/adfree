@@ -1,5 +1,7 @@
 package git.shin.adfree.vpn
 
+import git.shin.adfree.l10n.Strings
+import git.shin.adfree.l10n.L10n
 import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
@@ -30,7 +32,6 @@ import git.shin.adfree.core.prepareUpstreamSockets
 import git.shin.adfree.core.pushUidApps
 import git.shin.adfree.core.setConnectionUidLookup
 import git.shin.adfree.core.stopAndRelease
-import git.shin.adfree.ui.Localization
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -321,7 +322,7 @@ class AdGuardVpnService : VpnService() {
             .ifBlank { "94.140.14.14" }
 
         val builder = Builder()
-            .setSession(localizedContext().getString(R.string.vpn_session_name))
+            .setSession(L10n.get(Strings.vpn_session_name))
             .addAddress(TUN_ADDRESS, TUN_PREFIX)
             .addDnsServer(tunnelDns)
             .addRoute(ROUTE_IPV4, ROUTE_PREFIX)
@@ -573,18 +574,15 @@ class AdGuardVpnService : VpnService() {
      * A service outlives the Activity, so it has to resolve its own wording
      * instead of inheriting the Activity's per-app locale.
      */
-    private fun localizedContext(): Context =
-        Localization.wrap(this, container.repository.settings.value.appLanguage)
-
+    
     private fun createNotificationChannel() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            val ui = localizedContext()
             val channel = NotificationChannel(
                 NOTIFICATION_CHANNEL_ID,
-                ui.getString(R.string.vpn_channel_name),
+                L10n.get(Strings.vpn_channel_name),
                 NotificationManager.IMPORTANCE_LOW,
             ).apply {
-                description = ui.getString(R.string.vpn_channel_description)
+                description = L10n.get(Strings.vpn_channel_description)
                 setShowBadge(false)
             }
             getSystemService(NotificationManager::class.java)?.createNotificationChannel(channel)
@@ -599,13 +597,12 @@ class AdGuardVpnService : VpnService() {
      */
     private fun createAlertChannel() {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
-        val ui = localizedContext()
         val channel = NotificationChannel(
             ALERT_CHANNEL_ID,
-            ui.getString(R.string.vpn_alert_channel_name),
+            L10n.get(Strings.vpn_alert_channel_name),
             NotificationManager.IMPORTANCE_DEFAULT,
         ).apply {
-            description = ui.getString(R.string.vpn_alert_channel_description)
+            description = L10n.get(Strings.vpn_alert_channel_description)
         }
         getSystemService(NotificationManager::class.java)?.createNotificationChannel(channel)
     }
@@ -619,7 +616,6 @@ class AdGuardVpnService : VpnService() {
     }
 
     private fun buildStatusNotification(): Notification {
-        val ui = localizedContext()
         val paused = container.coreEngine.isProtectionPaused()
         val (blocked, savedMb) = if (paused) 0L to 0L else notificationStats()
         if (!paused) {
@@ -668,33 +664,33 @@ class AdGuardVpnService : VpnService() {
             .setCategory(NotificationCompat.CATEGORY_SERVICE)
         if (paused) {
             builder
-                .setContentTitle(ui.getString(R.string.vpn_notification_paused_title))
-                .setContentText(ui.getString(R.string.vpn_notification_paused_text))
+                .setContentTitle(L10n.get(Strings.vpn_notification_paused_title))
+                .setContentText(L10n.get(Strings.vpn_notification_paused_text))
                 .addAction(
                     R.drawable.ic_qs_shield,
-                    ui.getString(R.string.vpn_notification_resume),
+                    L10n.get(Strings.vpn_notification_resume),
                     toggle,
                 )
         } else {
-            val blockedLine = ui.getString(R.string.vpn_notification_blocked, blocked)
+            val blockedLine = L10n.format(Strings.vpn_notification_blocked, blocked)
             builder
-                .setContentTitle(ui.getString(R.string.vpn_notification_title))
+                .setContentTitle(L10n.get(Strings.vpn_notification_title))
                 .setContentText(blockedLine)
                 .setStyle(
                     NotificationCompat.BigTextStyle().bigText(
                         blockedLine + "\n" +
-                            ui.getString(R.string.vpn_notification_saved, savedMb),
+                            L10n.format(Strings.vpn_notification_saved, savedMb),
                     ),
                 )
                 .addAction(
                     R.drawable.ic_qs_shield,
-                    ui.getString(R.string.vpn_notification_disable),
+                    L10n.get(Strings.vpn_notification_disable),
                     disable,
                 )
         }
         builder.addAction(
             R.drawable.ic_qs_shield,
-            ui.getString(R.string.vpn_notification_assistant),
+            L10n.get(Strings.vpn_notification_assistant),
             assistant,
         )
         return builder.build()
@@ -707,7 +703,6 @@ class AdGuardVpnService : VpnService() {
      * instead of stacking a second shade entry.
      */
     private fun postDisabledReminder() {
-        val ui = localizedContext()
         createNotificationChannel()
         val open = PendingIntent.getActivity(
             this,
@@ -721,8 +716,8 @@ class AdGuardVpnService : VpnService() {
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
         )
         val notification = NotificationCompat.Builder(this, NOTIFICATION_CHANNEL_ID)
-            .setContentTitle(ui.getString(R.string.vpn_notification_disabled_title))
-            .setContentText(ui.getString(R.string.vpn_notification_disabled_text))
+            .setContentTitle(L10n.get(Strings.vpn_notification_disabled_title))
+            .setContentText(L10n.get(Strings.vpn_notification_disabled_text))
             .setSmallIcon(R.drawable.ic_qs_shield)
             .setContentIntent(open)
             .setOngoing(true)
@@ -745,7 +740,6 @@ class AdGuardVpnService : VpnService() {
      * `stopForeground` took the tunnel's notification away.
      */
     private fun postDroppedAlert(needsConsent: Boolean = true) {
-        val ui = localizedContext()
         createAlertChannel()
         val open = PendingIntent.getActivity(
             this,
@@ -760,15 +754,15 @@ class AdGuardVpnService : VpnService() {
         )
         val notification = NotificationCompat.Builder(this, ALERT_CHANNEL_ID)
             .setContentTitle(
-                ui.getString(
-                    if (needsConsent) R.string.vpn_notification_dropped_title
-                    else R.string.vpn_notification_failed_title,
+                L10n.get(
+                    if (needsConsent) Strings.vpn_notification_dropped_title
+                    else Strings.vpn_notification_failed_title,
                 ),
             )
             .setContentText(
-                ui.getString(
-                    if (needsConsent) R.string.vpn_notification_dropped_text
-                    else R.string.vpn_notification_failed_text,
+                L10n.get(
+                    if (needsConsent) Strings.vpn_notification_dropped_text
+                    else Strings.vpn_notification_failed_text,
                 ),
             )
             .setSmallIcon(R.drawable.ic_qs_shield)
