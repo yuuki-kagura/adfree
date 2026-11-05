@@ -1,5 +1,6 @@
 package git.shin.adfree.ui.screens
 
+import git.shin.adfree.l10n.L10n
 import android.content.Intent
 import android.net.Uri
 import android.widget.Toast
@@ -773,12 +774,12 @@ private fun FilterGroupCard(
                 Spacer(modifier = Modifier.width(12.dp))
                 Column(modifier = Modifier.weight(1f)) {
                     Text(
-                        stringResource(group.titleRes),
+                        L10n.get(group.titleKey),
                         fontSize = 13.sp,
                         fontWeight = FontWeight.Bold,
                         color = AdGuardTextPrimary,
                     )
-                    Text(stringResource(group.subtitleRes), fontSize = 11.sp, color = AdGuardTextMuted)
+                    Text(L10n.get(group.subtitleKey), fontSize = 11.sp, color = AdGuardTextMuted)
                     // AdGuard names the configuration state in words rather
                     // than as a bare ratio on the right of the row.
                     Text(
@@ -814,8 +815,8 @@ private fun FilterGroupCard(
                         Text(
                             stringResource(
                                 R.string.filters_inactive_body,
-                                stringResource(group.titleRes),
-                                gate?.let { stringResource(it.titleRes) }.orEmpty(),
+                                L10n.get(group.titleKey),
+                                gate?.let { L10n.get(it.titleKey) }.orEmpty(),
                             ),
                             fontSize = 11.sp,
                             color = AdGuardTextMuted,
@@ -846,14 +847,14 @@ private fun FilterGroupCard(
     }
 }
 
-/** Catalogue rows carry a resource id; user-added lists keep their own text. */
+/** Catalogue rows carry a string key; user-added lists keep their own text. */
 @Composable
 private fun filterDisplayName(list: FilterList): String =
-    if (list.nameRes != 0) stringResource(list.nameRes) else list.name
+    list.nameKey?.let { L10n.get(it) } ?: list.name
 
 @Composable
 private fun filterDisplayDescription(list: FilterList): String =
-    if (list.descriptionRes != 0) stringResource(list.descriptionRes) else list.description
+    list.descriptionKey?.let { L10n.get(it) } ?: list.description
 
 @Composable
 private fun FilterRow(
@@ -1762,7 +1763,7 @@ fun FilterDetailSheet(
 
         InfoRow(
             stringResource(R.string.filters_info_group),
-            FilterGroup.fromId(list.groupId)?.let { stringResource(it.titleRes) }
+            FilterGroup.fromId(list.groupId)?.let { L10n.get(it.titleKey) }
                 ?: stringResource(R.string.filters_info_custom_group),
         )
         InfoRow(

@@ -26,6 +26,10 @@ import git.shin.adfree.BuildConfig
 import git.shin.adfree.MainActivity
 import git.shin.adfree.R
 import git.shin.adfree.core.CoreEngine
+import git.shin.adfree.core.prepareUpstreamSockets
+import git.shin.adfree.core.pushUidApps
+import git.shin.adfree.core.setConnectionUidLookup
+import git.shin.adfree.core.stopAndRelease
 import git.shin.adfree.ui.Localization
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -404,7 +408,7 @@ class AdGuardVpnService : VpnService() {
      */
     private fun teardownTunnel() {
         isRunning = false
-        container.coreEngine.stop()
+        container.coreEngine.stopAndRelease()
         // Reported before the interface check: a start that died in `establish()`
         // never got an interface, and skipping the callback there is what left
         // the controller claiming a tunnel that did not exist.
@@ -479,7 +483,7 @@ class AdGuardVpnService : VpnService() {
         retryJob = null
         isRunning = false
         container.repository.syncHttpsReminder()
-        container.coreEngine.stop()
+        container.coreEngine.stopAndRelease()
         container.vpnController.onVpnStopped()
         try {
             vpnInterface?.close()

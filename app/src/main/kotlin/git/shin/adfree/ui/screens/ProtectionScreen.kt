@@ -1,5 +1,6 @@
 package git.shin.adfree.ui.screens
 
+import git.shin.adfree.l10n.L10n
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.core.tween
@@ -1037,16 +1038,8 @@ private fun AnnoyancesDetail(
                     lists.forEachIndexed { index, list ->
                         if (index > 0) Spacer(modifier = Modifier.height(12.dp))
                         StealthToggleRow(
-                            title = if (list.nameRes != 0) {
-                                stringResource(list.nameRes)
-                            } else {
-                                list.name
-                            },
-                            subtitle = if (list.descriptionRes != 0) {
-                                stringResource(list.descriptionRes)
-                            } else {
-                                list.description
-                            },
+                            title = list.nameKey?.let { L10n.get(it) } ?: list.name,
+                            subtitle = list.descriptionKey?.let { L10n.get(it) } ?: list.description,
                             isChecked = list.isEnabled,
                             enabled = settings.isAnnoyancesEnabled,
                             onCheckedChange = {

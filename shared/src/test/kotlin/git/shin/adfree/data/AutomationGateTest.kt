@@ -1,25 +1,37 @@
 package git.shin.adfree.data
 
-import androidx.test.core.app.ApplicationProvider
+import git.shin.adfree.platform.KeyValueStore
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
-import org.junit.runner.RunWith
-import org.robolectric.RobolectricTestRunner
-import org.robolectric.annotation.Config
 
 /**
  * The gate decides what an exported receiver is allowed to do, so its refusal
  * cases matter more than its happy path: a broadcast from any installed app
  * must not be able to switch protection off before the user opts in.
  */
-@RunWith(RobolectricTestRunner::class)
-@Config(sdk = [34], application = android.app.Application::class)
 class AutomationGateTest {
 
-    private fun gate(): AutomationGate = AutomationGate(ApplicationProvider.getApplicationContext())
+    private class MemoryStore : KeyValueStore {
+        private val strings = HashMap<String, String>()
+        private val booleans = HashMap<String, Boolean>()
+
+        override fun getString(key: String): String? = strings[key]
+        override fun putString(key: String, value: String?) {
+            if (value == null) strings.remove(key) else strings[key] = value
+        }
+
+        override fun getBoolean(key: String, default: Boolean): Boolean = booleans[key] ?: default
+        override fun putBoolean(key: String, value: Boolean) {
+            booleans[key] = value
+        }
+    }
+
+    private val store = MemoryStore()
+
+    private fun gate(): AutomationGate = AutomationGate(store)
 
     @Test
     fun `external control is off on a fresh install and carries no usable token`() {

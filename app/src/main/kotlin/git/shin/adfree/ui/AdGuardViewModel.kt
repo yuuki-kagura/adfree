@@ -8,6 +8,7 @@ import git.shin.adfree.R
 import git.shin.adfree.core.AssetState
 import git.shin.adfree.core.ConfigWarning
 import git.shin.adfree.core.CoreEngine
+import git.shin.adfree.core.installCertificateIntent
 import git.shin.adfree.data.AdGuardRepository
 import git.shin.adfree.data.AutomationControl
 import git.shin.adfree.model.AppCategory

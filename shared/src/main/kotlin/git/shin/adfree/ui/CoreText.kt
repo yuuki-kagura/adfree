@@ -1,7 +1,6 @@
 package git.shin.adfree.ui
 
 import git.shin.adfree.l10n.Strings
-import git.shin.adfree.R
 import git.shin.adfree.core.BackupError
 import git.shin.adfree.core.ConfigWarning
 import git.shin.adfree.core.DnsError
@@ -80,7 +79,7 @@ object CoreText {
         DownloadError.TOO_LARGE -> UiText.Resource(Strings.download_error_too_large)
     }
 
-    internal fun filterUrlError(error: FilterUrlError): UiText = when (error) {
+    fun filterUrlError(error: FilterUrlError): UiText = when (error) {
         FilterUrlError.EMPTY -> UiText.Resource(Strings.filter_url_empty)
         FilterUrlError.TOO_LONG -> UiText.Resource(Strings.filter_url_too_long)
         FilterUrlError.INVALID -> UiText.Resource(Strings.filter_url_invalid)

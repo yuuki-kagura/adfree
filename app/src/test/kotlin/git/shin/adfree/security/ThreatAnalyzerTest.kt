@@ -23,7 +23,11 @@ class ThreatAnalyzerTest {
 
     private val analyzer = ThreatAnalyzer(
         repository = git.shin.adfree.data.AdGuardRepository(
-            context = android.app.Application(),
+            platform = git.shin.adfree.platform.NoopPlatformHost(),
+            files = git.shin.adfree.platform.NoopFileHost(),
+            inventory = git.shin.adfree.platform.NoopAppInventory(),
+            reminders = git.shin.adfree.platform.NoopReminders(),
+            store = git.shin.adfree.platform.InMemoryKeyValueStore(),
             engine = git.shin.adfree.core.CoreEngine(),
         ),
         engine = git.shin.adfree.core.CoreEngine(),

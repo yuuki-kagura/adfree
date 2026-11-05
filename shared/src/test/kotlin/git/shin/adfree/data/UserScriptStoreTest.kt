@@ -2,44 +2,42 @@ package git.shin.adfree.data
 
 import git.shin.adfree.model.UserScriptStoreItem
 import git.shin.adfree.model.UserScriptStoreSort
-import org.json.JSONArray
-import org.json.JSONObject
+import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonNull
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.put
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
-import org.junit.runner.RunWith
-import org.robolectric.RobolectricTestRunner
-import org.robolectric.annotation.Config
 
 /**
  * The store must degrade safely when Greasy Fork returns odd rows.
- *
- * The base Application is deliberate: the production one opens the native
- * core in `onCreate`, which a JVM test cannot load. This class only exercises
- * JSON parsing.
  */
-@RunWith(RobolectricTestRunner::class)
-@Config(sdk = [34], application = android.app.Application::class)
 class UserScriptStoreTest {
 
     private fun entry(
         id: Int,
         codeUrl: String? = "https://update.greasyfork.org/scripts/$id/Test.user.js",
-    ): JSONObject = JSONObject()
-        .put("id", id)
-        .put("name", "Script $id")
-        .put("description", "Description $id")
-        .put("url", "https://greasyfork.org/scripts/$id")
-        .put("version", "1.$id")
-        .put("daily_installs", 12)
-        .put("total_installs", 34_000)
-        .put("license", "MIT")
-        .put("code_size", 1234)
-        .put("code_url", codeUrl ?: JSONObject.NULL)
+        pageUrl: String = "https://greasyfork.org/scripts/$id",
+    ): JsonObject = buildJsonObject {
+        put("id", id)
+        put("name", "Script $id")
+        put("description", "Description $id")
+        put("url", pageUrl)
+        put("version", "1.$id")
+        put("daily_installs", 12)
+        put("total_installs", 34_000)
+        put("license", "MIT")
+        put("code_size", 1234)
+        if (codeUrl == null) put("code_url", JsonNull) else put("code_url", codeUrl)
+    }
+
+    private fun json(vararg rows: JsonObject): String = JsonArray(rows.toList()).toString()
 
     @Test
     fun `parses the fields the sheet shows`() {
-        val items = parseGreasyForkScripts(JSONArray().put(entry(7)).toString())
+        val items = parseGreasyForkScripts(json(entry(7)))
 
         assertEquals(1, items.size)
         val item = items[0]
@@ -56,11 +54,11 @@ class UserScriptStoreTest {
     @Test
     fun `drops rows without a usable download url`() {
         val items = parseGreasyForkScripts(
-            JSONArray()
-                .put(entry(1, codeUrl = null))
-                .put(entry(2, codeUrl = "javascript:alert(1)"))
-                .put(entry(3))
-                .toString(),
+            json(
+                entry(1, codeUrl = null),
+                entry(2, codeUrl = "javascript:alert(1)"),
+                entry(3),
+            ),
         )
 
         assertEquals(1, items.size)
@@ -69,8 +67,7 @@ class UserScriptStoreTest {
 
     @Test
     fun `drops a source page that is not a web url`() {
-        val row = entry(4).put("url", "javascript:alert(1)")
-        val items = parseGreasyForkScripts(JSONArray().put(row).toString())
+        val items = parseGreasyForkScripts(json(entry(4, pageUrl = "javascript:alert(1)")))
 
         assertEquals(1, items.size)
         assertEquals("", items[0].pageUrl)
@@ -78,9 +75,7 @@ class UserScriptStoreTest {
 
     @Test
     fun `caps the result list`() {
-        val array = JSONArray()
-        for (i in 0 until 60) array.put(entry(i))
-        val items = parseGreasyForkScripts(array.toString())
+        val items = parseGreasyForkScripts(json(*Array(60) { entry(it) }))
         assertEquals(50, items.size)
         assertTrue(items.all { it.url.startsWith("https://") })
     }

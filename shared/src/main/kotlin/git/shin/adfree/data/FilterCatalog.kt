@@ -1,7 +1,6 @@
 package git.shin.adfree.data
 
-import androidx.annotation.StringRes
-import git.shin.adfree.R
+import git.shin.adfree.l10n.Strings
 
 /**
  * The bundled catalogue of filter lists behind the "Bộ lọc" tab.
@@ -26,20 +25,20 @@ import git.shin.adfree.R
  */
 enum class FilterGroup(
     val id: String,
-    @StringRes val titleRes: Int,
-    @StringRes val subtitleRes: Int,
+    val titleKey: String,
+    val subtitleKey: String,
 ) {
-    ADS("ads", R.string.filter_group_ads_title, R.string.filter_group_ads_subtitle),
-    PRIVACY("privacy", R.string.filter_group_privacy_title, R.string.filter_group_privacy_subtitle),
-    SOCIAL("social", R.string.filter_group_social_title, R.string.filter_group_social_subtitle),
+    ADS("ads", Strings.filter_group_ads_title, Strings.filter_group_ads_subtitle),
+    PRIVACY("privacy", Strings.filter_group_privacy_title, Strings.filter_group_privacy_subtitle),
+    SOCIAL("social", Strings.filter_group_social_title, Strings.filter_group_social_subtitle),
     ANNOYANCES(
         "annoyances",
-        R.string.filter_group_annoyances_title,
-        R.string.filter_group_annoyances_subtitle,
+        Strings.filter_group_annoyances_title,
+        Strings.filter_group_annoyances_subtitle,
     ),
-    SECURITY("security", R.string.filter_group_security_title, R.string.filter_group_security_subtitle),
-    OTHER("other", R.string.filter_group_other_title, R.string.filter_group_other_subtitle),
-    LANGUAGE("language", R.string.filter_group_language_title, R.string.filter_group_language_subtitle);
+    SECURITY("security", Strings.filter_group_security_title, Strings.filter_group_security_subtitle),
+    OTHER("other", Strings.filter_group_other_title, Strings.filter_group_other_subtitle),
+    LANGUAGE("language", Strings.filter_group_language_title, Strings.filter_group_language_subtitle);
 
     companion object {
         fun fromId(id: String): FilterGroup? = entries.firstOrNull { it.id == id }
@@ -53,11 +52,11 @@ enum class FilterGroup(
  * security the malware/phishing lists. Custom rules and the user rules
  * (`null` gates) are never switched off by a module.
  */
-enum class ModuleGate(@StringRes val titleRes: Int) {
-    AD_BLOCKING(R.string.filter_gate_ad_blocking),
-    ANNOYANCES(R.string.filter_gate_annoyances),
-    TRACKING(R.string.filter_gate_tracking),
-    BROWSING_SECURITY(R.string.filter_gate_browsing_security),
+enum class ModuleGate(val titleKey: String) {
+    AD_BLOCKING(Strings.filter_gate_ad_blocking),
+    ANNOYANCES(Strings.filter_gate_annoyances),
+    TRACKING(Strings.filter_gate_tracking),
+    BROWSING_SECURITY(Strings.filter_gate_browsing_security),
 }
 
 val FilterGroup.moduleGate: ModuleGate?
@@ -72,11 +71,11 @@ val FilterGroup.moduleGate: ModuleGate?
 data class CatalogFilter(
     val id: String,
     val name: String,
-    @StringRes val descriptionRes: Int,
+    val descriptionKey: String,
     val group: FilterGroup,
     val url: String,
-    /** Non-zero when the row shows a localized name instead of [name]. */
-    @StringRes val nameRes: Int = 0,
+    /** Set when the row shows a localized name instead of [name]. */
+    val nameKey: String? = null,
     val format: String = FORMAT_STANDARD,
     val homepage: String? = null,
     val defaultEnabled: Boolean = false,
@@ -99,7 +98,7 @@ object FilterCatalog {
         CatalogFilter(
             id = "ag-base",
             name = "AdGuard Base filter",
-            descriptionRes = R.string.filter_desc_ag_base,
+            descriptionKey = Strings.filter_desc_ag_base,
             group = FilterGroup.ADS,
             url = ADGUARD_URL + "2_optimized.txt",
             homepage = "https://adguard.com",
@@ -108,7 +107,7 @@ object FilterCatalog {
         CatalogFilter(
             id = "ag-mobile-ads",
             name = "AdGuard Mobile Ads filter",
-            descriptionRes = R.string.filter_desc_ag_mobile_ads,
+            descriptionKey = Strings.filter_desc_ag_mobile_ads,
             group = FilterGroup.ADS,
             url = ADGUARD_URL + "11_optimized.txt",
             defaultEnabled = true,
@@ -116,7 +115,7 @@ object FilterCatalog {
         CatalogFilter(
             id = "easylist",
             name = "EasyList",
-            descriptionRes = R.string.filter_desc_easylist,
+            descriptionKey = Strings.filter_desc_easylist,
             group = FilterGroup.ADS,
             url = "https://easylist.to/easylist/easylist.txt",
             homepage = "https://easylist.to/",
@@ -126,7 +125,7 @@ object FilterCatalog {
         CatalogFilter(
             id = "ag-tracking",
             name = "AdGuard Tracking Protection filter",
-            descriptionRes = R.string.filter_desc_ag_tracking,
+            descriptionKey = Strings.filter_desc_ag_tracking,
             group = FilterGroup.PRIVACY,
             url = ADGUARD_URL + "3_optimized.txt",
             defaultEnabled = true,
@@ -134,7 +133,7 @@ object FilterCatalog {
         CatalogFilter(
             id = "easyprivacy",
             name = "EasyPrivacy",
-            descriptionRes = R.string.filter_desc_easyprivacy,
+            descriptionKey = Strings.filter_desc_easyprivacy,
             group = FilterGroup.PRIVACY,
             url = "https://easylist.to/easylist/easyprivacy.txt",
             homepage = "https://easylist.to/",
@@ -142,7 +141,7 @@ object FilterCatalog {
         CatalogFilter(
             id = "peter-lowe",
             name = "Peter Lowe's Blocklist",
-            descriptionRes = R.string.filter_desc_peter_lowe,
+            descriptionKey = Strings.filter_desc_peter_lowe,
             group = FilterGroup.PRIVACY,
             url = "https://pgl.yoyo.org/adservers/serverlist.php?hostformat=adblockplus&showintro=0&mimetype=plaintext",
             homepage = "https://pgl.yoyo.org/adservers/",
@@ -150,7 +149,7 @@ object FilterCatalog {
         CatalogFilter(
             id = "ag-url-tracking",
             name = "AdGuard URL Tracking filter",
-            descriptionRes = R.string.filter_desc_ag_url_tracking,
+            descriptionKey = Strings.filter_desc_ag_url_tracking,
             group = FilterGroup.PRIVACY,
             url = ADGUARD_URL + "17_optimized.txt",
         ),
@@ -159,14 +158,14 @@ object FilterCatalog {
         CatalogFilter(
             id = "ag-social",
             name = "AdGuard Social Media filter",
-            descriptionRes = R.string.filter_desc_ag_social,
+            descriptionKey = Strings.filter_desc_ag_social,
             group = FilterGroup.SOCIAL,
             url = ADGUARD_URL + "4_optimized.txt",
         ),
         CatalogFilter(
             id = "fanboy-social",
             name = "Fanboy's Social Blocking List",
-            descriptionRes = R.string.filter_desc_fanboy_social,
+            descriptionKey = Strings.filter_desc_fanboy_social,
             group = FilterGroup.SOCIAL,
             url = "https://secure.fanboy.co.nz/fanboy-social.txt",
         ),
@@ -175,63 +174,63 @@ object FilterCatalog {
         CatalogFilter(
             id = "ag-cookie",
             name = "AdGuard Cookie Notices filter",
-            descriptionRes = R.string.filter_desc_ag_cookie,
+            descriptionKey = Strings.filter_desc_ag_cookie,
             group = FilterGroup.ANNOYANCES,
             url = ADGUARD_URL + "18_optimized.txt",
         ),
         CatalogFilter(
             id = "ag-popups",
             name = "AdGuard Popups filter",
-            descriptionRes = R.string.filter_desc_ag_popups,
+            descriptionKey = Strings.filter_desc_ag_popups,
             group = FilterGroup.ANNOYANCES,
             url = ADGUARD_URL + "19_optimized.txt",
         ),
         CatalogFilter(
             id = "ag-app-banners",
             name = "AdGuard Mobile App Banners filter",
-            descriptionRes = R.string.filter_desc_ag_app_banners,
+            descriptionKey = Strings.filter_desc_ag_app_banners,
             group = FilterGroup.ANNOYANCES,
             url = ADGUARD_URL + "20_optimized.txt",
         ),
         CatalogFilter(
             id = "ag-other-annoy",
             name = "AdGuard Other Annoyances filter",
-            descriptionRes = R.string.filter_desc_ag_other_annoy,
+            descriptionKey = Strings.filter_desc_ag_other_annoy,
             group = FilterGroup.ANNOYANCES,
             url = ADGUARD_URL + "21_optimized.txt",
         ),
         CatalogFilter(
             id = "ag-widgets",
             name = "AdGuard Widgets filter",
-            descriptionRes = R.string.filter_desc_ag_widgets,
+            descriptionKey = Strings.filter_desc_ag_widgets,
             group = FilterGroup.ANNOYANCES,
             url = ADGUARD_URL + "22_optimized.txt",
         ),
         CatalogFilter(
             id = "ag-annoyances",
             name = "AdGuard Annoyances filter",
-            descriptionRes = R.string.filter_desc_ag_annoyances,
+            descriptionKey = Strings.filter_desc_ag_annoyances,
             group = FilterGroup.ANNOYANCES,
             url = ADGUARD_URL + "14_optimized.txt",
         ),
         CatalogFilter(
             id = "fanboy-annoy",
             name = "Fanboy's Annoyance List",
-            descriptionRes = R.string.filter_desc_fanboy_annoy,
+            descriptionKey = Strings.filter_desc_fanboy_annoy,
             group = FilterGroup.ANNOYANCES,
             url = "https://secure.fanboy.co.nz/fanboy-annoyance.txt",
         ),
         CatalogFilter(
             id = "easylist-cookie",
             name = "EasyList Cookie List",
-            descriptionRes = R.string.filter_desc_easylist_cookie,
+            descriptionKey = Strings.filter_desc_easylist_cookie,
             group = FilterGroup.ANNOYANCES,
             url = "https://secure.fanboy.co.nz/easylist-cookie.txt",
         ),
         CatalogFilter(
             id = "adblock-warning-removal",
             name = "Adblock Warning Removal List",
-            descriptionRes = R.string.filter_desc_adblock_warning_removal,
+            descriptionKey = Strings.filter_desc_adblock_warning_removal,
             group = FilterGroup.ANNOYANCES,
             url = ADGUARD_URL + "207_optimized.txt",
         ),
@@ -240,35 +239,35 @@ object FilterCatalog {
         CatalogFilter(
             id = "urlhaus",
             name = "Online Malicious URL Blocklist",
-            descriptionRes = R.string.filter_desc_urlhaus,
+            descriptionKey = Strings.filter_desc_urlhaus,
             group = FilterGroup.SECURITY,
             url = "https://malware-filter.gitlab.io/malware-filter/urlhaus-filter-online.txt",
         ),
         CatalogFilter(
             id = "phishing",
             name = "Phishing URL Blocklist",
-            descriptionRes = R.string.filter_desc_phishing,
+            descriptionKey = Strings.filter_desc_phishing,
             group = FilterGroup.SECURITY,
             url = "https://malware-filter.gitlab.io/malware-filter/phishing-filter.txt",
         ),
         CatalogFilter(
             id = "scamblock",
             name = "Scam Blocklist",
-            descriptionRes = R.string.filter_desc_scamblock,
+            descriptionKey = Strings.filter_desc_scamblock,
             group = FilterGroup.SECURITY,
             url = "https://raw.githubusercontent.com/durablenapkin/scamblocklist/master/adguard.txt",
         ),
         CatalogFilter(
             id = "badware",
             name = "uBlock Origin – Badware risks",
-            descriptionRes = R.string.filter_desc_badware,
+            descriptionKey = Strings.filter_desc_badware,
             group = FilterGroup.SECURITY,
             url = "https://raw.githubusercontent.com/uBlockOrigin/uAssets/master/filters/badware.txt",
         ),
         CatalogFilter(
             id = "dandelion-malware",
             name = "Dandelion Sprout's Anti-Malware List",
-            descriptionRes = R.string.filter_desc_dandelion_malware,
+            descriptionKey = Strings.filter_desc_dandelion_malware,
             group = FilterGroup.SECURITY,
             url = ADGUARD_URL + "259_optimized.txt",
         ),
@@ -277,7 +276,7 @@ object FilterCatalog {
         CatalogFilter(
             id = "ag-dns",
             name = "AdGuard DNS filter",
-            descriptionRes = R.string.filter_desc_ag_dns,
+            descriptionKey = Strings.filter_desc_ag_dns,
             group = FilterGroup.OTHER,
             url = "https://adguardteam.github.io/AdGuardSDNSFilter/Filters/filter.txt",
             listId = "builtin_dns",
@@ -286,7 +285,7 @@ object FilterCatalog {
         CatalogFilter(
             id = "oisd",
             name = "OISD Big",
-            descriptionRes = R.string.filter_desc_oisd,
+            descriptionKey = Strings.filter_desc_oisd,
             group = FilterGroup.OTHER,
             url = "https://big.oisd.nl/dnsmasq2",
             format = CatalogFilter.FORMAT_HOSTS,
@@ -296,7 +295,7 @@ object FilterCatalog {
         CatalogFilter(
             id = "stevenblack",
             name = "StevenBlack Unified Hosts",
-            descriptionRes = R.string.filter_desc_stevenblack,
+            descriptionKey = Strings.filter_desc_stevenblack,
             group = FilterGroup.OTHER,
             url = "https://raw.githubusercontent.com/StevenBlack/hosts/master/hosts",
             format = CatalogFilter.FORMAT_HOSTS,
@@ -305,14 +304,14 @@ object FilterCatalog {
         CatalogFilter(
             id = "hagezi",
             name = "HaGeZi Multi PRO",
-            descriptionRes = R.string.filter_desc_hagezi,
+            descriptionKey = Strings.filter_desc_hagezi,
             group = FilterGroup.OTHER,
             url = "https://raw.githubusercontent.com/hagezi/dns-blocklists/main/adblock/pro.txt",
         ),
         CatalogFilter(
             id = "ag-experimental",
             name = "AdGuard Experimental filter",
-            descriptionRes = R.string.filter_desc_ag_experimental,
+            descriptionKey = Strings.filter_desc_ag_experimental,
             group = FilterGroup.OTHER,
             url = ADGUARD_URL + "5_optimized.txt",
         ),
@@ -321,7 +320,7 @@ object FilterCatalog {
         CatalogFilter(
             id = "ag-russian",
             name = "AdGuard Russian filter",
-            descriptionRes = R.string.filter_desc_ag_russian,
+            descriptionKey = Strings.filter_desc_ag_russian,
             group = FilterGroup.LANGUAGE,
             url = ADGUARD_URL + "1_optimized.txt",
             locales = listOf("ru"),
@@ -329,7 +328,7 @@ object FilterCatalog {
         CatalogFilter(
             id = "ag-german",
             name = "AdGuard German filter",
-            descriptionRes = R.string.filter_desc_ag_german,
+            descriptionKey = Strings.filter_desc_ag_german,
             group = FilterGroup.LANGUAGE,
             url = ADGUARD_URL + "6_optimized.txt",
             locales = listOf("de"),
@@ -337,7 +336,7 @@ object FilterCatalog {
         CatalogFilter(
             id = "ag-japanese",
             name = "AdGuard Japanese filter",
-            descriptionRes = R.string.filter_desc_ag_japanese,
+            descriptionKey = Strings.filter_desc_ag_japanese,
             group = FilterGroup.LANGUAGE,
             url = ADGUARD_URL + "7_optimized.txt",
             locales = listOf("ja"),
@@ -345,7 +344,7 @@ object FilterCatalog {
         CatalogFilter(
             id = "ag-dutch",
             name = "AdGuard Dutch filter",
-            descriptionRes = R.string.filter_desc_ag_dutch,
+            descriptionKey = Strings.filter_desc_ag_dutch,
             group = FilterGroup.LANGUAGE,
             url = ADGUARD_URL + "8_optimized.txt",
             locales = listOf("nl"),
@@ -353,7 +352,7 @@ object FilterCatalog {
         CatalogFilter(
             id = "ag-spanish",
             name = "AdGuard Spanish/Portuguese filter",
-            descriptionRes = R.string.filter_desc_ag_spanish,
+            descriptionKey = Strings.filter_desc_ag_spanish,
             group = FilterGroup.LANGUAGE,
             url = ADGUARD_URL + "9_optimized.txt",
             locales = listOf("es", "pt"),
@@ -361,7 +360,7 @@ object FilterCatalog {
         CatalogFilter(
             id = "ag-turkish",
             name = "AdGuard Turkish filter",
-            descriptionRes = R.string.filter_desc_ag_turkish,
+            descriptionKey = Strings.filter_desc_ag_turkish,
             group = FilterGroup.LANGUAGE,
             url = ADGUARD_URL + "13_optimized.txt",
             locales = listOf("tr"),
@@ -369,7 +368,7 @@ object FilterCatalog {
         CatalogFilter(
             id = "ag-french",
             name = "AdGuard French filter",
-            descriptionRes = R.string.filter_desc_ag_french,
+            descriptionKey = Strings.filter_desc_ag_french,
             group = FilterGroup.LANGUAGE,
             url = ADGUARD_URL + "16_optimized.txt",
             locales = listOf("fr"),
@@ -377,7 +376,7 @@ object FilterCatalog {
         CatalogFilter(
             id = "ag-ukrainian",
             name = "AdGuard Ukrainian filter",
-            descriptionRes = R.string.filter_desc_ag_ukrainian,
+            descriptionKey = Strings.filter_desc_ag_ukrainian,
             group = FilterGroup.LANGUAGE,
             url = ADGUARD_URL + "23_optimized.txt",
             locales = listOf("uk"),
@@ -385,7 +384,7 @@ object FilterCatalog {
         CatalogFilter(
             id = "ag-chinese",
             name = "AdGuard Chinese filter",
-            descriptionRes = R.string.filter_desc_ag_chinese,
+            descriptionKey = Strings.filter_desc_ag_chinese,
             group = FilterGroup.LANGUAGE,
             url = ADGUARD_URL + "224_optimized.txt",
             locales = listOf("zh"),
@@ -393,7 +392,7 @@ object FilterCatalog {
         CatalogFilter(
             id = "polish",
             name = "Polish filters for AdBlock/uBlock/AdGuard",
-            descriptionRes = R.string.filter_desc_polish,
+            descriptionKey = Strings.filter_desc_polish,
             group = FilterGroup.LANGUAGE,
             url = "https://raw.githubusercontent.com/MajkiIT/polish-ads-filter/master/polish-adblock-filters/adblock.txt",
             locales = listOf("pl"),
@@ -401,7 +400,7 @@ object FilterCatalog {
         CatalogFilter(
             id = "hostsvn",
             name = "hostsVN",
-            descriptionRes = R.string.filter_desc_hostsvn,
+            descriptionKey = Strings.filter_desc_hostsvn,
             group = FilterGroup.LANGUAGE,
             url = "https://raw.githubusercontent.com/bigdargon/hostsVN/master/hosts",
             format = CatalogFilter.FORMAT_HOSTS,
@@ -409,7 +408,7 @@ object FilterCatalog {
         CatalogFilter(
             id = "abpvn",
             name = "ABPVN List",
-            descriptionRes = R.string.filter_desc_abpvn,
+            descriptionKey = Strings.filter_desc_abpvn,
             group = FilterGroup.LANGUAGE,
             url = "https://raw.githubusercontent.com/abpvn/abpvn/master/filter/abpvn_adguard.txt",
             locales = listOf("vi"),
@@ -420,7 +419,7 @@ object FilterCatalog {
         CatalogFilter(
             id = "ag-italian",
             name = "AdGuard Italian filter",
-            descriptionRes = R.string.filter_desc_ag_italian,
+            descriptionKey = Strings.filter_desc_ag_italian,
             group = FilterGroup.LANGUAGE,
             url = ADGUARD_URL + "26_optimized.txt",
             locales = listOf("it"),
@@ -428,42 +427,42 @@ object FilterCatalog {
         CatalogFilter(
             id = "easylist-germany",
             name = "EasyList Germany",
-            descriptionRes = R.string.filter_desc_easylist_germany,
+            descriptionKey = Strings.filter_desc_easylist_germany,
             group = FilterGroup.LANGUAGE,
             url = ADGUARD_URL + "107_optimized.txt",
         ),
         CatalogFilter(
             id = "liste-fr",
             name = "Liste FR",
-            descriptionRes = R.string.filter_desc_liste_fr,
+            descriptionKey = Strings.filter_desc_liste_fr,
             group = FilterGroup.LANGUAGE,
             url = ADGUARD_URL + "113_optimized.txt",
         ),
         CatalogFilter(
             id = "easylist-spanish",
             name = "EasyList Spanish",
-            descriptionRes = R.string.filter_desc_easylist_spanish,
+            descriptionKey = Strings.filter_desc_easylist_spanish,
             group = FilterGroup.LANGUAGE,
             url = ADGUARD_URL + "231_optimized.txt",
         ),
         CatalogFilter(
             id = "easylist-portuguese",
             name = "EasyList Portuguese",
-            descriptionRes = R.string.filter_desc_easylist_portuguese,
+            descriptionKey = Strings.filter_desc_easylist_portuguese,
             group = FilterGroup.LANGUAGE,
             url = ADGUARD_URL + "124_optimized.txt",
         ),
         CatalogFilter(
             id = "easylist-china",
             name = "EasyList China",
-            descriptionRes = R.string.filter_desc_easylist_china,
+            descriptionKey = Strings.filter_desc_easylist_china,
             group = FilterGroup.LANGUAGE,
             url = ADGUARD_URL + "104_optimized.txt",
         ),
         CatalogFilter(
             id = "easylist-thailand",
             name = "EasyList Thailand",
-            descriptionRes = R.string.filter_desc_easylist_thailand,
+            descriptionKey = Strings.filter_desc_easylist_thailand,
             group = FilterGroup.LANGUAGE,
             url = ADGUARD_URL + "202_optimized.txt",
             locales = listOf("th"),
@@ -471,7 +470,7 @@ object FilterCatalog {
         CatalogFilter(
             id = "adblock-id",
             name = "AdBlockID",
-            descriptionRes = R.string.filter_desc_adblock_id,
+            descriptionKey = Strings.filter_desc_adblock_id,
             group = FilterGroup.LANGUAGE,
             url = ADGUARD_URL + "120_optimized.txt",
             locales = listOf("id"),
@@ -479,7 +478,7 @@ object FilterCatalog {
         CatalogFilter(
             id = "youslist",
             name = "YousList",
-            descriptionRes = R.string.filter_desc_youslist,
+            descriptionKey = Strings.filter_desc_youslist,
             group = FilterGroup.LANGUAGE,
             url = ADGUARD_URL + "244_optimized.txt",
             locales = listOf("ko"),
@@ -487,7 +486,7 @@ object FilterCatalog {
         CatalogFilter(
             id = "indianlist",
             name = "IndianList",
-            descriptionRes = R.string.filter_desc_indianlist,
+            descriptionKey = Strings.filter_desc_indianlist,
             group = FilterGroup.LANGUAGE,
             url = ADGUARD_URL + "253_optimized.txt",
             locales = listOf("hi"),
@@ -509,10 +508,10 @@ object FilterCatalog {
 data class CatalogUserScript(
     val id: String,
     val name: String,
-    @StringRes val descriptionRes: Int,
+    val descriptionKey: String,
     val url: String,
     /** Non-zero when the row shows a localized name instead of [name]. */
-    @StringRes val nameRes: Int = 0,
+    val nameKey: String? = null,
     /**
      * Body shipped with the core instead of downloaded (`coreInstallBuiltinScripts`
      * writes it into the store); such an entry is on by default and has no URL.
@@ -525,22 +524,22 @@ object UserScriptCatalog {
         CatalogUserScript(
             id = "adfree-extra",
             name = "AdFree Extra",
-            descriptionRes = R.string.script_catalog_adfree_extra,
+            descriptionKey = Strings.script_catalog_adfree_extra,
             url = "",
             builtin = true,
         ),
         CatalogUserScript(
             id = "adguard-extra",
             name = "AdGuard Extra",
-            descriptionRes = R.string.script_catalog_adguard_extra,
+            descriptionKey = Strings.script_catalog_adguard_extra,
             url = "https://userscripts.adtidy.org/release/adguard-extra/1.0/adguard-extra.user.js",
         ),
         CatalogUserScript(
             id = "disable-amp",
             name = "AMP page blocker",
-            descriptionRes = R.string.script_catalog_disable_amp,
+            descriptionKey = Strings.script_catalog_disable_amp,
             url = "https://userscripts.adtidy.org/release/disable-amp/1.0/disable-amp.user.js",
-            nameRes = R.string.script_name_disable_amp,
+            nameKey = Strings.script_name_disable_amp,
         ),
     )
 }

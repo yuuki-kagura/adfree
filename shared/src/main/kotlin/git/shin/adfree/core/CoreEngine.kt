@@ -1,21 +1,5 @@
 package git.shin.adfree.core
 
-import android.content.ContentValues
-import android.content.Context
-import android.content.Intent
-import android.content.pm.PackageManager
-import android.net.Uri
-import android.os.Build
-import android.os.Environment
-import android.provider.MediaStore
-import android.provider.Settings
-import android.util.Log
-import git.shin.adfree.AdGuardApplication
-import git.shin.adfree.model.NetworkRequestLog
-import java.io.File
-import java.security.KeyStore
-import java.security.cert.CertificateFactory
-import java.security.cert.X509Certificate
 
 /**
  * Kotlin-side wrapper around the uniffi bindings (`adfree.kt`).
@@ -24,12 +8,14 @@ import java.security.cert.X509Certificate
  * already-`protect()`ed UDP sockets, and the few things that need an Android
  * context (logcat, the certificate's trip to Downloads).
  */
-class CoreEngine {
-
-    private val tag = "AdFreeCore"
-
-    /** UDP sockets used to forward DNS, `VpnService.protect()`ed so they do not loop. */
-    private val upstreamSockets = mutableListOf<java.net.DatagramSocket>()
+class CoreEngine(
+    /** Where native warnings go; Android passes logcat, the desktop host stderr. */
+    private val log: git.shin.adfree.platform.LogSink = git.shin.adfree.platform.LogSink { },
+    /** Copies the CA where the platform installer can read it; null when the platform has none. */
+    private val caExporter: git.shin.adfree.platform.CaExporter? = null,
+    /** Looks the CA up in the platform trust store; null when the platform has none. */
+    private val caTrustChecker: git.shin.adfree.platform.CaTrustChecker? = null,
+) {
 
     val version: String
         get() = runCatching { git.shin.adfree.core.coreVersion() }.getOrDefault("unknown")
@@ -44,76 +30,11 @@ class CoreEngine {
 
     fun stop() {
         git.shin.adfree.core.coreStop()
-        closeUpstreamSockets()
     }
 
     fun isRunning(): Boolean = runCatching { git.shin.adfree.core.coreIsRunning() }.getOrDefault(false)
 
-    // -------------------------------------------------------------- DNS upstream
-
-    /**
-     * Create the UDP sockets the core forwards DNS with.
-     *
-     * The critical part: every socket must be `VpnService.protect()`ed, otherwise
-     * packets towards the resolver re-enter our own TUN and DNS dies entirely.
-     */
-    @Synchronized
-    fun prepareUpstreamSockets(vpnService: android.net.VpnService) {
-        closeUpstreamSockets()
-        repeat(SOCKET_COUNT) {
-            runCatching { java.net.DatagramSocket().apply { reuseAddress = true } }
-                .onSuccess { upstreamSockets += it }
-        }
-        val fds = upstreamSockets.mapNotNull { socket -> protectAndKeep(vpnService, socket) }
-        Log.i(tag, "upstream DNS sockets protected: ${fds.size}/$SOCKET_COUNT")
-        git.shin.adfree.core.coreProtectSockets(fds)
-    }
-
-    /**
-     * `protect()`s a socket and hands its descriptor to the Rust core.
-     *
-     * The descriptor is handed over as-is and the `ParcelFileDescriptor` that
-     * wraps it is kept alive for as long as the engine runs. That is deliberate:
-     * on Android 12 and newer a dup()ed descriptor belongs to the descriptor
-     * object that created it, so `dup()` + `close()` looks fine but the kernel
-     * then answers `sendto()` with EBADF and nothing resolves. Keeping the
-     * owner alive (and never closing it before `stop()`) is what actually works.
-     */
-    private fun protectAndKeep(
-        vpnService: android.net.VpnService,
-        socket: java.net.DatagramSocket,
-    ): Int? = runCatching {
-        vpnService.protect(socket)
-        val pfd = android.os.ParcelFileDescriptor.fromDatagramSocket(socket)
-        holderPipes += pfd
-        pfd.fd
-    }.getOrNull()
-
-    private val holderPipes = mutableListOf<android.os.ParcelFileDescriptor>()
-
-    @Synchronized
-    private fun closeUpstreamSockets() {
-        closeHeldSockets()
-        upstreamSockets.clear()
-    }
-
-    /**
-     * Releases every descriptor handed to the core. Called only from `stop()`,
-     * once the engine has stopped using them.
-     *
-     * Every entry point that touches the two lists is `@Synchronized`: a
-     * `stop()` racing the tunnel build otherwise iterates a list the other
-     * side is still appending to, which is exactly the crash that used to
-     * leave the tunnel half-built.
-     */
-    @Synchronized
-    private fun closeHeldSockets() {
-        holderPipes.forEach { runCatching { it.close() } }
-        holderPipes.clear()
-        upstreamSockets.forEach { runCatching { it.close() } }
-    }
-
-    // ----------------------------------------------------------------- config
+    // ----------------------------------------------------------------- config    // ----------------------------------------------------------------- config
 
     fun setScreenOff(off: Boolean) = runCatching { git.shin.adfree.core.coreSetScreenOff(off) }
 
@@ -243,13 +164,13 @@ class CoreEngine {
     fun setNetworkType(kind: Int) {
         runCatching {
             git.shin.adfree.core.coreSetNetworkType(kind.coerceIn(0, 3).toByte().toUByte())
-        }.onFailure { Log.w(tag, "setNetworkType failed", it) }
+        }.onFailure { log.line("AdFreeCore: setNetworkType failed failed: $it") }
     }
 
     /** Whether the active cellular network is roaming, as the callback sees it. */
     fun setRoaming(roaming: Boolean) {
         runCatching { git.shin.adfree.core.coreSetRoaming(roaming) }
-            .onFailure { Log.w(tag, "setRoaming failed", it) }
+            .onFailure { log.line("AdFreeCore: setRoaming failed failed: $it") }
     }
 
     // --------------------------------------------------------------- filters
@@ -261,7 +182,7 @@ class CoreEngine {
      */
     fun setListsAsync(lists: List<FilterListBinding>, userRules: List<String>) {
         runCatching { git.shin.adfree.core.coreSetListsAsync(lists, userRules) }
-            .onFailure { Log.w(tag, "setLists failed", it) }
+            .onFailure { log.line("AdFreeCore: setLists failed failed: $it") }
     }
 
     /**
@@ -288,49 +209,12 @@ class CoreEngine {
 
     /**
      * Pushes the uid -> packages table the core matches `$app=` network rules
-     * against.
-     *
-     * The core cannot read other apps' uid on Android 10+, so the platform has
-     * to tell it: one row per uid, every package sharing it included. Cheap
-     * enough to redo whenever an app is installed, removed or replaced.
+     * against. The platform builds the rows: only it can see every installed
+     * app's uid.
      */
-    fun pushUidApps(context: Context) {
-        val pm = context.packageManager
-        val installed = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            pm.getInstalledApplications(PackageManager.ApplicationInfoFlags.of(0L))
-        } else {
-            @Suppress("DEPRECATION")
-            pm.getInstalledApplications(0)
-        }
-        val byUid = LinkedHashMap<Int, MutableList<String>>()
-        for (info in installed) {
-            byUid.getOrPut(info.uid) { mutableListOf() } += info.packageName
-        }
-        val rows = byUid.map { (uid, packages) ->
-            git.shin.adfree.core.UidApps(uid = uid.toUInt(), packages = packages)
-        }
+    fun setUidApps(rows: List<git.shin.adfree.core.UidApps>) {
         runCatching { git.shin.adfree.core.coreSetUidApps(rows) }
-            .onFailure { Log.w(tag, "setUidApps failed", it) }
-    }
-
-    /**
-     * Installs the callback the core uses to name the app that owns one TCP
-     * connection, which is what `$app=` rules are matched against.
-     *
-     * `pushUidApps` above answers "which packages have this uid"; this answers
-     * "whose uid is this connection". The kernel table the desktop core reads
-     * (`/proc/net/tcp`) has been closed to apps since Android 10, but a
-     * VpnService may ask the framework about the connections its own tunnel
-     * carries — which is exactly the traffic being filtered.
-     */
-    fun setConnectionUidLookup(context: Context) {
-        // Below Android 10 the kernel table the core reads is still open to
-        // apps, and it costs no binder round-trip per flow; from Android 10 on
-        // `/proc` is closed, so the framework is the only answer.
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) return
-        runCatching {
-            git.shin.adfree.core.coreSetUidLookup(FrameworkUidLookup(context.applicationContext))
-        }.onFailure { Log.w(tag, "setUidLookup failed", it) }
+            .onFailure { log.line("AdFreeCore: setUidApps failed: $it") }
     }
 
     /**
@@ -484,7 +368,7 @@ class CoreEngine {
      */
     fun setSocketProtector(protector: git.shin.adfree.core.SocketProtector) {
         runCatching { git.shin.adfree.core.coreSetSocketProtector(protector) }
-            .onFailure { Log.w(tag, "setSocketProtector failed", it) }
+            .onFailure { log.line("AdFreeCore: setSocketProtector failed failed: $it") }
     }
 
     /** Number of live relays, for the settings screen. */
@@ -505,97 +389,25 @@ class CoreEngine {
     }
 
     /**
-     * Opens the Settings screen that leads to the CA installer.
-     *
-     * The platform refuses to install a CA certificate inline (`KeyChain`
-     * install intents answer "Install CA certificates in Settings"), so the
-     * user has to walk the Settings flow: Encryption & credentials → Install a
-     * certificate → CA certificate → pick the exported file → confirm the
-     * monitoring warning. [exportCaCertificate] puts that file where the
-     * picker can reach it.
-     */
-    fun installCertificateIntent(): Intent =
-        Intent(Settings.ACTION_SECURITY_SETTINGS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-
-    /**
-     * Copies the CA certificate to the shared Downloads folder.
-     *
-     * The Settings file picker cannot open app-private storage, so the
-     * certificate has to travel through the media store for the install flow
-     * to finish. Only the certificate is copied; the private half stays in
-     * [caKeyFile]. Returns the exported file name, or null when it failed.
+     * Hands the certificate PEM to the platform exporter, which puts it where
+     * the platform's install picker can reach it. Returns the exported file
+     * name, or null when the platform cannot export.
      */
     fun exportCaCertificate(): String? {
-        val pem = runCatching { ensureCa() }.getOrNull() ?: return null
-        val name = "AdFree-CA.crt"
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) {
-            return runCatching {
-                @Suppress("DEPRECATION")
-                val downloads = Environment
-                    .getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
-                if (!downloads.exists() && !downloads.mkdirs()) return null
-                File(downloads, name).writeText(pem)
-                name
-            }.getOrNull()
-        }
-        return runCatching {
-            val resolver = AdGuardApplication.instance.contentResolver
-            val collection = MediaStore.Downloads.EXTERNAL_CONTENT_URI
-            // Replace any earlier copy: two identical rows would leave the
-            // picker showing the same certificate twice with no way to tell
-            // them apart.
-            resolver.delete(
-                collection,
-                "${MediaStore.Downloads.DISPLAY_NAME} = ?",
-                arrayOf(name),
-            )
-            val uri = resolver.insert(
-                collection,
-                ContentValues().apply {
-                    put(MediaStore.Downloads.DISPLAY_NAME, name)
-                    put(MediaStore.Downloads.MIME_TYPE, "application/x-x509-ca-cert")
-                    put(MediaStore.Downloads.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS)
-                    put(MediaStore.Downloads.IS_PENDING, 1)
-                },
-            ) ?: return null
-            resolver.openOutputStream(uri)?.use { it.write(pem.toByteArray()) }
-            resolver.update(
-                uri,
-                ContentValues().apply { put(MediaStore.Downloads.IS_PENDING, 0) },
-                null,
-                null,
-            )
-            name
-        }.getOrNull()
+        val pem = runCatching { ensureCa() }.getOrNull().orEmpty()
+        if (pem.isBlank()) return null
+        return runCatching { caExporter?.export(pem) }.getOrNull()
     }
 
     /**
-     * True when our CA sits in the device trust store.
-     *
-     * Trust is checked by comparing DER bytes, not aliases: the same
-     * certificate can live in the user store (installed through the dialog
-     * above) or in the system store (preloaded images, emulator tooling), and
-     * either way the leaves we mint are accepted.
+     * True when our CA sits in the platform's trust store. The store itself is
+     * a platform concept, so the check is delegated; platforms without one
+     * honestly answer false.
      */
     fun isCaTrusted(): Boolean {
         val pem = runCatching { git.shin.adfree.core.coreCaPem() }.getOrNull().orEmpty()
         if (pem.isBlank()) return false
-        val expected = runCatching {
-            CertificateFactory.getInstance("X.509")
-                .generateCertificate(pem.byteInputStream())
-        }.getOrNull() as? X509Certificate ?: return false
-        val store = runCatching {
-            KeyStore.getInstance("AndroidCAStore").apply { load(null, null) }
-        }.getOrNull() ?: return false
-        return runCatching {
-            val aliases = store.aliases()
-            while (aliases.hasMoreElements()) {
-                val cert = store.getCertificate(aliases.nextElement()) as? X509Certificate
-                    ?: continue
-                if (cert.encoded.contentEquals(expected.encoded)) return true
-            }
-            false
-        }.getOrDefault(false)
+        return runCatching { caTrustChecker?.isTrusted(pem) == true }.getOrDefault(false)
     }
 
     /** Current MITM status from the core. */
@@ -624,7 +436,7 @@ class CoreEngine {
     /** Replaces the user script list plus the master switch. */
     fun setScripts(scripts: List<ScriptBinding>, enabled: Boolean) {
         runCatching { git.shin.adfree.core.coreSetScripts(scripts, enabled) }
-            .onFailure { Log.w(tag, "setScripts failed", it) }
+            .onFailure { log.line("AdFreeCore: setScripts failed failed: $it") }
     }
 
     /** The combined JS served at the injection URL. */
@@ -765,13 +577,11 @@ class CoreEngine {
      */
     fun flushNativeLogLines() {
         for (line in nativeLogLines) {
-            Log.i(TAG, line)
+            log.line(line)
         }
     }
 
     companion object {
-        private const val TAG = "AdFreeCore"
-        private const val SOCKET_COUNT = 4
         private var pendingStart = true
 
         /** Must match `NETWORK_*` in `rust/src/engine.rs`. */
@@ -801,43 +611,3 @@ data class DownloadResult(
     /** Modification time of the written body, for the auto-update interval. */
     val modifiedMs: Long = 0,
 )
-
-/**
- * The core's `$app=` attribution, answered by the framework.
- *
- * `ConnectivityManager.getConnectionOwnerUid` (API 29+) is the only
- * unprivileged way to learn which app owns a connection: a VpnService may ask
- * it about the flows its own tunnel carries, and the system names their owner
- * from the kernel's socket table on our behalf. `/proc/net/tcp` — what the
- * desktop core reads — has been closed to apps since Android 10.
- *
- * Every failure has to look like "no answer": an older release, a flow the
- * kernel already forgot, a permission the system no longer grants. The core
- * reads a missing uid as "apply no `$app=` rule at all", never as "apply every
- * one of them", so this stays safe while remaining useful.
- */
-private class FrameworkUidLookup(private val context: Context) :
-    git.shin.adfree.core.ConnectionUidLookup {
-
-    override fun ownerUid(
-        protocol: UByte,
-        localIp: String,
-        localPort: UShort,
-        remoteIp: String,
-        remotePort: UShort,
-    ): UInt? {
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) return null
-        return runCatching {
-            val connections = context.getSystemService(android.net.ConnectivityManager::class.java)
-                ?: return null
-            // The core hands us the IP protocol number (6 TCP, 17 UDP), which
-            // is what `getConnectionOwnerUid` documents as its first argument.
-            val uid = connections.getConnectionOwnerUid(
-                protocol.toInt(),
-                java.net.InetSocketAddress(localIp, localPort.toInt()),
-                java.net.InetSocketAddress(remoteIp, remotePort.toInt()),
-            )
-            if (uid == android.os.Process.INVALID_UID) null else uid.toUInt()
-        }.getOrNull()
-    }
-}

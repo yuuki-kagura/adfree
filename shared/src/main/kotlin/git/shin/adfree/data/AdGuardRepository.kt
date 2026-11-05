@@ -1,10 +1,7 @@
 package git.shin.adfree.data
 
-import android.content.Context
-import android.content.pm.ApplicationInfo
-import android.content.pm.PackageManager
+import git.shin.adfree.l10n.L10n
 import git.shin.adfree.l10n.Strings
-import git.shin.adfree.R
 import git.shin.adfree.core.AssetState
 import git.shin.adfree.core.CoreEngine
 import git.shin.adfree.core.DnsProbeResult
@@ -17,7 +14,6 @@ import git.shin.adfree.core.ScriptBinding
 import git.shin.adfree.core.ScriptRecord
 import git.shin.adfree.core.ScriptState
 import git.shin.adfree.core.StatsSnapshot
-import git.shin.adfree.model.AppCategory
 import git.shin.adfree.model.AppFirewallRule
 import git.shin.adfree.model.FirewallAccess
 import git.shin.adfree.model.ProxyAccess
@@ -50,13 +46,18 @@ import git.shin.adfree.model.StealthPreset
 import git.shin.adfree.model.ProxySettings
 import git.shin.adfree.model.ProtocolType
 import git.shin.adfree.model.RequestCategory
+import git.shin.adfree.platform.AppInventory
+import git.shin.adfree.platform.FileHost
+import git.shin.adfree.platform.KeyValueStore
+import git.shin.adfree.platform.PlatformHost
+import git.shin.adfree.platform.Reminders
 import git.shin.adfree.ui.CoreText
-import git.shin.adfree.ui.Localization
 import git.shin.adfree.ui.UiText
-import git.shin.adfree.vpn.HttpsReminder
-import git.shin.adfree.work.FilterUpdateScheduler
-import git.shin.adfree.work.FirewallNotifier
-import git.shin.adfree.work.SecurityNotifier
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.jsonArray
+import kotlinx.serialization.json.longOrNull
 import java.io.IOException
 import java.net.URLEncoder
 import java.util.Calendar
@@ -77,9 +78,6 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
 import okhttp3.Request
-import org.json.JSONArray
-import org.json.JSONObject
-import java.util.Locale
 
 /** Greasy Fork's public JSON search endpoint; blank query returns the top list. */
 private const val GREASY_FORK_API = "https://api.greasyfork.org/en/scripts.json"
@@ -117,12 +115,17 @@ private const val SECURITY_NOTICE_MAX_DOMAINS = 64
  * `StateFlow` for Compose, hold settings, and coordinate filter updates.
  */
 class AdGuardRepository(
-    private val context: Context,
+    private val platform: PlatformHost,
+    private val files: FileHost,
+    private val inventory: AppInventory,
+    private val reminders: Reminders,
+    /** Backs the automation gate's device-local token. */
+    private val store: KeyValueStore,
     private val engine: CoreEngine,
     /**
      * Rebuilds the engine from the freshly persisted state. Injected so the
-     * repository does not have to know about Private DNS (the DI container
-     * owns that Android setting).
+     * repository does not have to know about Private DNS (the host owns that
+     * platform setting).
      */
     private val onConfigApplied: () -> Unit = {},
 ) {
@@ -134,10 +137,7 @@ class AdGuardRepository(
      * own locale detection). The app's resources follow the in-app language
      * setting, so an explicit choice there wins over the system locale.
      */
-    private fun deviceLanguage(): String {
-        val locales = context.resources.configuration.locales
-        return if (locales.isEmpty) "" else locales[0].language.lowercase(Locale.ROOT)
-    }
+    private fun deviceLanguage(): String = platform.deviceLanguage()
 
     private val _settings = MutableStateFlow(ProtectionSettings())
     val settings: StateFlow<ProtectionSettings> = _settings.asStateFlow()
@@ -148,7 +148,7 @@ class AdGuardRepository(
      * inside a file the user can hand to anyone would hand over control of
      * protection with it.
      */
-    val automation: AutomationGate by lazy { AutomationGate(context) }
+    val automation: AutomationGate by lazy { AutomationGate(store) }
 
     private val _stats = MutableStateFlow(ProtectionStats())
     val stats: StateFlow<ProtectionStats> = _stats.asStateFlow()
@@ -309,7 +309,7 @@ class AdGuardRepository(
         // WorkManager keeps the periodic refresh across reboots and updates.
         // Syncing at startup also schedules it for users upgrading from a
         // build that only checked while the app was open.
-        FilterUpdateScheduler.sync(context, settings.filterAutoUpdateHours)
+        reminders.scheduleFilterUpdates(settings.filterAutoUpdateHours)
         loadFilterState(snapshot.filters)
         loadScriptsState(snapshot.scripts)
     }
@@ -323,8 +323,7 @@ class AdGuardRepository(
         scope.launch {
             val settings = _settings.value
             val caTrusted = runCatching { engine.isCaTrusted() }.getOrDefault(false)
-            HttpsReminder.sync(
-                context,
+            reminders.syncHttpsReminder(
                 settings.appLanguage,
                 settings.isProtectionActive,
                 caTrusted,
@@ -421,8 +420,7 @@ class AdGuardRepository(
                     val last = firewallNoticeAt[packageName] ?: 0L
                     if (now - last < FIREWALL_NOTICE_WINDOW_MS) continue
                     firewallNoticeAt[packageName] = now
-                    FirewallNotifier.notify(
-                        context,
+                    reminders.notifyFirewall(
                         settings.appLanguage,
                         packageName,
                         rule?.appName ?: packageName,
@@ -470,7 +468,7 @@ class AdGuardRepository(
                     val last = securityNoticeAt[row.domain] ?: 0L
                     if (now - last < FIREWALL_NOTICE_WINDOW_MS) continue
                     securityNoticeAt[row.domain] = now
-                    SecurityNotifier.notify(context, settings.appLanguage, row.domain, row.filterListName)
+                    reminders.notifySecurity(settings.appLanguage, row.domain, row.filterListName)
                 }
             }
         }
@@ -761,7 +759,7 @@ class AdGuardRepository(
     fun setFilterAutoUpdate(hours: Int) {
         val clamped = hours.coerceIn(0, 168)
         updateSettings { it.copy(filterAutoUpdateHours = clamped) }
-        FilterUpdateScheduler.sync(context, clamped)
+        reminders.scheduleFilterUpdates(clamped)
         showTransientStatus(
             if (clamped == 0) UiText.Resource(Strings.filter_auto_update_off)
             else UiText.Formatted(Strings.filter_auto_update_every_hours, clamped),
@@ -815,7 +813,7 @@ class AdGuardRepository(
             name = name.trim().ifBlank { host },
             address = host,
             type = type,
-            description = context.getString(R.string.dns_custom_description),
+            description = L10n.get(Strings.dns_custom_description),
             isCustom = true,
             port = port,
         )
@@ -945,8 +943,8 @@ class AdGuardRepository(
                     id = entry.listId ?: "cat_${entry.id}",
                     name = entry.name,
                     description = "",
-                    nameRes = entry.nameRes,
-                    descriptionRes = entry.descriptionRes,
+                    nameKey = entry.nameKey,
+                    descriptionKey = entry.descriptionKey,
                     ruleCount = 0,
                     isEnabled = enabled,
                     category = entry.group.id,
@@ -956,7 +954,7 @@ class AdGuardRepository(
                     version = "",
                     isOnlineSubscription = true,
                     subscriptionUrl = entry.url,
-                    lastUpdatedText = context.getString(R.string.filter_not_loaded),
+                    lastUpdatedText = L10n.get(Strings.filter_not_loaded),
                     groupId = entry.group.id,
                     format = entry.format,
                     catalogId = entry.id,
@@ -971,14 +969,14 @@ class AdGuardRepository(
                 lists += FilterList(
                     id = stored.id,
                     name = stored.name,
-                    description = context.getString(R.string.filter_custom_description),
+                    description = L10n.get(Strings.filter_custom_description),
                     ruleCount = 0,
                     isEnabled = stored.enabled,
                     category = "custom",
                     version = "",
                     isOnlineSubscription = stored.url.isNotBlank(),
                     subscriptionUrl = stored.url.ifBlank { null },
-                    lastUpdatedText = context.getString(R.string.filter_not_loaded),
+                    lastUpdatedText = L10n.get(Strings.filter_not_loaded),
                     groupId = "custom",
                     format = stored.format.ifBlank { "standard" },
                     homepage = stored.homepage.ifBlank { null },
@@ -990,14 +988,14 @@ class AdGuardRepository(
                 lists += FilterList(
                     id = stored.id,
                     name = stored.name,
-                    description = context.getString(R.string.filter_dns_description),
+                    description = L10n.get(Strings.filter_dns_description),
                     ruleCount = 0,
                     isEnabled = stored.enabled,
                     category = "custom",
                     version = "",
                     isOnlineSubscription = stored.url.isNotBlank(),
                     subscriptionUrl = stored.url.ifBlank { null },
-                    lastUpdatedText = context.getString(R.string.filter_not_loaded),
+                    lastUpdatedText = L10n.get(Strings.filter_not_loaded),
                     groupId = "dns",
                     format = stored.format.ifBlank { "standard" },
                     homepage = stored.homepage.ifBlank { null },
@@ -1009,8 +1007,8 @@ class AdGuardRepository(
             val rules = if (saved.userRulesConfigured) saved.userRules else starterRules
             lists += FilterList(
                 id = BUILTIN_CUSTOM,
-                name = context.getString(R.string.filter_user_rules_name),
-                description = context.getString(R.string.filter_user_rules_description),
+                name = L10n.get(Strings.filter_user_rules_name),
+                description = L10n.get(Strings.filter_user_rules_description),
                 ruleCount = rules.size,
                 isEnabled = rules.isNotEmpty(),
                 category = "user",
@@ -1175,7 +1173,7 @@ class AdGuardRepository(
                 if (it.id == listId) {
                     it.copy(
                         ruleCount = result.lineCount.toInt(),
-                        lastUpdatedText = result.updatedText ?: context.getString(R.string.filter_downloaded_now),
+                        lastUpdatedText = result.updatedText ?: L10n.get(Strings.filter_downloaded_now),
                         lastUpdatedMs = result.modifiedMs.takeIf { ms -> ms > 0 }
                             ?: System.currentTimeMillis(),
                         version = result.version ?: it.version,
@@ -1196,8 +1194,7 @@ class AdGuardRepository(
     private fun applyFailure(listId: String, message: UiText) {
         // The row keeps this text until the next update, so it must follow the
         // in-app language even though the repository outlives the Activity.
-        val ui = Localization.wrap(context, _settings.value.appLanguage)
-        val text = message.resolve().ifBlank { ui.getString(R.string.filter_download_failed) }
+        val text = message.resolve().ifBlank { L10n.get(Strings.filter_download_failed) }
         _filterLists.update { current ->
             current.map {
                 if (it.id == listId) {
@@ -1364,9 +1361,7 @@ class AdGuardRepository(
             val list = FilterList(
                 id = "${if (dnsOnly) "dns" else "sub"}_${System.currentTimeMillis()}",
                 name = name.ifBlank { trimmedUrl.substringAfter("//").take(40) },
-                description = context.getString(
-                    if (dnsOnly) R.string.filter_dns_description else R.string.filter_custom_description
-                ),
+                description = L10n.get(if (dnsOnly) Strings.filter_dns_description else Strings.filter_custom_description),
                 ruleCount = 0,
                 isEnabled = false,
                 category = "custom",
@@ -1399,34 +1394,21 @@ class AdGuardRepository(
     /** Adds a `.txt` the user picked through the system file chooser. */
     fun importLocalFilter(uriText: String, dnsOnly: Boolean = false) {
         scope.launch {
-            val uri = android.net.Uri.parse(uriText)
-            val resolver = context.contentResolver
             val text = withContext(Dispatchers.IO) {
-                runCatching {
-                    resolver.openInputStream(uri)?.bufferedReader()?.use { it.readText() }
-                }.getOrNull()
+                runCatching { files.readText(uriText) }.getOrNull()
             }
             if (text.isNullOrBlank()) {
                 showTransientStatus(UiText.Resource(Strings.filter_file_unreadable))
                 return@launch
             }
             val displayName = withContext(Dispatchers.IO) {
-                runCatching {
-                    resolver.query(uri, null, null, null, null)?.use { cursor ->
-                        if (cursor.moveToFirst()) {
-                            val index = cursor.getColumnIndex(android.provider.OpenableColumns.DISPLAY_NAME)
-                            if (index >= 0) cursor.getString(index) else null
-                        } else null
-                    }
-                }.getOrNull()
+                runCatching { files.displayName(uriText) }.getOrNull()
             }
             val list = FilterList(
                 id = "${if (dnsOnly) "dns_local" else "local"}_${System.currentTimeMillis()}",
                 name = displayName?.take(60)?.takeIf { it.isNotBlank() }
-                    ?: context.getString(R.string.filter_from_file_name),
-                description = context.getString(
-                    if (dnsOnly) R.string.filter_dns_description else R.string.filter_from_file_description
-                ),
+                    ?: L10n.get(Strings.filter_from_file_name),
+                description = L10n.get(if (dnsOnly) Strings.filter_dns_description else Strings.filter_from_file_description),
                 ruleCount = 0,
                 isEnabled = true,
                 category = "custom",
@@ -1443,7 +1425,7 @@ class AdGuardRepository(
             _filterLists.update {
                 it + list.copy(
                     ruleCount = state.lineCount.toInt(),
-                    lastUpdatedText = context.getString(R.string.filter_imported_now),
+                    lastUpdatedText = L10n.get(Strings.filter_imported_now),
                     version = state.version ?: "",
                     format = state.detectedFormat ?: list.format,
                 )
@@ -1471,9 +1453,7 @@ class AdGuardRepository(
         }
         val ok = withContext(Dispatchers.IO) {
             runCatching {
-                val uri = android.net.Uri.parse(uriText)
-                context.contentResolver.openOutputStream(uri)
-                    ?.bufferedWriter(Charsets.UTF_8)
+                files.openWrite(uriText)
                     ?.use { it.write(payload) }
                     ?: error("no output stream")
             }.isSuccess
@@ -1494,16 +1474,12 @@ class AdGuardRepository(
      * are downloaded again by [loadFilterState], and current scripts stay.
      */
     suspend fun importBackup(uriText: String): BackupResult {
-        val bytes = withContext(Dispatchers.IO) {
-            runCatching {
-                val uri = android.net.Uri.parse(uriText)
-                context.contentResolver.openInputStream(uri)?.use { it.readBytes() }
-            }.getOrNull()
+        val raw = withContext(Dispatchers.IO) {
+            runCatching { files.readText(uriText) }.getOrNull()
         } ?: return BackupResult(false, UiText.Resource(Strings.backup_import_file_unreadable))
-        if (bytes.size > MAX_BACKUP_BYTES) {
+        if (raw.toByteArray(Charsets.UTF_8).size > MAX_BACKUP_BYTES) {
             return BackupResult(false, UiText.Resource(Strings.backup_import_too_large))
         }
-        val raw = String(bytes, Charsets.UTF_8)
         // Rust replaces every collection in one transaction, so a rejected
         // file leaves the current state untouched.
         val outcome = engine.backupImport(raw)
@@ -1755,12 +1731,8 @@ class AdGuardRepository(
     suspend fun exportLogs(uriText: String): BackupResult {
         val written = withContext(Dispatchers.IO) {
             val rows = runCatching {
-                val uri = android.net.Uri.parse(uriText)
-                val stream = context.contentResolver.openOutputStream(uri)
-                    ?: error("no output stream")
-                stream.bufferedWriter(Charsets.UTF_8).use { writer ->
-                    writeLogCsv(storedLogRows(), writer)
-                }
+                val writer = files.openWrite(uriText) ?: error("no output stream")
+                writer.use { writeLogCsv(storedLogRows(), it) }
             }.getOrDefault(-1L)
             // The core turns a failed page into an empty one, so a walk that
             // writes nothing from a non-empty store has to count as a failure:
@@ -1838,12 +1810,11 @@ class AdGuardRepository(
             }
             val errors = withContext(Dispatchers.IO) { engine.filterBuildErrors() }
             if (errors.isEmpty()) return@launch
-            val ui = Localization.wrap(context, _settings.value.appLanguage)
             _filterLists.update { lists ->
                 lists.map { list ->
                     val message = errors[list.stableId()] ?: return@map list
                     list.copy(
-                        lastError = ui.getString(R.string.filter_file_unreadable_detail, message),
+                        lastError = L10n.format(Strings.filter_file_unreadable_detail, message),
                     )
                 }
             }
@@ -2004,13 +1975,8 @@ class AdGuardRepository(
      */
     fun importServicesTable(uriText: String) {
         scope.launch {
-            val uri = android.net.Uri.parse(uriText)
             val text = withContext(Dispatchers.IO) {
-                runCatching {
-                    context.contentResolver.openInputStream(uri)
-                        ?.bufferedReader()
-                        ?.use { it.readText() }
-                }.getOrNull()
+                runCatching { files.readText(uriText) }.getOrNull()
             }
             if (text.isNullOrBlank()) {
                 showTransientStatus(UiText.Resource(Strings.filter_file_unreadable))
@@ -2085,36 +2051,25 @@ class AdGuardRepository(
         return filterUpdateDue(modified, nowMs, hours)
     }
 
-    /** Read installed apps through PackageManager and overlay the persisted rows. */
+    /** Read installed apps through the host inventory and overlay the persisted rows. */
     private fun readInstalledApps(
         overrides: List<git.shin.adfree.core.AppFirewallRule>,
     ): List<AppFirewallRule> {
         val saved = overrides.associateBy { it.packageName }
-        val pm = context.packageManager
-        val installed = if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) {
-            pm.getInstalledApplications(PackageManager.ApplicationInfoFlags.of(0L))
-        } else {
-            @Suppress("DEPRECATION")
-            pm.getInstalledApplications(0)
-        }
-        val rows = installed
+        val rows = inventory.installedApps()
             .asSequence()
             // System apps stay out of the Apps tab unless the user gave them a
             // rule from the firewall picker; then the override must survive.
-            .filter {
-                saved.containsKey(it.packageName) ||
-                    (it.flags and ApplicationInfo.FLAG_SYSTEM) == 0 ||
-                    it.flags and ApplicationInfo.FLAG_UPDATED_SYSTEM_APP != 0
-            }
-            .map { info ->
-                val override = saved[info.packageName]
+            .filter { it.packageName in saved || !it.isSystem }
+            .map { app ->
+                val override = saved[app.packageName]
                 if (override != null) {
-                    override.toModel(pm.getApplicationLabel(info).toString(), appCategory(info))
+                    override.toModel(app.label, app.category)
                 } else {
                     AppFirewallRule(
-                        packageName = info.packageName,
-                        appName = pm.getApplicationLabel(info).toString(),
-                        category = appCategory(info),
+                        packageName = app.packageName,
+                        appName = app.label,
+                        category = app.category,
                     )
                 }
             }
@@ -2127,33 +2082,6 @@ class AdGuardRepository(
         val shownPackages = shown.mapTo(HashSet(shown.size)) { it.packageName }
         return (shown + rows.filter { it.packageName in saved && it.packageName !in shownPackages })
             .sortedBy { it.appName.lowercase() }
-    }
-
-    private fun appCategory(info: ApplicationInfo): String {
-        // PackageManager has no browser category; without this list the
-        // "Browsers" chip could never match anything.
-        if (info.packageName in BROWSER_PACKAGES) return AppCategory.BROWSER
-        val pm = context.packageManager
-        return try {
-            val category = if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
-                pm.getApplicationInfo(info.packageName, 0).category
-            } else {
-                ApplicationInfo.CATEGORY_UNDEFINED
-            }
-            when (category) {
-                ApplicationInfo.CATEGORY_GAME -> AppCategory.GAME
-                ApplicationInfo.CATEGORY_SOCIAL -> AppCategory.SOCIAL
-                ApplicationInfo.CATEGORY_VIDEO -> AppCategory.VIDEO
-                ApplicationInfo.CATEGORY_AUDIO -> AppCategory.AUDIO
-                ApplicationInfo.CATEGORY_NEWS -> AppCategory.NEWS
-                ApplicationInfo.CATEGORY_MAPS -> AppCategory.MAPS
-                ApplicationInfo.CATEGORY_PRODUCTIVITY -> AppCategory.PRODUCTIVITY
-                ApplicationInfo.CATEGORY_IMAGE -> AppCategory.IMAGE
-                else -> AppCategory.OTHER
-            }
-        } catch (_: Exception) {
-            AppCategory.OTHER
-        }
     }
 
     fun updateAppFirewall(
@@ -2275,27 +2203,18 @@ class AdGuardRepository(
     }
 
     /** Every installed app, including system ones, for the firewall picker. */
-    fun installedAppsForFirewall(): List<FirewallAppChoice> {
-        val pm = context.packageManager
-        val installed = if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) {
-            pm.getInstalledApplications(PackageManager.ApplicationInfoFlags.of(0L))
-        } else {
-            @Suppress("DEPRECATION")
-            pm.getInstalledApplications(0)
-        }
-        return installed
+    fun installedAppsForFirewall(): List<FirewallAppChoice> =
+        inventory.installedApps()
             .asSequence()
-            .map { info ->
+            .map { app ->
                 FirewallAppChoice(
-                    packageName = info.packageName,
-                    appName = pm.getApplicationLabel(info).toString(),
-                    isSystem = (info.flags and ApplicationInfo.FLAG_SYSTEM) != 0 &&
-                        (info.flags and ApplicationInfo.FLAG_UPDATED_SYSTEM_APP) == 0,
+                    packageName = app.packageName,
+                    appName = app.label,
+                    isSystem = app.isSystem,
                 )
             }
             .sortedBy { it.appName.lowercase() }
             .toList()
-    }
 
     /** The persisted override count, independent of the Apps-tab filter. */
     fun firewallOverrideCount(): Int = _appFirewallRules.value.count { it.hasNetworkRules }
@@ -2332,15 +2251,15 @@ class AdGuardRepository(
                     id = entry.id,
                     name = entry.name,
                     description = "",
-                    nameRes = entry.nameRes,
-                    descriptionRes = entry.descriptionRes,
+                    nameKey = entry.nameKey,
+                    descriptionKey = entry.descriptionKey,
                     url = entry.url,
                     // Built-in scripts run unless the user turned them off;
                     // catalogue downloads wait to be asked for.
                     isEnabled = state?.enabled ?: entry.builtin,
                     sizeBytes = asset?.sizeBytes ?: 0,
                     lastUpdatedText = asset?.let { engine.dateText(it.modifiedMs) }
-                        ?: context.getString(R.string.filter_not_loaded),
+                        ?: L10n.get(Strings.filter_not_loaded),
                     isBuiltin = entry.builtin,
                     metadata = scriptMetadata(entry.id, asset),
                 )
@@ -2355,7 +2274,7 @@ class AdGuardRepository(
                     isEnabled = state.enabled,
                     sizeBytes = asset?.sizeBytes ?: 0,
                     lastUpdatedText = asset?.let { engine.dateText(it.modifiedMs) }
-                        ?: context.getString(R.string.filter_not_loaded),
+                        ?: L10n.get(Strings.filter_not_loaded),
                     isUserAdded = true,
                     metadata = scriptMetadata(state.id, asset),
                 )
@@ -2465,7 +2384,7 @@ class AdGuardRepository(
                     it.copy(
                         loading = false,
                         error = e.message?.take(160)
-                            ?: context.getString(R.string.script_store_load_failed),
+                            ?: L10n.get(Strings.script_store_load_failed),
                     )
                 }
             }
@@ -2504,7 +2423,7 @@ class AdGuardRepository(
                     it.copy(
                         loadingMore = false,
                         error = e.message?.take(160)
-                            ?: context.getString(R.string.script_store_more_failed),
+                            ?: L10n.get(Strings.script_store_more_failed),
                     )
                 }
             }
@@ -2529,7 +2448,7 @@ class AdGuardRepository(
             if (body.isBlank()) return emptyList()
             return parseGreasyForkScripts(
                 body,
-                context.getString(R.string.script_greasy_fork_name),
+                L10n.get(Strings.script_greasy_fork_name),
             )
         }
     }
@@ -2538,7 +2457,7 @@ class AdGuardRepository(
     fun addScript(
         name: String,
         url: String,
-        description: String = context.getString(R.string.script_custom_description),
+        description: String = L10n.get(Strings.script_custom_description),
     ) {
         scope.launch {
             val trimmed = url.trim()
@@ -2562,10 +2481,10 @@ class AdGuardRepository(
                 id = id,
                 name = name.ifBlank {
                     trimmed.substringAfterLast('/').take(40)
-                        .ifBlank { context.getString(R.string.script_default_name) }
+                        .ifBlank { L10n.get(Strings.script_default_name) }
                 },
                 description = description.trim().take(300)
-                    .ifEmpty { context.getString(R.string.script_custom_description) },
+                    .ifEmpty { L10n.get(Strings.script_custom_description) },
                 url = trimmed,
                 isEnabled = false,
                 isUserAdded = true,
@@ -2667,33 +2586,23 @@ class AdGuardRepository(
     /** Imports a userscript body from a local file and enables it. */
     fun importLocalScript(uriText: String) {
         scope.launch {
-            val uri = android.net.Uri.parse(uriText)
-            val resolver = context.contentResolver
             val text = withContext(Dispatchers.IO) {
-                runCatching { resolver.openInputStream(uri)?.bufferedReader()?.use { it.readText() } }
-                    .getOrNull()
+                runCatching { files.readText(uriText) }.getOrNull()
             }
             if (text.isNullOrBlank()) {
                 showTransientStatus(UiText.Resource(Strings.script_file_unreadable))
                 return@launch
             }
             val displayName = withContext(Dispatchers.IO) {
-                runCatching {
-                    resolver.query(uri, null, null, null, null)?.use { cursor ->
-                        if (cursor.moveToFirst()) {
-                            val index = cursor.getColumnIndex(android.provider.OpenableColumns.DISPLAY_NAME)
-                            if (index >= 0) cursor.getString(index) else null
-                        } else null
-                    }
-                }.getOrNull()
+                runCatching { files.displayName(uriText) }.getOrNull()
             }
             val base = scriptNameFromFile(displayName)
-                .ifBlank { context.getString(R.string.script_from_file_name) }
+                .ifBlank { L10n.get(Strings.script_from_file_name) }
             val id = "script_local_${System.currentTimeMillis()}"
             val script = UserScriptInfo(
                 id = id,
                 name = base,
-                description = context.getString(R.string.script_from_file_description),
+                description = L10n.get(Strings.script_from_file_description),
                 url = "",
                 isEnabled = false,
                 isUserAdded = true,
@@ -2713,7 +2622,7 @@ class AdGuardRepository(
                     if (it.id == id) {
                         it.copy(
                             sizeBytes = state.sizeBytes,
-                            lastUpdatedText = context.getString(R.string.script_imported_now),
+                            lastUpdatedText = L10n.get(Strings.script_imported_now),
                             isEnabled = true,
                             metadata = parseUserScriptMetadata(text),
                         )
@@ -2735,13 +2644,13 @@ class AdGuardRepository(
                 return@launch
             }
             val displayName = name.trim()
-                .ifBlank { context.getString(R.string.script_default_custom_name) }
+                .ifBlank { L10n.get(Strings.script_default_custom_name) }
                 .take(60)
             val id = "script_custom_${System.currentTimeMillis()}"
             val script = UserScriptInfo(
                 id = id,
                 name = displayName,
-                description = context.getString(R.string.script_editor_description),
+                description = L10n.get(Strings.script_editor_description),
                 url = "",
                 isEnabled = false,
                 isUserAdded = true,
@@ -2758,7 +2667,7 @@ class AdGuardRepository(
                     if (it.id == id) {
                         it.copy(
                             sizeBytes = state.sizeBytes,
-                            lastUpdatedText = context.getString(R.string.script_created_now),
+                            lastUpdatedText = L10n.get(Strings.script_created_now),
                             isEnabled = true,
                             metadata = parseUserScriptMetadata(trimmed),
                         )
@@ -2795,7 +2704,7 @@ class AdGuardRepository(
                         it.copy(
                             name = displayName,
                             sizeBytes = state.sizeBytes,
-                            lastUpdatedText = context.getString(R.string.script_edited_now),
+                            lastUpdatedText = L10n.get(Strings.script_edited_now),
                             metadata = parseUserScriptMetadata(trimmed),
                         )
                     } else it
@@ -2872,28 +2781,6 @@ class AdGuardRepository(
         private const val MAX_APPS_SHOWN = 250
         private const val BUILTIN_CUSTOM = "builtin_custom"
 
-        /** Known browser packages; Android exposes no browser category. */
-        private val BROWSER_PACKAGES = setOf(
-            "com.android.chrome",
-            "com.chrome.beta",
-            "com.chrome.dev",
-            "com.chrome.canary",
-            "org.chromium.chrome",
-            "com.google.android.apps.chrome",
-            "org.mozilla.firefox",
-            "org.mozilla.firefox_beta",
-            "org.mozilla.fennec_fdroid",
-            "com.brave.browser",
-            "com.sec.android.app.sbrowser",
-            "com.opera.browser",
-            "com.opera.mini.native",
-            "com.microsoft.emmx",
-            "com.duckduckgo.mobile.android",
-            "com.vivaldi.browser",
-            "com.kiwibrowser.browser",
-            "io.github.ungoogled_software.ungoogled_chromium",
-        )
-
         /** A few starter rules so the user sees how they work. */
         private val starterRules = listOf(
             "@@||example.com^",
@@ -2962,18 +2849,17 @@ internal fun mergeGreasyForkItems(
 }
 
 /**
- * Parse Greasy Fork's JSON list. Kept top-level and free of Android state so a
- * JVM test can feed it a fixture without a network call.
+ * Parse Greasy Fork's JSON list. Kept top-level and free of platform state so
+ * a JVM test can feed it a fixture without a network call.
  */
 internal fun parseGreasyForkScripts(
     json: String,
     fallbackName: String = "Greasy Fork userscript",
 ): List<UserScriptStoreItem> {
-    val array = JSONArray(json)
-    val count = minOf(array.length(), GREASY_FORK_LIMIT)
-    val items = ArrayList<UserScriptStoreItem>(count)
-    for (i in 0 until count) {
-        val obj = array.optJSONObject(i) ?: continue
+    val array = Json.parseToJsonElement(json).jsonArray
+    val items = ArrayList<UserScriptStoreItem>(minOf(array.size, GREASY_FORK_LIMIT))
+    for (element in array.asSequence().take(GREASY_FORK_LIMIT)) {
+        val obj = element as? JsonObject ?: continue
         val codeUrl = obj.cleanString("code_url")
         if (codeUrl.isEmpty()) continue
         if (!codeUrl.startsWith("https://") && !codeUrl.startsWith("http://")) continue
@@ -2981,21 +2867,25 @@ internal fun parseGreasyForkScripts(
             .takeIf { it.startsWith("https://") || it.startsWith("http://") }
             .orEmpty()
         items += UserScriptStoreItem(
-            id = obj.optLong("id"),
+            id = obj.number("id"),
             name = obj.cleanString("name").ifEmpty { fallbackName },
             description = obj.cleanString("description").take(300),
             url = codeUrl,
             pageUrl = pageUrl,
             version = obj.cleanString("version"),
-            dailyInstalls = obj.optInt("daily_installs"),
-            totalInstalls = obj.optInt("total_installs"),
+            dailyInstalls = obj.number("daily_installs").toInt(),
+            totalInstalls = obj.number("total_installs").toInt(),
             license = obj.cleanString("license"),
-            codeSizeBytes = obj.optLong("code_size"),
+            codeSizeBytes = obj.number("code_size"),
         )
     }
     return items
 }
 
-/** `optString` returns the literal "null" for JSON null; hide that from the UI. */
-private fun JSONObject.cleanString(key: String): String =
-    optString(key).trim().let { if (it == "null") "" else it }
+/** JSON null, absent keys and non-text values collapse to "" like `optString` did. */
+private fun JsonObject.cleanString(key: String): String =
+    (this[key] as? JsonPrimitive)?.content?.trim().orEmpty().let { if (it == "null") "" else it }
+
+/** `optLong`/`optInt` answer 0 for anything that is not a number; same here. */
+private fun JsonObject.number(key: String): Long =
+    (this[key] as? JsonPrimitive)?.longOrNull ?: 0L

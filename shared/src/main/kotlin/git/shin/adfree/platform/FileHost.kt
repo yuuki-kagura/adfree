@@ -20,6 +20,12 @@ interface FileHost {
     /** Writes [text] into a document chosen by [createDocument]. */
     fun writeText(uriText: String, text: String): Boolean
 
+    /**
+     * Streams into a document chosen by [createDocument]; the caller closes
+     * the writer. Null when the document cannot be opened.
+     */
+    fun openWrite(uriText: String): java.io.Writer?
+
     /** The name the document picker shows for [uriText]. */
     fun displayName(uriText: String): String
 

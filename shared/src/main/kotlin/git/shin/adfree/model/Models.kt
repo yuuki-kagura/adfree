@@ -152,10 +152,10 @@ data class FilterList(
     val id: String,
     val name: String,
     val description: String,
-    /** Non-zero when the UI shows a localized catalogue name instead of [name]. */
-    val nameRes: Int = 0,
-    /** Non-zero when the UI shows a localized catalogue description. */
-    val descriptionRes: Int = 0,
+    /** Set when the UI shows a localized catalogue name instead of [name]. */
+    val nameKey: String? = null,
+    /** Set when the UI shows a localized catalogue description. */
+    val descriptionKey: String? = null,
     val ruleCount: Int,
     val isEnabled: Boolean,
     val category: String,
@@ -286,10 +286,10 @@ data class UserScriptInfo(
     val id: String,
     val name: String,
     val description: String,
-    /** Non-zero when the UI shows a localized catalogue name instead of [name]. */
-    val nameRes: Int = 0,
-    /** Non-zero when the UI shows a localized catalogue description. */
-    val descriptionRes: Int = 0,
+    /** Set when the UI shows a localized catalogue name instead of [name]. */
+    val nameKey: String? = null,
+    /** Set when the UI shows a localized catalogue description. */
+    val descriptionKey: String? = null,
     val url: String,
     val isEnabled: Boolean,
     val sizeBytes: Long = 0,

@@ -1,7 +1,6 @@
 package git.shin.adfree.data
 
-import android.content.Context
-import android.content.SharedPreferences
+import git.shin.adfree.platform.KeyValueStore
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -25,16 +24,13 @@ data class AutomationControl(
  * hand to anyone. A backup that carried it would put control of protection in
  * any file the user has shared.
  */
-class AutomationGate(context: Context) {
-
-    private val prefs: SharedPreferences =
-        context.applicationContext.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+class AutomationGate(private val store: KeyValueStore) {
 
     private val _state = MutableStateFlow(read())
     val state: StateFlow<AutomationControl> = _state.asStateFlow()
 
     fun setEnabled(enabled: Boolean) {
-        prefs.edit().putBoolean(KEY_ENABLED, enabled).apply()
+        store.putBoolean(KEY_ENABLED, enabled)
         _state.value = read()
     }
 
@@ -44,7 +40,8 @@ class AutomationGate(context: Context) {
      */
     fun rotateToken(): String {
         val fresh = newToken()
-        prefs.edit().putString(KEY_TOKEN, fresh).putBoolean(KEY_ENABLED, false).apply()
+        store.putString(KEY_TOKEN, fresh)
+        store.putBoolean(KEY_ENABLED, false)
         _state.value = read()
         return fresh
     }
@@ -64,21 +61,20 @@ class AutomationGate(context: Context) {
     }
 
     private fun read(): AutomationControl {
-        val stored = prefs.getString(KEY_TOKEN, null) ?: run {
+        val stored = store.getString(KEY_TOKEN) ?: run {
             // Generated once, on the device, and never shown anywhere but the
             // Settings row the user reads it from.
             val fresh = newToken()
-            prefs.edit().putString(KEY_TOKEN, fresh).apply()
+            store.putString(KEY_TOKEN, fresh)
             fresh
         }
         return AutomationControl(
-            enabled = prefs.getBoolean(KEY_ENABLED, false),
+            enabled = store.getBoolean(KEY_ENABLED, false),
             token = stored,
         )
     }
 
     private companion object {
-        const val PREFS = "adfree_automation"
         const val KEY_ENABLED = "allow_external_control"
         const val KEY_TOKEN = "control_token"
 

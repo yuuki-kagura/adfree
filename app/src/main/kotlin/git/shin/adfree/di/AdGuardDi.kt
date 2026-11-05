@@ -31,7 +31,11 @@ import java.net.Inet4Address
 class AdGuardAppContainer(private val context: Context) {
 
     val coreEngine: CoreEngine by lazy {
-        CoreEngine().also {
+        CoreEngine(
+            log = git.shin.adfree.platform.LogSink { Log.i("AdFreeCore", it) },
+            caExporter = git.shin.adfree.core.AndroidCaExporter(),
+            caTrustChecker = git.shin.adfree.core.AndroidCaTrustChecker(),
+        ).also {
             // The core owns everything under the app's files directory from
             // here on: filters, scripts, the CA and the request-log database.
             // The call is idempotent, so a later restart is a no-op.
@@ -41,10 +45,35 @@ class AdGuardAppContainer(private val context: Context) {
 
     val vpnController: VpnController by lazy { VpnController(context, coreEngine) }
 
+    val platformHost: git.shin.adfree.platform.AndroidPlatformHost by lazy {
+        git.shin.adfree.platform.AndroidPlatformHost(context)
+    }
+    val fileHost: git.shin.adfree.platform.AndroidFileHost by lazy {
+        git.shin.adfree.platform.AndroidFileHost(context)
+    }
+    val appInventory: git.shin.adfree.platform.AndroidAppInventory by lazy {
+        git.shin.adfree.platform.AndroidAppInventory(context)
+    }
+    private val reminders: git.shin.adfree.platform.AndroidReminders by lazy {
+        git.shin.adfree.platform.AndroidReminders(context)
+    }
+    private val automationStore: git.shin.adfree.platform.AndroidKeyValueStore by lazy {
+        git.shin.adfree.platform.AndroidKeyValueStore(
+            context.getSharedPreferences("adfree_automation", Context.MODE_PRIVATE),
+        )
+    }
+
     val repository: AdGuardRepository by lazy {
         // The repository writes state; reconfiguring the engine is the
         // container's job because it owns the Private DNS system setting.
-        AdGuardRepository(context, coreEngine) { applyConfig() }
+        AdGuardRepository(
+            platform = platformHost,
+            files = fileHost,
+            inventory = appInventory,
+            reminders = reminders,
+            store = automationStore,
+            engine = coreEngine,
+        ) { applyConfig() }
     }
 
     /** Offline threat analysis via heuristics plus the filter engine; no API key. */

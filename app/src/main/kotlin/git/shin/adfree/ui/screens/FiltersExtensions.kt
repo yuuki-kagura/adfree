@@ -1,5 +1,6 @@
 package git.shin.adfree.ui.screens
 
+import git.shin.adfree.l10n.L10n
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -658,14 +659,14 @@ private fun storeInstallsText(count: Int): String = when {
     else -> count.toString()
 }
 
-/** Catalogue scripts carry resource ids; imported/created ones keep their text. */
+/** Catalogue scripts carry string keys; imported/created ones keep their text. */
 @Composable
 private fun scriptDisplayName(script: UserScriptInfo): String =
-    if (script.nameRes != 0) stringResource(script.nameRes) else script.name
+    script.nameKey?.let { L10n.get(it) } ?: script.name
 
 @Composable
 private fun scriptDisplayDescription(script: UserScriptInfo): String =
-    if (script.descriptionRes != 0) stringResource(script.descriptionRes) else script.description
+    script.descriptionKey?.let { L10n.get(it) } ?: script.description
 
 @Composable
 private fun ScriptRow(
