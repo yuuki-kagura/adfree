@@ -76,6 +76,15 @@ interface PlatformHost {
      * capture which never happens.
      */
     fun localProxyStatus(): List<Pair<String, String>> = emptyList()
+
+    /**
+     * The shell draws a window header: the section name, one step back, and
+     * the app-wide menu (settings export/import, activity export). A phone
+     * gets all three from the system — the status bar, the back gesture and
+     * the per-screen app bars — so Android leaves this off; a desktop window
+     * has an OS title bar that says nothing about where you are in the app.
+     */
+    fun supportsWindowHeader(): Boolean = false
 }
 
 /** Kept separate from [PlatformHost] so a desktop host can reuse the parts it can honour. */

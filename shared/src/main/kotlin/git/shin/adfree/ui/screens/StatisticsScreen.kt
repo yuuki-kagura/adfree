@@ -25,13 +25,16 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ListAlt
 import androidx.compose.material.icons.filled.Apps
 import androidx.compose.material.icons.filled.ChevronRight
+import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.PieChart
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -68,6 +71,7 @@ import git.shin.adfree.ui.theme.AdGuardGreenPrimary
 import git.shin.adfree.ui.theme.AdGuardOnAccent
 import git.shin.adfree.ui.theme.AdGuardOrangeWarning
 import git.shin.adfree.ui.theme.AdGuardPurpleAI
+import git.shin.adfree.ui.theme.AdGuardRedBlocked
 import git.shin.adfree.ui.theme.AdGuardTextMuted
 import git.shin.adfree.ui.theme.AdGuardTextPrimary
 import git.shin.adfree.ui.theme.AdGuardTextSecondary
@@ -93,6 +97,9 @@ fun StatisticsScreen(
     var range by rememberSaveable { mutableStateOf(viewModel.currentAppUsageRange()) }
     var transport by rememberSaveable { mutableStateOf(viewModel.currentAppUsageTransport()) }
     var sort by rememberSaveable { mutableStateOf(StatsAppSort.ADS) }
+    // AdGuard keeps this behind the screen's own menu: counters and the log
+    // both start over, so the ask is explicit rather than one tap deep.
+    var confirmClear by remember { mutableStateOf(false) }
 
     val totals = state.windowTotals
     val topApps = remember(state.allAppFirewallRules, sort) {
@@ -369,7 +376,40 @@ fun StatisticsScreen(
             }
 
             Spacer(modifier = Modifier.height(16.dp))
+
+            NavigationRow(
+                title = L10n.get(Strings.stats_clear_action),
+                icon = Icons.Default.Delete,
+                testTag = "stats_clear",
+                tint = AdGuardRedBlocked,
+                onClick = { confirmClear = true },
+            )
+
+            Spacer(modifier = Modifier.height(8.dp))
         }
+    }
+
+    if (confirmClear) {
+        AlertDialog(
+            onDismissRequest = { confirmClear = false },
+            title = { Text(L10n.get(Strings.stats_clear_title)) },
+            text = { Text(L10n.get(Strings.stats_clear_body), fontSize = 12.sp) },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        confirmClear = false
+                        viewModel.onIntent(AdGuardIntent.ResetStats)
+                    },
+                ) {
+                    Text(L10n.get(Strings.stats_clear_confirm), color = AdGuardRedBlocked)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { confirmClear = false }) {
+                    Text(L10n.get(Strings.common_cancel))
+                }
+            },
+        )
     }
 }
 
@@ -477,6 +517,7 @@ private fun NavigationRow(
     icon: androidx.compose.ui.graphics.vector.ImageVector,
     testTag: String,
     onClick: () -> Unit,
+    tint: Color = AdGuardGreenLight,
 ) {
     Card(
         modifier = Modifier
@@ -495,7 +536,7 @@ private fun NavigationRow(
             Icon(
                 imageVector = icon,
                 contentDescription = null,
-                tint = AdGuardGreenLight,
+                tint = tint,
                 modifier = Modifier.size(18.dp),
             )
             Spacer(modifier = Modifier.width(10.dp))

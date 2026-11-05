@@ -598,7 +598,10 @@ class AdGuardViewModel(
             is AdGuardIntent.SetAppUsageRange -> repository.setAppUsageRange(intent.range)
             is AdGuardIntent.SetAppUsageTransport -> repository.setAppUsageTransport(intent.transport)
             is AdGuardIntent.ClearLogs -> repository.clearLogs()
-            is AdGuardIntent.ResetStats -> repository.resetStats()
+            is AdGuardIntent.ResetStats -> {
+                repository.resetStats()
+                emit(AdGuardEffect.ShowSnackbar(UiText.Resource(Strings.stats_cleared)))
+            }
             is AdGuardIntent.LoadMoreLogs -> repository.loadMoreLogs()
             is AdGuardIntent.ExportLogs -> scope.launch {
                 val result = repository.exportLogs(intent.uri)

@@ -17,16 +17,19 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.ListAlt
 import androidx.compose.material.icons.automirrored.outlined.ListAlt
 import androidx.compose.material.icons.filled.Apps
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.Lock
+import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.PieChart
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Shield
@@ -36,6 +39,12 @@ import androidx.compose.material.icons.outlined.PieChart
 import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material.icons.outlined.Shield
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.NavigationBarItemDefaults
@@ -51,8 +60,11 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveableStateHolder
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
@@ -62,6 +74,9 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import git.shin.adfree.l10n.L10n
 import git.shin.adfree.l10n.Strings
+import git.shin.adfree.platform.LocalBackRegistry
+import git.shin.adfree.platform.currentFileHost
+import git.shin.adfree.platform.currentPlatformHost
 import git.shin.adfree.ui.screens.AppsManagementScreen
 import git.shin.adfree.ui.screens.FilteringLogScreen
 import git.shin.adfree.ui.screens.HomeScreen
@@ -70,6 +85,7 @@ import git.shin.adfree.ui.screens.SecurityLabScreen
 import git.shin.adfree.ui.screens.SettingsScreen
 import git.shin.adfree.ui.screens.StatisticsScreen
 import git.shin.adfree.ui.theme.AdGuardDarkBg
+import git.shin.adfree.ui.theme.AdGuardDarkOutline
 import git.shin.adfree.ui.theme.AdGuardDarkSurface
 import git.shin.adfree.ui.theme.AdGuardGreenPrimary
 import git.shin.adfree.ui.theme.AdGuardOnAccent
@@ -79,6 +95,7 @@ import git.shin.adfree.ui.theme.AdGuardTextPrimary
 import git.shin.adfree.ui.theme.AdGuardTextSecondary
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.emptyFlow
+import kotlinx.coroutines.launch
 
 data class NavItem(
     val tab: AdGuardTab,
@@ -221,6 +238,161 @@ private fun HttpsOffBar(onEnable: () -> Unit) {
 }
 
 /**
+ * The header a desktop draws for itself. An OS title bar names the window,
+ * not the screen inside it, so this carries the section crumb, one step back
+ * while a sub-route or dialog is open, and the app-wide menu AdGuard keeps in
+ * its own title bar: check for updates, and settings/activity export-import.
+ */
+@Composable
+private fun WindowHeader(
+    viewModel: AdGuardViewModel,
+    currentTab: AdGuardTab,
+) {
+    val back = LocalBackRegistry.current
+    val files = currentFileHost()
+    val scope = rememberCoroutineScope()
+    var menuOpen by remember { mutableStateOf(false) }
+    var pendingRestoreUri by remember { mutableStateOf<String?>(null) }
+
+    val crumb = when (currentTab) {
+        // The lab sits behind Settings rather than in the destination list.
+        AdGuardTab.AI_LAB -> L10n.get(Strings.settings_lab_title)
+        else -> defaultNavItems().firstOrNull { it.tab == currentTab }?.label?.asString()
+            ?: L10n.get(Strings.app_name)
+    }
+
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .background(AdGuardDarkSurface)
+            .height(48.dp)
+            .padding(horizontal = 12.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        if (back.depth > 0) {
+            TextButton(
+                onClick = { back.onBack() },
+                modifier = Modifier.testTag("header_back"),
+            ) {
+                Icon(
+                    imageVector = Icons.AutoMirrored.Filled.ArrowBack,
+                    contentDescription = null,
+                    modifier = Modifier.size(16.dp),
+                )
+                Spacer(modifier = Modifier.width(4.dp))
+                Text(L10n.get(Strings.hub_back), fontSize = 13.sp)
+            }
+        }
+        Icon(
+            imageVector = Icons.Default.Shield,
+            contentDescription = null,
+            tint = AdGuardGreenPrimary,
+            modifier = Modifier.size(18.dp),
+        )
+        Spacer(modifier = Modifier.width(8.dp))
+        Text(
+            text = L10n.get(Strings.app_name),
+            fontSize = 14.sp,
+            fontWeight = FontWeight.Bold,
+            color = AdGuardTextPrimary,
+        )
+        Text(
+            text = "· $crumb",
+            fontSize = 13.sp,
+            color = AdGuardTextMuted,
+            modifier = Modifier.padding(start = 8.dp),
+        )
+        Spacer(modifier = Modifier.weight(1f))
+        IconButton(
+            onClick = { menuOpen = true },
+            modifier = Modifier.testTag("header_menu"),
+        ) {
+            Icon(
+                imageVector = Icons.Default.MoreVert,
+                contentDescription = L10n.get(Strings.app_name),
+                tint = AdGuardTextSecondary,
+            )
+        }
+        DropdownMenu(
+            expanded = menuOpen,
+            onDismissRequest = { menuOpen = false },
+            containerColor = AdGuardDarkSurface,
+        ) {
+            DropdownMenuItem(
+                text = {
+                    Text(L10n.get(Strings.header_check_updates), fontSize = 13.sp, color = AdGuardTextPrimary)
+                },
+                onClick = {
+                    menuOpen = false
+                    viewModel.checkAppUpdateManually()
+                },
+            )
+            HorizontalDivider(color = AdGuardDarkOutline)
+            DropdownMenuItem(
+                text = {
+                    Text(L10n.get(Strings.header_export_settings), fontSize = 13.sp, color = AdGuardTextPrimary)
+                },
+                onClick = {
+                    menuOpen = false
+                    scope.launch {
+                        files.createDocument("adfree-backup.json", "application/json")?.let {
+                            viewModel.onIntent(AdGuardIntent.ExportBackup(it))
+                        }
+                    }
+                },
+            )
+            DropdownMenuItem(
+                text = {
+                    Text(L10n.get(Strings.header_import_settings), fontSize = 13.sp, color = AdGuardTextPrimary)
+                },
+                onClick = {
+                    menuOpen = false
+                    scope.launch {
+                        files.openText()?.let { pendingRestoreUri = it }
+                    }
+                },
+            )
+            DropdownMenuItem(
+                text = {
+                    Text(L10n.get(Strings.log_export_action), fontSize = 13.sp, color = AdGuardTextPrimary)
+                },
+                onClick = {
+                    menuOpen = false
+                    scope.launch {
+                        files.createDocument("adfree-activity.csv", "text/csv")?.let {
+                            viewModel.onIntent(AdGuardIntent.ExportLogs(it))
+                        }
+                    }
+                },
+            )
+        }
+    }
+
+    pendingRestoreUri?.let { uri ->
+        AlertDialog(
+            onDismissRequest = { pendingRestoreUri = null },
+            title = { Text(L10n.get(Strings.settings_restore_title)) },
+            text = { Text(L10n.get(Strings.settings_restore_body), fontSize = 12.sp) },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        pendingRestoreUri = null
+                        viewModel.onIntent(AdGuardIntent.ImportBackup(uri))
+                    },
+                ) {
+                    Text(L10n.get(Strings.settings_restore_confirm), color = AdGuardOrangeWarning)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { pendingRestoreUri = null }) {
+                    Text(L10n.get(Strings.common_cancel))
+                }
+            },
+        )
+    }
+}
+
+/**
  * The app shell both hosts render: snackbar, HTTPS-off strip, the six-tab
  * rail (wide) or bottom bar (narrow), and the tab transition. Host glue that
  * only Android can do — VPN consent launchers, lifecycle resumes, SAF
@@ -234,6 +406,7 @@ fun AdGuardApp(
     toastMessages: Flow<String> = emptyFlow(),
 ) {
     val state by viewModel.uiState.collectAsState()
+    val platform = currentPlatformHost()
     val snackbarHostState = remember { SnackbarHostState() }
     // Keep each tab's own navigation (for example the Filters hub
     // sub-screen) alive while the user visits another tab.
@@ -262,6 +435,17 @@ fun AdGuardApp(
         Scaffold(
             modifier = Modifier.fillMaxSize(),
             containerColor = AdGuardDarkBg,
+            topBar = {
+                // A desktop window's OS title bar names the app, not the
+                // screen: the crumb, the back step and the app-wide menu go
+                // here. A phone gets all three from the system instead.
+                if (isWide && platform.supportsWindowHeader()) {
+                    WindowHeader(
+                        viewModel = viewModel,
+                        currentTab = state.currentTab,
+                    )
+                }
+            },
             snackbarHost = {
                 SnackbarHost(snackbarHostState) { data ->
                     Snackbar(

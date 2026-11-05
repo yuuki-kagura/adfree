@@ -1133,4 +1133,18 @@
     <string name="rule_from_log_app_scope">Only apply to %1$s</string>
     <string name="rule_from_log_dns_note">Per-app rules apply to filtered web traffic; a DNS lookup is decided for every app.</string>
     <string name="rule_from_log_add">Add rule</string>
+    <string name="header_check_updates">Check for updates</string>
+    <string name="header_export_settings">Export settings</string>
+    <string name="header_import_settings">Import settings</string>
+    <string name="tray_open">Open AdFree</string>
+    <string name="tray_pause_30s">Pause filtering for 30 seconds</string>
+    <string name="tray_pause_1h">Pause filtering for 1 hour</string>
+    <string name="tray_resume">Resume filtering</string>
+    <string name="tray_exit">Exit AdFree</string>
+    <string name="tray_hidden">AdFree keeps filtering in the background</string>
+    <string name="stats_clear_action">Clear statistics</string>
+    <string name="stats_clear_title">Clear statistics?</string>
+    <string name="stats_clear_body">Blocked counts, per-app usage and the filtering log start from zero. Filters, rules and settings stay untouched.</string>
+    <string name="stats_clear_confirm">Clear</string>
+    <string name="stats_cleared">Statistics cleared</string>
 </resources>

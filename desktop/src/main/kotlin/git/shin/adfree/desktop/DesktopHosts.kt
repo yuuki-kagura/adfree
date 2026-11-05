@@ -87,6 +87,10 @@ class DesktopPlatformHost(
     override fun supportsCertificateInstaller(): Boolean = false
     override fun supportsAppCatalogue(): Boolean = false
 
+    // The window draws its own header: an OS title bar carries no notion of
+    // where in the app you are, and there is no system back gesture here.
+    override fun supportsWindowHeader(): Boolean = true
+
     override fun localProxyStatus(): List<Pair<String, String>> = proxyStatus()
 }
 

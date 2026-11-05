@@ -1084,4 +1084,21 @@ object Strings {
     const val rule_from_log_app_scope = "rule_from_log_app_scope"
     const val rule_from_log_dns_note = "rule_from_log_dns_note"
     const val rule_from_log_add = "rule_from_log_add"
+
+    // Window header and tray: the desktop shell's own wording, none of which
+    // a phone shows (the OS bar and gesture cover it).
+    const val header_check_updates = "header_check_updates"
+    const val header_export_settings = "header_export_settings"
+    const val header_import_settings = "header_import_settings"
+    const val tray_open = "tray_open"
+    const val tray_pause_30s = "tray_pause_30s"
+    const val tray_pause_1h = "tray_pause_1h"
+    const val tray_resume = "tray_resume"
+    const val tray_exit = "tray_exit"
+    const val tray_hidden = "tray_hidden"
+    const val stats_clear_action = "stats_clear_action"
+    const val stats_clear_title = "stats_clear_title"
+    const val stats_clear_body = "stats_clear_body"
+    const val stats_clear_confirm = "stats_clear_confirm"
+    const val stats_cleared = "stats_cleared"
 }

@@ -4,8 +4,10 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.runtime.setValue
 import androidx.compose.runtime.staticCompositionLocalOf
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -34,14 +36,24 @@ val LocalResumeTick = staticCompositionLocalOf<StateFlow<Long>> { NO_TICK }
 class BackRegistry {
     private val handlers = mutableListOf<() -> Boolean>()
 
+    /**
+     * Live back steps, readable by composition. The window header shows its
+     * back step only when there is somewhere to go back to, so this has to
+     * recompose the shell when a screen opens or closes a sub-route.
+     */
+    var depth by mutableIntStateOf(0)
+        private set
+
     @Synchronized
     fun push(handler: () -> Boolean) {
         handlers += handler
+        depth = handlers.size
     }
 
     @Synchronized
     fun pop(handler: () -> Boolean) {
         handlers -= handler
+        depth = handlers.size
     }
 
     @Synchronized

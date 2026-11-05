@@ -1130,4 +1130,18 @@
     <string name="rule_from_log_app_scope">Chỉ áp dụng cho %1$s</string>
     <string name="rule_from_log_dns_note">Quy tắc theo ứng dụng chỉ áp dụng cho traffic web đã lọc; truy vấn DNS được quyết định cho mọi ứng dụng.</string>
     <string name="rule_from_log_add">Thêm quy tắc</string>
+    <string name="header_check_updates">Kiểm tra cập nhật</string>
+    <string name="header_export_settings">Xuất cấu hình</string>
+    <string name="header_import_settings">Nhập cấu hình</string>
+    <string name="tray_open">Mở AdFree</string>
+    <string name="tray_pause_30s">Tạm dừng lọc 30 giây</string>
+    <string name="tray_pause_1h">Tạm dừng lọc 1 giờ</string>
+    <string name="tray_resume">Tiếp tục lọc</string>
+    <string name="tray_exit">Thoát AdFree</string>
+    <string name="tray_hidden">AdFree vẫn tiếp tục lọc chạy nền</string>
+    <string name="stats_clear_action">Xóa thống kê</string>
+    <string name="stats_clear_title">Xóa thống kê?</string>
+    <string name="stats_clear_body">Số lượt chặn, thống kê theo ứng dụng và nhật ký lọc sẽ bắt đầu từ 0. Bộ lọc, quy tắc và cấu hình vẫn giữ nguyên.</string>
+    <string name="stats_clear_confirm">Xóa</string>
+    <string name="stats_cleared">Đã xóa thống kê</string>
 </resources>
