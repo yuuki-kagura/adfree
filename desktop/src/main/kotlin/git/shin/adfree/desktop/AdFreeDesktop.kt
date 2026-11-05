@@ -81,8 +81,13 @@ fun main() {
     val hasTray = java.awt.SystemTray.isSupported()
     // Whatever ends the process — the tray, a signal, a crash of the UI thread
     // — the listeners go down with it. Left up, native threads keep the JVM
-    // from finishing and the ports stay taken.
-    Runtime.getRuntime().addShutdownHook(Thread { container.coreEngine.stopProxy() })
+    // from finishing and the ports stay taken. The redirect goes first: rules
+    // aimed at closed ports are a machine with no DNS and no web, and a signal
+    // never runs the UI's stop path.
+    Runtime.getRuntime().addShutdownHook(Thread {
+        if (container.privileges.canSetFirewallMark()) container.privileges.removeRules()
+        container.coreEngine.stopProxy()
+    })
 
     application {
         val windowState = rememberWindowState(width = 1200.dp, height = 800.dp)
@@ -110,7 +115,9 @@ fun main() {
             container.repository.setUiVisible(false)
             // The listeners are native threads: left up, they keep the JVM
             // from finishing, and quitting would leave ports bound behind a
-            // process with no window and no way back to it.
+            // process with no window and no way back to it. The redirect goes
+            // first for the same reason it goes first in the shutdown hook.
+            if (container.privileges.canSetFirewallMark()) container.privileges.removeRules()
             container.coreEngine.stopProxy()
             appScope.cancel()
             exitApplication()

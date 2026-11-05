@@ -176,6 +176,11 @@ explicit `CONNECT`/absolute-form request names its own destination and gets
 identical filtering. The Home card shows which of the two layouts is live, the
 two addresses, and whether the rules are installed.
 
+The rules never outlive the process that installed them: quitting AdFree, or a
+signal that kills it, drops the table before the listeners close. Rules pointing
+at closed ports are a machine with no DNS and no web, and a signal never runs
+the UI's stop button, so the shutdown hook is what takes them down.
+
 ## Limitations
 
 - Android is the only shipping shell today. Linux runs the whole UI and filters

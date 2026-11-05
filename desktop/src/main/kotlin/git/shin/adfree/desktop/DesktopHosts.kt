@@ -99,8 +99,10 @@ class DesktopPlatformHost(
 
     // The redirect that captures the machine's own traffic is a kernel
     // request, so the app asks the system for it through polkit — the desktop
-    // answer to the VPN consent a phone shows.
-    override fun supportsPrivilegedEngine(): Boolean = privileges != null
+    // answer to the VPN consent a phone shows. Once the mark works the offer
+    // is gone: asking again would start a second instance that cannot bind the
+    // ports this one is holding.
+    override fun supportsPrivilegedEngine(): Boolean = privileges != null && !privileges.canSetFirewallMark()
 
     override fun requestPrivilegedEngine(): String? {
         val helper = privileges ?: return null

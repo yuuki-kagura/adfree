@@ -1204,12 +1204,17 @@ Practical consequences per platform:
   UID for the app firewall. The mark is the whole reason the ruleset is safe to
   install, so `DesktopPrivileges` checks it by actually calling `setsockopt`
   before writing any rules: an unprivileged process refuses the ruleset outright
-  rather than redirecting its own upstream traffic back into itself. Neither
-  the rules nor the mark needs root as a user, though: the Home button asks
+  rather than redirecting its own upstream traffic back into itself. Holding
+  `CAP_NET_ADMIN` does not mean running as root either: the Home button asks
   polkit to start a transient `systemd-run --system` unit that keeps this
   uid and carries only `CAP_NET_ADMIN`, which is the same split AdGuard for
   Windows uses — a privileged engine and a UI running as the signed-in user,
-  with the desktop's own authentication dialog in place of a terminal.
+  with the desktop's own authentication dialog in place of a terminal. The
+  offer disappears once the mark works, because a second instance could not
+  bind the ports the first one holds. And the rules do not outlive the process
+  that wrote them: the shutdown hook drops the table before the listeners
+  close, since rules aimed at closed ports are a machine with no DNS and no
+  web, and a signal never runs the UI's stop path.
 - **Windows** — Wintun supplies the adapter; a signed driver/service and the IP
   Helper API replace VpnService and `/proc`. The core needs a Windows
   implementation of the fd/socket layer, not a new filtering engine.

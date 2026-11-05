@@ -108,7 +108,20 @@ class DesktopPrivileges(
         val self = ProcessHandle.current().info()
         val command = self.command().orElse(null)
             ?: return PrivilegeOutcome.Failed("cannot read this process's own command line")
-        val args = self.arguments().orElse(emptyArray()).toList()
+        val argv = engineUnitArgv(command, self.arguments().orElse(emptyArray()).toList(), environment)
+        return run(*argv.toTypedArray())
+    }
+
+    /**
+     * The `systemd-run` call that starts this same command as a transient unit.
+     * Split out because a mistyped property flag fails before polkit is ever
+     * asked, which looks exactly like a machine that has no privilege to give.
+     */
+    internal fun engineUnitArgv(
+        command: String,
+        arguments: List<String>,
+        environment: Map<String, String>,
+    ): List<String> {
         val argv = mutableListOf(
             systemdRun,
             "--system",
@@ -116,13 +129,15 @@ class DesktopPrivileges(
             "--service-type=simple",
             "--collect",
             "--uid=${System.getProperty("user.name")}",
-            "-p=AmbientCapabilities=CAP_NET_ADMIN",
-            "-p=CapabilityBoundingSet=CAP_NET_ADMIN",
+            // `-p=Key=Value` is read as an assignment with an empty key and
+            // fails outright, so each property is its own long option.
+            "--property=AmbientCapabilities=CAP_NET_ADMIN",
+            "--property=CapabilityBoundingSet=CAP_NET_ADMIN",
         )
-        environment.forEach { (key, value) -> argv += "-p=Environment=$key=$value" }
+        environment.forEach { (key, value) -> argv += "--property=Environment=$key=$value" }
         argv += command
-        argv += args
-        return run(*argv.toTypedArray())
+        argv += arguments
+        return argv
     }
 
     private fun run(vararg argv: String): PrivilegeOutcome = runCatching {
