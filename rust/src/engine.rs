@@ -1042,6 +1042,12 @@ impl Core {
         &self.stats
     }
 
+    /// The shared counters, for the desktop proxy sessions that report TLS and
+    /// rewrite costs like the TUN path does (see [`crate::proxy`]).
+    pub(crate) fn stats_arc(&self) -> Arc<Stats> {
+        Arc::clone(&self.stats)
+    }
+
     /// Opens the writable data root (files + database). The platform calls
     /// this once, as soon as it knows the app's file directory; every later
     /// call is a no-op, so a reconnect never re-opens a live store.
@@ -1261,7 +1267,7 @@ impl Core {
 
     /// The reason this collection of packages may not use the network right
     /// now, or `None` when it is allowed.
-    fn app_blocked_reason(&self, packages: &[String]) -> Option<&'static str> {
+    pub(crate) fn app_blocked_reason(&self, packages: &[String]) -> Option<&'static str> {
         let policy = Arc::clone(&*self.app_network_policy.read().unwrap());
         policy.blocked_reason(
             packages,
@@ -4426,7 +4432,7 @@ impl Core {
 
     // --------------------------------------------------------------- logging
 
-    fn log_event(&self, event: Event) {
+    pub(crate) fn log_event(&self, event: Event) {
         // With the screen off nobody reads the log, and writing it would keep
         // the process out of the deepest sleep states.
         if self.is_screen_off() && self.cfg.read().unwrap().eco_mode {
@@ -4591,7 +4597,7 @@ impl Core {
     /// the apps that turned out to reject the AdFree CA. Learned entries are
     /// per app, not per host: the alert says the client's trust store refused
     /// us, and every later connection of that app would fail the same way.
-    fn effective_https_skip_apps(&self) -> Arc<HashSet<String>> {
+    pub(crate) fn effective_https_skip_apps(&self) -> Arc<HashSet<String>> {
         let configured = self.https_skip_apps.read().unwrap();
         let learned = self.ca_rejecting_apps.read().unwrap();
         if learned.is_empty() {
@@ -4615,7 +4621,7 @@ impl Core {
     /// not trust the AdFree CA. Remember the owner so its next connection is
     /// handed to the origin untouched — DNS filtering and `$app=` rules still
     /// apply, the TLS payload just stays encrypted. Logged once per app.
-    fn note_client_cert_rejection(&self, err: &str, apps: &[String], host: &str) {
+    pub(crate) fn note_client_cert_rejection(&self, err: &str, apps: &[String], host: &str) {
         if apps.is_empty() || !Self::client_rejected_certificate(err) {
             return;
         }
@@ -4757,8 +4763,35 @@ impl Core {
     /// HTTPS filtering is opt-in and needs a loaded CA; both the relay and the
     /// DNS layer's deferral of `$redirect` hosts read the same gate, so a host
     /// is never let through on the promise of a filter that is not there.
-    fn mitm_ready(&self, cfg: &Config) -> bool {
+    pub(crate) fn mitm_ready(&self, cfg: &Config) -> bool {
         cfg.mitm_enabled && !self.is_paused() && self.mitm_ca.read().unwrap().has_ca()
+    }
+
+    /// The splice set a new proxy connection opens with; the desktop proxy
+    /// attributes flows from `SO_PEERCRED` instead of a packet header, but the
+    /// uid -> package table and every decision on top of it are shared.
+    pub(crate) fn apps_for_local_uid(&self, uid: u32) -> Vec<String> {
+        self.packages_for_uid(uid)
+    }
+
+    /// Packages owning the local UDP socket on `port` (the kernel table
+    /// answers, as the TUN path does without a platform callback).
+    pub(crate) fn apps_for_local_port(&self, port: u16) -> Vec<String> {
+        let uid = self.uidmap.lock().unwrap().lookup(port);
+        self.packages_for_uid(uid)
+    }
+
+    /// The user rewrite for one host, if any (family filtering is the
+    /// caller's: an A rule must not answer an AAAA question).
+    pub(crate) fn dns_rewrite_for(&self, host: &str) -> Option<std::net::IpAddr> {
+        crate::dnsrewrite::lookup(&self.dns_rewrites.read().unwrap(), host)
+    }
+
+    /// The HTTPS website lists as they stand right now, for a connection that
+    /// opens outside the TUN path (see [`crate::proxy`]).
+    pub(crate) fn https_host_lists(&self) -> (Arc<crate::mitm::hosts::HostPatterns>, Arc<crate::mitm::hosts::HostPatterns>, bool) {
+        let hosts = self.https_hosts.read().unwrap();
+        (Arc::clone(&hosts.skip), Arc::clone(&hosts.only), hosts.only_mode)
     }
 
     /// Overrides the upstream trust anchors. The engine's end-to-end tests use
@@ -4847,7 +4880,7 @@ impl Core {
     /// The DNS server the next query travels to, rendered the way the request
     /// log shows a destination: `udp://94.140.14.14:53`, `tls://host:853` or
     /// the DoH URL.
-    fn dns_server_text(&self) -> String {
+    pub(crate) fn dns_server_text(&self) -> String {
         if let Some(resolver) = self.secure_resolver.read().unwrap().as_ref() {
             return match resolver.protocol {
                 crate::state::model::DnsProtocol::Dot => {

@@ -196,6 +196,14 @@ pub fn synthesize_error(
             &parsed
         }
     };
+    let body = error_message(query, rcode)?;
+    Some(packet.rewrite_udp(&body))
+}
+
+/// The message form of [`synthesize_error`]: DNS bytes with no IP wrapper, for
+/// callers that answer over a socket rather than through the tun (the desktop
+/// transparent proxy, see [`crate::proxy`]).
+pub fn error_message(query: &Query<'_>, rcode: u16) -> Option<Vec<u8>> {
     if !query.has_question || query.q_end > query.body.len() {
         return None;
     }
@@ -209,12 +217,20 @@ pub fn synthesize_error(
     body.extend_from_slice(&0u16.to_be_bytes());
     body.extend_from_slice(&0u16.to_be_bytes());
     body.extend_from_slice(question);
-    Some(packet.rewrite_udp(&body))
+    Some(body)
 }
 
 /// Builds a synthetic answer for `q` and wraps it into a complete IP packet
 /// addressed back to the querying client.
 pub fn synthesize_reply(packet: &Packet<'_>, q: &Query<'_>, mode: BlockMode) -> Option<Vec<u8>> {
+    let body = block_message(q, mode)?;
+    Some(packet.rewrite_udp(&body))
+}
+
+/// The message form of [`synthesize_reply`]: the refused answer as DNS bytes,
+/// no IP wrapper, keyed only on the parsed query. This is what a socket-based
+/// server writes back after swapping source and port ([`crate::proxy`]).
+pub fn block_message(q: &Query<'_>, mode: BlockMode) -> Option<Vec<u8>> {
     if !q.has_question || q.q_end > q.body.len() {
         return None;
     }
@@ -252,7 +268,7 @@ pub fn synthesize_reply(packet: &Packet<'_>, q: &Query<'_>, mode: BlockMode) -> 
         }
     }
 
-    Some(packet.rewrite_udp(&body))
+    Some(body)
 }
 
 fn q_end_len(q: &Query<'_>, mode: BlockMode) -> usize {

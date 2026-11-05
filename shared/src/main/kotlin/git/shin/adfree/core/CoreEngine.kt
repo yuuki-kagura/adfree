@@ -34,7 +34,29 @@ class CoreEngine(
 
     fun isRunning(): Boolean = runCatching { git.shin.adfree.core.coreIsRunning() }.getOrDefault(false)
 
-    // ----------------------------------------------------------------- config    // ----------------------------------------------------------------- config
+    /**
+     * Starts the desktop protection stack: a transparent HTTP(S) proxy and a
+     * DNS server on loopback — the shape AdGuard for Windows uses in place of
+     * a VPN, since a desktop has no per-app tunnel to open. Kernel redirect
+     * rules (or an explicit proxy setting) are what put traffic onto it.
+     * Returns false when the listeners cannot come up; protection stays off
+     * rather than pretending.
+     */
+    fun startProxy(
+        tcpPort: Int = PROXY_TCP_PORT,
+        dnsPort: Int = PROXY_DNS_PORT,
+    ): Boolean = runCatching {
+        git.shin.adfree.core.coreStartProxy(tcpPort.toUShort(), dnsPort.toUShort())
+    }.getOrDefault(false)
+
+    fun stopProxy() {
+        runCatching { git.shin.adfree.core.coreStopProxy() }
+    }
+
+    fun isProxyRunning(): Boolean =
+        runCatching { git.shin.adfree.core.coreProxyRunning() }.getOrDefault(false)
+
+    // ----------------------------------------------------------------- config
 
     fun setScreenOff(off: Boolean) = runCatching { git.shin.adfree.core.coreSetScreenOff(off) }
 
@@ -589,6 +611,10 @@ class CoreEngine(
         const val NETWORK_WIFI = 1
         const val NETWORK_CELLULAR = 2
         const val NETWORK_OTHER = 3
+
+        /** The desktop proxy's listeners; must match `rust/src/proxy/mod.rs`. */
+        const val PROXY_TCP_PORT = 3129
+        const val PROXY_DNS_PORT = 5353
 
         @Volatile
         var screenOffFlag = false

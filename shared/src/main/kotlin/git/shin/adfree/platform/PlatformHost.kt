@@ -66,6 +66,16 @@ interface PlatformHost {
 
     /** The OS exposes an installed-app catalogue (apps, firewall by app). */
     fun supportsAppCatalogue(): Boolean = true
+
+    /**
+     * How traffic reaches the filter when this platform has no system tunnel.
+     * Android answers nothing — its VpnService captures the device without
+     * the user configuring anything. A desktop names the local listeners and
+     * the redirect that puts traffic onto them, so the screen can show the
+     * address a browser can be pointed at instead of a switch that promises
+     * capture which never happens.
+     */
+    fun localProxyStatus(): List<Pair<String, String>> = emptyList()
 }
 
 /** Kept separate from [PlatformHost] so a desktop host can reuse the parts it can honour. */

@@ -34,6 +34,8 @@ import git.shin.adfree.core.CoreEngine
 class DesktopPlatformHost(
     /** Where [DesktopCaExporter] writes the PEM, so the toast can name it. */
     private val caFile: File? = null,
+    /** The listener rows, read live: the container supplies it from the core. */
+    private val proxyStatus: () -> List<Pair<String, String>> = { emptyList() },
 ) : PlatformHost {
 
     /** Toasts the window pipes into the scaffold's snackbar host. */
@@ -76,13 +78,16 @@ class DesktopPlatformHost(
     override fun deviceLanguage(): String = Locale.getDefault().language.lowercase(Locale.ROOT)
     override fun packageName(): String = "git.shin.adfree"
 
-    // Phase 3 will flip the tunnel and CA flags with real Linux protection;
-    // until then the UI hides these controls rather than offering dead ones.
+    // Protection here is the local transparent proxy, not a system tunnel, so
+    // the tunnel-shaped controls stay hidden and the proxy card takes their
+    // place; notifications and the battery whitelist have no Linux answer.
     override fun supportsSystemTunnel(): Boolean = false
     override fun supportsNotifications(): Boolean = false
     override fun supportsBatteryOptimization(): Boolean = false
     override fun supportsCertificateInstaller(): Boolean = false
     override fun supportsAppCatalogue(): Boolean = false
+
+    override fun localProxyStatus(): List<Pair<String, String>> = proxyStatus()
 }
 
 /** Real files instead of SAF: the uriText is simply the absolute path. */
@@ -156,10 +161,11 @@ class DesktopKeyValueStore(private val file: File) : KeyValueStore {
 }
 
 /**
- * Desktop protection is engine-side: there is no VpnService, so the switch
- * tracks the persisted intent rather than an OS tunnel nobody asked for.
- * The core still resolves and filters; capturing traffic would need a TUN fd,
- * which only a root launcher could hand it.
+ * Desktop protection is the AdGuard-for-Windows shape: no tunnel, a local
+ * transparent proxy and DNS server that the machine's own traffic is brought
+ * onto by kernel redirect rules (or an explicit proxy setting). The switch
+ * follows the listeners themselves — a taken port shows as protection off,
+ * never as a filter that is not running.
  */
 class DesktopTunnelControl(
     private val coreEngine: CoreEngine,
@@ -168,18 +174,24 @@ class DesktopTunnelControl(
 
     override val isVpnActive: StateFlow<Boolean> = protectionWanted
 
-    override fun isTunnelUp(): Boolean = isVpnActive.value
+    override fun isTunnelUp(): Boolean = coreEngine.isProxyRunning()
 
     override fun needsConsent(): Boolean = false
 
     override fun startVpnService() {
-        System.err.println("[desktop] engine ready: ${coreEngine.isReady()}")
+        if (!coreEngine.startProxy()) {
+            System.err.println("[desktop] proxy listeners did not come up (ports taken?)")
+        }
     }
 
-    override fun stopVpnService() = Unit
+    override fun stopVpnService() {
+        coreEngine.stopProxy()
+    }
 
     override fun restartVpnService() {
-        System.err.println("[desktop] engine re-applied after config change")
+        // Both listeners read the engine's live tables, so a config change
+        // needs no reconnect; only a stack that fell over has to come back.
+        if (isVpnActive.value && !coreEngine.isProxyRunning()) coreEngine.startProxy()
     }
 
     override fun onPermissionResult(granted: Boolean) = Unit

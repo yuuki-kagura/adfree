@@ -1,0 +1,60 @@
+#!/usr/sbin/nft -f
+#
+# Kernel redirect for AdFree's desktop protection — the Linux form of what
+# AdGuard for Windows does with its WFP callouts: the machine's own HTTP(S)
+# and DNS traffic is moved onto the local listeners in `rust/src/proxy`, and
+# QUIC is refused so browsers fall back to the TCP the proxy can see.
+#
+#   install:   sudo nft -f tools/adfree-linux.nft
+#   remove:    sudo nft delete table inet adfree
+#
+# Every rule skips the firewall mark 0xad45 (`proxy::FWMARK`), which the proxy
+# puts on the sockets it dials itself — without it the redirect would catch
+# the proxy's own upstream traffic and feed it back into itself. That mark
+# needs CAP_NET_ADMIN, so these rules and an AdFree that runs as the same user
+# belong together: either run the app as root, or use explicit-proxy mode in
+# the browser (127.0.0.1:3129) and no rules at all.
+
+table inet adfree {
+
+    # ---------------------------------------------------------- HTTP(S) flow
+    chain http {
+        type nat hook output priority -100; policy accept;
+
+        # The proxy's own connections travel on.
+        meta mark 0xad45 accept
+
+        # Locally generated packets reach the nat table at the output hook,
+        # not prerouting; dnat is what records the original destination that
+        # `SO_ORIGINAL_DST` reads back in `proxy::tcp`. Each family names its
+        # own loopback: an IPv6 packet cannot be sent to an IPv4 address.
+        meta nfproto ipv4 tcp dport { 80, 443 } dnat to 127.0.0.1:3129
+        meta nfproto ipv6 tcp dport { 80, 443 } dnat to [::1]:3129
+    }
+
+    # ------------------------------------------------------------- DNS flow
+    chain dns {
+        type nat hook output priority -100; policy accept;
+
+        meta mark 0xad45 accept
+
+        # Both transports: some resolvers fall back to TCP/53 on truncation.
+        meta nfproto ipv4 udp dport 53 dnat to 127.0.0.1:5353
+        meta nfproto ipv4 tcp dport 53 dnat to 127.0.0.1:5353
+        meta nfproto ipv6 udp dport 53 dnat to [::1]:5353
+        meta nfproto ipv6 tcp dport 53 dnat to [::1]:5353
+    }
+
+    # ------------------------------------------------------------ QUIC gate
+    chain quic {
+        type filter hook output priority 0; policy accept;
+
+        meta mark 0xad45 accept
+
+        # HTTP/3 rides UDP/443 past any TCP proxy. Refusing it — rather than
+        # silently dropping it — is what makes Chrome and curl give up the
+        # attempt quickly and retry over the TCP connection that is filtered.
+        # `icmpx` covers the v4 and the v6 answer from one rule.
+        udp dport 443 reject with icmpx type admin-prohibited
+    }
+}

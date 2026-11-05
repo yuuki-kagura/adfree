@@ -797,6 +797,8 @@ internal object IntegrityCheckingUniffiLib {
     ): Int
     external fun uniffi_adfree_core_checksum_func_core_protection_save(
     ): Int
+    external fun uniffi_adfree_core_checksum_func_core_proxy_running(
+    ): Int
     external fun uniffi_adfree_core_checksum_func_core_relay_count(
     ): Int
     external fun uniffi_adfree_core_checksum_func_core_remove_root_ca(
@@ -859,11 +861,15 @@ internal object IntegrityCheckingUniffiLib {
     ): Int
     external fun uniffi_adfree_core_checksum_func_core_start(
     ): Int
+    external fun uniffi_adfree_core_checksum_func_core_start_proxy(
+    ): Int
     external fun uniffi_adfree_core_checksum_func_core_state_load(
     ): Int
     external fun uniffi_adfree_core_checksum_func_core_stats(
     ): Int
     external fun uniffi_adfree_core_checksum_func_core_stop(
+    ): Int
+    external fun uniffi_adfree_core_checksum_func_core_stop_proxy(
     ): Int
     external fun uniffi_adfree_core_checksum_func_core_take_log_lines(
     ): Int
@@ -995,6 +1001,8 @@ internal object UniffiLib {
     ): Unit
     external fun uniffi_adfree_core_fn_func_core_protection_save(`value`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): Byte
+    external fun uniffi_adfree_core_fn_func_core_proxy_running(uniffi_out_err: UniffiRustCallStatus, 
+    ): Byte
     external fun uniffi_adfree_core_fn_func_core_relay_count(uniffi_out_err: UniffiRustCallStatus, 
     ): Int
     external fun uniffi_adfree_core_fn_func_core_remove_root_ca(uniffi_out_err: UniffiRustCallStatus, 
@@ -1057,11 +1065,15 @@ internal object UniffiLib {
     ): Unit
     external fun uniffi_adfree_core_fn_func_core_start(`tunFd`: Int,uniffi_out_err: UniffiRustCallStatus, 
     ): Unit
+    external fun uniffi_adfree_core_fn_func_core_start_proxy(`tcpPort`: Short,`dnsPort`: Short,uniffi_out_err: UniffiRustCallStatus, 
+    ): Byte
     external fun uniffi_adfree_core_fn_func_core_state_load(uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
     external fun uniffi_adfree_core_fn_func_core_stats(uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
     external fun uniffi_adfree_core_fn_func_core_stop(uniffi_out_err: UniffiRustCallStatus, 
+    ): Unit
+    external fun uniffi_adfree_core_fn_func_core_stop_proxy(uniffi_out_err: UniffiRustCallStatus, 
     ): Unit
     external fun uniffi_adfree_core_fn_func_core_take_log_lines(uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
@@ -1309,6 +1321,9 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
     if ((lib.uniffi_adfree_core_checksum_func_core_protection_save() and 0xFFFF) != 21422) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
+    if ((lib.uniffi_adfree_core_checksum_func_core_proxy_running() and 0xFFFF) != 59086) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
     if ((lib.uniffi_adfree_core_checksum_func_core_relay_count() and 0xFFFF) != 38928) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
@@ -1402,6 +1417,9 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
     if ((lib.uniffi_adfree_core_checksum_func_core_start() and 0xFFFF) != 51365) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
+    if ((lib.uniffi_adfree_core_checksum_func_core_start_proxy() and 0xFFFF) != 23268) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
     if ((lib.uniffi_adfree_core_checksum_func_core_state_load() and 0xFFFF) != 43672) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
@@ -1409,6 +1427,9 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if ((lib.uniffi_adfree_core_checksum_func_core_stop() and 0xFFFF) != 23004) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if ((lib.uniffi_adfree_core_checksum_func_core_stop_proxy() and 0xFFFF) != 32836) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if ((lib.uniffi_adfree_core_checksum_func_core_take_log_lines() and 0xFFFF) != 63880) {
@@ -6737,6 +6758,16 @@ public object FfiConverterSequenceTypeUidApps: FfiConverterRustBuffer<List<UidAp
     )
     }
     
+ fun `coreProxyRunning`(): kotlin.Boolean {
+            return FfiConverterBoolean.lift(
+    uniffiRustCall() { _status ->
+    UniffiLib.uniffi_adfree_core_fn_func_core_proxy_running(
+    
+        _status)
+}
+    )
+    }
+    
 
         /**
          * Number of relays currently alive (for the UI).
@@ -7190,6 +7221,24 @@ public object FfiConverterSequenceTypeUidApps: FfiConverterRustBuffer<List<UidAp
     
 
         /**
+         * Starts the desktop protection stack: a transparent TCP proxy and a DNS
+         * server on loopback (see [`crate::proxy`]). This is AdGuard-for-Windows'
+         * shape — local proxy plus redirect rules, not a VPN. Returns false when the
+         * listeners cannot come up (ports taken, proxy already running).
+         */ fun `coreStartProxy`(`tcpPort`: kotlin.UShort, `dnsPort`: kotlin.UShort): kotlin.Boolean {
+            return FfiConverterBoolean.lift(
+    uniffiRustCall() { _status ->
+    UniffiLib.uniffi_adfree_core_fn_func_core_start_proxy(
+    
+        
+        FfiConverterUShort.lower(`tcpPort`),
+        FfiConverterUShort.lower(`dnsPort`),_status)
+}
+    )
+    }
+    
+
+        /**
          * The whole persisted state. Defaults when the store is not open (the UI
          * still renders a usable screen).
          */ fun `coreStateLoad`(): StateSnapshot {
@@ -7216,6 +7265,15 @@ public object FfiConverterSequenceTypeUidApps: FfiConverterRustBuffer<List<UidAp
         = 
     uniffiRustCall() { _status ->
     UniffiLib.uniffi_adfree_core_fn_func_core_stop(
+    
+        _status)
+}
+    
+    
+ fun `coreStopProxy`()
+        = 
+    uniffiRustCall() { _status ->
+    UniffiLib.uniffi_adfree_core_fn_func_core_stop_proxy(
     
         _status)
 }

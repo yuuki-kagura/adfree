@@ -55,6 +55,7 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -138,6 +139,14 @@ fun HomeScreen(
             Spacer(modifier = Modifier.height(14.dp))
 
             HomeSystemStatusRow()
+
+            // Read during composition, so the card follows the listeners: a
+            // start that could not bind its ports must not keep saying "up".
+            val proxyRows = platform.localProxyStatus()
+            if (proxyRows.isNotEmpty()) {
+                Spacer(modifier = Modifier.height(16.dp))
+                HomeLocalProxyCard(proxyRows)
+            }
 
             if (privateDnsOn) {
                 Spacer(modifier = Modifier.height(16.dp))
@@ -380,6 +389,67 @@ private fun PrivateDnsWarningCard(onOpenSettings: () -> Unit) {
                 shape = RoundedCornerShape(8.dp),
             ) {
                 Text(L10n.get(Strings.home_private_dns_open), fontSize = 11.sp)
+            }
+        }
+    }
+}
+
+/**
+ * Where the machine's traffic is brought onto the filter when there is no
+ * system tunnel to open: the desktop's local proxy listeners and the redirect
+ * that feeds them. Android shows nothing here — its VpnService captures the
+ * device without the user running anything.
+ */
+@Composable
+private fun HomeLocalProxyCard(rows: List<Pair<String, String>>) {
+    Card(
+        modifier = Modifier.fillMaxWidth().testTag("home_local_proxy"),
+        shape = RoundedCornerShape(14.dp),
+        colors = CardDefaults.cardColors(containerColor = AdGuardDarkSurface),
+    ) {
+        Column(modifier = Modifier.padding(14.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(
+                    imageVector = Icons.Default.Dns,
+                    contentDescription = null,
+                    tint = AdGuardGreenPrimary,
+                    modifier = Modifier.size(18.dp),
+                )
+                Spacer(modifier = Modifier.width(8.dp))
+                Text(
+                    text = L10n.get(Strings.home_proxy_title),
+                    fontSize = 13.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = AdGuardTextPrimary,
+                )
+            }
+            Spacer(modifier = Modifier.height(6.dp))
+            Text(
+                text = L10n.get(Strings.home_proxy_body),
+                fontSize = 11.sp,
+                color = AdGuardTextSecondary,
+            )
+            Spacer(modifier = Modifier.height(8.dp))
+            rows.forEach { (label, value) ->
+                Row(
+                    modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        text = label,
+                        modifier = Modifier.width(90.dp),
+                        fontSize = 11.sp,
+                        color = AdGuardTextMuted,
+                    )
+                    // Addresses and a command line, not prose: monospace, and
+                    // selectable so the redirect can be copied out of the box.
+                    Text(
+                        text = value,
+                        fontSize = 11.sp,
+                        fontFamily = FontFamily.Monospace,
+                        color = AdGuardTextPrimary,
+                    )
+                }
             }
         }
     }

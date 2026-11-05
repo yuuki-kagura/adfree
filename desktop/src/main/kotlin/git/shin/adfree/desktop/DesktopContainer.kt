@@ -47,16 +47,34 @@ class DesktopContainer(
         CoreEngine(
             log = LogSink { System.err.println("[core] $it") },
             caExporter = DesktopCaExporter(dataRoot),
-            // The desktop cannot look into the distro's trust store reliably;
-            // null keeps the HTTPS section honest ("not trusted yet").
-            caTrustChecker = null,
+            // The core reads the distro bundle itself (see `rust/src/trust.rs`):
+            // trusted means the PEM is in /usr/local/share/ca-certificates and
+            // `update-ca-certificates` has run. Called straight on the bindings
+            // because this runs while the engine itself is being built.
+            caTrustChecker = git.shin.adfree.platform.CaTrustChecker {
+                runCatching { git.shin.adfree.core.coreRootTrustStatus().installed }
+                    .getOrDefault(false)
+            },
         ).also {
             dataRoot.mkdirs()
             runCatching { coreSetDataRoot(dataRoot.absolutePath) }
         }
     }
 
-    val platformHost = DesktopPlatformHost(File(dataRoot, "adfree-ca.pem"))
+    val platformHost = DesktopPlatformHost(
+        File(dataRoot, "adfree-ca.pem"),
+        // Read when the screen asks, so the card follows the listeners rather
+        // than a snapshot taken at startup.
+        proxyStatus = {
+            val up = coreEngine.isProxyRunning()
+            listOf(
+                "HTTP(S)" to "127.0.0.1:${CoreEngine.PROXY_TCP_PORT}",
+                "DNS" to "127.0.0.1:${CoreEngine.PROXY_DNS_PORT}",
+                "Redirect" to "sudo nft -f tools/adfree-linux.nft",
+                "State" to if (up) "listening" else "stopped",
+            )
+        },
+    )
     val fileHost = DesktopFileHost()
     val inventory = DesktopAppInventory()
     private val reminders = NoopReminders()

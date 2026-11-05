@@ -140,10 +140,33 @@ HTTPS module until the store contains the CA. The full flow, including the
 Android 14+ user trust store path, is documented in
 [DESIGN.md](DESIGN.md#installing-the-certificate).
 
+## Desktop protection on Linux
+
+A desktop has no per-app tunnel to open, so Linux filters traffic the way
+AdGuard for Windows does — a local transparent proxy rather than a VPN:
+
+- `rust/src/proxy` listens on `127.0.0.1:3129` (HTTP/HTTPS) and `:5353` (DNS)
+  and runs the same engine the tunnel does: the lists, the app firewall, the
+  rewrites, the event log and, when HTTPS filtering is armed, the very same
+  TLS-terminating session.
+- `tools/adfree-linux.nft` moves the machine's own traffic onto those
+  listeners with `nft` redirect rules (`sudo nft -f tools/adfree-linux.nft`,
+  remove with `sudo nft delete table inet adfree`) and refuses QUIC on UDP/443
+  so browsers fall back to the TCP that is filtered.
+
+The listeners skip the firewall mark `0xad45` on the sockets they dial
+themselves, which is what keeps the redirect from catching the proxy's own
+upstream traffic. Setting that mark needs `CAP_NET_ADMIN`, so the rules and an
+AdFree running as root belong together — or skip root entirely and point the
+browser at `127.0.0.1:3129`: an explicit `CONNECT`/absolute-form request names
+its own destination and gets identical filtering. The Home screen shows both
+addresses and the rule command so the setup is never guesswork.
+
 ## Limitations
 
-- Android is the only shipping shell today; Linux, Windows, macOS and iOS are
-  the planned targets — see the
+- Android is the only shipping shell today. Linux runs the whole UI and filters
+  through the local proxy above; Windows, macOS and iOS are the planned
+  targets — see the
   [platform roadmap](DESIGN.md#platform-roadmap).
 - HTTPS filtering requires installing the CA.
 - With full ECH on, flows that negotiate ECH are spliced rather than

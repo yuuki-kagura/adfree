@@ -309,6 +309,25 @@ pub fn core_is_running() -> bool {
     guard(false, || crate::core().is_running())
 }
 
+/// Starts the desktop protection stack: a transparent TCP proxy and a DNS
+/// server on loopback (see [`crate::proxy`]). This is AdGuard-for-Windows'
+/// shape — local proxy plus redirect rules, not a VPN. Returns false when the
+/// listeners cannot come up (ports taken, proxy already running).
+#[uniffi::export]
+pub fn core_start_proxy(tcp_port: u16, dns_port: u16) -> bool {
+    guard(false, || crate::proxy::start(tcp_port, dns_port))
+}
+
+#[uniffi::export]
+pub fn core_stop_proxy() {
+    guard((), crate::proxy::stop)
+}
+
+#[uniffi::export]
+pub fn core_proxy_running() -> bool {
+    guard(false, crate::proxy::is_running)
+}
+
 /// Hands over upstream UDP sockets that the app has already protected. The engine
 /// forwards every non-blocked DNS query through them.
 #[uniffi::export]

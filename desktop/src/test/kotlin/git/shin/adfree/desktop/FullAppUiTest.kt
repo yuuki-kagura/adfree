@@ -10,6 +10,7 @@ import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.runComposeUiTest
 import androidx.compose.ui.test.waitUntilAtLeastOneExists
+import git.shin.adfree.core.CoreEngine
 import git.shin.adfree.l10n.L10n
 import git.shin.adfree.l10n.Strings
 import git.shin.adfree.platform.BackRegistry
@@ -72,6 +73,10 @@ class FullAppUiTest {
             // No notification/battery health chips on a desktop OS.
             onNodeWithText(L10n.get(Strings.home_health_notifications)).assertDoesNotExist()
             onNodeWithText(L10n.get(Strings.home_health_battery)).assertDoesNotExist()
+            // What a desktop does have: the local proxy the traffic is
+            // redirected onto, in place of the Android tunnel status.
+            onNodeWithText(L10n.get(Strings.home_proxy_title)).assertExists()
+            onNodeWithText("127.0.0.1:${CoreEngine.PROXY_TCP_PORT}").assertExists()
 
             // Tab switch through the shared intent pipeline.
             onNodeWithText(L10n.get(Strings.nav_settings)).performClick()

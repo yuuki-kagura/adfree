@@ -34,6 +34,7 @@ pub mod jsonprune;
 pub mod logbuf;
 pub mod packet;
 pub mod pathmask;
+pub mod proxy;
 pub mod safesearch;
 pub mod services;
 pub mod smart;
