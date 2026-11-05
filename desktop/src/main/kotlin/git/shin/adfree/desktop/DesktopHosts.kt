@@ -31,7 +31,10 @@ import git.shin.adfree.core.CoreEngine
  * URLs open in the browser, and the OS-settings prompts report honestly that
  * Linux has nothing of the sort. Nothing throws; nothing pretends.
  */
-class DesktopPlatformHost : PlatformHost {
+class DesktopPlatformHost(
+    /** Where [DesktopCaExporter] writes the PEM, so the toast can name it. */
+    private val caFile: File? = null,
+) : PlatformHost {
 
     /** Toasts the window pipes into the scaffold's snackbar host. */
     val toasts = MutableSharedFlow<String>(extraBufferCapacity = 8)
@@ -61,10 +64,25 @@ class DesktopPlatformHost : PlatformHost {
     override fun miuiNoRestrictApps(): String? = null
     override fun privateDnsMode(): DnsPrivacyMode = DnsPrivacyMode.UNKNOWN
     override fun openPrivateDnsSettings() = Unit
-    override fun openCertificateInstaller() = Unit
+
+    // Linux has no in-app certificate screen: name the exact trust-store
+    // commands instead of opening nothing (the PEM is already exported).
+    override fun openCertificateInstaller() {
+        val pem = caFile?.absolutePath ?: return
+        toast("sudo cp $pem /usr/local/share/ca-certificates/adfree-ca.crt && sudo update-ca-certificates")
+    }
+
     override fun openAppDetails(packageName: String) = Unit
     override fun deviceLanguage(): String = Locale.getDefault().language.lowercase(Locale.ROOT)
     override fun packageName(): String = "git.shin.adfree"
+
+    // Phase 3 will flip the tunnel and CA flags with real Linux protection;
+    // until then the UI hides these controls rather than offering dead ones.
+    override fun supportsSystemTunnel(): Boolean = false
+    override fun supportsNotifications(): Boolean = false
+    override fun supportsBatteryOptimization(): Boolean = false
+    override fun supportsCertificateInstaller(): Boolean = false
+    override fun supportsAppCatalogue(): Boolean = false
 }
 
 /** Real files instead of SAF: the uriText is simply the absolute path. */

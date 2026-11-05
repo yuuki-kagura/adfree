@@ -47,6 +47,25 @@ interface PlatformHost {
 
     /** This app's package id, used by settings deep links. */
     fun packageName(): String
+
+    // Capabilities: the UI hides what this platform genuinely cannot do
+    // instead of offering a control that answers nothing. Defaults keep the
+    // Android host (and every existing implementation) unchanged.
+
+    /** A system tunnel (Android's VpnService) can be established here. */
+    fun supportsSystemTunnel(): Boolean = true
+
+    /** The OS has notification channels the app can open and post to. */
+    fun supportsNotifications(): Boolean = true
+
+    /** The OS has a battery-optimization whitelist to exempt this app from. */
+    fun supportsBatteryOptimization(): Boolean = true
+
+    /** The OS can be walked to a screen that installs a CA certificate. */
+    fun supportsCertificateInstaller(): Boolean = true
+
+    /** The OS exposes an installed-app catalogue (apps, firewall by app). */
+    fun supportsAppCatalogue(): Boolean = true
 }
 
 /** Kept separate from [PlatformHost] so a desktop host can reuse the parts it can honour. */

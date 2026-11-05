@@ -88,15 +88,19 @@ data class NavItem(
     val tag: String,
 )
 
-/** The bottom bar and the wide-layout side rail show the same six destinations. */
-private fun defaultNavItems(): List<NavItem> = listOf(
-    NavItem(AdGuardTab.HOME, UiText.Resource(Strings.nav_home), Icons.Filled.Home, Icons.Outlined.Home, "nav_home"),
-    NavItem(AdGuardTab.PROTECTION, UiText.Resource(Strings.nav_protection), Icons.Filled.Shield, Icons.Outlined.Shield, "nav_protection"),
-    NavItem(AdGuardTab.APPS, UiText.Resource(Strings.nav_apps), Icons.Filled.Apps, Icons.Outlined.Apps, "nav_apps"),
-    NavItem(AdGuardTab.ACTIVITY, UiText.Resource(Strings.nav_activity), Icons.AutoMirrored.Filled.ListAlt, Icons.AutoMirrored.Outlined.ListAlt, "nav_activity"),
-    NavItem(AdGuardTab.STATISTICS, UiText.Resource(Strings.nav_statistics), Icons.Filled.PieChart, Icons.Outlined.PieChart, "nav_statistics"),
-    NavItem(AdGuardTab.SETTINGS, UiText.Resource(Strings.nav_settings), Icons.Filled.Settings, Icons.Outlined.Settings, "nav_settings"),
-)
+/** The bottom bar and the wide-layout side rail show the same destinations. */
+@Composable
+private fun defaultNavItems(): List<NavItem> {
+    val platform = git.shin.adfree.platform.currentPlatformHost()
+    return listOf(
+        NavItem(AdGuardTab.HOME, UiText.Resource(Strings.nav_home), Icons.Filled.Home, Icons.Outlined.Home, "nav_home"),
+        NavItem(AdGuardTab.PROTECTION, UiText.Resource(Strings.nav_protection), Icons.Filled.Shield, Icons.Outlined.Shield, "nav_protection"),
+        NavItem(AdGuardTab.APPS, UiText.Resource(Strings.nav_apps), Icons.Filled.Apps, Icons.Outlined.Apps, "nav_apps"),
+        NavItem(AdGuardTab.ACTIVITY, UiText.Resource(Strings.nav_activity), Icons.AutoMirrored.Filled.ListAlt, Icons.AutoMirrored.Outlined.ListAlt, "nav_activity"),
+        NavItem(AdGuardTab.STATISTICS, UiText.Resource(Strings.nav_statistics), Icons.Filled.PieChart, Icons.Outlined.PieChart, "nav_statistics"),
+        NavItem(AdGuardTab.SETTINGS, UiText.Resource(Strings.nav_settings), Icons.Filled.Settings, Icons.Outlined.Settings, "nav_settings"),
+    ).filter { it.tab != AdGuardTab.APPS || platform.supportsAppCatalogue() }
+}
 
 @Composable
 fun AdGuardBottomBar(

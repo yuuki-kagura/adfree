@@ -26,6 +26,11 @@ class NoopPlatformHost : PlatformHost {
     override fun openAppDetails(packageName: String) = Unit
     override fun deviceLanguage(): String = Locale.getDefault().language.lowercase(Locale.ROOT)
     override fun packageName(): String = ""
+    override fun supportsSystemTunnel(): Boolean = false
+    override fun supportsNotifications(): Boolean = false
+    override fun supportsBatteryOptimization(): Boolean = false
+    override fun supportsCertificateInstaller(): Boolean = false
+    override fun supportsAppCatalogue(): Boolean = false
 }
 
 /** No pickers, no documents: every read reports failure, every write declines. */

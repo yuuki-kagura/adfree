@@ -56,7 +56,7 @@ class DesktopContainer(
         }
     }
 
-    val platformHost = DesktopPlatformHost()
+    val platformHost = DesktopPlatformHost(File(dataRoot, "adfree-ca.pem"))
     val fileHost = DesktopFileHost()
     val inventory = DesktopAppInventory()
     private val reminders = NoopReminders()

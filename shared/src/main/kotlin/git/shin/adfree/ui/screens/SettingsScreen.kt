@@ -191,31 +191,37 @@ fun SettingsScreen(
 
             SettingsGroupHeader(L10n.get(Strings.settings_group_network))
 
-            val proxy = state.settings.proxy
-            val proxyActive = proxy.enabled && proxy.isUsable
-            SettingsValueRow(
-                icon = Icons.Default.Route,
-                title = L10n.get(Strings.settings_routing_mode_title),
-                subtitle = L10n.get(if (proxyActive) Strings.settings_routing_socks5
-                    else Strings.settings_routing_local_vpn,
-                ),
-                value = if (proxyActive) "${proxy.host}:${proxy.port}" else null,
-            )
+            // On a platform without a system tunnel the routing row would
+            // only describe a mechanism that is never used; skip it.
+            if (platform.supportsSystemTunnel()) {
+                val proxy = state.settings.proxy
+                val proxyActive = proxy.enabled && proxy.isUsable
+                SettingsValueRow(
+                    icon = Icons.Default.Route,
+                    title = L10n.get(Strings.settings_routing_mode_title),
+                    subtitle = L10n.get(if (proxyActive) Strings.settings_routing_socks5
+                        else Strings.settings_routing_local_vpn,
+                    ),
+                    value = if (proxyActive) "${proxy.host}:${proxy.port}" else null,
+                )
 
-            Spacer(modifier = Modifier.height(10.dp))
+                Spacer(modifier = Modifier.height(10.dp))
+            }
 
-            SettingsLink(
-                icon = Icons.Default.NotificationsActive,
-                title = L10n.get(Strings.settings_notifications_title),
-                subtitle = L10n.get(Strings.settings_notifications_subtitle),
-                onClick = {
-                    // Per-channel switches live in the OS, one per feature
-                    // (protection, firewall, updates, HTTPS reminder).
-                    platform.openNotificationSettings()
-                },
-            )
+            if (platform.supportsNotifications()) {
+                SettingsLink(
+                    icon = Icons.Default.NotificationsActive,
+                    title = L10n.get(Strings.settings_notifications_title),
+                    subtitle = L10n.get(Strings.settings_notifications_subtitle),
+                    onClick = {
+                        // Per-channel switches live in the OS, one per feature
+                        // (protection, firewall, updates, HTTPS reminder).
+                        platform.openNotificationSettings()
+                    },
+                )
 
-            Spacer(modifier = Modifier.height(20.dp))
+                Spacer(modifier = Modifier.height(20.dp))
+            }
 
             SettingsGroupHeader(L10n.get(Strings.settings_group_logging))
 

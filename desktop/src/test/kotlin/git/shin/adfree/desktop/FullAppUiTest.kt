@@ -62,11 +62,16 @@ class FullAppUiTest {
                 }
             }
 
-            // The rail carries the six L10n destinations and Home renders first.
+            // The rail carries the L10n destinations and Home renders first.
+            // The Apps destination is Android-only: no app catalogue here.
             onNodeWithText(L10n.get(Strings.nav_home)).assertExists()
             onNodeWithText(L10n.get(Strings.nav_protection)).assertExists()
             onNodeWithText(L10n.get(Strings.nav_settings)).assertExists()
+            onNodeWithText(L10n.get(Strings.nav_apps)).assertDoesNotExist()
             waitUntilAtLeastOneExists(hasText(L10n.get(Strings.app_name)), 30_000)
+            // No notification/battery health chips on a desktop OS.
+            onNodeWithText(L10n.get(Strings.home_health_notifications)).assertDoesNotExist()
+            onNodeWithText(L10n.get(Strings.home_health_battery)).assertDoesNotExist()
 
             // Tab switch through the shared intent pipeline.
             onNodeWithText(L10n.get(Strings.nav_settings)).performClick()
@@ -75,6 +80,9 @@ class FullAppUiTest {
                 30_000,
             )
             onNodeWithText(L10n.get(Strings.settings_group_general)).assertExists()
+            // The routing row and the notification link hide with their capabilities.
+            onNodeWithText(L10n.get(Strings.settings_routing_mode_title)).assertDoesNotExist()
+            onNodeWithText(L10n.get(Strings.settings_notifications_title)).assertDoesNotExist()
 
             val image = onRoot().captureToImage().toAwtImage()
             ImageIO.write(image, "png", File("/tmp/adfree_full_app.png"))

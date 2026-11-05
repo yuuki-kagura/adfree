@@ -217,6 +217,8 @@ private fun StatusChip(isActive: Boolean) {
 private fun HomeSystemStatusRow() {
     val platform = currentPlatformHost()
     val scope = rememberCoroutineScope()
+    val showNotifications = platform.supportsNotifications()
+    val showBattery = platform.supportsBatteryOptimization()
     var notificationsOn by remember { mutableStateOf(platform.notificationsEnabled()) }
     var batteryOptimized by remember { mutableStateOf(!platform.ignoringBatteryOptimizations()) }
 
@@ -241,38 +243,44 @@ private fun HomeSystemStatusRow() {
         }
     }
 
+    if (!showNotifications && !showBattery) return
+
     Row(
         modifier = Modifier.fillMaxWidth(),
         horizontalArrangement = Arrangement.spacedBy(8.dp),
     ) {
-        SystemStatusChip(
-            icon = if (notificationsOn) Icons.Default.NotificationsActive
-            else Icons.Default.NotificationsOff,
-            title = L10n.get(Strings.home_health_notifications),
-            value = L10n.get(if (notificationsOn) Strings.home_health_notifications_on
-                else Strings.home_health_notifications_off
-            ),
-            ok = notificationsOn,
-            onClick = { platform.requestNotificationPermission() },
-            modifier = Modifier
-                .weight(1f)
-                .testTag("home_status_notifications"),
-        )
-        SystemStatusChip(
-            icon = Icons.Default.BatteryChargingFull,
-            title = L10n.get(Strings.home_health_battery),
-            value = L10n.get(if (batteryOptimized) Strings.home_health_battery_on
-                else Strings.home_health_battery_ok
-            ),
-            ok = !batteryOptimized,
-            onClick = {
+        if (showNotifications) {
+            SystemStatusChip(
+                icon = if (notificationsOn) Icons.Default.NotificationsActive
+                else Icons.Default.NotificationsOff,
+                title = L10n.get(Strings.home_health_notifications),
+                value = L10n.get(if (notificationsOn) Strings.home_health_notifications_on
+                    else Strings.home_health_notifications_off
+                ),
+                ok = notificationsOn,
+                onClick = { platform.requestNotificationPermission() },
+                modifier = Modifier
+                    .weight(1f)
+                    .testTag("home_status_notifications"),
+            )
+        }
+        if (showBattery) {
+            SystemStatusChip(
+                icon = Icons.Default.BatteryChargingFull,
+                title = L10n.get(Strings.home_health_battery),
+                value = L10n.get(if (batteryOptimized) Strings.home_health_battery_on
+                    else Strings.home_health_battery_ok
+                ),
+                ok = !batteryOptimized,
+                onClick = {
                     if (batteryOptimized) platform.requestIgnoreBatteryOptimizations()
                     else platform.openBatterySettings()
                 },
-            modifier = Modifier
-                .weight(1f)
-                .testTag("home_status_battery"),
-        )
+                modifier = Modifier
+                    .weight(1f)
+                    .testTag("home_status_battery"),
+            )
+        }
     }
 }
 
