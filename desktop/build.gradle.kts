@@ -43,3 +43,12 @@ val runUi by tasks.registering(JavaExec::class) {
     classpath = sourceSets["main"].runtimeClasspath
     jvmArgs("--enable-native-access=ALL-UNNAMED")
 }
+
+// The full AdFree UI (shared screens + desktop seams) in one window.
+val runApp by tasks.registering(JavaExec::class) {
+    group = "application"
+    description = "Launch the full AdFree desktop app"
+    mainClass = "git.shin.adfree.desktop.AdFreeDesktopKt"
+    classpath = sourceSets["main"].runtimeClasspath
+    jvmArgs("--enable-native-access=ALL-UNNAMED")
+}
