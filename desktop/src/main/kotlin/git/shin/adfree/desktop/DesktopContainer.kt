@@ -61,19 +61,35 @@ class DesktopContainer(
         }
     }
 
+    /** The system's privilege answers: the mark, the rules, the service. */
+    val privileges = DesktopPrivileges()
+
+    /** Set by the shell so the app can hand its window over to a privileged instance. */
+    var onEngineTakeover: () -> Unit = {}
+
     val platformHost = DesktopPlatformHost(
         File(dataRoot, "adfree-ca.pem"),
         // Read when the screen asks, so the card follows the listeners rather
         // than a snapshot taken at startup.
         proxyStatus = {
             val up = coreEngine.isProxyRunning()
+            val marked = privileges.canSetFirewallMark()
             listOf(
                 "HTTP(S)" to "127.0.0.1:${CoreEngine.PROXY_TCP_PORT}",
                 "DNS" to "127.0.0.1:${CoreEngine.PROXY_DNS_PORT}",
-                "Redirect" to "sudo nft -f tools/adfree-linux.nft",
+                // Which of the two layouts is in play decides whether anything
+                // reaches the filter at all, so the card says it plainly.
+                "Traffic" to if (marked) "the machine's own, redirected" else "only what is pointed here",
+                "Rules" to when {
+                    !marked -> "not installed (no CAP_NET_ADMIN)"
+                    privileges.rulesInstalled() -> "installed"
+                    else -> "not installed"
+                },
                 "State" to if (up) "listening" else "stopped",
             )
         },
+        privileges = privileges,
+        onEngineTakeover = { onEngineTakeover() },
     )
     val fileHost = DesktopFileHost()
     val inventory = DesktopAppInventory()
@@ -106,7 +122,7 @@ class DesktopContainer(
     val viewModel: AdGuardViewModel by lazy {
         AdGuardViewModel(
             repository = repository,
-            tunnel = DesktopTunnelControl(coreEngine, protectionWanted),
+            tunnel = DesktopTunnelControl(coreEngine, protectionWanted, privileges),
             threatAnalyzer = threatAnalyzer,
             coreEngine = coreEngine,
             platform = platformHost,

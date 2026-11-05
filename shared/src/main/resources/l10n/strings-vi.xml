@@ -338,7 +338,8 @@
     <string name="home_private_dns_body">Truy vấn DNS đi thẳng tới máy chủ riêng nên bỏ qua bộ lọc của AdFree. Đã tạm ngừng chặn DoT để mạng vẫn hoạt động; tắt Private DNS để lọc đầy đủ.</string>
     <string name="home_private_dns_open">Mở cài đặt Private DNS</string>
     <string name="home_proxy_title">Proxy cục bộ</string>
-    <string name="home_proxy_body">Nền tảng này không có đường hầm hệ thống: lưu lượng đến AdFree qua các cổng nghe dưới đây. Hãy cài luật chuyển hướng, hoặc trỏ trình duyệt về địa chỉ proxy, để đưa lưu lượng của máy vào bộ lọc.</string>
+    <string name="home_proxy_body">Nền tảng này không có đường hầm hệ thống: lưu lượng đến AdFree qua các cổng nghe dưới đây. Muốn đưa toàn bộ lưu lượng của máy vào bộ lọc thì cần luật chuyển hướng, và luật này cần quyền hệ thống — nút dưới đây sẽ xin quyền đó. Cũng có thể trỏ trình duyệt thẳng vào địa chỉ proxy mà không cần quyền.</string>
+    <string name="home_ask_privileges">Chạy bộ lọc với quyền hệ thống</string>
     <string name="home_shield_toggle">Bật hoặc tắt lọc</string>
     <string name="home_shield_protected">Đang được bảo vệ</string>
     <string name="home_shield_off">Lọc đang tắt</string>

@@ -1201,7 +1201,15 @@ Practical consequences per platform:
   the listeners are never an open proxy or an open resolver on the network.
   QUIC is refused so nothing escapes to HTTP/3; the proxy's own sockets carry
   mark `0xad45` to stay outside the redirect, and `SO_PEERCRED` supplies the
-  UID for the app firewall.
+  UID for the app firewall. The mark is the whole reason the ruleset is safe to
+  install, so `DesktopPrivileges` checks it by actually calling `setsockopt`
+  before writing any rules: an unprivileged process refuses the ruleset outright
+  rather than redirecting its own upstream traffic back into itself. Neither
+  the rules nor the mark needs root as a user, though: the Home button asks
+  polkit to start a transient `systemd-run --system` unit that keeps this
+  uid and carries only `CAP_NET_ADMIN`, which is the same split AdGuard for
+  Windows uses — a privileged engine and a UI running as the signed-in user,
+  with the desktop's own authentication dialog in place of a terminal.
 - **Windows** — Wintun supplies the adapter; a signed driver/service and the IP
   Helper API replace VpnService and `/proc`. The core needs a Windows
   implementation of the fd/socket layer, not a new filtering engine.

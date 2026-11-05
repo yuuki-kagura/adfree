@@ -78,6 +78,10 @@ class FullAppUiTest {
             // redirected onto, in place of the Android tunnel status.
             onNodeWithText(L10n.get(Strings.home_proxy_title)).assertExists()
             onNodeWithText("127.0.0.1:${CoreEngine.PROXY_TCP_PORT}").assertExists()
+            // The redirect that captures the machine's own traffic needs a
+            // privilege a phone gets from VPN consent, so the card carries the
+            // request rather than a command line to type out.
+            onNodeWithTag("home_ask_privileges").assertExists()
 
             // Tab switch through the shared intent pipeline.
             onNodeWithText(L10n.get(Strings.nav_settings)).performClick()

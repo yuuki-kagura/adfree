@@ -115,6 +115,13 @@ fun main() {
             appScope.cancel()
             exitApplication()
         }
+        // The privileged instance binds the same ports, so this one has to be
+        // the one that leaves.
+        DisposableEffect(quit) {
+            container.onEngineTakeover = quit
+            onDispose { container.onEngineTakeover = {} }
+        }
+
         val resumeFiltering: () -> Unit = {
             pauseJob?.cancel()
             pauseJob = null

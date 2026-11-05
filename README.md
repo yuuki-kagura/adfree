@@ -153,21 +153,28 @@ AdGuard for Windows does — a local transparent proxy rather than a VPN:
   each accepted flow is then checked against the addresses this host owns, so
   another machine on the network can neither use AdFree as a proxy nor as a
   resolver.
-- `tools/adfree-linux.nft` moves the machine's own traffic onto those
-  listeners with `nft` redirect rules (`sudo nft -f tools/adfree-linux.nft`,
-  remove with `sudo nft delete table inet adfree`) and refuses QUIC on UDP/443
-  so browsers fall back to the TCP that is filtered.
+- Redirect rules move the machine's own traffic onto those listeners and refuse
+  QUIC on UDP/443 so browsers fall back to the TCP that is filtered. The app
+  generates and installs them itself (`desktop/.../DesktopPrivileges.kt`, the
+  same ruleset as `tools/adfree-linux.nft` for anyone who prefers to apply it
+  by hand) — but only when it can mark its own sockets, because without the
+  mark the redirect catches the traffic the proxy dials and feeds it back to
+  itself.
 
-The listeners skip the firewall mark `0xad45` on the sockets they dial
-themselves, which is what keeps the redirect from catching the proxy's own
-upstream traffic, and the DNS listener answers from the address the query was
-sent to — a redirect only reverses for a reply it can match, so the answer has
-to leave from the server the client thought it was asking. Both need
-`CAP_NET_ADMIN`, so the rules and an AdFree running as root belong together —
-or skip root entirely and point the browser at `127.0.0.1:3129`: an explicit
-`CONNECT`/absolute-form request names its own destination and gets identical
-filtering. The Home screen shows both addresses and the rule command so the
-setup is never guesswork.
+The listeners put the firewall mark `0xad45` on the sockets they dial
+themselves, which is what keeps the redirect out of a loop, and the DNS
+listener answers from the address the query was sent to — a redirect only
+reverses for a reply it can match, so the answer has to leave from the server
+the client thought it was asking. Both need `CAP_NET_ADMIN`, and the Home
+screen asks for it instead of sending the user to a terminal: **Run the filter
+with system privileges** starts the same app as a transient systemd unit that
+keeps the user's uid — so nothing in `~/.local/share/adfree` changes owner —
+and carries only `CAP_NET_ADMIN`. `systemd-run` routes that through polkit, so
+what appears is the desktop's own authentication dialog. Cancel it and AdFree
+keeps working in the other layout: point the browser at `127.0.0.1:3129` and an
+explicit `CONNECT`/absolute-form request names its own destination and gets
+identical filtering. The Home card shows which of the two layouts is live, the
+two addresses, and whether the rules are installed.
 
 ## Limitations
 

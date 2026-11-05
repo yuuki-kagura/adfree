@@ -78,6 +78,22 @@ interface PlatformHost {
     fun localProxyStatus(): List<Pair<String, String>> = emptyList()
 
     /**
+     * The host can ask the system for the privilege that putting the machine's
+     * own traffic onto the filter needs. Android gets it from the VPN consent
+     * dialog it already raises, so it leaves this off; a desktop has no tunnel
+     * to consent to and would otherwise have to send the user to a terminal.
+     */
+    fun supportsPrivilegedEngine(): Boolean = false
+
+    /**
+     * Restarts the app where it can hold that privilege, then closes this
+     * window — the listeners are handed over, not duplicated. Null when the
+     * request went through; otherwise what the system said, in its own words,
+     * because it is a technical answer rather than a screen message.
+     */
+    fun requestPrivilegedEngine(): String? = null
+
+    /**
      * The shell draws a window header: the section name, one step back, and
      * the app-wide menu (settings export/import, activity export). A phone
      * gets all three from the system — the status bar, the back gesture and

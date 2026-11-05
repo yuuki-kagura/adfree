@@ -59,6 +59,7 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import git.shin.adfree.model.ProtectionStats
@@ -93,6 +94,7 @@ fun HomeScreen(
     val state by viewModel.uiState.collectAsState()
     val privateDnsOn by viewModel.privateDnsOn.collectAsState()
     val platform = currentPlatformHost()
+    val scope = rememberCoroutineScope()
 
     // The switch lives in the system settings, so re-read it on every return;
     // the same call re-pushes the effective DoT policy to the core.
@@ -145,7 +147,20 @@ fun HomeScreen(
             val proxyRows = platform.localProxyStatus()
             if (proxyRows.isNotEmpty()) {
                 Spacer(modifier = Modifier.height(16.dp))
-                HomeLocalProxyCard(proxyRows)
+                HomeLocalProxyCard(
+                    rows = proxyRows,
+                    // A desktop can ask the system for the privilege the
+                    // redirect needs; a phone already asked for its tunnel.
+                    onAskPrivileges = if (platform.supportsPrivilegedEngine()) {
+                        {
+                            scope.launch(Dispatchers.IO) {
+                                platform.requestPrivilegedEngine()?.let(platform::toast)
+                            }
+                        }
+                    } else {
+                        null
+                    },
+                )
             }
 
             if (privateDnsOn) {
@@ -401,7 +416,10 @@ private fun PrivateDnsWarningCard(onOpenSettings: () -> Unit) {
  * device without the user running anything.
  */
 @Composable
-private fun HomeLocalProxyCard(rows: List<Pair<String, String>>) {
+private fun HomeLocalProxyCard(
+    rows: List<Pair<String, String>>,
+    onAskPrivileges: (() -> Unit)? = null,
+) {
     Card(
         modifier = Modifier.fillMaxWidth().testTag("home_local_proxy"),
         shape = RoundedCornerShape(14.dp),
@@ -449,6 +467,15 @@ private fun HomeLocalProxyCard(rows: List<Pair<String, String>>) {
                         fontFamily = FontFamily.Monospace,
                         color = AdGuardTextPrimary,
                     )
+                }
+            }
+            onAskPrivileges?.let { ask ->
+                Spacer(modifier = Modifier.height(10.dp))
+                OutlinedButton(
+                    onClick = ask,
+                    modifier = Modifier.fillMaxWidth().testTag("home_ask_privileges"),
+                ) {
+                    Text(L10n.get(Strings.home_ask_privileges), fontSize = 12.sp)
                 }
             }
         }

@@ -8,6 +8,11 @@
 #   install:   sudo nft -f tools/adfree-linux.nft
 #   remove:    sudo nft delete table inet adfree
 #
+# The app installs this itself — `DesktopPrivileges.ruleset()` generates the
+# same text and a test keeps the two from drifting — so typing these lines is
+# optional. What it needs back is `CAP_NET_ADMIN`: the Home screen asks for it
+# through polkit and restarts the app as a transient systemd unit.
+#
 # Every rule skips the firewall mark 0xad45 (`proxy::FWMARK`), which the proxy
 # puts on the sockets it dials itself — without it the redirect would catch
 # the proxy's own upstream traffic and feed it back into itself. That mark

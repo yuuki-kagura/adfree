@@ -27,7 +27,9 @@ dependencies {
     implementation(compose.desktop.currentOs)
     implementation(compose.material3)
     implementation(compose.materialIconsExtended)
-    runtimeOnly(libs.jna)
+    // The host asks libc whether this process may mark its own sockets — that
+    // is what decides whether the redirect layout can be installed at all.
+    implementation(libs.jna)
 
     testImplementation(libs.junit)
     testImplementation(compose.desktop.uiTestJUnit4)

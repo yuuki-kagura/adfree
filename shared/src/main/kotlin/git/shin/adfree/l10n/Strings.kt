@@ -319,6 +319,7 @@ object Strings {
     const val home_private_dns_open = "home_private_dns_open"
     const val home_proxy_title = "home_proxy_title"
     const val home_proxy_body = "home_proxy_body"
+    const val home_ask_privileges = "home_ask_privileges"
     const val home_shield_toggle = "home_shield_toggle"
     const val home_shield_protected = "home_shield_protected"
     const val home_shield_off = "home_shield_off"

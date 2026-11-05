@@ -36,6 +36,10 @@ class DesktopPlatformHost(
     private val caFile: File? = null,
     /** The listener rows, read live: the container supplies it from the core. */
     private val proxyStatus: () -> List<Pair<String, String>> = { emptyList() },
+    /** The system's privilege answers; null where the host has none to ask. */
+    private val privileges: DesktopPrivileges? = null,
+    /** Runs when the privileged engine has taken over: this window must go. */
+    private val onEngineTakeover: () -> Unit = {},
 ) : PlatformHost {
 
     /** Toasts the window pipes into the scaffold's snackbar host. */
@@ -92,6 +96,37 @@ class DesktopPlatformHost(
     override fun supportsWindowHeader(): Boolean = true
 
     override fun localProxyStatus(): List<Pair<String, String>> = proxyStatus()
+
+    // The redirect that captures the machine's own traffic is a kernel
+    // request, so the app asks the system for it through polkit — the desktop
+    // answer to the VPN consent a phone shows.
+    override fun supportsPrivilegedEngine(): Boolean = privileges != null
+
+    override fun requestPrivilegedEngine(): String? {
+        val helper = privileges ?: return null
+        val env = buildMap {
+            listOf(
+                "DISPLAY",
+                "WAYLAND_DISPLAY",
+                "XAUTHORITY",
+                "XDG_RUNTIME_DIR",
+                "XDG_DATA_HOME",
+                "HOME",
+                "ADFREE_CORE_LIB",
+            ).forEach { key ->
+                System.getenv(key)?.let { value -> put(key, value) }
+            }
+        }
+        val outcome = helper.requestPrivilegedEngine(env)
+        return when (outcome) {
+            is PrivilegeOutcome.Ok -> {
+                onEngineTakeover()
+                null
+            }
+            is PrivilegeOutcome.Denied -> outcome.reason
+            is PrivilegeOutcome.Failed -> outcome.reason
+        }
+    }
 }
 
 /** Real files instead of SAF: the uriText is simply the absolute path. */
@@ -174,6 +209,7 @@ class DesktopKeyValueStore(private val file: File) : KeyValueStore {
 class DesktopTunnelControl(
     private val coreEngine: CoreEngine,
     protectionWanted: StateFlow<Boolean>,
+    private val privileges: DesktopPrivileges? = null,
 ) : TunnelControl {
 
     override val isVpnActive: StateFlow<Boolean> = protectionWanted
@@ -185,10 +221,23 @@ class DesktopTunnelControl(
     override fun startVpnService() {
         if (!coreEngine.startProxy()) {
             System.err.println("[desktop] proxy listeners did not come up (ports taken?)")
+            return
+        }
+        // With the mark in hand the redirect is safe to put in: the proxy can
+        // tell its own traffic apart. Without it the rules would catch the
+        // traffic the proxy dials and feed it back to itself, so protection
+        // stays at what is pointed at it instead of taking the machine down.
+        val helper = privileges ?: return
+        if (!helper.canSetFirewallMark()) return
+        when (val outcome = helper.installRules(CoreEngine.PROXY_TCP_PORT, CoreEngine.PROXY_DNS_PORT)) {
+            is PrivilegeOutcome.Ok -> System.err.println("[desktop] redirect rules installed")
+            is PrivilegeOutcome.Denied -> System.err.println("[desktop] redirect rules: ${outcome.reason}")
+            is PrivilegeOutcome.Failed -> System.err.println("[desktop] redirect rules: ${outcome.reason}")
         }
     }
 
     override fun stopVpnService() {
+        privileges?.removeRules()
         coreEngine.stopProxy()
     }
 
