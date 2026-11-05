@@ -94,6 +94,7 @@ Requirements:
 ./desktop/build/install/desktop/bin/desktop # run the probe on the host JVM
 cd rust && cargo build --release            # build libadfree_core.so for the desktop UI
 ./gradlew :desktop:runUi                    # Compose desktop window (uses that .so, or set ADFREE_CORE_LIB)
+./gradlew :desktop:runApp                   # the full AdFree app on Linux (same shared UI as the APK)
 ```
 
 The company table ships at `rust/assets/services.tsv`. To rebuild it from
@@ -119,7 +120,9 @@ cargo test                      # unit + integration tests
 cargo clippy --all-targets      # must stay warning-free
 
 cd ..
-./gradlew :app:testDebugUnitTest
+./gradlew :app:testDebugUnitTest            # Android host + moved-code unit tests
+./gradlew :shared:test                      # shared JVM unit tests
+./gradlew :desktop:test                     # headless Compose UI tests (need the release .so)
 bun install && bun run test     # 32 Chromium tests (1 needs ADFREE_CDP)
 ```
 
