@@ -278,6 +278,19 @@ fun FilteringLogScreen(
                         .padding(top = 2.dp)
                         .testTag("log_retention_note")
                 )
+                // The core drops allowed rows while the settings say to save
+                // the CPU, and a log that shows only refusals reads as a
+                // machine that asked for nothing. Say which half is missing.
+                if (!state.settings.logAllowedRequests) {
+                    Text(
+                        text = L10n.get(Strings.log_allowed_off_hint),
+                        fontSize = 11.sp,
+                        color = AdGuardTextMuted,
+                        modifier = Modifier
+                            .padding(top = 2.dp)
+                            .testTag("log_allowed_off_hint")
+                    )
+                }
             }
 
             // Both actions sit at the right edge; SpaceBetween with three

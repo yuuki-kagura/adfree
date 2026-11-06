@@ -899,6 +899,13 @@ pub fn core() -> &'static Core {
 /// request that never reached an origin counts as bytes the network spared.
 pub(crate) fn log_mitm_block(block: &crate::mitm::proxy::MitmBlock<'_>) {
     let core = core();
+    // A forwarded request is an allowed row, so it is written only while the
+    // settings say to keep allowed rows — the same switch the packet path
+    // honors, and the reason a quiet machine does not fill the log with every
+    // pixel it loaded.
+    if block.allowed && !core.config().log_allowed {
+        return;
+    }
     let saved = if block.allowed {
         0
     } else {

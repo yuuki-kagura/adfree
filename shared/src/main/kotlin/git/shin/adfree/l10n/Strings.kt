@@ -883,6 +883,7 @@ object Strings {
     const val log_detail_content_type = "log_detail_content_type"
     const val log_detail_tls_version = "log_detail_tls_version"
     const val log_detail_cipher_suite = "log_detail_cipher_suite"
+    const val log_allowed_off_hint = "log_allowed_off_hint"
     const val log_detail_connection = "log_detail_connection"
     const val log_detail_transfer = "log_detail_transfer"
     const val log_detail_transport = "log_detail_transport"

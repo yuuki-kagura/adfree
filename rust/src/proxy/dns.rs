@@ -361,6 +361,10 @@ fn serve_one(listener: &Listener, query: &Inquiry, stop: &AtomicBool) {
         }
     };
 
+    // The owner every row this listener writes names, taken once rather than
+    // re-derived in each arm.
+    let app = packages.first().map(String::as_str).unwrap_or("");
+
     match decision {
         Served::Blocked { message, rule, list, category } => {
             if message.is_empty() {
@@ -371,38 +375,28 @@ fn serve_one(listener: &Listener, query: &Inquiry, stop: &AtomicBool) {
             if listener.send(&message, query).is_ok() {
                 stats.inc(&stats.dns_replies);
             }
-            core.log_event(crate::events::with_type(
-                crate::events::with_app(
-                    crate::events::block_event(
-                        crate::events::ACTION_BLOCK,
-                        &host,
-                        &server_text,
-                        &rule,
-                        &list,
-                        category,
-                        0,
-                        BYTES_PER_BLOCKED_REQUEST as u32,
-                        false,
-                    ),
-                    packages.first().map(String::as_str).unwrap_or(""),
+            core.log_event(row(
+                crate::events::block_event(
+                    crate::events::ACTION_BLOCK,
+                    &host,
+                    &server_text,
+                    &rule,
+                    &list,
+                    category,
+                    0,
+                    BYTES_PER_BLOCKED_REQUEST as u32,
+                    false,
                 ),
-                crate::events::req_type::DNS,
+                app,
             ));
         }
         Served::Rewritten { message, answer } => {
             stats.inc(&stats.dns_allowed);
             if listener.send(&message, query).is_ok() {
                 stats.inc(&stats.dns_replies);
-                core.log_event(crate::events::with_type(
-                    crate::events::with_answer(
-                        crate::events::with_app(
-                            crate::events::allow_event(&host, &server_text, 0),
-                            packages.first().map(String::as_str).unwrap_or(""),
-                        ),
-                        &answer,
-                    ),
-                    crate::events::req_type::DNS,
-                ));
+                let mut event = row(crate::events::allow_event(&host, &server_text, 0), app);
+                event = crate::events::with_answer(event, &answer);
+                core.log_event(event);
             }
         }
         Served::Nodata(message) => {
@@ -410,18 +404,41 @@ fn serve_one(listener: &Listener, query: &Inquiry, stop: &AtomicBool) {
                 return;
             }
             // Counted as an allowed reply: the lookup went through, it just
-            // named nothing. No log row — this repeats for every host on the
-            // machine while an outage lasts, and it is not a decision.
+            // named nothing.
             stats.inc(&stats.dns_allowed);
             if listener.send(&message, query).is_ok() {
                 stats.inc(&stats.dns_replies);
+                // An empty answer is still an answer the log shows — this is
+                // the record of a family the machine could not reach, which is
+                // otherwise invisible. The switch decides it like any other
+                // allowed row.
+                if cfg.log_allowed {
+                    core.log_event(row(
+                        crate::events::allow_event(&host, &server_text, 0),
+                        app,
+                    ));
+                }
             }
         }
         Served::Forwarded(reply) => match reply {
             Some(message) => {
                 stats.inc(&stats.dns_allowed);
-                if listener.send(&message, query).is_ok() {
+                let answered = listener.send(&message, query).is_ok();
+                if answered {
                     stats.inc(&stats.dns_replies);
+                }
+                // AdGuard's DNS tab lists every lookup it saw, refused ones
+                // and answered ones, with the addresses the answer carried.
+                // The switch in the settings decides whether we keep those
+                // rows, exactly as the tun path does.
+                if answered && cfg.log_allowed {
+                    let mut event = row(crate::events::allow_event(&host, &server_text, 0), app);
+                    event = crate::events::with_traffic(event, 0, message.len() as u32);
+                    let answer = answer_text(&message);
+                    if !answer.is_empty() {
+                        event = crate::events::with_answer(event, &answer);
+                    }
+                    core.log_event(event);
                 }
             }
             None => {
@@ -429,6 +446,27 @@ fn serve_one(listener: &Listener, query: &Inquiry, stop: &AtomicBool) {
             }
         },
     }
+}
+
+/// Every row the DNS listener writes is the same shape: a lookup, on the
+/// transport it actually arrived on, classified as DNS, owned by the app whose
+/// socket asked. Call sites only hand over the decision.
+fn row(event: crate::events::Event, app: &str) -> crate::events::Event {
+    crate::events::with_protocol(
+        crate::events::with_type(crate::events::with_app(event, app), crate::events::req_type::DNS),
+        crate::events::protocol::DNS_UDP,
+    )
+}
+
+/// The addresses an answer carried, in the form the log's answer column shows:
+/// the same four the tun path keeps, newest first.
+fn answer_text(message: &[u8]) -> String {
+    dns::answer_addresses(message)
+        .into_iter()
+        .take(4)
+        .map(|(address, _)| address.to_string())
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 
 /// Sends the query to the engine's resolver (or `/etc/resolv.conf` when no
@@ -596,6 +634,34 @@ mod tests {
         let msg = dns::block_message(&q, dns::BlockMode::ZeroIp).unwrap();
         assert_eq!(&msg[6..8], &1u16.to_be_bytes(), "one answer record");
         assert!(msg.ends_with(&[0, 0, 0, 0]), "the record is 0.0.0.0");
+    }
+
+    /// A row is only worth reading when its transport is something the engine
+    /// recorded rather than something the UI guesses from the action, so every
+    /// row this listener writes says DNS over UDP and names the app that asked.
+    #[test]
+    fn the_dns_rows_name_the_transport_they_arrived_on() {
+        let event = row(
+            crate::events::allow_event("ads.example.com", "1.1.1.1", 0),
+            "com.example.browser",
+        );
+        assert_eq!(event.protocol(), crate::events::protocol::DNS_UDP);
+        assert_eq!(event.req_type_name(), "dns");
+        assert_eq!(event.app(), "com.example.browser");
+        assert_eq!(event.action, crate::events::ACTION_ALLOW);
+    }
+
+    #[test]
+    fn the_answer_column_keeps_the_addresses_the_reply_carried() {
+        let body = query_bytes("multi.example.com", dns::TYPE_A);
+        let q = dns::parse_query(&body).unwrap();
+        let one: IpAddr = "93.184.216.34".parse().unwrap();
+        let two: IpAddr = "104.20.22.33".parse().unwrap();
+        let msg = dns::answer_message(&q, &[one, two], 60).unwrap();
+        assert_eq!(answer_text(&msg), "93.184.216.34, 104.20.22.33");
+        // A refusal echoes the question and carries no record: nothing to name.
+        let refused = dns::block_message(&q, dns::BlockMode::NxDomain).unwrap();
+        assert_eq!(answer_text(&refused), "");
     }
 
     #[test]

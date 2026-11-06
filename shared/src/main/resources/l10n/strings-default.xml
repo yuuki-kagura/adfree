@@ -924,6 +924,7 @@
     <string name="log_detail_content_type">Response type</string>
     <string name="log_detail_tls_version">TLS version</string>
     <string name="log_detail_cipher_suite">Cipher suite</string>
+    <string name="log_allowed_off_hint">Only what was blocked is recorded. Turn on “Log allowed requests too” in Settings to see every request this machine made.</string>
     <string name="log_detail_connection">Connection ID</string>
     <string name="log_detail_transfer">Transferred</string>
     <string name="log_detail_transport">Network</string>

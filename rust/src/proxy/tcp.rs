@@ -153,24 +153,30 @@ fn handle(client: TcpStream, stop: &AtomicBool) {
             "proxy: {} refused by the app firewall",
             apps.first().map(String::as_str).unwrap_or("app")
         ));
-        core.log_event(crate::events::with_type(
-            crate::events::with_app(
-                crate::events::block_event(
-                    crate::events::ACTION_BLOCK,
-                    &addr.ip().to_string(),
-                    &addr.to_string(),
-                    reason,
-                    "App firewall",
-                    crate::filter::CAT_AD,
-                    0,
-                    0,
-                    addr.is_ipv6(),
+        core.log_event(crate::events::with_protocol(
+            crate::events::with_url(
+                crate::events::with_type(
+                    crate::events::with_app(
+                        crate::events::block_event(
+                            crate::events::ACTION_BLOCK,
+                            &addr.ip().to_string(),
+                            &addr.to_string(),
+                            reason,
+                            "App firewall",
+                            crate::filter::CAT_AD,
+                            0,
+                            0,
+                            addr.is_ipv6(),
+                        ),
+                        apps.first().map(String::as_str).unwrap_or(""),
+                    ),
+                    // No request was ever made: the app firewall refused the
+                    // connection itself, which is the log's Connection row.
+                    crate::events::req_type::CONNECTION,
                 ),
-                apps.first().map(String::as_str).unwrap_or(""),
+                &format!("tcp://{addr}"),
             ),
-            // No request was ever made: the app firewall refused the
-            // connection itself, which is the log's Connection row.
-            crate::events::req_type::CONNECTION,
+            crate::events::protocol::TCP,
         ));
         reset_on_close(client_fd);
         return;
@@ -223,6 +229,15 @@ fn handle(client: TcpStream, stop: &AtomicBool) {
     };
 
     let mut peer_fd = peer.as_ref().map(TcpStream::as_raw_fd).unwrap_or(-1);
+
+    // A connection this proxy only relays is still something the log should
+    // name: AdGuard's Connection tab lists what passed untouched, and without
+    // the row an encrypted session to a host no rule mentions is invisible.
+    // A flow that got a TLS session writes its own rows, one per request.
+    if session.is_none() && cfg.log_allowed {
+        core.log_event(connection_row(&addr, apps.first().map(String::as_str).unwrap_or("")));
+    }
+
     let mut buf = vec![0u8; 16 * 1024];
     let mut last_activity = std::time::Instant::now();
     let mut peer_open = peer_fd >= 0;
@@ -325,6 +340,34 @@ fn handle(client: TcpStream, stop: &AtomicBool) {
 enum Step {
     Continue,
     Done,
+}
+
+/// The row for a connection this proxy carries without looking inside it.
+/// Nothing was refused, so the answer column stays empty and the name is the
+/// pseudo-URL AdGuard gives a connection: the address the client was told to
+/// reach, with its port, which is all this path can know before TLS starts.
+fn connection_row(addr: &SocketAddr, app: &str) -> crate::events::Event {
+    let event = crate::events::with_app(
+        crate::events::block_event(
+            crate::events::ACTION_ALLOW,
+            &addr.ip().to_string(),
+            &addr.to_string(),
+            "",
+            "",
+            0,
+            0,
+            0,
+            addr.is_ipv6(),
+        ),
+        app,
+    );
+    crate::events::with_protocol(
+        crate::events::with_url(
+            crate::events::with_type(event, crate::events::req_type::CONNECTION),
+            &format!("tcp://{addr}"),
+        ),
+        crate::events::protocol::TCP,
+    )
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -672,6 +715,22 @@ mod tests {
         let bytes = b"CONNECT example.com:443 HTTP/1.1\r\nHost: example.com:443\r\n\r\nrest";
         assert_eq!(find_head_end(bytes), Some(bytes.len() - 4));
         assert_eq!(find_head_end(b"GET /x HTTP/1.1\r\n"), None);
+    }
+
+    /// AdGuard's Connection tab is not only refusals: a session this proxy
+    /// relays untouched is a row too, named by the address the client was sent
+    /// to because nothing here can see inside the TLS that starts after it.
+    #[test]
+    fn a_relayed_connection_is_a_row_of_its_own() {
+        let addr: SocketAddr = "93.184.216.34:443".parse().unwrap();
+        let event = connection_row(&addr, "com.example.browser");
+        assert_eq!(event.action, crate::events::ACTION_ALLOW);
+        assert_eq!(event.protocol(), crate::events::protocol::TCP);
+        assert_eq!(event.req_type_name(), "connection");
+        assert_eq!(event.url(), "tcp://93.184.216.34:443");
+        assert_eq!(event.domain(), "93.184.216.34");
+        assert_eq!(event.app(), "com.example.browser");
+        assert_eq!(event.answer(), "", "a relayed connection claims no answer");
     }
 
     #[test]
