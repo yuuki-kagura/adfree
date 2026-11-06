@@ -165,6 +165,17 @@ class AdGuardRepository(
     private val _logAllowedTotal = MutableStateFlow(0L)
     val logAllowedTotal: StateFlow<Long> = _logAllowedTotal.asStateFlow()
 
+    /**
+     * A log file the user opened, while it is open.
+     *
+     * It never merges into [logs]: the log screen shows the file instead of
+     * the store, and closing it puts the store back. Deciding a rule from
+     * traffic this machine never saw would make every later verdict rest on
+     * somebody else's rows.
+     */
+    private val _importedLog = MutableStateFlow<ImportedLog?>(null)
+    val importedLog: StateFlow<ImportedLog?> = _importedLog.asStateFlow()
+
     /** How many newest rows a tail reload mirrors; scroll paging appends past it. */
     private var logWindow = LOG_PAGE_SIZE
     private var lastLogCount = -1L
@@ -1763,6 +1774,29 @@ class AdGuardRepository(
             cursor = page.last().id
             if (page.size < LOG_EXPORT_PAGE_SIZE) break
         }
+    }
+
+    /**
+     * Reads a log file the user picked and shows it in the log screen.
+     *
+     * False means the file could not be opened or is not an AdFree export.
+     * Nothing here reaches the store: a file somebody else sent is something
+     * to look at, and mixing its rows into what this machine recorded would
+     * make every later decision about a rule rest on rows this machine never
+     * saw.
+     */
+    suspend fun importLogs(uriText: String): Boolean =
+        withContext(Dispatchers.IO) {
+            val rows = runCatching { files.readText(uriText) }.getOrNull()
+                ?.let(::readLogCsv)
+                ?: return@withContext false
+            _importedLog.value = ImportedLog.of(files.displayName(uriText), rows)
+            true
+        }
+
+    /** Drops the imported file and goes back to this machine's own log. */
+    fun closeImportedLogs() {
+        _importedLog.value = null
     }
 
     /**

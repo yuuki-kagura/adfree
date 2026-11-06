@@ -863,6 +863,10 @@
     <string name="log_export_action">Xuất hoạt động</string>
     <string name="log_export_done">Đã xuất hoạt động</string>
     <string name="log_export_failed">Không ghi được tệp hoạt động</string>
+    <string name="log_import_action">Nhập hoạt động</string>
+    <string name="log_import_failed">Tệp đó không phải nhật ký hoạt động của AdFree</string>
+    <string name="log_imported_viewing">Đang đọc %1$d yêu cầu từ %2$s — máy này không ghi lại chúng</string>
+    <string name="log_import_close">Về nhật ký của máy này</string>
     <string name="log_clear_title">Xoá nhật ký?</string>
     <string name="log_clear_body">Toàn bộ %1$d bản ghi sẽ bị xoá và không thể hoàn tác.</string>
     <string name="log_clear_confirm">Xoá</string>

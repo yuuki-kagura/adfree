@@ -36,6 +36,7 @@ import androidx.compose.material.icons.filled.Clear
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.DeleteSweep
 import androidx.compose.material.icons.filled.FileDownload
+import androidx.compose.material.icons.filled.FileUpload
 import androidx.compose.material.icons.filled.FilterList
 import androidx.compose.material.icons.filled.Public
 import androidx.compose.material.icons.filled.Search
@@ -166,6 +167,8 @@ fun FilteringLogScreen(
     var showClearConfirm by remember { mutableStateOf(false) }
     val files = currentFileHost()
     val exportScope = rememberCoroutineScope()
+    // Set while the screen shows a file the user opened instead of the store.
+    val importedName = state.importedLogName
 
     // The selected row's details: a pane docked under the table once the window
     // is wide enough, and the sheet this screen always used when it is not. The
@@ -267,21 +270,25 @@ fun FilteringLogScreen(
                 // window the store actually keeps: AdGuard advertises "the
                 // newest 10k requests" and this list loads fewer rows than
                 // that, which reads as a shorter history than there is.
-                Text(
-                    text = L10n.format(Strings.log_retention_note,
-                        AdGuardRepository.LOG_DB_MAX_ROWS,
-                        AdGuardRepository.LOG_DB_KEEP_DAYS,
-                    ),
-                    fontSize = 11.sp,
-                    color = AdGuardTextMuted,
-                    modifier = Modifier
-                        .padding(top = 2.dp)
-                        .testTag("log_retention_note")
-                )
+                // An imported file keeps nothing, so the note is not its story.
+                if (importedName == null) {
+                    Text(
+                        text = L10n.format(Strings.log_retention_note,
+                            AdGuardRepository.LOG_DB_MAX_ROWS,
+                            AdGuardRepository.LOG_DB_KEEP_DAYS,
+                        ),
+                        fontSize = 11.sp,
+                        color = AdGuardTextMuted,
+                        modifier = Modifier
+                            .padding(top = 2.dp)
+                            .testTag("log_retention_note")
+                    )
+                }
                 // The core drops allowed rows while the settings say to save
                 // the CPU, and a log that shows only refusals reads as a
-                // machine that asked for nothing. Say which half is missing.
-                if (!state.settings.logAllowedRequests) {
+                // machine that asked for nothing. Say which half is missing —
+                // of this machine's log, which is what is on screen otherwise.
+                if (importedName == null && !state.settings.logAllowedRequests) {
                     Text(
                         text = L10n.get(Strings.log_allowed_off_hint),
                         fontSize = 11.sp,
@@ -293,40 +300,94 @@ fun FilteringLogScreen(
                 }
             }
 
-            // Both actions sit at the right edge; SpaceBetween with three
+            // Every action sits at the right edge; SpaceBetween with three
             // children would strand the download button mid-header.
             Row {
-                IconButton(
-                    onClick = {
-                        exportScope.launch {
-                            files.createDocument("adfree-activity.csv", "text/csv")?.let {
-                                viewModel.onIntent(AdGuardIntent.ExportLogs(it))
+                if (importedName != null) {
+                    // Reading somebody else's file: the only action that means
+                    // anything here is going back. Export would re-save rows
+                    // this machine never saw, and clear would empty the store
+                    // that is not being shown.
+                    IconButton(
+                        onClick = { viewModel.onIntent(AdGuardIntent.CloseImportedLogs) },
+                        modifier = Modifier.testTag("close_imported_logs_button")
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Close,
+                            contentDescription = L10n.get(Strings.log_import_close),
+                            tint = AdGuardTextSecondary
+                        )
+                    }
+                } else {
+                    IconButton(
+                        onClick = {
+                            exportScope.launch {
+                                files.openText()?.let {
+                                    viewModel.onIntent(AdGuardIntent.ImportLogs(it))
+                                }
                             }
-                        }
-                    },
-                    modifier = Modifier.testTag("export_logs_button")
-                ) {
-                    Icon(
-                        imageVector = Icons.Default.FileDownload,
-                        contentDescription = L10n.get(Strings.log_export_action),
-                        tint = AdGuardTextSecondary
-                    )
-                }
+                        },
+                        modifier = Modifier.testTag("import_logs_button")
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.FileUpload,
+                            contentDescription = L10n.get(Strings.log_import_action),
+                            tint = AdGuardTextSecondary
+                        )
+                    }
 
-                IconButton(
-                    onClick = { showClearConfirm = true },
-                    modifier = Modifier.testTag("clear_logs_button")
-                ) {
-                    Icon(
-                        imageVector = Icons.Default.DeleteSweep,
-                        contentDescription = L10n.get(Strings.log_clear_action),
-                        tint = AdGuardTextSecondary
-                    )
+                    IconButton(
+                        onClick = {
+                            exportScope.launch {
+                                files.createDocument("adfree-activity.csv", "text/csv")?.let {
+                                    viewModel.onIntent(AdGuardIntent.ExportLogs(it))
+                                }
+                            }
+                        },
+                        modifier = Modifier.testTag("export_logs_button")
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.FileDownload,
+                            contentDescription = L10n.get(Strings.log_export_action),
+                            tint = AdGuardTextSecondary
+                        )
+                    }
+
+                    IconButton(
+                        onClick = { showClearConfirm = true },
+                        modifier = Modifier.testTag("clear_logs_button")
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.DeleteSweep,
+                            contentDescription = L10n.get(Strings.log_clear_action),
+                            tint = AdGuardTextSecondary
+                        )
+                    }
                 }
             }
         }
 
         Spacer(modifier = Modifier.height(12.dp))
+
+        if (importedName != null) {
+            // Says plainly that what follows is a file, not this machine's
+            // traffic — the same rows, the same columns, and nothing to do
+            // with what the filter is deciding right now.
+            Text(
+                text = L10n.format(Strings.log_imported_viewing, state.logTotal, importedName),
+                fontSize = 12.sp,
+                color = AdGuardTextSecondary,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(12.dp))
+                    .background(AdGuardDarkSurfaceVariant)
+                    .padding(horizontal = 12.dp, vertical = 8.dp)
+                    .testTag("log_imported_banner")
+            )
+            Spacer(modifier = Modifier.height(10.dp))
+        }
 
         // Search Bar
         OutlinedTextField(

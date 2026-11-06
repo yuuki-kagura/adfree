@@ -366,6 +366,19 @@ private fun WindowHeader(
                     }
                 },
             )
+            // The desktop window has no toolbar of its own for the log, so the
+            // file the user wants to read is one menu item away.
+            DropdownMenuItem(
+                text = {
+                    Text(L10n.get(Strings.log_import_action), fontSize = 13.sp, color = AdGuardTextPrimary)
+                },
+                onClick = {
+                    menuOpen = false
+                    scope.launch {
+                        files.openText()?.let { viewModel.onIntent(AdGuardIntent.ImportLogs(it)) }
+                    }
+                },
+            )
         }
     }
 

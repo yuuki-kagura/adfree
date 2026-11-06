@@ -57,6 +57,12 @@ data class AdGuardUiState(
     /** Whole-log totals per decision; the chips count the log, not the window. */
     val logBlockedTotal: Long = 0L,
     val logAllowedTotal: Long = 0L,
+    /**
+     * Name of the log file the screen is reading, null while it shows the
+     * live log. [logs] and the three totals above describe that file instead
+     * of the store while it is set.
+     */
+    val importedLogName: String? = null,
     val filterLists: List<FilterList> = emptyList(),
     val appFirewallRules: List<AppFirewallRule> = emptyList(),
     /** Every installed app, before the Apps-tab search and chip filters. */
@@ -220,6 +226,10 @@ sealed interface AdGuardIntent {
     data object LoadMoreLogs : AdGuardIntent
     /** Write the loaded activity window to a CSV document (SAF URI). */
     data class ExportLogs(val uri: String) : AdGuardIntent
+    /** Show a CSV document the user picked, instead of this machine's log. */
+    data class ImportLogs(val uri: String) : AdGuardIntent
+    /** Leave the imported file and go back to the live log. */
+    data object CloseImportedLogs : AdGuardIntent
 
     /** Sent by the log screen as it is scrolled to its top (or away from it). */
     data class SetLogTailing(val tailing: Boolean) : AdGuardIntent

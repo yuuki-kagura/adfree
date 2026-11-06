@@ -6,6 +6,7 @@ import git.shin.adfree.core.ConfigWarning
 import git.shin.adfree.core.CoreEngine
 import git.shin.adfree.data.AdGuardRepository
 import git.shin.adfree.data.AutomationControl
+import git.shin.adfree.data.ImportedLog
 import git.shin.adfree.platform.AppUpdate
 import git.shin.adfree.platform.LogSink
 import git.shin.adfree.platform.PlatformHost
@@ -169,7 +170,8 @@ class AdGuardViewModel(
                 _currentTab,
                 repository.settings,
                 repository.stats,
-            ) { tab, settings, stats -> Triple(tab, settings, stats) },
+                repository.importedLog,
+            ) { tab, settings, stats, imported -> UiHead(tab, settings, stats, imported) },
             repository.logs,
             combine(
                 repository.logTotal,
@@ -183,19 +185,23 @@ class AdGuardViewModel(
             _searchQuery,
             _logTypeFilter,
         ) { head, logs, totals, query, typeTab ->
-            val (tab, settings, stats) = head
+            val (tab, settings, stats, imported) = head
+            // While a file is open the screen shows the file: the rows, the
+            // counter under the chips and the footer all have to agree with it,
+            // or the list claims there is more to load than the file holds.
             UiPartA(
                 tab,
                 settings,
                 stats,
-                logs,
-                totals.total,
-                totals.blocked,
-                totals.allowed,
+                imported?.rows ?: logs,
+                imported?.rows?.size?.toLong() ?: totals.total,
+                imported?.blocked ?: totals.blocked,
+                imported?.allowed ?: totals.allowed,
                 totals.window,
                 totals.services,
                 query,
                 typeTab,
+                imported?.name,
             )
         },
         combine(
@@ -313,6 +319,7 @@ class AdGuardViewModel(
             logTotal = a.logTotal,
             logBlockedTotal = a.logBlockedTotal,
             logAllowedTotal = a.logAllowedTotal,
+            importedLogName = a.importName,
             filterLists = b.filters,
             appFirewallRules = apps,
             allAppFirewallRules = b.apps,
@@ -617,6 +624,14 @@ class AdGuardViewModel(
                 val result = repository.exportLogs(intent.uri)
                 emit(AdGuardEffect.ShowSnackbar(result.message))
             }
+            is AdGuardIntent.ImportLogs -> scope.launch {
+                // Nothing to say when it works: the screen itself switches to
+                // the file, and a snackbar over that would only repeat it.
+                if (!repository.importLogs(intent.uri)) {
+                    emit(AdGuardEffect.ShowSnackbar(UiText.Resource(Strings.log_import_failed)))
+                }
+            }
+            is AdGuardIntent.CloseImportedLogs -> repository.closeImportedLogs()
             is AdGuardIntent.SetLogTailing -> repository.setLogTailing(intent.tailing)
             is AdGuardIntent.ShowCustomRuleDialog -> _showCustomRuleDialog.value = intent.show
             is AdGuardIntent.ShowCustomRuleEditor -> _showCustomRuleEditor.value = intent.show
@@ -1077,6 +1092,14 @@ class AdGuardViewModel(
         scope.launch { _effect.emit(effect) }
     }
 
+    /** The tab's own state plus whatever file the user is reading instead. */
+    private data class UiHead(
+        val tab: AdGuardTab,
+        val settings: ProtectionSettings,
+        val stats: ProtectionStats,
+        val imported: ImportedLog?,
+    )
+
     private data class UiPartA(
         val tab: AdGuardTab,
         val settings: ProtectionSettings,
@@ -1089,6 +1112,7 @@ class AdGuardViewModel(
         val services: List<ServiceUsage>,
         val query: String,
         val typeTab: LogTypeTab,
+        val importName: String?,
     )
 
     /** The log-wide and windowed counters travel together. */

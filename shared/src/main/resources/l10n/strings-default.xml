@@ -863,6 +863,10 @@
     <string name="log_export_action">Export activity</string>
     <string name="log_export_done">Activity exported</string>
     <string name="log_export_failed">Could not write the activity file</string>
+    <string name="log_import_action">Import activity</string>
+    <string name="log_import_failed">That file is not an AdFree activity log</string>
+    <string name="log_imported_viewing">Reading %1$d requests from %2$s — this machine did not record them</string>
+    <string name="log_import_close">Back to this machine\'s log</string>
     <string name="log_clear_title">Clear the log?</string>
     <string name="log_clear_body">All %1$d entries will be deleted. This cannot be undone.</string>
     <string name="log_clear_confirm">Delete</string>
