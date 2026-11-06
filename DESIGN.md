@@ -1288,8 +1288,11 @@ Practical consequences per platform:
   loopback and not assigned to this host is reset (TCP) or ignored (DNS), so
   the listeners are never an open proxy or an open resolver on the network.
   QUIC is refused so nothing escapes to HTTP/3; the proxy's own sockets carry
-  mark `0xad45` to stay outside the redirect, and `SO_PEERCRED` supplies the
-  UID for the app firewall. The mark is the whole reason the ruleset is safe to
+  mark `0xad45` to stay outside the redirect, and `proxy::peer` names the
+  process behind each connection for the app firewall. `SO_PEERCRED` is not that
+  answer — on an `AF_INET` socket Linux leaves the credential struct zeroed — so
+  the owner is resolved the way `ss -p` resolves it: the inode from
+  `/proc/net/tcp`, then the process holding that socket descriptor. The mark is the whole reason the ruleset is safe to
   install, so `DesktopPrivileges` checks it by actually calling `setsockopt`
   before writing any rules: an unprivileged process refuses the ruleset outright
   rather than redirecting its own upstream traffic back into itself. Holding

@@ -141,10 +141,13 @@ fn handle(client: TcpStream, stop: &AtomicBool) {
     }
 
     // The per-app firewall decides before any socket is opened, exactly as
-    // `engine::complete_setup` does on the tun path. The connecting process
-    // is right here: `SO_PEERCRED` names its uid without the kernel table.
-    let uid = peer_uid(client_fd).unwrap_or(0);
-    let apps = if uid == 0 { Vec::new() } else { core.apps_for_local_uid(uid) };
+    // `engine::complete_setup` does on the tun path. On this path the
+    // connecting process is knowable, and naming it is what makes the desktop
+    // log answer the question it exists to answer: which app asked for this.
+    let apps = match (client.peer_addr().ok(), local_addr(client_fd)) {
+        (Some(from), Some(our)) => core.peer_apps(from, our),
+        _ => Vec::new(),
+    };
     if let Some(reason) = core.app_blocked_reason(&apps) {
         crate::logbuf::push(&format!(
             "proxy: {} refused by the app firewall",
@@ -448,27 +451,6 @@ fn local_addr(fd: RawFd) -> Option<SocketAddr> {
     };
     if rc == 0 {
         parse_sockaddr(&sa)
-    } else {
-        None
-    }
-}
-
-/// The uid of the process that opened this connection (a desktop luxury the
-/// tun path never had: the socket's owner is right here).
-fn peer_uid(fd: RawFd) -> Option<u32> {
-    let mut cred: libc::ucred = unsafe { std::mem::zeroed() };
-    let mut len = std::mem::size_of::<libc::ucred>() as libc::socklen_t;
-    let rc = unsafe {
-        libc::getsockopt(
-            fd,
-            libc::SOL_SOCKET,
-            libc::SO_PEERCRED,
-            &mut cred as *mut libc::ucred as *mut libc::c_void,
-            &mut len,
-        )
-    };
-    if rc == 0 {
-        Some(cred.uid)
     } else {
         None
     }

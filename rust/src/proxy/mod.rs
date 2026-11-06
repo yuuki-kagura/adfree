@@ -23,6 +23,7 @@
 
 pub mod dns;
 pub mod egress;
+pub mod peer;
 pub mod tcp;
 
 use std::os::unix::io::RawFd;

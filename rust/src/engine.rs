@@ -790,6 +790,10 @@ pub struct Core {
     /// The port->uid table of the kernel, which says whose UDP/TCP sockets
     /// are whose.
     uidmap: Mutex<UidMap>,
+    /// The desktop's answer to the same question, one level up: which process
+    /// holds the socket a proxy connection came from. Remembers the last walk
+    /// of the process table so a burst of connections is one walk.
+    peers: Mutex<crate::proxy::peer::Table>,
     /// uid -> package names, pushed down by the platform (Kotlin, the only
     /// side with a package manager); the kernel knows uids alone. Empty until
     /// the first push.
@@ -925,8 +929,9 @@ pub(crate) fn log_mitm_block(block: &crate::mitm::proxy::MitmBlock<'_>) {
     core.stats.add(&core.stats.bytes_saved, u64::from(saved));
 }
 
-/// A uid can resolve to several packages (shared uid); the log names the first
-/// one, which is what the platform's attribution reported.
+/// Attribution can name several owners of one flow — a uid with shared
+/// packages on Android, a process tree on the desktop; the log names the first,
+/// which is what the platform's lookup reported.
 fn first_app(packages: &[String]) -> &str {
     packages.first().map(String::as_str).unwrap_or("")
 }
@@ -1008,6 +1013,7 @@ impl Core {
             store: OnceLock::new(),
             state: OnceLock::new(),
             uidmap: Mutex::new(UidMap::new()),
+            peers: Mutex::new(crate::proxy::peer::Table::new()),
             uid_apps: RwLock::new(FxHashMap::default()),
             uid_lookup: RwLock::new(None),
             screen_off: AtomicBool::new(false),
@@ -4791,11 +4797,19 @@ impl Core {
         cfg.mitm_enabled && !self.is_paused() && self.mitm_ca.read().unwrap().has_ca()
     }
 
-    /// The splice set a new proxy connection opens with; the desktop proxy
-    /// attributes flows from `SO_PEERCRED` instead of a packet header, but the
-    /// uid -> package table and every decision on top of it are shared.
-    pub(crate) fn apps_for_local_uid(&self, uid: u32) -> Vec<String> {
-        self.packages_for_uid(uid)
+    /// The splice set a new proxy connection opens with. On this path the
+    /// flow's owner is a process, not a package: the log's Process column and
+    /// every `$app=` rule read the name the kernel's socket table leads us to
+    /// (see [`crate::proxy::peer`]), which is what AdGuard's Windows log shows
+    /// too. Empty when the table cannot answer.
+    pub(crate) fn peer_apps(&self, client: SocketAddr, our: SocketAddr) -> Vec<String> {
+        match self.peers.lock() {
+            Ok(mut table) => table
+                .owner(client, our)
+                .map(|peer| vec![peer.name])
+                .unwrap_or_default(),
+            Err(_) => Vec::new(),
+        }
     }
 
     /// Packages owning the local UDP socket on `port` (the kernel table
