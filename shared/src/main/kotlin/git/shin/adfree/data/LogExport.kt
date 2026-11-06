@@ -13,7 +13,8 @@ import java.util.Locale
 private const val LOG_CSV_HEADER =
     "time,app,domain,ip,protocol,status,category,rule,list,latency_us,saved_bytes," +
         "transport,roaming,flow_id,url,dns_answer,bytes_sent,bytes_recv,req_type,source," +
-        "tls,cipher,http_status,content_type"
+        "tls,cipher,http_status,content_type,cert_subject,cert_issuer," +
+        "cert_valid_from,cert_valid_to"
 
 /**
  * Writes every row of [rows], newest first, and returns how many were written.
@@ -54,6 +55,10 @@ fun writeLogCsv(rows: Sequence<NetworkRequestLog>, out: Writer): Long {
                 log.cipher.orEmpty(),
                 log.httpResponseStatus?.toString().orEmpty(),
                 log.contentType.orEmpty(),
+                log.certSubject.orEmpty(),
+                log.certIssuer.orEmpty(),
+                log.certValidFrom?.toString().orEmpty(),
+                log.certValidTo?.toString().orEmpty(),
             ).joinToString(",") { csvField(it) },
         )
         written++

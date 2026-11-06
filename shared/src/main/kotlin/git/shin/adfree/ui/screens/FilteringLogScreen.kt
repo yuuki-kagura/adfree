@@ -1169,6 +1169,25 @@ private fun LogDetailBody(
             log.cipher?.let { suite ->
                 DetailRow(label = L10n.get(Strings.log_detail_cipher_suite), value = suite)
             }
+            // The leaf the origin handed over. The issuer is the line that
+            // answers which authority this machine is really trusting for a
+            // given endpoint — the reason AdGuard keeps it beside the cipher.
+            log.certSubject?.let { subject ->
+                DetailRow(label = L10n.get(Strings.log_detail_cert_subject), value = subject)
+            }
+            log.certIssuer?.let { issuer ->
+                DetailRow(label = L10n.get(Strings.log_detail_cert_issuer), value = issuer)
+            }
+            val from = log.certValidFrom
+            val to = log.certValidTo
+            if (from != null && to != null) {
+                DetailRow(
+                    label = L10n.get(Strings.log_detail_cert_validity),
+                    value = SimpleDateFormat("yyyy-MM-dd", Locale.getDefault())
+                        .format(Date(from)) + " → " +
+                        SimpleDateFormat("yyyy-MM-dd", Locale.getDefault()).format(Date(to)),
+                )
+            }
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,

@@ -112,6 +112,17 @@ data class NetworkRequestLog(
     val httpResponseStatus: Int? = null,
     /** Response `Content-Type` with its parameters cut, e.g. `text/html`. */
     val contentType: String? = null,
+    /**
+     * Who the origin's certificate said it was: the common name, or the
+     * organization when it carried none. Null for a row that never finished a
+     * TLS handshake, which is most blocked rows and every DNS row.
+     */
+    val certSubject: String? = null,
+    /** Who signed that certificate — the authority the connection trusted. */
+    val certIssuer: String? = null,
+    /** The window the certificate claimed to be good for, in epoch millis. */
+    val certValidFrom: Long? = null,
+    val certValidTo: Long? = null,
 ) {
     /**
      * The log's Name column. AdGuard prints the full request URL and, for a
@@ -168,6 +179,10 @@ data class NetworkRequestLog(
                 cipher = event.cipher.ifBlank { null },
                 httpResponseStatus = event.status.takeIf { it != 0 },
                 contentType = event.contentType.ifBlank { null },
+                certSubject = event.certSubject.ifBlank { null },
+                certIssuer = event.certIssuer.ifBlank { null },
+                certValidFrom = event.certFrom.takeIf { it != 0L },
+                certValidTo = event.certTo.takeIf { it != 0L },
             )
         }
     }

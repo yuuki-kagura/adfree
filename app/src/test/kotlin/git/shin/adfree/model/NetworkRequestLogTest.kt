@@ -33,6 +33,10 @@ class NetworkRequestLogTest {
         cipher: String = "",
         status: Int = 0,
         contentType: String = "",
+        certSubject: String = "",
+        certIssuer: String = "",
+        certFrom: Long = 0L,
+        certTo: Long = 0L,
     ) = LogEvent(
         id = id,
         tsMs = 1_700_000_000_000L,
@@ -60,6 +64,10 @@ class NetworkRequestLogTest {
         cipher = cipher,
         status = status,
         contentType = contentType,
+        certSubject = certSubject,
+        certIssuer = certIssuer,
+        certFrom = certFrom,
+        certTo = certTo,
     )
 
     @Test
@@ -239,5 +247,36 @@ class NetworkRequestLogTest {
         assertNull(log.contentType)
         // Zero is the core's "never parsed an HTTP response", not status 0.
         assertNull(log.httpResponseStatus)
+    }
+
+    @Test
+    fun `the certificate the session accepted says who signed it and for how long`() {
+        val log = NetworkRequestLog.from(
+            event(
+                CoreActions.ALLOWED.toInt(),
+                proto = ProtocolType.HTTPS.code,
+                tls = "TLS 1.3",
+                certSubject = "cdn.example.com",
+                certIssuer = "DigiCert TLS RSA SHA256 2020 CA1",
+                certFrom = 1_700_000_000_000L,
+                certTo = 1_800_000_000_000L,
+            ),
+        )
+        assertEquals("cdn.example.com", log.certSubject)
+        assertEquals("DigiCert TLS RSA SHA256 2020 CA1", log.certIssuer)
+        assertEquals(1_700_000_000_000L, log.certValidFrom)
+        assertEquals(1_800_000_000_000L, log.certValidTo)
+    }
+
+    @Test
+    fun `a row that never saw a certificate carries no certificate facts`() {
+        // A refused host or a DNS answer has no leaf at all, and the core says
+        // so with empty names and a window at zero. Reading that as "valid from
+        // the epoch" would put a fact on the row the session never produced.
+        val log = NetworkRequestLog.from(event(CoreActions.BLOCKED.toInt()))
+        assertNull(log.certSubject)
+        assertNull(log.certIssuer)
+        assertNull(log.certValidFrom)
+        assertNull(log.certValidTo)
     }
 }

@@ -3856,6 +3856,25 @@ data class LogEvent (
      * Response `Content-Type` up to its parameters, e.g. `text/html`.
      */
     var `contentType`: kotlin.String
+    , 
+    /**
+     * The name the upstream certificate carried — its common name, or the
+     * organization when it had none. Empty when no certificate was seen.
+     */
+    var `certSubject`: kotlin.String
+    , 
+    /**
+     * Who signed that certificate: the authority the connection trusted.
+     */
+    var `certIssuer`: kotlin.String
+    , 
+    /**
+     * The certificate's validity window in epoch milliseconds, both 0 when
+     * the row never saw a certificate.
+     */
+    var `certFrom`: kotlin.Long
+    , 
+    var `certTo`: kotlin.Long
     
 ){
     
@@ -3898,6 +3917,10 @@ public object FfiConverterTypeLogEvent: FfiConverterRustBuffer<LogEvent> {
             FfiConverterString.read(buf),
             FfiConverterInt.read(buf),
             FfiConverterString.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterLong.read(buf),
+            FfiConverterLong.read(buf),
         )
     }
 
@@ -3927,7 +3950,11 @@ public object FfiConverterTypeLogEvent: FfiConverterRustBuffer<LogEvent> {
             FfiConverterString.allocationSize(value.`tls`) +
             FfiConverterString.allocationSize(value.`cipher`) +
             FfiConverterInt.allocationSize(value.`status`) +
-            FfiConverterString.allocationSize(value.`contentType`)
+            FfiConverterString.allocationSize(value.`contentType`) +
+            FfiConverterString.allocationSize(value.`certSubject`) +
+            FfiConverterString.allocationSize(value.`certIssuer`) +
+            FfiConverterLong.allocationSize(value.`certFrom`) +
+            FfiConverterLong.allocationSize(value.`certTo`)
     )
 
     override fun write(value: LogEvent, buf: ByteBuffer) {
@@ -3957,6 +3984,10 @@ public object FfiConverterTypeLogEvent: FfiConverterRustBuffer<LogEvent> {
             FfiConverterString.write(value.`cipher`, buf)
             FfiConverterInt.write(value.`status`, buf)
             FfiConverterString.write(value.`contentType`, buf)
+            FfiConverterString.write(value.`certSubject`, buf)
+            FfiConverterString.write(value.`certIssuer`, buf)
+            FfiConverterLong.write(value.`certFrom`, buf)
+            FfiConverterLong.write(value.`certTo`, buf)
     }
 }
 

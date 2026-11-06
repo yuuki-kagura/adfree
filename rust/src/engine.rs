@@ -949,6 +949,20 @@ pub(crate) fn log_mitm_block(block: &crate::mitm::proxy::MitmBlock<'_>) {
     let event = events::with_cipher(event, block.facts.cipher);
     let event = events::with_status(event, block.facts.status);
     let event = events::with_content_type(event, block.facts.content_type);
+    // The leaf the server produced: who it claimed to be, who signed that
+    // claim, and the window the claim covered. AdGuard's log puts these on the
+    // request's certificate tab, and they are the only way the log can answer
+    // which authority a given endpoint is really trusted under.
+    let event = match block.facts.cert {
+        Some(cert) => events::with_cert(
+            event,
+            &cert.subject,
+            &cert.issuer,
+            cert.not_before_ms,
+            cert.not_after_ms,
+        ),
+        None => event,
+    };
     core.log_event(event);
     if !block.allowed {
         core.stats.add(&core.stats.bytes_saved, u64::from(saved));

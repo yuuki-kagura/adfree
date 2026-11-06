@@ -634,6 +634,66 @@ pub fn negotiated(client: &ClientConnection) -> (u8, &'static str) {
     (version, cipher)
 }
 
+/// What the server's certificate said about itself, for the log.
+///
+/// rustls has already run the chain against its root store by the time it
+/// hands the leaf over, so this is not a check. It is the answer to the
+/// question a filtering log is uniquely placed to ask: which name did this
+/// connection actually present, and who signed the proof.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PeerCert {
+    pub subject: String,
+    pub issuer: String,
+    /// Validity window in epoch milliseconds — coarse on purpose, the log
+    /// prints a date and never a time of day.
+    pub not_before_ms: i64,
+    pub not_after_ms: i64,
+}
+
+/// Reads the leaf the upstream server presented.
+///
+/// `None` while the handshake is still open, and for a peer that sent no
+/// certificate at all — a spliced TCP flow never has one.
+pub fn peer_cert(client: &ClientConnection) -> Option<PeerCert> {
+    let der = client.peer_certificates()?.first()?.as_ref();
+    use x509_parser::prelude::FromDer;
+    let (_, cert) = x509_parser::prelude::X509Certificate::from_der(der).ok()?;
+    let tbs = &cert.tbs_certificate;
+    Some(PeerCert {
+        subject: party_name(&tbs.subject),
+        issuer: party_name(&tbs.issuer),
+        not_before_ms: tbs.validity.not_before.timestamp() * 1000,
+        not_after_ms: tbs.validity.not_after.timestamp() * 1000,
+    })
+}
+
+/// The one attribute of a distinguished name that says who the party is.
+///
+/// A full DN runs past 200 bytes and its trailing attributes (country, state,
+/// locality) add nothing a user acts on, so the log keeps the common name and
+/// falls back through the attributes that also name an organization.
+fn party_name(name: &x509_parser::x509::X509Name<'_>) -> String {
+    if let Some(cn) = name.iter_common_name().find_map(|attr| attr.as_str().ok()) {
+        return cn.to_string();
+    }
+    if let Some(org) = name
+        .iter_organization()
+        .find_map(|attr| attr.as_str().ok())
+    {
+        return org.to_string();
+    }
+    if let Some(unit) = name
+        .iter_organizational_unit()
+        .find_map(|attr| attr.as_str().ok())
+    {
+        return unit.to_string();
+    }
+    if let Some(any) = name.iter_attributes().find_map(|attr| attr.as_str().ok()) {
+        return any.to_string();
+    }
+    name.to_string()
+}
+
 /// The ALPN protocol negotiated on a server connection.
 pub fn server_alpn(connection: &ServerConnection) -> Option<Vec<u8>> {
     connection.alpn_protocol().map(|p| p.to_vec())
@@ -867,5 +927,53 @@ mod tests {
         if bundle.exists() {
             assert!(store.len() > 20, "the system CA bundle should be read");
         }
+    }
+
+    #[test]
+    fn a_certificate_names_the_party_and_the_window_it_claimed() {
+        // The reason the log keeps a certificate at all is these two names:
+        // who the connection said it was, and who signed that claim. A window
+        // that survives as milliseconds is what lets the UI say whether the
+        // claim was good at the time.
+        let key = rcgen::KeyPair::generate().unwrap();
+        let mut params =
+            rcgen::CertificateParams::new(vec!["cdn.example".to_string()]).unwrap();
+        let mut dn = rcgen::DistinguishedName::new();
+        dn.push(rcgen::DnType::CommonName, "cdn.example");
+        dn.push(rcgen::DnType::OrganizationName, "Example Networks");
+        params.distinguished_name = dn;
+        params.not_before = time::OffsetDateTime::from_unix_timestamp(1_700_000_000).unwrap();
+        params.not_after = time::OffsetDateTime::from_unix_timestamp(1_800_000_000).unwrap();
+        let cert = params.self_signed(&key).unwrap();
+
+        use x509_parser::prelude::FromDer;
+        let (_, parsed) = x509_parser::prelude::X509Certificate::from_der(cert.der()).unwrap();
+        let tbs = &parsed.tbs_certificate;
+        assert_eq!(party_name(&tbs.subject), "cdn.example");
+        // Self-signed, so the signer is the party — which is precisely the
+        // reading a user needs when a device endpoint carries its own name.
+        assert_eq!(party_name(&tbs.issuer), "cdn.example");
+        assert_eq!(tbs.validity.not_before.timestamp() * 1000, 1_700_000_000_000);
+        assert_eq!(tbs.validity.not_after.timestamp() * 1000, 1_800_000_000_000);
+    }
+
+    #[test]
+    fn a_name_with_no_common_name_still_names_somebody() {
+        // CAs are not obliged to put a CN in, and an empty column would read
+        // as "no certificate" rather than "a certificate nobody signed by
+        // name", so the fallbacks matter more than the preference.
+        let key = rcgen::KeyPair::generate().unwrap();
+        let mut params = rcgen::CertificateParams::new(Vec::new()).unwrap();
+        let mut dn = rcgen::DistinguishedName::new();
+        dn.push(rcgen::DnType::OrganizationName, "Example Networks");
+        params.distinguished_name = dn;
+        let cert = params.self_signed(&key).unwrap();
+
+        use x509_parser::prelude::FromDer;
+        let (_, parsed) = x509_parser::prelude::X509Certificate::from_der(cert.der()).unwrap();
+        assert_eq!(
+            party_name(&parsed.tbs_certificate.subject),
+            "Example Networks"
+        );
     }
 }

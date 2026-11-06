@@ -240,6 +240,15 @@ pub struct LogEvent {
     pub status: i32,
     /// Response `Content-Type` up to its parameters, e.g. `text/html`.
     pub content_type: String,
+    /// The name the upstream certificate carried — its common name, or the
+    /// organization when it had none. Empty when no certificate was seen.
+    pub cert_subject: String,
+    /// Who signed that certificate: the authority the connection trusted.
+    pub cert_issuer: String,
+    /// The certificate's validity window in epoch milliseconds, both 0 when
+    /// the row never saw a certificate.
+    pub cert_from: i64,
+    pub cert_to: i64,
 }
 
 impl From<&events::Event> for LogEvent {
@@ -271,6 +280,10 @@ impl From<&events::Event> for LogEvent {
             cipher: e.cipher().to_string(),
             status: e.status as i32,
             content_type: e.content_type().to_string(),
+            cert_subject: e.cert_subject().to_string(),
+            cert_issuer: e.cert_issuer().to_string(),
+            cert_from: e.cert_from,
+            cert_to: e.cert_to,
         }
     }
 }
@@ -304,6 +317,10 @@ impl From<&crate::store::LogRow> for LogEvent {
             cipher: r.cipher.clone(),
             status: r.status as i32,
             content_type: r.ctype.clone(),
+            cert_subject: r.cert_subj.clone(),
+            cert_issuer: r.cert_iss.clone(),
+            cert_from: r.cert_from,
+            cert_to: r.cert_to,
         }
     }
 }

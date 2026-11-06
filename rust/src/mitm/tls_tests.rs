@@ -96,8 +96,44 @@ fn terminates_a_full_tls_conversation() {
 }
 
 #[test]
-fn spliced_body_survives_the_tls_round_trip() {
+fn the_log_reads_the_certificate_the_session_ended_up_with() {
+    // The point of recording a certificate is that the user can see which name
+    // the connection carried and who signed it — and on a MITM the signer is
+    // our own CA, which is exactly the fact a "why does the browser trust
+    // this?" question turns on.
     let ca = Arc::new(crate::mitm::ca::CertificateAuthority::generate().expect("ca"));
+    let mut server = server_using(Arc::clone(&ca));
+    let cconfig = client_trusting(&ca);
+    let name = rustls::pki_types::ServerName::try_from("origin.example.com".to_string())
+        .expect("server name");
+    let mut client = ClientConnection::new(cconfig, name).expect("client conn");
+    handshake(&mut server, &mut client);
+
+    let cert = peer_cert(&client).expect("the finished session has a leaf");
+    assert_eq!(cert.subject, "origin.example.com");
+    assert_eq!(cert.issuer, "AdFree Personal CA");
+    assert!(cert.not_before_ms > 0);
+    assert!(
+        cert.not_after_ms > cert.not_before_ms,
+        "a window that runs backwards is a parse that went wrong"
+    );
+}
+
+#[test]
+fn a_session_still_handshaking_has_no_certificate_to_report() {
+    // Rows are written for refused requests too, and some of those never saw a
+    // Certificate. An absent certificate has to stay absent in the log rather
+    // than arrive as an empty name the UI would render as a blank row.
+    let ca = Arc::new(crate::mitm::ca::CertificateAuthority::generate().expect("ca"));
+    let cconfig = client_trusting(&ca);
+    let name = rustls::pki_types::ServerName::try_from("origin.example.com".to_string())
+        .expect("server name");
+    let client = ClientConnection::new(cconfig, name).expect("client conn");
+    assert!(peer_cert(&client).is_none());
+}
+
+#[test]
+fn spliced_body_survives_the_tls_round_trip() {    let ca = Arc::new(crate::mitm::ca::CertificateAuthority::generate().expect("ca"));
     let mut server = server_using(Arc::clone(&ca));
 
     let cconfig = client_trusting(&ca);

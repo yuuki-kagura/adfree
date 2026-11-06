@@ -90,10 +90,15 @@ pub const MAX_CIPHER: usize = 40;
 /// The MIME type the response declared, without its parameters. AdGuard names
 /// this `Content-Type`, and a truncated one still tells the user what arrived.
 pub const MAX_CTYPE: usize = 32;
+/// Who the server a session talked to said it was, and who signed the proof.
+/// A full distinguished name runs past 200 bytes and says nothing more than
+/// the attribute that names the party, so the writers store that one (see
+/// [`crate::mitm::tls::peer_cert`]).
+pub const MAX_CERT_NAME: usize = 96;
 const RECORD_HEADER: usize = 26;
 /// Fixed bytes appended after the variable-name tail (flow id, traffic, the
-/// five length bytes, the response status).
-const RECORD_TRAILER: usize = 19;
+/// seven length bytes, the response status, the certificate's validity window).
+const RECORD_TRAILER: usize = 37;
 
 /// What kind of thing a decision was about, in the words the log's tabs use.
 ///
@@ -220,6 +225,17 @@ pub struct Event {
     pub cipher_len: u8,
     pub ctype: [u8; MAX_CTYPE],
     pub ctype_len: u8,
+    /// The subject and issuer of the certificate the upstream TLS session
+    /// presented, empty when the row never saw one.
+    pub cert_subj: [u8; MAX_CERT_NAME],
+    pub cert_subj_len: u8,
+    pub cert_iss: [u8; MAX_CERT_NAME],
+    pub cert_iss_len: u8,
+    /// That certificate's validity window in epoch milliseconds, 0 when there
+    /// was no certificate. A day is all the log shows, so seconds would do,
+    /// but the platform's date helpers already speak milliseconds.
+    pub cert_from: i64,
+    pub cert_to: i64,
 }
 
 impl Event {
@@ -257,6 +273,12 @@ impl Event {
             cipher_len: 0,
             ctype: [0; MAX_CTYPE],
             ctype_len: 0,
+            cert_subj: [0; MAX_CERT_NAME],
+            cert_subj_len: 0,
+            cert_iss: [0; MAX_CERT_NAME],
+            cert_iss_len: 0,
+            cert_from: 0,
+            cert_to: 0,
         }
     }
 
@@ -341,6 +363,17 @@ impl Event {
     /// answer to declare one in.
     pub fn content_type(&self) -> &str {
         std::str::from_utf8(&self.ctype[..self.ctype_len as usize]).unwrap_or("")
+    }
+
+    /// The name the server's certificate carried, empty for a row that never
+    /// completed a handshake.
+    pub fn cert_subject(&self) -> &str {
+        std::str::from_utf8(&self.cert_subj[..self.cert_subj_len as usize]).unwrap_or("")
+    }
+
+    /// Who signed that certificate — the party the user is really trusting.
+    pub fn cert_issuer(&self) -> &str {
+        std::str::from_utf8(&self.cert_iss[..self.cert_iss_len as usize]).unwrap_or("")
     }
 }
 
@@ -456,6 +489,8 @@ fn encode(ev: &Event, out: &mut Vec<u8>) -> bool {
     let slen = ev.source_len as usize;
     let clen = ev.cipher_len as usize;
     let tlen = ev.ctype_len as usize;
+    let subjlen = ev.cert_subj_len as usize;
+    let isslen = ev.cert_iss_len as usize;
     if dlen > MAX_DOMAIN
         || ilen > MAX_IP
         || rlen > MAX_RULE
@@ -466,6 +501,8 @@ fn encode(ev: &Event, out: &mut Vec<u8>) -> bool {
         || slen > MAX_SOURCE
         || clen > MAX_CIPHER
         || tlen > MAX_CTYPE
+        || subjlen > MAX_CERT_NAME
+        || isslen > MAX_CERT_NAME
     {
         return false;
     }
@@ -498,11 +535,19 @@ fn encode(ev: &Event, out: &mut Vec<u8>) -> bool {
     out.push(clen as u8);
     out.push(tlen as u8);
     out.extend_from_slice(&ev.status.to_le_bytes());
+    // Last of the trailer, so every offset a reader of the older fields
+    // already computes still points at the same thing.
+    out.push(subjlen as u8);
+    out.push(isslen as u8);
+    out.extend_from_slice(&ev.cert_from.to_le_bytes());
+    out.extend_from_slice(&ev.cert_to.to_le_bytes());
     out.extend_from_slice(&ev.url[..ulen]);
     out.extend_from_slice(&ev.answer[..qlen]);
     out.extend_from_slice(&ev.source[..slen]);
     out.extend_from_slice(&ev.cipher[..clen]);
     out.extend_from_slice(&ev.ctype[..tlen]);
+    out.extend_from_slice(&ev.cert_subj[..subjlen]);
+    out.extend_from_slice(&ev.cert_iss[..isslen]);
     debug_assert_eq!(
         out.len() - start,
         RECORD_HEADER
@@ -517,6 +562,8 @@ fn encode(ev: &Event, out: &mut Vec<u8>) -> bool {
             + slen
             + clen
             + tlen
+            + subjlen
+            + isslen
     );
     true
 }
@@ -595,6 +642,24 @@ pub fn with_status(mut event: Event, status: u16) -> Event {
 /// whether a request brought back a page, a script or a video.
 pub fn with_content_type(mut event: Event, mime: &str) -> Event {
     put_str(&mut event.ctype[..], &mut event.ctype_len, mime);
+    event
+}
+
+/// Attaches the certificate the upstream TLS session presented: who it named,
+/// who signed it, and the window it claimed to be good for. A row whose
+/// handshake never completed — or never happened — has no certificate, and
+/// stays as it was built.
+pub fn with_cert(
+    mut event: Event,
+    subject: &str,
+    issuer: &str,
+    not_before_ms: i64,
+    not_after_ms: i64,
+) -> Event {
+    put_str(&mut event.cert_subj[..], &mut event.cert_subj_len, subject);
+    put_str(&mut event.cert_iss[..], &mut event.cert_iss_len, issuer);
+    event.cert_from = not_before_ms;
+    event.cert_to = not_after_ms;
     event
 }
 
@@ -691,8 +756,10 @@ mod tests {
     fn the_live_ring_stays_within_its_memory_budget() {
         let record = std::mem::size_of::<Event>();
         // Naming the bound per record, not only per ring, is what tells a
-        // future field how much room it took and how much is left.
-        assert!(record <= 800, "one event is {record} bytes");
+        // future field how much room it took and how much is left. The peer
+        // certificate's two names and their window cost ~210 bytes; the ring
+        // still sits well inside its total budget.
+        assert!(record <= 1152, "one event is {record} bytes");
         let ring_bytes = record * CAPACITY;
         // Phase 6 enrichment (url, dns answer, flow id, per-flow sizes) may
         // not push the ring past the ~3 MB budget the plan set for it.
@@ -858,20 +925,30 @@ mod tests {
 
     #[test]
     fn the_tls_facts_and_the_answer_travel_with_the_event() {
-        let ev = with_content_type(
-            with_status(
-                with_cipher(
-                    with_tls(allow_event("host.test", "", 0), tls_ver::TLS13),
-                    "TLS13_AES_256_GCM_SHA384",
+        let ev = with_cert(
+            with_content_type(
+                with_status(
+                    with_cipher(
+                        with_tls(allow_event("host.test", "", 0), tls_ver::TLS13),
+                        "TLS13_AES_256_GCM_SHA384",
+                    ),
+                    200,
                 ),
-                200,
+                "text/html",
             ),
-            "text/html",
+            "cdn.example",
+            "Example Root CA",
+            1_700_000_000_000,
+            1_800_000_000_000,
         );
         assert_eq!(ev.tls_name(), "TLS 1.3");
         assert_eq!(ev.cipher(), "TLS13_AES_256_GCM_SHA384");
         assert_eq!(ev.status, 200);
         assert_eq!(ev.content_type(), "text/html");
+        assert_eq!(ev.cert_subject(), "cdn.example");
+        assert_eq!(ev.cert_issuer(), "Example Root CA");
+        assert_eq!(ev.cert_from, 1_700_000_000_000);
+        assert_eq!(ev.cert_to, 1_800_000_000_000);
 
         let mut log = EventLog::new(4);
         log.push(ev);
@@ -883,14 +960,26 @@ mod tests {
         let dlen = out[11] as usize;
         let ilen = out[12] as usize;
         let tail = RECORD_HEADER + dlen + ilen;
-        // The trailer's fixed part ends with the status; the two new strings
-        // follow it, so nothing before them moved.
+        // The trailer's fixed part still ends with the status, and the
+        // certificate's own facts follow it: the strings the lengths count are
+        // pushed back, nothing before them moved.
         assert_eq!(out[tail + 17], 200);
-        assert_eq!(&out[tail + 19..], b"TLS13_AES_256_GCM_SHA384text/html");
+        assert_eq!(out[tail + 19], 11);
+        assert_eq!(out[tail + 20], 15);
+        assert_eq!(
+            i64::from_le_bytes(out[tail + 21..tail + 29].try_into().unwrap()),
+            1_700_000_000_000
+        );
+        assert_eq!(
+            &out[tail + RECORD_TRAILER..],
+            b"TLS13_AES_256_GCM_SHA384text/htmlcdn.exampleExample Root CA"
+        );
         assert_eq!(
             out.len(),
             RECORD_HEADER + RECORD_TRAILER + dlen + ilen + ev.cipher_len as usize
                 + ev.ctype_len as usize
+                + ev.cert_subj_len as usize
+                + ev.cert_iss_len as usize
         );
     }
 
@@ -904,11 +993,24 @@ mod tests {
         assert_eq!(Event::zeroed().status, 0);
         assert!(Event::zeroed().cipher().is_empty());
         assert!(Event::zeroed().content_type().is_empty());
+        assert!(Event::zeroed().cert_subject().is_empty());
+        assert!(Event::zeroed().cert_issuer().is_empty());
+        assert_eq!(Event::zeroed().cert_from, 0);
+        assert_eq!(Event::zeroed().cert_to, 0);
         let long = "c".repeat(200);
         let ev = with_cipher(allow_event("host.test", "", 0), &long);
         assert_eq!(ev.cipher_len, MAX_CIPHER as u8);
         let mime = with_content_type(allow_event("host.test", "", 0), &"m".repeat(100));
         assert_eq!(mime.ctype_len, MAX_CTYPE as u8);
+        let named = with_cert(
+            allow_event("host.test", "", 0),
+            &"s".repeat(200),
+            &"i".repeat(200),
+            1,
+            2,
+        );
+        assert_eq!(named.cert_subj_len, MAX_CERT_NAME as u8);
+        assert_eq!(named.cert_iss_len, MAX_CERT_NAME as u8);
     }
 
     #[test]

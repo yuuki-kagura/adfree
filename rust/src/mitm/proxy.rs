@@ -180,6 +180,9 @@ pub struct MitmFacts<'a> {
     pub status: u16,
     /// The media type the answer declared, empty when it declared none.
     pub content_type: &'a str,
+    /// The leaf certificate the upstream half accepted, absent when the flow
+    /// never finished a handshake (or never made one).
+    pub cert: Option<&'a crate::mitm::tls::PeerCert>,
 }
 
 /// Where the HTTPS path reports what it blocked.
@@ -976,6 +979,7 @@ impl ProxySession {
                             cipher: "",
                             status: 0,
                             content_type: "",
+                            cert: None,
                         },
                     });
                 }
@@ -1622,6 +1626,7 @@ impl ProxySession {
                 // not; `negotiated` says which, and a refused request has no
                 // answer to report.
                 let (tls_ver, cipher) = tls::negotiated(&session.client);
+                let cert = tls::peer_cert(&session.client);
                 sink(&MitmBlock {
                     host: &host,
                     url: Some(&url),
@@ -1634,13 +1639,14 @@ impl ProxySession {
                     allowed: false,
                     // No origin was asked, so there is no answer to name —
                     // but the session upstream is real, and says how it was
-                    // encrypted.
+                    // encrypted and who the server proved itself to be.
                     facts: MitmFacts {
                         protocol: crate::events::protocol::HTTPS,
                         tls: tls_ver,
                         cipher,
                         status: 0,
                         content_type: "",
+                        cert: cert.as_ref(),
                     },
                 });
             }
@@ -1924,9 +1930,12 @@ impl ProxySession {
         // The session facts every row this connection writes reports. A
         // request only reaches the origin once the upstream handshake is over,
         // so they are settled for the rest of the connection.
-        let (tls_ver, cipher) = match &self.state {
-            ProxyState::Active(session) => tls::negotiated(&session.client),
-            _ => (crate::events::tls_ver::NONE, ""),
+        let (tls_ver, cipher, cert) = match &self.state {
+            ProxyState::Active(session) => {
+                let (version, suite) = tls::negotiated(&session.client);
+                (version, suite, tls::peer_cert(&session.client))
+            }
+            _ => (crate::events::tls_ver::NONE, "", None),
         };
         if !plain.is_empty() {
             self.resp_pending.extend_from_slice(plain);
@@ -1983,6 +1992,7 @@ impl ProxySession {
                                     cipher,
                                     status: info.status,
                                     content_type: http::response_mime(&head).unwrap_or(""),
+                                    cert: cert.as_ref(),
                                 },
                             });
                         }

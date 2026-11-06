@@ -924,6 +924,9 @@
     <string name="log_detail_content_type">Kiểu nội dung phản hồi</string>
     <string name="log_detail_tls_version">Phiên bản TLS</string>
     <string name="log_detail_cipher_suite">Bộ mã hóa TLS</string>
+    <string name="log_detail_cert_subject">Chủ thể chứng chỉ</string>
+    <string name="log_detail_cert_issuer">Nơi cấp chứng chỉ</string>
+    <string name="log_detail_cert_validity">Hiệu lực</string>
     <string name="log_allowed_off_hint">Nhật ký đang chỉ ghi lại những gì bị chặn. Bật “Ghi log cả request hợp lệ” trong phần Cài đặt để thấy toàn bộ yêu cầu máy này đã gửi.</string>
     <string name="log_detail_connection">Mã kết nối</string>
     <string name="log_detail_transfer">Dữ liệu truyền</string>

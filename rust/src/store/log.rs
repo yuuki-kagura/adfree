@@ -158,6 +158,16 @@ pub struct LogRow {
     pub status: i64,
     /// The MIME type the response declared, without its parameters.
     pub ctype: String,
+    /// The name the upstream certificate carried, empty for a row that never
+    /// completed a handshake.
+    pub cert_subj: String,
+    /// Who signed that certificate.
+    pub cert_iss: String,
+    /// The window it claimed to be valid for, in epoch milliseconds. Both are
+    /// 0 when no certificate was seen, which is not the same as a certificate
+    /// valid since the epoch.
+    pub cert_from: i64,
+    pub cert_to: i64,
 }
 
 impl From<&Event> for LogRow {
@@ -190,6 +200,10 @@ impl From<&Event> for LogRow {
             cipher: e.cipher().to_string(),
             status: i64::from(e.status),
             ctype: e.content_type().to_string(),
+            cert_subj: e.cert_subject().to_string(),
+            cert_iss: e.cert_issuer().to_string(),
+            cert_from: e.cert_from,
+            cert_to: e.cert_to,
         }
     }
 }
@@ -295,7 +309,11 @@ fn write_batch(db: &Db, rows: &[LogRow], traffic: &[FlowTraffic]) -> rusqlite::R
                 r.tls,
                 r.cipher,
                 r.status,
-                r.ctype
+                r.ctype,
+                r.cert_subj,
+                r.cert_iss,
+                r.cert_from,
+                r.cert_to
             ])?;
         }
     }
@@ -313,13 +331,14 @@ fn write_batch(db: &Db, rows: &[LogRow], traffic: &[FlowTraffic]) -> rusqlite::R
 const COLUMNS: &str = "id, ts_ms, action, category, domain, ip, rule, list_name, \
                        latency_ns, bytes_saved, ipv6, app, transport, roaming, flow_id, \
                        url, dns_answer, bytes_sent, bytes_recv, req_type, source, \
-                       proto, tls, cipher, status, ctype";
+                       proto, tls, cipher, status, ctype, cert_subj, cert_iss, \
+                       cert_from, cert_to";
 
 const INSERT_SQL: &str = "INSERT INTO log_events \
      (ts_ms, action, category, domain, ip, rule, list_name, latency_ns, bytes_saved, ipv6, app, \
       transport, roaming, flow_id, url, dns_answer, bytes_sent, bytes_recv, req_type, source, \
-      proto, tls, cipher, status, ctype) \
-     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25)";
+      proto, tls, cipher, status, ctype, cert_subj, cert_iss, cert_from, cert_to) \
+     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29)";
 
 const INSERT_TRAFFIC_SQL: &str = "INSERT INTO flow_traffic \
      (ts_ms, app, transport, roaming, sent, recv) VALUES (?1, ?2, ?3, ?4, ?5, ?6)";
@@ -352,6 +371,10 @@ fn row_from(r: &rusqlite::Row<'_>) -> rusqlite::Result<LogRow> {
         cipher: r.get(23)?,
         status: r.get(24)?,
         ctype: r.get(25)?,
+        cert_subj: r.get(26)?,
+        cert_iss: r.get(27)?,
+        cert_from: r.get(28)?,
+        cert_to: r.get(29)?,
     })
 }
 

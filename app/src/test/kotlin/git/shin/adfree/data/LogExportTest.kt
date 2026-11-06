@@ -90,6 +90,10 @@ class LogExportTest {
                     cipher = "TLS_AES_256_GCM_SHA384",
                     httpResponseStatus = 200,
                     contentType = "text/html",
+                    certSubject = "cdn.example.com",
+                    certIssuer = "DigiCert TLS RSA SHA256 2020 CA1",
+                    certValidFrom = 1_700_000_000_000L,
+                    certValidTo = 1_800_000_000_000L,
                 ),
             ),
             out,
@@ -101,13 +105,36 @@ class LogExportTest {
         assertEquals("TLS_AES_256_GCM_SHA384", fields[21])
         assertEquals("200", fields[22])
         assertEquals("text/html", fields[23])
+        assertEquals("cdn.example.com", fields[24])
+        assertEquals("DigiCert TLS RSA SHA256 2020 CA1", fields[25])
+        assertEquals("1700000000000", fields[26])
+        assertEquals("1800000000000", fields[27])
 
         // A DNS row was never an encrypted session, so it names none of that.
         val dnsFields = StringWriter().let { writer ->
             writeLogCsv(sequenceOf(rowAt(4)), writer)
             writer.toString().reader().readLines()[1].split(",")
         }
-        assertEquals(4, dnsFields.subList(20, 24).count { it.isEmpty() })
+        assertEquals(8, dnsFields.subList(20, 28).count { it.isEmpty() })
+    }
+
+    @Test
+    fun `a certificate name with commas stays inside one field`() {
+        // Distinguished names are written with commas in them, which is what a
+        // CSV has to survive: the row stays one line and the name travels
+        // quoted, instead of spilling into every column after it.
+        val out = StringWriter()
+        val written = writeLogCsv(
+            sequenceOf(rowAt(5).copy(certSubject = "Example, Inc, DC=London")),
+            out,
+        )
+
+        val lines = out.toString().reader().readLines()
+        assertEquals(1L, written)
+        // Header plus one row: the commas inside the name are quoted, so they
+        // never end the line.
+        assertEquals(2, lines.size)
+        assertTrue(lines[1].contains("\"Example, Inc, DC=London\""))
     }
 
     @Test
@@ -170,6 +197,6 @@ class LogExportTest {
 
     private companion object {
         /** The header and every row must keep the same number of columns. */
-        const val COLUMN_COUNT = 24
+        const val COLUMN_COUNT = 28
     }
 }

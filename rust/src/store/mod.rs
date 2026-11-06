@@ -560,6 +560,23 @@ fn migrate(conn: &Connection) -> Result<(), String> {
         )
         .map_err(|e| format!("migrate schema to v10: {e}"))?;
     }
+    if version < 11 {
+        // v11: the certificate the upstream server handed over. Knowing a
+        // connection ended at `CN=example.com` is not much; knowing *who signed
+        // that claim* and *for how long* is what turns the log into evidence,
+        // and it is the column AdGuard's details pane shows for HTTPS. Rows
+        // from before it stay empty, so the UI simply leaves the row out.
+        conn.execute_batch(
+            "BEGIN;
+             ALTER TABLE log_events ADD COLUMN cert_subj TEXT NOT NULL DEFAULT '';
+             ALTER TABLE log_events ADD COLUMN cert_iss TEXT NOT NULL DEFAULT '';
+             ALTER TABLE log_events ADD COLUMN cert_from INTEGER NOT NULL DEFAULT 0;
+             ALTER TABLE log_events ADD COLUMN cert_to INTEGER NOT NULL DEFAULT 0;
+             PRAGMA user_version = 11;
+             COMMIT;",
+        )
+        .map_err(|e| format!("migrate schema to v11: {e}"))?;
+    }
     Ok(())
 }
 
@@ -846,7 +863,7 @@ mod tests {
             let version: i64 = conn
                 .query_row("PRAGMA user_version", [], |r| r.get(0))
                 .expect("version read");
-            assert_eq!(version, 10);
+            assert_eq!(version, 11);
         }
         assert_eq!(
             store.log_usage_by_domain(1_000, -1),
@@ -859,9 +876,9 @@ mod tests {
             "the row written before the migration is still grouped by domain"
         );
 
-        // The v9 and v10 columns come along with the index. An old row reads
-        // as unclassified; nothing guesses a type, a TLS version or a status it
-        // never saw.
+        // The v9, v10 and v11 columns come along with the index. An old row
+        // reads as unclassified; nothing guesses a type, a TLS version, a
+        // status or a signer it never saw.
         let old = &store.log_page(0, 10)[0];
         assert_eq!(old.req_type, "");
         assert_eq!(old.source, "");
@@ -870,17 +887,31 @@ mod tests {
         assert_eq!(old.cipher, "");
         assert_eq!(old.status, 0);
         assert_eq!(old.ctype, "");
-        store.log_enqueue(&crate::events::with_type(
-            crate::events::with_source(
-                allow_event("new.example", "10.0.0.2", 1),
-                "https://old.example/page",
+        assert_eq!(old.cert_subj, "");
+        assert_eq!(old.cert_iss, "");
+        assert_eq!(old.cert_from, 0);
+        assert_eq!(old.cert_to, 0);
+        store.log_enqueue(&crate::events::with_cert(
+            crate::events::with_type(
+                crate::events::with_source(
+                    allow_event("new.example", "10.0.0.2", 1),
+                    "https://old.example/page",
+                ),
+                crate::events::req_type::SCRIPT,
             ),
-            crate::events::req_type::SCRIPT,
+            "cdn.example",
+            "Let's Encrypt",
+            1_700_000_000_000,
+            1_800_000_000_000,
         ));
         store.log_flush();
         let new = &store.log_page(0, 1)[0];
         assert_eq!(new.req_type, "script");
         assert_eq!(new.source, "https://old.example/page");
+        assert_eq!(new.cert_subj, "cdn.example");
+        assert_eq!(new.cert_iss, "Let's Encrypt");
+        assert_eq!(new.cert_from, 1_700_000_000_000);
+        assert_eq!(new.cert_to, 1_800_000_000_000);
         drop(store);
         let _ = std::fs::remove_dir_all(&dir);
     }

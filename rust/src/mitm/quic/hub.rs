@@ -321,6 +321,7 @@ async fn handle_request(
                     cipher: "",
                     status: 0,
                     content_type: "",
+                    cert: None,
                 },
             });
         }
@@ -503,8 +504,9 @@ async fn relay_response(
     let info = crate::mitm::http::parse_response_head(&wire);
     // The request this answer belongs to is a log row of its own, exactly like
     // the HTTP/1.1 splice writes one: what the origin said is the point of
-    // looking. QUIC is always TLS 1.3, and the suite is not what this layer can
-    // reach.
+    // looking. QUIC is always TLS 1.3, and neither the suite nor the peer's
+    // certificate is reachable here: the upstream connection belongs to the
+    // h3 client, not to the request this row describes.
     if !plan.log_url.is_empty() {
         if let Some(sink) = config.sink {
             sink(&MitmBlock {
@@ -523,6 +525,7 @@ async fn relay_response(
                     cipher: "",
                     status: status.as_u16(),
                     content_type: crate::mitm::http::response_mime(&wire).unwrap_or(""),
+                    cert: None,
                 },
             });
         }
