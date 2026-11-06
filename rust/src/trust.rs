@@ -28,9 +28,42 @@ const ANDROID_STAGE: &str = "/data/local/tmp/adfree_ca";
 /// Magisk keeps modules here; a directory is a module.
 #[cfg(any(target_os = "android", test))]
 const MAGISK_MODULE_DIR: &str = "/data/adb/modules/adfree_ca";
-/// Where the distro's update command looks on Debian-family Linux.
-#[cfg(target_os = "linux")]
-const LINUX_CA_FILE: &str = "/usr/local/share/ca-certificates/adfree-ca.crt";
+/// File name the certificate keeps in whichever distro anchor directory this
+/// machine has; the directory itself is a `LinuxStore`.
+#[cfg(any(target_os = "linux", test))]
+const LINUX_CA_NAME: &str = "adfree-ca.crt";
+
+/// One distro's answer: the directory an admin anchor belongs in, and the
+/// command that rebuilds the bundle from it. A machine has exactly one of
+/// these, so guessing the Debian layout — as this file used to — means both
+/// writing somewhere that does not exist and never seeing a CA that is
+/// installed correctly.
+#[cfg(any(target_os = "linux", test))]
+struct LinuxStore {
+    anchors: &'static str,
+    /// Where the refresh command may live, in the order distros ship it.
+    refresh: &'static [&'static str],
+    refresh_args: &'static [&'static str],
+}
+
+#[cfg(any(target_os = "linux", test))]
+const LINUX_STORES: [LinuxStore; 3] = [
+    LinuxStore {
+        anchors: "/usr/local/share/ca-certificates",
+        refresh: &["/usr/sbin/update-ca-certificates", "/usr/bin/update-ca-certificates"],
+        refresh_args: &[],
+    },
+    LinuxStore {
+        anchors: "/etc/ca-certificates/trust-source/anchors",
+        refresh: &["/usr/bin/update-ca-trust", "/usr/sbin/update-ca-trust"],
+        refresh_args: &[],
+    },
+    LinuxStore {
+        anchors: "/etc/pki/ca-trust/source/anchors",
+        refresh: &["/usr/bin/update-ca-trust", "/usr/sbin/update-ca-trust"],
+        refresh_args: &["extract"],
+    },
+];
 
 /// `su` may show a consent dialog, so the first probe can take a while.
 #[cfg(target_os = "android")]
@@ -609,6 +642,45 @@ fn shell_single_quote(value: &str) -> String {
 
 // --------------------------------------------------------------------- linux
 
+/// `path` joined under `root` with its leading slash dropped, so one set of
+/// absolute paths serves both the real system and a test's fake tree.
+#[cfg(any(target_os = "linux", test))]
+fn under(root: &Path, path: &str) -> std::path::PathBuf {
+    root.join(path.strip_prefix('/').unwrap_or(path))
+}
+
+/// The distro store this machine has, searched for under `root`.
+#[cfg(any(target_os = "linux", test))]
+fn linux_store_under(root: &Path) -> Option<&'static LinuxStore> {
+    LINUX_STORES.iter().find(|store| {
+        under(root, store.anchors).is_dir()
+            && store.refresh.iter().any(|program| under(root, program).is_file())
+    })
+}
+
+#[cfg(target_os = "linux")]
+fn linux_store() -> Option<&'static LinuxStore> {
+    linux_store_under(Path::new("/"))
+}
+
+/// Where the certificate is written for this store. Detection reads the same
+/// function, which is the whole point: an install that lands somewhere the
+/// check does not look is a switch that can never come on.
+#[cfg(any(target_os = "linux", test))]
+fn anchor_target(store: &LinuxStore, root: &Path) -> std::path::PathBuf {
+    under(root, store.anchors).join(LINUX_CA_NAME)
+}
+
+/// Every anchor path the certificate could be living at, so a CA placed by
+/// hand in another family's directory is still recognised.
+#[cfg(any(target_os = "linux", test))]
+fn anchor_targets(root: &Path) -> Vec<std::path::PathBuf> {
+    LINUX_STORES
+        .iter()
+        .map(|store| anchor_target(store, root))
+        .collect()
+}
+
 #[cfg(target_os = "linux")]
 fn elevated_linux() -> bool {
     // SAFETY: geteuid has no preconditions.
@@ -625,9 +697,13 @@ fn linux_installed(der: Option<&[u8]>) -> bool {
     let Some(der) = der else {
         return false;
     };
-    fs::read(LINUX_CA_FILE)
-        .map(|bytes| cert_matches_file(&bytes, der))
-        .unwrap_or(false)
+    anchor_targets(Path::new("/"))
+        .iter()
+        .any(|path| {
+            fs::read(path)
+                .map(|bytes| cert_matches_file(&bytes, der))
+                .unwrap_or(false)
+        })
 }
 
 #[cfg(target_os = "linux")]
@@ -670,23 +746,26 @@ fn linux_run(program: &str, args: &[&str]) -> Result<(), String> {
     }
 }
 
+/// Rebuilds the bundle from the anchor directory this store owns. Probing the
+/// command through the store rather than by name is what keeps the write and
+/// the refresh from disagreeing about which distro this is.
 #[cfg(target_os = "linux")]
-fn update_linux_bundle() -> Result<(), String> {
-    if Path::new("/usr/sbin/update-ca-certificates").exists()
-        || Path::new("/usr/bin/update-ca-certificates").exists()
-    {
-        return linux_run("update-ca-certificates", &[]);
-    }
-    if Path::new("/usr/bin/update-ca-trust").exists()
-        || Path::new("/usr/sbin/update-ca-trust").exists()
-    {
-        return linux_run("update-ca-trust", &["extract"]);
-    }
-    Err("update-ca-certificates/update-ca-trust not found".to_string())
+fn update_linux_bundle(store: &LinuxStore) -> Result<(), String> {
+    let Some(program) = store.refresh.iter().find(|path| Path::new(path).is_file()) else {
+        return Err("no update-ca-certificates/update-ca-trust command for this anchor directory".to_string());
+    };
+    linux_run(program, store.refresh_args)
 }
 
 #[cfg(target_os = "linux")]
 fn linux_install(der: &[u8]) -> RootTrust {
+    let Some(store) = linux_store() else {
+        return RootTrust {
+            detail_code: TrustDetail::LinuxInstallFailed,
+            detail: "no ca-certificates anchor directory on this system".to_string(),
+            ..RootTrust::default()
+        };
+    };
     if !elevated_linux() {
         return RootTrust {
             detail_code: TrustDetail::NeedsRoot,
@@ -694,7 +773,7 @@ fn linux_install(der: &[u8]) -> RootTrust {
         };
     }
     let pem = pem_from_der(der);
-    let temp = std::env::temp_dir().join("adfree-ca.crt");
+    let temp = std::env::temp_dir().join(LINUX_CA_NAME);
     if let Err(e) = fs::write(&temp, pem) {
         return RootTrust {
             su_present: true,
@@ -704,9 +783,11 @@ fn linux_install(der: &[u8]) -> RootTrust {
             ..RootTrust::default()
         };
     }
+    let target = anchor_target(store, Path::new("/"));
     let staged = temp.to_string_lossy().to_string();
-    let install = linux_run("install", &["-m", "644", &staged, LINUX_CA_FILE])
-        .and_then(|()| update_linux_bundle());
+    let installed_path = target.to_string_lossy().to_string();
+    let install = linux_run("install", &["-m", "644", &staged, &installed_path])
+        .and_then(|()| update_linux_bundle(store));
     let _ = fs::remove_file(&temp);
     match install {
         Ok(()) => RootTrust {
@@ -736,7 +817,19 @@ fn linux_remove(der: &[u8]) -> RootTrust {
             ..RootTrust::default()
         };
     }
-    let removed = linux_run("rm", &["-f", LINUX_CA_FILE]).and_then(|()| update_linux_bundle());
+    // Every family's path, not just this distro's: a CA copied in by hand
+    // during setup is still ours to clean up.
+    let targets: Vec<String> = anchor_targets(Path::new("/"))
+        .iter()
+        .map(|path| path.to_string_lossy().into_owned())
+        .collect();
+    let mut args = vec!["-f".to_string()];
+    args.extend(targets);
+    let arg_refs: Vec<&str> = args.iter().map(String::as_str).collect();
+    let removed = linux_run("rm", &arg_refs).and_then(|()| match linux_store() {
+        Some(store) => update_linux_bundle(store),
+        None => Ok(()),
+    });
     match removed {
         Ok(()) => RootTrust {
             su_present: true,
@@ -840,5 +933,78 @@ iRjL+xZqkbnzAis6uQIhAJc+z9Z5CRp5OFQT110aMAqyuGpi5rouQa7kYzl2smXB
     fn shell_quotes_single_quotes() {
         assert_eq!(shell_single_quote("a'b"), "'a'\\''b'");
         assert_eq!(shell_single_quote("plain"), "'plain'");
+    }
+
+    /// A throwaway directory tree standing in for a distro's layout. Built by
+    /// hand: the crate has no temp-dir dev dependency.
+    fn fake_root(tag: &str, files: &[&str], dirs: &[&str]) -> std::path::PathBuf {
+        static COUNTER: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+        let seq = COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let root = std::env::temp_dir().join(format!(
+            "adfree-trust-test-{}-{tag}-{seq}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        for path in dirs {
+            std::fs::create_dir_all(under(&root, path)).expect("fake anchor dir");
+        }
+        for path in files {
+            let target = under(&root, path);
+            std::fs::create_dir_all(target.parent().expect("fake parent")).expect("fake parent");
+            std::fs::write(target, b"").expect("fake program");
+        }
+        root
+    }
+
+    #[test]
+    fn every_store_writes_where_the_check_reads() {
+        for (index, store) in LINUX_STORES.iter().enumerate() {
+            let root = fake_root(
+                &format!("store{index}"),
+                store.refresh,
+                &[store.anchors],
+            );
+            let found = linux_store_under(&root)
+                .unwrap_or_else(|| panic!("{} has an anchor dir and a refresh command", store.anchors));
+            assert_eq!(found.anchors, store.anchors);
+            assert_eq!(found.refresh, store.refresh);
+            // The install target and the install check are the same path; a CA
+            // written anywhere else would never flip the switch.
+            assert!(anchor_targets(&root).contains(&anchor_target(store, &root)));
+            let _ = std::fs::remove_dir_all(&root);
+        }
+    }
+
+    #[test]
+    fn an_arch_machine_is_not_read_as_debian() {
+        // This host's actual shape, after the Debian directory was created by
+        // hand: both anchor dirs exist, only p11-kit's command does. Picking
+        // Debian here would write a PEM nobody rehashes and report the CA as
+        // missing forever.
+        let root = fake_root(
+            "arch",
+            &["/usr/bin/update-ca-trust"],
+            &[
+                "/usr/local/share/ca-certificates",
+                "/etc/ca-certificates/trust-source/anchors",
+            ],
+        );
+        let store = linux_store_under(&root).expect("arch store");
+        assert_eq!(store.anchors, "/etc/ca-certificates/trust-source/anchors");
+        assert_eq!(store.refresh_args, &[] as &[&str]);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn anchor_dirs_without_a_refresh_command_are_not_a_store() {
+        // A directory alone is not an answer: without the rehash the anchor is
+        // inert, and an install that claims success would be a lie.
+        let root = fake_root("orphan", &[], &["/usr/local/share/ca-certificates"]);
+        assert!(linux_store_under(&root).is_none());
+        let empty = fake_root("empty", &[], &[]);
+        assert!(linux_store_under(&empty).is_none());
+        assert_eq!(anchor_targets(&empty).len(), LINUX_STORES.len());
+        let _ = std::fs::remove_dir_all(&root);
+        let _ = std::fs::remove_dir_all(&empty);
     }
 }
