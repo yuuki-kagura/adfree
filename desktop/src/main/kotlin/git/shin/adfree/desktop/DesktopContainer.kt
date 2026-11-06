@@ -47,10 +47,11 @@ class DesktopContainer(
         CoreEngine(
             log = LogSink { System.err.println("[core] $it") },
             caExporter = DesktopCaExporter(dataRoot),
-            // The core reads the distro bundle itself (see `rust/src/trust.rs`):
-            // trusted means the PEM is in /usr/local/share/ca-certificates and
-            // `update-ca-certificates` has run. Called straight on the bindings
-            // because this runs while the engine itself is being built.
+            // The core reads the distro's own trust store (see
+            // `rust/src/trust.rs`): trusted means the PEM is in whichever
+            // anchor directory this machine has and its rehash has run.
+            // Called straight on the bindings because this runs while the
+            // engine itself is being built.
             caTrustChecker = git.shin.adfree.platform.CaTrustChecker {
                 runCatching { git.shin.adfree.core.coreRootTrustStatus().installed }
                     .getOrDefault(false)
@@ -90,6 +91,8 @@ class DesktopContainer(
         },
         privileges = privileges,
         onEngineTakeover = { onEngineTakeover() },
+        coreLibrary = coreLibrary,
+        exportCaPem = { coreEngine.exportCaCertificate() },
     )
     val fileHost = DesktopFileHost()
     val inventory = DesktopAppInventory()
@@ -148,6 +151,38 @@ class DesktopContainer(
         applyConfig()
     }
 
+    /**
+     * Filtering the machine's own traffic on a desktop is worth nothing while
+     * TLS stays sealed, so HTTPS is the default here wherever the certificate
+     * can be made trusted: the CA goes into the system store through polkit —
+     * the same dialog the redirect rules ask with — and filtering comes on
+     * after it. Once per install, because a switch the user later turns off
+     * must stay off; Settings keeps offering the same ask by hand.
+     *
+     * The shell calls this rather than [start], and on its IO thread: the
+     * elevation dialog blocks until it is answered, and a headless test has no
+     * business raising one.
+     */
+    fun applyHttpsDefault(scope: CoroutineScope) {
+        if (!engineAvailable) return
+        if (store.getBoolean(KEY_HTTPS_DEFAULT_APPLIED, false)) return
+        store.putBoolean(KEY_HTTPS_DEFAULT_APPLIED, true)
+        scope.launch(Dispatchers.IO) {
+            if (!coreEngine.isCaTrusted()) {
+                val reason = platformHost.installSystemCa()
+                if (reason != null) {
+                    // Nothing is forced: an untrusted certificate would make
+                    // the engine a plain relay wearing a filtering switch.
+                    platformHost.toast(reason)
+                    return@launch
+                }
+            }
+            if (!repository.settings.value.isHttpsFilteringEnabled) {
+                repository.toggleHttpsFiltering(true)
+            }
+        }
+    }
+
     fun applyConfig(): ConfigOutcome {
         coreEngine.setSystemDns(systemDnsServers())
         val outcome = coreEngine.applyConfig(privateDnsStrict = false)
@@ -162,4 +197,9 @@ class DesktopContainer(
             parts.getOrNull(1)?.takeIf { parts.firstOrNull() == "nameserver" && it.contains('.') }
         }
     }.getOrDefault(emptyList())
+
+    private companion object {
+        /** Set the first time the HTTPS default is applied, so it is never re-asked. */
+        const val KEY_HTTPS_DEFAULT_APPLIED = "https_default_applied"
+    }
 }

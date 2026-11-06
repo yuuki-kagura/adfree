@@ -771,6 +771,8 @@ internal object IntegrityCheckingUniffiLib {
     ): Int
     external fun uniffi_adfree_core_checksum_func_core_install_builtin_scripts(
     ): Int
+    external fun uniffi_adfree_core_checksum_func_core_install_ca_pem(
+    ): Int
     external fun uniffi_adfree_core_checksum_func_core_install_root_ca(
     ): Int
     external fun uniffi_adfree_core_checksum_func_core_is_protection_paused(
@@ -975,6 +977,8 @@ internal object UniffiLib {
     ): RustBuffer.ByValue
     external fun uniffi_adfree_core_fn_func_core_install_builtin_scripts(uniffi_out_err: UniffiRustCallStatus, 
     ): Int
+    external fun uniffi_adfree_core_fn_func_core_install_ca_pem(`pem`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    ): RustBuffer.ByValue
     external fun uniffi_adfree_core_fn_func_core_install_root_ca(uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
     external fun uniffi_adfree_core_fn_func_core_is_protection_paused(uniffi_out_err: UniffiRustCallStatus, 
@@ -1280,6 +1284,9 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if ((lib.uniffi_adfree_core_checksum_func_core_install_builtin_scripts() and 0xFFFF) != 36332) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if ((lib.uniffi_adfree_core_checksum_func_core_install_ca_pem() and 0xFFFF) != 47056) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if ((lib.uniffi_adfree_core_checksum_func_core_install_root_ca() and 0xFFFF) != 37100) {
@@ -6580,6 +6587,24 @@ public object FfiConverterSequenceTypeUidApps: FfiConverterRustBuffer<List<UidAp
     UniffiLib.uniffi_adfree_core_fn_func_core_install_builtin_scripts(
     
         _status)
+}
+    )
+    }
+    
+
+        /**
+         * Installs a certificate given as PEM text into the OS trust store.
+         *
+         * Needs no engine: the desktop's elevated helper runs exactly this, and a
+         * process started as root must not open the user's database on its way to
+         * writing one anchor file.
+         */ fun `coreInstallCaPem`(`pem`: kotlin.String): RootTrustBinding {
+            return FfiConverterTypeRootTrustBinding.lift(
+    uniffiRustCall() { _status ->
+    UniffiLib.uniffi_adfree_core_fn_func_core_install_ca_pem(
+    
+        
+        FfiConverterString.lower(`pem`),_status)
 }
     )
     }

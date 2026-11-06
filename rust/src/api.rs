@@ -1561,6 +1561,18 @@ pub fn core_remove_root_ca() -> RootTrustBinding {
     })
 }
 
+/// Installs a certificate given as PEM text into the OS trust store.
+///
+/// Needs no engine: the desktop's elevated helper runs exactly this, and a
+/// process started as root must not open the user's database on its way to
+/// writing one anchor file.
+#[uniffi::export]
+pub fn core_install_ca_pem(pem: String) -> RootTrustBinding {
+    guard(RootTrustBinding::default(), || {
+        crate::trust::install_pem(&pem).into()
+    })
+}
+
 /// PEM of the CA private key.
 ///
 /// Only used to re-load the CA on the next launch, so the user installs the

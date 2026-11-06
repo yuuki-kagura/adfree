@@ -1057,10 +1057,12 @@
     <string name="settings_ca_reinstall_system">Cài lại CA hệ thống</string>
     <string name="settings_ca_install_system">Cài CA hệ thống (root)</string>
     <string name="settings_ca_remove_system">Gỡ CA hệ thống</string>
+    <string name="settings_ca_system_installed">Hệ thống đã tin cậy chứng chỉ của AdFree</string>
     <string name="settings_ca_stage">Giai đoạn: %1$s • %2$d script • %3$d cert đã cấp</string>
     <string name="settings_manage_scripts">Quản lý tiện ích</string>
     <string name="settings_cert_gate_title">Cần cài chứng chỉ</string>
     <string name="settings_cert_gate_body">Lọc HTTPS cần chứng chỉ của AdFree để giải mã kết nối. AdFree sẽ lưu tệp chứng chỉ vào Downloads rồi mở Cài đặt.</string>
+    <string name="settings_cert_gate_body_system">Lọc HTTPS cần chứng chỉ của AdFree để giải mã kết nối. AdFree sẽ xin hệ thống tin cậy chứng chỉ; hệ thống trả lời bằng hộp thoại riêng của nó.</string>
     <string name="settings_cert_gate_steps">Trong Cài đặt chọn: Bảo mật &amp; quyền riêng tư → Cài đặt bảo mật khác → Mã hóa &amp; thông tin xác thực → Cài đặt chứng chỉ → Chứng chỉ CA,\nrồi chọn tệp AdFree-CA.crt trong Downloads.</string>
     <string name="settings_cert_gate_open">Mở Cài đặt</string>
     <string name="settings_cert_gate_later">Để sau</string>

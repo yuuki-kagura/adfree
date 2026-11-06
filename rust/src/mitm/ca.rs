@@ -248,7 +248,10 @@ fn self_signed_ca(key: &rcgen::KeyPair) -> Result<(rcgen::Certificate, Vec<u8>),
     Ok((cert, der))
 }
 
-fn decode_cert_pem(pem: &str) -> Result<Vec<u8>, String> {
+/// DER of the first certificate in `pem`, which is what a trust store wants.
+/// Also the core's only PEM reader that needs no engine, so the desktop's
+/// short-lived elevated helper can install a CA without opening the database.
+pub fn decode_cert_pem(pem: &str) -> Result<Vec<u8>, String> {
     let mut found = None;
     for block in rustls_pemfile::read_all(&mut std::io::Cursor::new(pem.as_bytes())).flatten() {
         if let rustls_pemfile::Item::X509Certificate(cert) = block {

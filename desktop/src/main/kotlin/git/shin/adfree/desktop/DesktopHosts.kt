@@ -40,6 +40,10 @@ class DesktopPlatformHost(
     private val privileges: DesktopPrivileges? = null,
     /** Runs when the privileged engine has taken over: this window must go. */
     private val onEngineTakeover: () -> Unit = {},
+    /** The core image the elevated helper has to load, named by absolute path. */
+    private val coreLibrary: File? = null,
+    /** Writes the certificate where the helper can read it; null when there is none. */
+    private val exportCaPem: () -> String? = { null },
 ) : PlatformHost {
 
     /** Toasts the window pipes into the scaffold's snackbar host. */
@@ -71,11 +75,14 @@ class DesktopPlatformHost(
     override fun privateDnsMode(): DnsPrivacyMode = DnsPrivacyMode.UNKNOWN
     override fun openPrivateDnsSettings() = Unit
 
-    // Linux has no in-app certificate screen: name the exact trust-store
-    // commands instead of opening nothing (the PEM is already exported).
+    // Only reached where there is no polkit to ask (see [installSystemCa]). The
+    // anchor directory is a distro answer — Debian, Arch and Fedora keep the
+    // certificate in three different places and rehash it with three different
+    // commands — so this names the file instead of a command that may not
+    // exist here.
     override fun openCertificateInstaller() {
         val pem = caFile?.absolutePath ?: return
-        toast("sudo cp $pem /usr/local/share/ca-certificates/adfree-ca.crt && sudo update-ca-certificates")
+        toast("put $pem in this system's CA anchor directory and refresh its trust store")
     }
 
     override fun openAppDetails(packageName: String) = Unit
@@ -125,6 +132,24 @@ class DesktopPlatformHost(
                 onEngineTakeover()
                 null
             }
+            is PrivilegeOutcome.Denied -> outcome.reason
+            is PrivilegeOutcome.Failed -> outcome.reason
+        }
+    }
+
+    // Trusting the certificate is the other half of the same conversation: on
+    // Android the app asks `su`, here it asks polkit. Without it the HTTPS
+    // switch stays off forever, because this platform has no OS screen where a
+    // user could import the PEM themselves.
+    override fun supportsSystemCaInstall(): Boolean = privileges != null && coreLibrary != null
+
+    override fun installSystemCa(): String? {
+        val helper = privileges ?: return null
+        val library = coreLibrary ?: return "the filtering core was not found, so nothing can install the certificate"
+        val exported = exportCaPem() ?: caFile?.takeIf(File::isFile)?.absolutePath
+            ?: return "no certificate to install yet"
+        return when (val outcome = helper.requestRootCaInstall(exported, library.absolutePath)) {
+            is PrivilegeOutcome.Ok -> null
             is PrivilegeOutcome.Denied -> outcome.reason
             is PrivilegeOutcome.Failed -> outcome.reason
         }

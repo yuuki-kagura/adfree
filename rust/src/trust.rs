@@ -188,6 +188,21 @@ pub fn remove(der: &[u8]) -> RootTrust {
     }
 }
 
+/// Installs the certificate carried by `pem`, which is given as text instead
+/// of being read from a running engine. The desktop hands this to a
+/// short-lived root process, and that process must not open the user's
+/// database: as root it would leave rows the app can no longer write.
+pub fn install_pem(pem: &str) -> RootTrust {
+    match crate::mitm::ca::decode_cert_pem(pem) {
+        Ok(der) => install(&der),
+        Err(e) => RootTrust {
+            detail_code: TrustDetail::InvalidCa,
+            detail: e,
+            ..RootTrust::default()
+        },
+    }
+}
+
 // -------------------------------------------------------------------- shared
 
 /// Android names CA files `<subject_hash_old>.0`, where the hash is the MD5 of
@@ -993,6 +1008,15 @@ iRjL+xZqkbnzAis6uQIhAJc+z9Z5CRp5OFQT110aMAqyuGpi5rouQa7kYzl2smXB
         assert_eq!(store.anchors, "/etc/ca-certificates/trust-source/anchors");
         assert_eq!(store.refresh_args, &[] as &[&str]);
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn text_that_holds_no_certificate_is_refused_before_anything_is_written() {
+        // The elevated helper passes the PEM straight through. A file that is
+        // not a certificate must fail here, not end up inside the trust store.
+        let trust = install_pem("adfree-ca.pem: no such luck\n");
+        assert_eq!(trust.detail_code, TrustDetail::InvalidCa);
+        assert!(!trust.installed);
     }
 
     #[test]

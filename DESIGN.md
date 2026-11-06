@@ -885,8 +885,8 @@ live.
 
 The toggle is gated: while the CA is not in the trust store, turning it on only
 opens instructions, and the toggle stays OFF (`isCaTrusted()` compares DER
-against `AndroidCAStore`). The dialog exports `AdFree-CA.crt` to Downloads
-(through MediaStore) and opens Settings, because:
+against `AndroidCAStore`). On Android the dialog exports `AdFree-CA.crt` to
+Downloads (through MediaStore) and opens Settings, because:
 
 - the inline install intent (`KeyChain.createInstallIntent`) only answers
   *"Install CA certificates in Settings"* — Android does not install a CA
@@ -924,11 +924,38 @@ are tried again.
 
 **Root mode.** Where `su` is available, `trust.rs` installs the same CA into
 the system store: a Magisk module on Android (a bind mount over the Conscrypt
-APEX on 14+), a live mount in init's namespace without Magisk, or
-`update-ca-certificates`/`update-ca-trust` on Linux. `su` runs only when the
+APEX on 14+), a live mount in init's namespace without Magisk, or the distro's
+own anchor directory plus its rehash command on Linux. `su` runs only when the
 user presses the button; status probes never elevate. With the CA in the
 system store, Cronet apps are filtered instead of spliced. The root install
 path is covered by automated tests only — the test device has no root.
+
+**Linux: which store.** Debian, Arch and Fedora keep an admin anchor in three
+different directories and rehash with three different commands, so `trust.rs`
+holds the three as data (`LINUX_STORES`) and picks the one whose anchor
+directory *and* rehash program both exist. Detection scans every one of them,
+so a certificate placed by hand in another family's directory still counts as
+installed. Guessing the Debian layout made an Arch machine report a correctly
+installed CA as missing, and wrote a PEM that nothing rehashed — which is why
+install and check resolve the same store rather than each naming a path.
+
+**Linux desktop: the ask.** A desktop has neither `su` nor an OS screen that
+could import a PEM, so `suPresent` is false and the gated toggle could never
+come on. The certificate is therefore installed the way the redirect rules are:
+`systemd-run --system --service-type=oneshot --wait --collect` asks polkit, and
+what it runs is `CaInstallKt` — one exported PEM in, one anchor file out, exit
+status zero only when the certificate reads back from the store. It is not a
+copy of the app with a different uid: a root process that opened the user's
+database would leave rows the signed-in app cannot write. `core_install_ca_pem`
+exists for that helper because it needs the trust-store answer and nothing
+else.
+
+The same mechanism is why HTTPS filtering is the desktop default: on the first
+run, if the store does not hold the CA, the app asks for it and turns filtering
+on when the ask succeeds (`DesktopContainer.applyHttpsDefault`, remembered in
+`automation.properties` so a switch the user later turns off stays off). A
+dismissed dialog enables nothing — an engine that cannot terminate TLS is a
+relay, and a switch that says otherwise is the bug this gate exists to prevent.
 
 ## DNS
 

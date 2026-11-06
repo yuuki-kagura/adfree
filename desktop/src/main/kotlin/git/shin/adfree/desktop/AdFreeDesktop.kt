@@ -73,6 +73,9 @@ fun main() {
     val container = DesktopContainer()
     val appScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     container.start(appScope)
+    // The window is not up yet and does not need to be: the ask runs on its own
+    // thread, so the certificate dialog the system raises never blocks it.
+    container.applyHttpsDefault(appScope)
     val resumeTick = MutableStateFlow(0L)
     val backRegistry = BackRegistry()
     // Hiding is only a detour when there is a status field to come back

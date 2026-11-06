@@ -94,6 +94,22 @@ interface PlatformHost {
     fun requestPrivilegedEngine(): String? = null
 
     /**
+     * The host can put the CA into the *system* trust store through its own
+     * elevation prompt. Android leaves this off — it has `su` and reports that
+     * through the core's root-trust status; a desktop has neither a
+     * terminal-worthy sudo nor an OS certificate screen, and sending the user
+     * to one of those is how HTTPS filtering ends up permanently off.
+     */
+    fun supportsSystemCaInstall(): Boolean = false
+
+    /**
+     * Asks the system, in its own words and with its own dialog, to install the
+     * application CA. Null when the certificate is in the store now; otherwise
+     * the system's answer, including a dismissed dialog.
+     */
+    fun installSystemCa(): String? = null
+
+    /**
      * The shell draws a window header: the section name, one step back, and
      * the app-wide menu (settings export/import, activity export). A phone
      * gets all three from the system — the status bar, the back gesture and

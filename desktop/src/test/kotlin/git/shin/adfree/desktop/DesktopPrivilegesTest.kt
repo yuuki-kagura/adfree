@@ -54,6 +54,41 @@ class DesktopPrivilegesTest {
         )
     }
 
+    /**
+     * The certificate ask is the same mechanism with the opposite shape: it
+     * must run as root rather than as this uid, must report the helper's exit
+     * status back to the caller, and must not stay behind as a unit in the
+     * journal. None of that is visible from the app, and all of it is exactly
+     * what systemd-run refuses when a flag is spelled wrong.
+     */
+    @Test
+    fun theCertificateUnitAsksRootForOneShortLivedInstall() {
+        val argv = DesktopPrivileges().caUnitArgv(
+            command = "/usr/lib/jvm/java/bin/java",
+            classpath = "/tmp/desktop/lib/adfree-desktop.jar:/tmp/desktop/lib/core.jar",
+            pemPath = "/home/shin/.local/share/adfree/adfree-ca.pem",
+            coreLibPath = "/home/shin/adfree/rust/target/release/libadfree_core.so",
+        )
+        assertEquals("systemd-run", argv.first())
+        assertTrue(argv.contains("--service-type=oneshot"))
+        assertTrue("the caller has to hear the answer", argv.contains("--wait"))
+        assertTrue("--collect", argv.contains("--collect"))
+        assertTrue(argv.contains("--property=Environment=ADFREE_CORE_LIB=/home/shin/adfree/rust/target/release/libadfree_core.so"))
+        assertTrue("writing /etc is root's work, not this uid's", argv.none { it.startsWith("--uid=") })
+        assertTrue("no short -p= form", argv.none { it.startsWith("-p=") })
+        assertEquals(
+            listOf(
+                "/usr/lib/jvm/java/bin/java",
+                "--enable-native-access=ALL-UNNAMED",
+                "-cp",
+                "/tmp/desktop/lib/adfree-desktop.jar:/tmp/desktop/lib/core.jar",
+                "git.shin.adfree.desktop.CaInstallKt",
+                "/home/shin/.local/share/adfree/adfree-ca.pem",
+            ),
+            argv.takeLast(6),
+        )
+    }
+
     /** Comment and blank lines carry no meaning to nft, so they are not compared. */
     private fun significantLines(text: String): List<String> = text.lines()
         .map { it.trim() }

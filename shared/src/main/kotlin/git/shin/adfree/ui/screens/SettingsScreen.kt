@@ -747,11 +747,14 @@ internal fun HttpsFilterSection(
     var status by remember { mutableStateOf<MitmStatus?>(null) }
     var showCert by remember { mutableStateOf(false) }
     var showCertGate by remember { mutableStateOf(false) }
+    val ui by viewModel.uiState.collectAsState()
     // HTTPS filtering is the persisted setting (the same one the engine config
     // is built from); `scriptsEnabled` only says whether the script set is
-    // armed, which is a different thing entirely.
-    var httpsEnabled by remember {
-        mutableStateOf(viewModel.uiState.value.settings.isHttpsFilteringEnabled)
+    // armed, which is a different thing entirely. The local copy only rides out
+    // the write — anything else that changes the setting, the Home switch or
+    // the desktop's first-run default included, has to move this switch too.
+    var httpsEnabled by remember(ui.settings.isHttpsFilteringEnabled) {
+        mutableStateOf(ui.settings.isHttpsFilteringEnabled)
     }
     // Live view of the trust store: installing the CA while the app sits in
     // the background must flip this without a restart.
@@ -770,7 +773,6 @@ internal fun HttpsFilterSection(
     var pendingEnable by remember { mutableStateOf(false) }
     // Which website list the add dialog is editing; null keeps it closed.
     var addTarget by remember { mutableStateOf<HttpsListTarget?>(null) }
-    val ui by viewModel.uiState.collectAsState()
 
     val platform = currentPlatformHost()
 
@@ -791,6 +793,42 @@ internal fun HttpsFilterSection(
             pendingEnable = false
             httpsEnabled = true
             viewModel.setHttpsFiltering(true) { status = it }
+        }
+    }
+
+    // Two roads to the system trust store: Android raises su and gets a
+    // RootTrustBinding back, a desktop asks polkit and gets the system's own
+    // words. Both end the same way — the store re-read, and the enable the user
+    // asked for before the dialog honoured as they intended.
+    val installIntoSystemStore: () -> Unit = {
+        rootBusy = true
+        if (platform.supportsSystemCaInstall()) {
+            viewModel.installSystemCa { reason ->
+                rootBusy = false
+                status = viewModel.readMitmStatus()
+                caTrusted = viewModel.isCaTrusted()
+                rootTrust = viewModel.rootTrustStatus()
+                when {
+                    reason != null -> platform.toast(reason)
+                    pendingEnable -> {
+                        pendingEnable = false
+                        httpsEnabled = true
+                        viewModel.setHttpsFiltering(true) { status = it }
+                    }
+                    else -> platform.toast(L10n.get(Strings.settings_ca_system_installed))
+                }
+            }
+        } else {
+            viewModel.installRootCa { result ->
+                rootBusy = false
+                rootTrust = result
+                caTrusted = viewModel.isCaTrusted()
+                result?.detailCode?.let { code ->
+                    CoreText.trustDetail(code)?.let {
+                        platform.toast(it.asString())
+                    }
+                }
+            }
         }
     }
 
@@ -974,8 +1012,14 @@ internal fun HttpsFilterSection(
                     // them without splicing their traffic verbatim.
                     Spacer(modifier = Modifier.height(10.dp))
                     Text(
+                        // Where the ask goes to polkit there is no su to report,
+                        // and "needs root" next to a button that gets root from
+                        // the desktop's own dialog is just noise: say what the
+                        // store holds instead.
                         text = if (rootBusy) L10n.get(Strings.trust_working)
-                        else rootTrust?.detailCode?.let { CoreText.trustDetail(it)?.asString() }
+                        else if (platform.supportsSystemCaInstall()) {
+                            L10n.get(if (caTrusted) Strings.settings_ca_trusted else Strings.settings_ca_untrusted)
+                        } else rootTrust?.detailCode?.let { CoreText.trustDetail(it)?.asString() }
                             ?: L10n.get(Strings.trust_checking_root),
                         fontSize = 11.sp,
                         color = when {
@@ -986,26 +1030,14 @@ internal fun HttpsFilterSection(
                         },
                     )
                     rootTrust?.let { trust ->
-                        if (trust.suPresent || trust.installed) {
+                        if (trust.suPresent || trust.installed || platform.supportsSystemCaInstall()) {
                             Row(
                                 modifier = Modifier.padding(top = 6.dp),
                                 horizontalArrangement = Arrangement.spacedBy(8.dp),
                             ) {
                                 OutlinedButton(
                                     enabled = !rootBusy,
-                                    onClick = {
-                                        rootBusy = true
-                                        viewModel.installRootCa { result ->
-                                            rootBusy = false
-                                            rootTrust = result
-                                            caTrusted = viewModel.isCaTrusted()
-                                                result?.detailCode?.let { code ->
-                                                    CoreText.trustDetail(code)?.let {
-                                                        platform.toast(it.asString())
-                                                    }
-                                                }
-                                        }
-                                    },
+                                    onClick = installIntoSystemStore,
                                     shape = RoundedCornerShape(8.dp),
                                 ) {
                                     Text(
@@ -1015,7 +1047,7 @@ internal fun HttpsFilterSection(
                                         fontSize = 11.sp,
                                     )
                                 }
-                                if (trust.installed) {
+                                if (trust.installed && !platform.supportsSystemCaInstall()) {
                                     OutlinedButton(
                                         enabled = !rootBusy,
                                         onClick = {
@@ -1091,29 +1123,45 @@ internal fun HttpsFilterSection(
             text = {
                 Column {
                     Text(
-                        L10n.get(Strings.settings_cert_gate_body),
+                        L10n.get(if (platform.supportsSystemCaInstall()) Strings.settings_cert_gate_body_system
+                        else Strings.settings_cert_gate_body
+                        ),
                         fontSize = 12.sp,
                         color = AdGuardTextSecondary,
                     )
                     Spacer(modifier = Modifier.height(8.dp))
-                    Text(
-                        L10n.get(Strings.settings_cert_gate_steps),
-                        fontSize = 12.sp,
-                        color = AdGuardTextSecondary,
-                    )
+                    // The route through Settings is Android's; where the app
+                    // can ask the system itself there is no route to walk.
+                    if (!platform.supportsSystemCaInstall()) {
+                        Text(
+                            L10n.get(Strings.settings_cert_gate_steps),
+                            fontSize = 12.sp,
+                            color = AdGuardTextSecondary,
+                        )
+                    }
                 }
             },
             confirmButton = {
                 TextButton(onClick = {
                     showCertGate = false
-                    val saved = viewModel.installCertificate()
-                    platform.toast(if (saved != null) {
-                            L10n.format(Strings.settings_cert_saved, saved)
-                        } else {
-                            L10n.get(Strings.settings_cert_save_failed)
-                        })
+                    if (platform.supportsSystemCaInstall()) {
+                        // pendingEnable stays set: the enable the switch asked
+                        // for happens as soon as the store says trusted.
+                        installIntoSystemStore()
+                    } else {
+                        val saved = viewModel.installCertificate()
+                        platform.toast(if (saved != null) {
+                                L10n.format(Strings.settings_cert_saved, saved)
+                            } else {
+                                L10n.get(Strings.settings_cert_save_failed)
+                            })
+                    }
                 }) {
-                    Text(L10n.get(Strings.settings_cert_gate_open))
+                    Text(
+                        L10n.get(if (platform.supportsSystemCaInstall()) Strings.settings_ca_install_system
+                        else Strings.settings_cert_gate_open
+                        ),
+                    )
                 }
             },
             dismissButton = {

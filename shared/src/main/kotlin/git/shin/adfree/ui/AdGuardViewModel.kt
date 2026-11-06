@@ -927,6 +927,23 @@ class AdGuardViewModel(
         }
     }
 
+    /**
+     * Asks the system, through its own elevation prompt, to trust the CA — the
+     * desktop shape of [installRootCa], for a platform with no `su`. The dialog
+     * blocks, so the ask runs off the main thread; `onDone` receives null when
+     * the certificate is in the store now, and the system's own words when it
+     * is not, a dismissed dialog included.
+     */
+    fun installSystemCa(onDone: (String?) -> Unit) {
+        scope.launch {
+            val reason = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                runCatching { platform.installSystemCa() }
+                    .getOrElse { failure -> failure.message ?: "the trust store did not answer" }
+            }
+            onDone(reason)
+        }
+    }
+
     /** True when the CA is present in the device trust store. */
     fun isCaTrusted(): Boolean = coreEngine.isCaTrusted()
 

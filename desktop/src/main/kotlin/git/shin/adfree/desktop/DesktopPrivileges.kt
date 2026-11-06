@@ -14,7 +14,9 @@ import java.io.File
  * itself. Both need `CAP_NET_ADMIN`. A process without it is not broken — it
  * just filters only what is pointed at it — so the app says which of the two
  * it is and offers the one command that changes it, rather than telling the
- * user to open a terminal.
+ * user to open a terminal. Trusting the certificate is the same conversation
+ * with a different capability: one short-lived unit as root, asked the same
+ * way, because a desktop has no `su` and no OS screen that could import a PEM.
  */
 class DesktopPrivileges(
     private val nftBinary: String = "nft",
@@ -140,6 +142,55 @@ class DesktopPrivileges(
         return argv
     }
 
+    /**
+     * Puts the CA in the system trust store through a short-lived root process,
+     * which is the desktop answer to Android's `su` consent dialog. polkit is
+     * asked by `systemd-run --wait`, so the dialog appears from the app and the
+     * exit status is the helper's own: zero only when the certificate reads
+     * back from the store.
+     *
+     * The helper is [CaInstallKt] — one PEM in, one anchor file out. It is not
+     * this app with a different uid: a root instance would open the user's
+     * database and leave rows the signed-in app cannot write.
+     */
+    fun requestRootCaInstall(pemPath: String, coreLibPath: String): PrivilegeOutcome {
+        val command = ProcessHandle.current().info().command().orElse(null)
+            ?: return PrivilegeOutcome.Failed("cannot read this process's own command line")
+        return run(*caUnitArgv(command, System.getProperty("java.class.path"), pemPath, coreLibPath).toTypedArray())
+    }
+
+    /**
+     * The `systemd-run` call for that helper, as data rather than as a shell
+     * line: the flag forms here are the ones systemd accepts, and a mistake
+     * fails before polkit is ever asked, which looks like a machine with
+     * nothing to give.
+     */
+    internal fun caUnitArgv(
+        command: String,
+        classpath: String,
+        pemPath: String,
+        coreLibPath: String,
+    ): List<String> = listOf(
+        systemdRun,
+        "--system",
+        "--unit=$CA_UNIT_NAME",
+        "--service-type=oneshot",
+        // The caller needs the answer, and nothing is left behind once it has
+        // it: a unit that stays in the journal would outlive the dialog.
+        "--wait",
+        "--collect",
+        // No `--uid`: writing to /etc is the one thing that does need root. The
+        // library is handed over by absolute path so the helper does not guess
+        // it from a working directory that is no longer this app's.
+        "--property=Environment=ADFREE_CORE_LIB=$coreLibPath",
+        command,
+        "--enable-native-access=ALL-UNNAMED",
+        "-cp",
+        classpath,
+        CA_INSTALL_MAIN,
+        pemPath,
+    )
+
     private fun run(vararg argv: String): PrivilegeOutcome = runCatching {
         val process = ProcessBuilder(*argv).redirectErrorStream(true).start()
         val output = process.inputStream.bufferedReader().readText().trim()
@@ -167,6 +218,8 @@ class DesktopPrivileges(
         const val SO_MARK = 36
         const val FIREWALL_MARK = 0xad45
         const val UNIT_NAME = "adfree-desktop"
+        const val CA_UNIT_NAME = "adfree-ca-install"
+        const val CA_INSTALL_MAIN = "git.shin.adfree.desktop.CaInstallKt"
     }
 }
 

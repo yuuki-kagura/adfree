@@ -181,6 +181,17 @@ signal that kills it, drops the table before the listeners close. Rules pointing
 at closed ports are a machine with no DNS and no web, and a signal never runs
 the UI's stop button, so the shutdown hook is what takes them down.
 
+HTTPS filtering is the desktop default wherever it can work. A certificate the
+system does not trust leaves the engine relaying instead of filtering, so the
+first run asks polkit to put the CA in the distro's own anchor directory — the
+same dialog as the redirect rules, run by a short-lived helper that opens no
+database and stays root only long enough to write one file and rehash the
+store. When that succeeds, filtering switches itself on; when the dialog is
+cancelled, nothing is enabled and the offer stays under **Protection → HTTPS
+filtering**. AdFree reads whichever trust store this machine actually has
+(Debian, Arch and Fedora disagree), so a certificate installed by hand is
+recognised rather than reported missing.
+
 ## Limitations
 
 - Android is the only shipping shell today. Linux runs the whole UI and filters
