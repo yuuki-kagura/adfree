@@ -548,6 +548,7 @@
     <string name="common_cancel">Hủy</string>
     <string name="common_close">Đóng</string>
     <string name="common_clear_search">Xóa tìm kiếm</string>
+    <string name="common_undo">Hoàn tác</string>
 
     <!-- Userscript extensions -->
     <string name="ext_editor_name_label">Tên tiện ích</string>
@@ -911,10 +912,8 @@
     <string name="log_detail_title">Chi tiết truy vấn</string>
     <string name="log_dest_header">TÊN MIỀN ĐÍCH</string>
     <string name="log_ip_protocol">Máy chủ: %1$s • Giao thức: %2$s</string>
-    <string name="log_detail_domain">Tên miền</string>
     <string name="log_detail_time">Thời gian</string>
     <string name="log_detail_latency">Độ trễ</string>
-    <string name="log_detail_action">Quyết định xử lý</string>
     <string name="log_detail_category">Phân loại</string>
     <string name="log_detail_app">Ứng dụng</string>
     <string name="log_detail_rule">Quy tắc kích hoạt</string>
@@ -937,6 +936,14 @@
     <string name="log_allowlist">Danh sách trắng</string>
     <string name="log_block_domain">Chặn tên miền</string>
     <string name="log_check_safety">Kiểm tra an toàn</string>
+    <string name="log_detail_section_general">Chung</string>
+    <string name="log_detail_section_rules">Quy tắc</string>
+    <string name="log_detail_no_rules">Không có quy tắc nào lọc yêu cầu này</string>
+    <string name="log_open_in_browser">Mở trong trình duyệt</string>
+    <string name="log_rule_switched_off">Đã tắt quy tắc: %1$s</string>
+    <string name="log_rule_switched_on">Đã bật lại quy tắc: %1$s</string>
+    <string name="log_list_switched_off">Đã tắt bộ lọc: %1$s</string>
+    <string name="log_list_switched_on">Đã bật bộ lọc: %1$s</string>
     <string name="log_category_ad">Quảng cáo</string>
     <string name="log_category_tracker">Tracker &amp; Telemetry</string>
     <string name="log_category_analytics">Phân tích</string>

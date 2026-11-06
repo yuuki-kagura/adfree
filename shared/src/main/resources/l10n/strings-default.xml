@@ -548,6 +548,7 @@
     <string name="common_cancel">Cancel</string>
     <string name="common_close">Close</string>
     <string name="common_clear_search">Clear search</string>
+    <string name="common_undo">Undo</string>
 
     <!-- Userscript extensions -->
     <string name="ext_editor_name_label">Extension name</string>
@@ -911,10 +912,8 @@
     <string name="log_detail_title">Query details</string>
     <string name="log_dest_header">TARGET DOMAIN</string>
     <string name="log_ip_protocol">Server: %1$s • Protocol: %2$s</string>
-    <string name="log_detail_domain">Domain</string>
     <string name="log_detail_time">Time</string>
     <string name="log_detail_latency">Latency</string>
-    <string name="log_detail_action">Action</string>
     <string name="log_detail_category">Category</string>
     <string name="log_detail_app">App</string>
     <string name="log_detail_rule">Matched rule</string>
@@ -937,6 +936,14 @@
     <string name="log_allowlist">Allowlist</string>
     <string name="log_block_domain">Block domain</string>
     <string name="log_check_safety">Check safety</string>
+    <string name="log_detail_section_general">General</string>
+    <string name="log_detail_section_rules">Rules</string>
+    <string name="log_detail_no_rules">Nothing filtered this request</string>
+    <string name="log_open_in_browser">Open in browser</string>
+    <string name="log_rule_switched_off">Rule switched off: %1$s</string>
+    <string name="log_rule_switched_on">Rule switched back on: %1$s</string>
+    <string name="log_list_switched_off">Filter switched off: %1$s</string>
+    <string name="log_list_switched_on">Filter switched on: %1$s</string>
     <string name="log_category_ad">Advertising</string>
     <string name="log_category_tracker">Tracker &amp; telemetry</string>
     <string name="log_category_analytics">Analytics</string>

@@ -13,6 +13,7 @@ import git.shin.adfree.model.FilterList
 import git.shin.adfree.model.FilterStatus
 import git.shin.adfree.model.FirewallAccess
 import git.shin.adfree.model.LogLevel
+import git.shin.adfree.model.LogRuleSwitch
 import git.shin.adfree.model.LogTypeTab
 import git.shin.adfree.model.LogWindowTotals
 import git.shin.adfree.model.NetworkRequestLog
@@ -149,6 +150,12 @@ sealed interface AdGuardIntent {
     /** Picks the log's request-type tab; [LogTypeTab.ALL] clears it. */
     data class FilterLogTypeChanged(val tab: LogTypeTab) : AdGuardIntent
     data class InspectLog(val log: NetworkRequestLog?) : AdGuardIntent
+    /**
+     * Switches one of the rules the detail panel lists for a request. Kept
+     * separate from [ToggleFilterList] and [ReplaceCustomRule] because the
+     * panel also reports the change back with a way to take it undone.
+     */
+    data class SwitchLogRule(val rule: LogRuleSwitch, val enabled: Boolean) : AdGuardIntent
     data class AddCustomRule(val rule: String) : AdGuardIntent
     data class RemoveCustomRule(val rule: String) : AdGuardIntent
     data class ReplaceCustomRule(val oldRule: String, val newRule: String) : AdGuardIntent
@@ -300,6 +307,18 @@ sealed interface AdGuardIntent {
 /** One-off side effects. */
 sealed interface AdGuardEffect {
     data class ShowSnackbar(val message: UiText) : AdGuardEffect
+
+    /**
+     * A change the user can take back. [undo] is the intent that puts things
+     * the way they were, so the panel does not have to remember the previous
+     * state itself; it is sent only when the snackbar's action is pressed.
+     */
+    data class ShowUndoSnackbar(
+        val message: UiText,
+        val actionLabel: UiText,
+        val undo: AdGuardIntent,
+    ) : AdGuardEffect
+
     data object RequestVpnPermission : AdGuardEffect
 }
 

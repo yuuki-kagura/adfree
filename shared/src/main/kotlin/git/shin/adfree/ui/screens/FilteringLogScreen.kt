@@ -5,12 +5,14 @@ import git.shin.adfree.l10n.L10n
 import git.shin.adfree.platform.currentFileHost
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.Spacer
@@ -26,6 +28,7 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Block
 import androidx.compose.material.icons.filled.Check
@@ -71,24 +74,32 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import git.shin.adfree.data.AdGuardRepository
+import git.shin.adfree.model.FilterList
 import git.shin.adfree.model.FilterStatus
+import git.shin.adfree.model.LogRuleSwitch
 import git.shin.adfree.model.LogTypeTab
 import git.shin.adfree.model.NetworkRequestLog
 import git.shin.adfree.model.NetworkTransport
 import git.shin.adfree.model.assetSizeLabel
+import git.shin.adfree.model.logDurationLabel
+import git.shin.adfree.model.logRuleSwitches
+import git.shin.adfree.model.logUrlOpenable
 import git.shin.adfree.model.requestTypeLabel
 import git.shin.adfree.model.ProtocolType
 import git.shin.adfree.model.RequestCategory
 import git.shin.adfree.model.RuleDraft
 import git.shin.adfree.model.RuleDraftKind
 import git.shin.adfree.model.appScopeSupported
+import git.shin.adfree.platform.currentPlatformHost
 import git.shin.adfree.ui.AdGuardIntent
 import git.shin.adfree.ui.AdGuardTab
 import git.shin.adfree.ui.AdGuardViewModel
@@ -136,6 +147,14 @@ private const val COL_SOURCE = 2.0f
 private const val COL_PROCESS = 1.4f
 private const val COL_STATUS = 1.1f
 
+// AdGuard's log is a table with the selected request's details docked under it.
+// One width decides both halves, and the sheet that stands in for the pane is
+// gated on that same number less this screen's own horizontal padding: get the
+// two to disagree and a window of the awkward size shows both surfaces, or
+// neither.
+private val TABLE_MIN_WIDTH = 720.dp
+private val SCREEN_PADDING_HORIZONTAL = 16.dp
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun FilteringLogScreen(
@@ -147,6 +166,13 @@ fun FilteringLogScreen(
     var showClearConfirm by remember { mutableStateOf(false) }
     val files = currentFileHost()
     val exportScope = rememberCoroutineScope()
+
+    // The selected row's details: a pane docked under the table once the window
+    // is wide enough, and the sheet this screen always used when it is not. The
+    // rule editor opens inside whichever of the two the user is looking at, so
+    // the draft lives beside the selection rather than in either surface.
+    val inspected = state.inspectedLog
+    var ruleDraft by remember(inspected) { mutableStateOf<RuleDraft?>(null) }
 
     // While the list sits at its top it follows incoming rows; scrolling into
     // history tells the repository to freeze the window instead, or fresh rows
@@ -217,7 +243,7 @@ fun FilteringLogScreen(
         modifier = modifier
             .fillMaxSize()
             .background(AdGuardDarkBg)
-            .padding(horizontal = 16.dp, vertical = 12.dp)
+            .padding(horizontal = SCREEN_PADDING_HORIZONTAL, vertical = 12.dp)
     ) {
         // Title Bar & Quick Clear
         Row(
@@ -439,159 +465,185 @@ fun FilteringLogScreen(
             // AdGuard's log is a table. Its columns only fit once the window is
             // a window, so the desktop gets the table and a phone keeps the
             // cards it already reads well.
-            val asTable = maxWidth >= 720.dp
-            if (state.filteredLogs.isEmpty()) {
+            val asTable = maxWidth >= TABLE_MIN_WIDTH
+            Column(modifier = Modifier.fillMaxSize()) {
                 Box(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .padding(32.dp),
-                    contentAlignment = Alignment.Center
+                    modifier = Modifier.weight(if (asTable && inspected != null) 1.5f else 1f),
                 ) {
-                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                        Icon(
-                            imageVector = Icons.Default.FilterList,
-                            contentDescription = null,
-                            tint = AdGuardTextMuted,
-                            modifier = Modifier.size(48.dp)
-                        )
-                        Spacer(modifier = Modifier.height(12.dp))
-                        // "No traffic yet" is wrong when rows exist but the query
-                        // filters them all out; say which case this is.
-                        Text(
-                            text = L10n.get(if (filterActive) Strings.log_empty_filtered_title
-                                else Strings.log_empty_title
-                            ),
-                            fontSize = 15.sp,
-                            fontWeight = FontWeight.SemiBold,
-                            color = AdGuardTextSecondary
-                        )
-                        Text(
-                            text = L10n.get(if (filterActive) Strings.log_empty_filtered_body
-                                else Strings.log_empty_body
-                            ),
-                            fontSize = 12.sp,
-                            color = AdGuardTextMuted
-                        )
-                    }
-                }
-            } else {
-                LazyColumn(
-                    state = listState,
-                    modifier = Modifier.fillMaxSize(),
-                    verticalArrangement = Arrangement.spacedBy(if (asTable) 0.dp else 8.dp)
-                ) {
-                    if (asTable) {
-                        // The header is a row of the list: it scrolls with the
-                        // rows it names, exactly as AdGuard's does, and it keeps
-                        // its place when the last row is pulled in.
-                        item(key = "log_table_header") { LogTableHeader() }
-                    }
-                    items(state.filteredLogs, key = { it.id }) { log ->
-                        if (asTable) {
-                            LogTableRow(
-                                log = log,
-                                appLabel = appLabelFor(state.appNames, log.appPackage),
-                                onClick = { viewModel.onIntent(AdGuardIntent.InspectLog(log)) }
-                            )
-                        } else {
-                            LogItemCard(
-                                log = log,
-                                appLabel = appLabelFor(state.appNames, log.appPackage),
-                                onClick = { viewModel.onIntent(AdGuardIntent.InspectLog(log)) }
-                            )
+                    if (state.filteredLogs.isEmpty()) {
+                        Box(
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .padding(32.dp),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                Icon(
+                                    imageVector = Icons.Default.FilterList,
+                                    contentDescription = null,
+                                    tint = AdGuardTextMuted,
+                                    modifier = Modifier.size(48.dp)
+                                )
+                                Spacer(modifier = Modifier.height(12.dp))
+                                // "No traffic yet" is wrong when rows exist but the query
+                                // filters them all out; say which case this is.
+                                Text(
+                                    text = L10n.get(if (filterActive) Strings.log_empty_filtered_title
+                                        else Strings.log_empty_title
+                                    ),
+                                    fontSize = 15.sp,
+                                    fontWeight = FontWeight.SemiBold,
+                                    color = AdGuardTextSecondary
+                                )
+                                Text(
+                                    text = L10n.get(if (filterActive) Strings.log_empty_filtered_body
+                                        else Strings.log_empty_body
+                                    ),
+                                    fontSize = 12.sp,
+                                    color = AdGuardTextMuted
+                                )
+                            }
                         }
-                    }
-
-                    // The screen mirrors a window of the database log; the scroll
-                    // trigger above grows it, so the tail is a quiet hint. Once
-                    // the in-RAM cap is hit, say so instead of spinning forever.
-                    if (state.logs.size < state.logTotal) {
-                        item(key = "log_infinite_footer") {
-                            Column(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .padding(vertical = 10.dp)
-                                    .testTag("log_infinite_footer"),
-                                horizontalAlignment = Alignment.CenterHorizontally
-                            ) {
-                                if (state.logs.size >= AdGuardRepository.LOG_ROW_CAP) {
-                                    Text(
-                                        text = L10n.format(Strings.log_window_capped,
-                                            state.logs.size,
-                                            state.logTotal,
-                                        ),
-                                        fontSize = 11.sp,
-                                        color = AdGuardTextMuted
+                    } else {
+                        LazyColumn(
+                            state = listState,
+                            modifier = Modifier.fillMaxSize(),
+                            verticalArrangement = Arrangement.spacedBy(if (asTable) 0.dp else 8.dp)
+                        ) {
+                            if (asTable) {
+                                // The header is a row of the list: it scrolls with the
+                                // rows it names, exactly as AdGuard's does, and it keeps
+                                // its place when the last row is pulled in.
+                                item(key = "log_table_header") { LogTableHeader() }
+                            }
+                            items(state.filteredLogs, key = { it.id }) { log ->
+                                if (asTable) {
+                                    LogTableRow(
+                                        log = log,
+                                        appLabel = appLabelFor(state.appNames, log.appPackage),
+                                        onClick = { viewModel.onIntent(AdGuardIntent.InspectLog(log)) }
                                     )
                                 } else {
-                                    CircularProgressIndicator(
-                                        modifier = Modifier.size(18.dp),
-                                        color = AdGuardGreenPrimary,
-                                        strokeWidth = 2.dp
+                                    LogItemCard(
+                                        log = log,
+                                        appLabel = appLabelFor(state.appNames, log.appPackage),
+                                        onClick = { viewModel.onIntent(AdGuardIntent.InspectLog(log)) }
                                     )
+                                }
+                            }
+
+                            // The screen mirrors a window of the database log; the scroll
+                            // trigger above grows it, so the tail is a quiet hint. Once
+                            // the in-RAM cap is hit, say so instead of spinning forever.
+                            if (state.logs.size < state.logTotal) {
+                                item(key = "log_infinite_footer") {
+                                    Column(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .padding(vertical = 10.dp)
+                                            .testTag("log_infinite_footer"),
+                                        horizontalAlignment = Alignment.CenterHorizontally
+                                    ) {
+                                        if (state.logs.size >= AdGuardRepository.LOG_ROW_CAP) {
+                                            Text(
+                                                text = L10n.format(Strings.log_window_capped,
+                                                    state.logs.size,
+                                                    state.logTotal,
+                                                ),
+                                                fontSize = 11.sp,
+                                                color = AdGuardTextMuted
+                                            )
+                                        } else {
+                                            CircularProgressIndicator(
+                                                modifier = Modifier.size(18.dp),
+                                                color = AdGuardGreenPrimary,
+                                                strokeWidth = 2.dp
+                                            )
+                                        }
+                                    }
                                 }
                             }
                         }
                     }
                 }
+                if (inspected != null && asTable) {
+                    // AdGuard keeps the details of the selected request in the
+                    // same window, under the table: the row stays visible while
+                    // its rules are switched, and nothing has to be re-found
+                    // after the sheet closes.
+                    Spacer(modifier = Modifier.height(12.dp))
+                    LogDetailBody(
+                        log = inspected,
+                        appNames = state.appNames,
+                        filterLists = state.filterLists,
+                        ruleDraft = ruleDraft,
+                        onOpenRuleEditor = { draft -> ruleDraft = draft },
+                        onCloseRuleEditor = { ruleDraft = null },
+                        onSubmitRule = { rule ->
+                            viewModel.onIntent(AdGuardIntent.AddCustomRule(rule))
+                            viewModel.onIntent(AdGuardIntent.InspectLog(null))
+                        },
+                        onSwitchRule = { rule, enabled ->
+                            viewModel.onIntent(AdGuardIntent.SwitchLogRule(rule, enabled))
+                        },
+                        onAnalyzeWithAi = { domain ->
+                            viewModel.onIntent(AdGuardIntent.InspectLog(null))
+                            viewModel.onIntent(AdGuardIntent.SelectTab(AdGuardTab.AI_LAB))
+                            viewModel.onIntent(AdGuardIntent.RunThreatScan(domain))
+                        },
+                        onClose = { viewModel.onIntent(AdGuardIntent.InspectLog(null)) },
+                        modifier = Modifier
+                            .weight(1f)
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(12.dp))
+                            .background(AdGuardDarkSurface)
+                            .border(1.dp, AdGuardDarkOutline, RoundedCornerShape(12.dp))
+                            .testTag("log_detail_pane"),
+                    )
+                }
             }
         }
     }
 
-    // Modal Bottom Sheet for Log Details Inspection
-    if (state.inspectedLog != null) {
-        val inspected = state.inspectedLog!!
-        val sheetState = rememberModalBottomSheetState()
-        var ruleDraft by remember(inspected) { mutableStateOf<RuleDraft?>(null) }
-        val existingRules = state.filterLists.firstOrNull { it.isCustom }?.customRules
-            ?: emptyList()
-        ModalBottomSheet(
-            onDismissRequest = {
-                if (ruleDraft != null) ruleDraft = null else viewModel.onIntent(AdGuardIntent.InspectLog(null))
-            },
-            sheetState = sheetState,
-            containerColor = AdGuardDarkSurface,
-            contentColor = AdGuardTextPrimary
-        ) {
-            val draft = ruleDraft
-            if (draft == null) {
-                PacketInspectionSheetContent(
-                    log = inspected,
-                    appLabel = appLabelFor(state.appNames, inspected.appPackage),
-                    onAddToWhitelist = {
-                        ruleDraft = RuleDraft(
-                            kind = RuleDraftKind.ALLOW,
-                            host = it,
-                            appPackage = inspected.appPackage,
-                            appScopable = appScopeSupported(inspected.protocol, inspected.appPackage),
-                        )
+    // A phone has no room to dock the pane, so the same detail body arrives as
+    // the sheet this screen always used. The gate is the table's own width less
+    // the padding the list measures inside: get it wrong by that much and a
+    // window of the awkward size shows a sheet and a pane, or neither.
+    if (inspected != null) {
+        BoxWithConstraints {
+            if (maxWidth - SCREEN_PADDING_HORIZONTAL * 2 < TABLE_MIN_WIDTH) {
+                val sheetState = rememberModalBottomSheetState()
+                ModalBottomSheet(
+                    onDismissRequest = {
+                        if (ruleDraft != null) ruleDraft = null
+                        else viewModel.onIntent(AdGuardIntent.InspectLog(null))
                     },
-                    onAddToBlacklist = {
-                        ruleDraft = RuleDraft(
-                            kind = RuleDraftKind.BLOCK,
-                            host = it,
-                            appPackage = inspected.appPackage,
-                            appScopable = appScopeSupported(inspected.protocol, inspected.appPackage),
-                        )
-                    },
-                    onAnalyzeWithAi = { domain ->
-                        viewModel.onIntent(AdGuardIntent.InspectLog(null))
-                        viewModel.onIntent(AdGuardIntent.SelectTab(AdGuardTab.AI_LAB))
-                        viewModel.onIntent(AdGuardIntent.RunThreatScan(domain))
-                    },
-                    onClose = { viewModel.onIntent(AdGuardIntent.InspectLog(null)) }
-                )
-            } else {
-                RuleFromLogSheetContent(
-                    draft = draft,
-                    appLabel = appLabelFor(state.appNames, draft.appPackage),
-                    existingRules = existingRules,
-                    onSubmit = { rule ->
-                        viewModel.onIntent(AdGuardIntent.AddCustomRule(rule))
-                        viewModel.onIntent(AdGuardIntent.InspectLog(null))
-                    },
-                    onCancel = { ruleDraft = null },
-                )
+                    sheetState = sheetState,
+                    containerColor = AdGuardDarkSurface,
+                    contentColor = AdGuardTextPrimary,
+                ) {
+                    LogDetailBody(
+                        log = inspected,
+                        appNames = state.appNames,
+                        filterLists = state.filterLists,
+                        ruleDraft = ruleDraft,
+                        onOpenRuleEditor = { draft -> ruleDraft = draft },
+                        onCloseRuleEditor = { ruleDraft = null },
+                        onSubmitRule = { rule ->
+                            viewModel.onIntent(AdGuardIntent.AddCustomRule(rule))
+                            viewModel.onIntent(AdGuardIntent.InspectLog(null))
+                        },
+                        onSwitchRule = { rule, enabled ->
+                            viewModel.onIntent(AdGuardIntent.SwitchLogRule(rule, enabled))
+                        },
+                        onAnalyzeWithAi = { domain ->
+                            viewModel.onIntent(AdGuardIntent.InspectLog(null))
+                            viewModel.onIntent(AdGuardIntent.SelectTab(AdGuardTab.AI_LAB))
+                            viewModel.onIntent(AdGuardIntent.RunThreatScan(domain))
+                        },
+                        onClose = { viewModel.onIntent(AdGuardIntent.InspectLog(null)) },
+                    )
+                }
             }
         }
     }
@@ -967,18 +1019,50 @@ fun LogItemCard(
     }
 }
 
+/**
+ * AdGuard's view of one request: what was asked, what answered it, which rules
+ * spoke for it, and what to do about it next. The sheet a phone gets and the
+ * pane a window docks both render this, so neither can drift from the other.
+ */
 @Composable
-fun PacketInspectionSheetContent(
+private fun LogDetailBody(
     log: NetworkRequestLog,
-    appLabel: String? = null,
-    onAddToWhitelist: (String) -> Unit,
-    onAddToBlacklist: (String) -> Unit,
+    appNames: Map<String, String>,
+    filterLists: List<FilterList>,
+    ruleDraft: RuleDraft?,
+    onOpenRuleEditor: (RuleDraft) -> Unit,
+    onCloseRuleEditor: () -> Unit,
+    onSubmitRule: (String) -> Unit,
+    onSwitchRule: (LogRuleSwitch, Boolean) -> Unit,
     onAnalyzeWithAi: (String) -> Unit,
-    onClose: () -> Unit
+    onClose: () -> Unit,
+    modifier: Modifier = Modifier,
 ) {
+    val platform = currentPlatformHost()
+    val clipboard = LocalClipboardManager.current
+    val appLabel = appLabelFor(appNames, log.appPackage)
+    // "App" on a phone, where the owner is an installed application; "Process"
+    // on a desktop, where the name belongs to one running process.
+    val ownerLabel = L10n.get(
+        if (platform.supportsAppCatalogue()) Strings.log_detail_app else Strings.log_col_process,
+    )
+    val openableUrl = log.url?.takeIf { logUrlOpenable(it) }
+
+    if (ruleDraft != null) {
+        RuleFromLogSheetContent(
+            draft = ruleDraft,
+            appLabel = appLabelFor(appNames, ruleDraft.appPackage),
+            existingRules = filterLists.firstOrNull { it.isCustom }?.customRules.orEmpty(),
+            onSubmit = onSubmitRule,
+            onCancel = onCloseRuleEditor,
+        )
+        return
+    }
+
     Column(
-        modifier = Modifier
+        modifier = modifier
             .fillMaxWidth()
+            .verticalScroll(rememberScrollState())
             .padding(horizontal = 24.dp, vertical = 16.dp)
     ) {
         Row(
@@ -990,16 +1074,19 @@ fun PacketInspectionSheetContent(
                 text = L10n.get(Strings.log_detail_title),
                 fontSize = 17.sp,
                 fontWeight = FontWeight.Bold,
-                color = AdGuardTextPrimary
+                color = AdGuardTextPrimary,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f)
             )
             IconButton(onClick = onClose) {
                 Icon(Icons.Default.Close, contentDescription = L10n.get(Strings.common_close), tint = AdGuardTextSecondary)
             }
         }
 
-        Spacer(modifier = Modifier.height(16.dp))
+        Spacer(modifier = Modifier.height(12.dp))
 
-        // Domain Header Card
+        // Destination Header Card
         Card(
             modifier = Modifier.fillMaxWidth(),
             shape = RoundedCornerShape(12.dp),
@@ -1013,7 +1100,7 @@ fun PacketInspectionSheetContent(
                     color = AdGuardTextMuted
                 )
                 Text(
-                    text = log.domain,
+                    text = log.displayName,
                     fontSize = 16.sp,
                     fontWeight = FontWeight.Bold,
                     fontFamily = FontFamily.Monospace,
@@ -1033,41 +1120,27 @@ fun PacketInspectionSheetContent(
 
         Spacer(modifier = Modifier.height(16.dp))
 
-        // Detailed Metadata Grid
-        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            DetailRow(label = L10n.get(Strings.log_detail_domain), value = log.domain)
+        LogDetailSection(L10n.get(Strings.log_detail_section_general)) {
             DetailRow(
-                label = L10n.get(Strings.log_detail_time),
-                value = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault())
-                    .format(Date(log.timestampMs)),
+                label = L10n.get(Strings.log_detail_url),
+                value = log.displayName,
             )
             DetailRow(
-                label = L10n.get(Strings.log_detail_latency),
-                value = if (log.latencyMicros >= 1_000) {
-                    "%.1f ms".format(log.latencyMicros / 1_000.0)
-                } else {
-                    "${log.latencyMicros} µs"
-                },
-            )
-            DetailRow(
-                label = L10n.get(Strings.log_detail_action),
+                label = L10n.get(Strings.log_col_status),
                 value = logActionLabel(log.status)
             )
+            DetailRow(
+                label = L10n.get(Strings.log_col_type),
+                value = requestTypeLabel(log.requestType),
+            )
             DetailRow(label = L10n.get(Strings.log_detail_category), value = requestCategoryLabel(log.category))
-            val transportLabel = when (log.transport) {
-                NetworkTransport.WIFI -> L10n.get(Strings.log_transport_wifi)
-                NetworkTransport.CELLULAR -> L10n.get(Strings.log_transport_cellular)
-                NetworkTransport.UNKNOWN -> null
+            // AdGuard names the page that asked for a request its log's
+            // Source; here it is the referrer the request really carried.
+            log.source?.let { referrer ->
+                DetailRow(label = L10n.get(Strings.log_col_source), value = referrer)
             }
-            if (transportLabel != null) {
-                DetailRow(
-                    label = L10n.get(Strings.log_detail_transport),
-                    value = if (log.roaming) {
-                        L10n.format(Strings.log_transport_roaming, transportLabel)
-                    } else {
-                        transportLabel
-                    },
-                )
+            log.dnsAnswer?.let { dnsAnswer ->
+                DetailRow(label = L10n.get(Strings.log_detail_dns_answer), value = dnsAnswer)
             }
             Row(
                 modifier = Modifier.fillMaxWidth(),
@@ -1075,7 +1148,7 @@ fun PacketInspectionSheetContent(
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 Text(
-                    text = L10n.get(Strings.log_detail_app),
+                    text = ownerLabel,
                     fontSize = 12.sp,
                     color = AdGuardTextSecondary,
                 )
@@ -1098,26 +1171,60 @@ fun PacketInspectionSheetContent(
                     )
                 }
             }
-            log.matchedRule?.let { matchedRule ->
-                DetailRow(label = L10n.get(Strings.log_detail_rule), value = matchedRule)
+        }
+
+        Spacer(modifier = Modifier.height(16.dp))
+
+        LogDetailSection(L10n.get(Strings.log_detail_section_rules)) {
+            val switches = logRuleSwitches(log, filterLists)
+            if (switches.isEmpty()) {
+                // Nothing here can be switched: the rule came from a body that
+                // is no longer installed, or nothing filtered the request at
+                // all. Say which, rather than showing an empty heading.
+                if (log.matchedRule == null && log.filterListName == null) {
+                    Text(
+                        text = L10n.get(Strings.log_detail_no_rules),
+                        fontSize = 12.sp,
+                        color = AdGuardTextMuted,
+                    )
+                }
+                log.matchedRule?.let { matchedRule ->
+                    DetailRow(label = L10n.get(Strings.log_detail_rule), value = matchedRule)
+                }
+                log.filterListName?.let { filterListName ->
+                    DetailRow(label = L10n.get(Strings.log_detail_list), value = filterListName)
+                }
             }
-            log.filterListName?.let { filterListName ->
-                DetailRow(label = L10n.get(Strings.log_detail_list), value = filterListName)
+            switches.forEachIndexed { index, rule ->
+                LogRuleSwitchRow(rule = rule, index = index, onSwitch = onSwitchRule)
             }
-            log.url?.let { url ->
-                DetailRow(label = L10n.get(Strings.log_detail_url), value = url)
-            }
+        }
+
+        Spacer(modifier = Modifier.height(16.dp))
+
+        LogDetailSection(L10n.get(Strings.settings_group_network)) {
             DetailRow(
-                label = L10n.get(Strings.log_col_type),
-                value = requestTypeLabel(log.requestType),
+                label = L10n.get(Strings.log_detail_time),
+                value = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault())
+                    .format(Date(log.timestampMs)),
             )
-            // AdGuard names the page that asked for a request its log's
-            // Source; here it is the referrer the request really carried.
-            log.source?.let { referrer ->
-                DetailRow(label = L10n.get(Strings.log_col_source), value = referrer)
+            logDurationLabel(log.latencyMicros)?.let { duration ->
+                DetailRow(label = L10n.get(Strings.log_detail_latency), value = duration)
             }
-            log.dnsAnswer?.let { dnsAnswer ->
-                DetailRow(label = L10n.get(Strings.log_detail_dns_answer), value = dnsAnswer)
+            val transportLabel = when (log.transport) {
+                NetworkTransport.WIFI -> L10n.get(Strings.log_transport_wifi)
+                NetworkTransport.CELLULAR -> L10n.get(Strings.log_transport_cellular)
+                NetworkTransport.UNKNOWN -> null
+            }
+            if (transportLabel != null) {
+                DetailRow(
+                    label = L10n.get(Strings.log_detail_transport),
+                    value = if (log.roaming) {
+                        L10n.format(Strings.log_transport_roaming, transportLabel)
+                    } else {
+                        transportLabel
+                    },
+                )
             }
             if (log.flowId > 0) {
                 DetailRow(
@@ -1142,7 +1249,57 @@ fun PacketInspectionSheetContent(
             }
         }
 
-        Spacer(modifier = Modifier.height(24.dp))
+        Spacer(modifier = Modifier.height(20.dp))
+
+        // Reach the address, take the text along, and then decide what the
+        // filter should do next time — AdGuard's own order of wants.
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+            openableUrl?.let { url ->
+                OutlinedButton(
+                    onClick = { platform.openUrl(url) },
+                    modifier = Modifier
+                        .weight(1f)
+                        .height(44.dp)
+                        .testTag("log_detail_open_url"),
+                    shape = RoundedCornerShape(10.dp),
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Public,
+                        contentDescription = null,
+                        modifier = Modifier.size(16.dp),
+                        tint = AdGuardGreenPrimary,
+                    )
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text(
+                        text = L10n.get(Strings.log_open_in_browser),
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = AdGuardGreenPrimary,
+                    )
+                }
+            }
+
+            OutlinedButton(
+                onClick = { clipboard.setText(AnnotatedString(log.displayName)) },
+                modifier = Modifier
+                    .weight(1f)
+                    .height(44.dp)
+                    .testTag("log_detail_copy"),
+                shape = RoundedCornerShape(10.dp),
+            ) {
+                Text(
+                    text = L10n.get(Strings.settings_copy),
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = AdGuardTextSecondary,
+                )
+            }
+        }
+
+        Spacer(modifier = Modifier.height(10.dp))
 
         // Action Buttons
         Row(
@@ -1150,7 +1307,16 @@ fun PacketInspectionSheetContent(
             horizontalArrangement = Arrangement.spacedBy(10.dp)
         ) {
             OutlinedButton(
-                onClick = { onAddToWhitelist(log.domain) },
+                onClick = {
+                    onOpenRuleEditor(
+                        RuleDraft(
+                            kind = RuleDraftKind.ALLOW,
+                            host = log.domain,
+                            appPackage = log.appPackage,
+                            appScopable = appScopeSupported(log.protocol, log.appPackage),
+                        ),
+                    )
+                },
                 modifier = Modifier
                     .weight(1f)
                     .height(48.dp),
@@ -1161,7 +1327,16 @@ fun PacketInspectionSheetContent(
             }
 
             OutlinedButton(
-                onClick = { onAddToBlacklist(log.domain) },
+                onClick = {
+                    onOpenRuleEditor(
+                        RuleDraft(
+                            kind = RuleDraftKind.BLOCK,
+                            host = log.domain,
+                            appPackage = log.appPackage,
+                            appScopable = appScopeSupported(log.protocol, log.appPackage),
+                        ),
+                    )
+                },
                 modifier = Modifier
                     .weight(1f)
                     .height(48.dp),
@@ -1188,6 +1363,77 @@ fun PacketInspectionSheetContent(
         }
 
         Spacer(modifier = Modifier.height(16.dp))
+    }
+}
+
+/**
+ * AdGuard groups a request's details under their own headings — General,
+ * Network, Rules — instead of leaving the user to pick them out of one long
+ * list of label and value pairs.
+ */
+@Composable
+private fun LogDetailSection(title: String, content: @Composable ColumnScope.() -> Unit) {
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Text(
+            text = title,
+            fontSize = 11.sp,
+            fontWeight = FontWeight.Bold,
+            color = AdGuardTextMuted,
+            letterSpacing = 0.06.sp,
+        )
+        content()
+    }
+}
+
+/**
+ * One rule the request fell under, with the switch AdGuard hangs beside it.
+ *
+ * The two kinds behave differently on purpose: a rule the user wrote parks
+ * behind a `!` and comes back with its text intact, a list turns off whole
+ * because a single rule inside a downloaded body cannot be edited here.
+ */
+@Composable
+private fun LogRuleSwitchRow(
+    rule: LogRuleSwitch,
+    index: Int,
+    onSwitch: (LogRuleSwitch, Boolean) -> Unit,
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .testTag("log_rule_switch_$index"),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                text = rule.label,
+                fontSize = 12.sp,
+                fontWeight = FontWeight.SemiBold,
+                color = if (rule.enabled) AdGuardTextPrimary else AdGuardTextMuted,
+                fontFamily = FontFamily.Monospace,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+            )
+            rule.rule?.let { fired ->
+                Text(
+                    text = fired,
+                    fontSize = 11.sp,
+                    color = AdGuardTextMuted,
+                    fontFamily = FontFamily.Monospace,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+        }
+        Switch(
+            checked = rule.enabled,
+            onCheckedChange = { onSwitch(rule, it) },
+            colors = SwitchDefaults.colors(
+                checkedTrackColor = AdGuardGreenPrimary,
+                checkedThumbColor = AdGuardOnAccent,
+            ),
+        )
     }
 }
 

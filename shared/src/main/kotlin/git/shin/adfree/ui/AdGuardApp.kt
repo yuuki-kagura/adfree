@@ -55,6 +55,7 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Snackbar
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
+import androidx.compose.material3.SnackbarResult
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -417,6 +418,16 @@ fun AdGuardApp(
             when (effect) {
                 is AdGuardEffect.ShowSnackbar ->
                     snackbarHostState.showSnackbar(effect.message.asString())
+
+                is AdGuardEffect.ShowUndoSnackbar -> {
+                    val outcome = snackbarHostState.showSnackbar(
+                        effect.message.asString(),
+                        effect.actionLabel.asString(),
+                    )
+                    if (outcome == SnackbarResult.ActionPerformed) {
+                        viewModel.onIntent(effect.undo)
+                    }
+                }
                 // The consent dialog itself is host glue; the host watches
                 // showVpnPermissionPrompt on the state it already collects.
                 is AdGuardEffect.RequestVpnPermission -> Unit

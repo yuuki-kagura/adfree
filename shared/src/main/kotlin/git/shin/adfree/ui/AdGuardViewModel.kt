@@ -21,6 +21,8 @@ import git.shin.adfree.model.DnsBlockMode
 import git.shin.adfree.model.FilterStatus
 import git.shin.adfree.model.FirewallAccess
 import git.shin.adfree.model.FirewallAppChoice
+import git.shin.adfree.model.LogRuleSwitch
+import git.shin.adfree.model.LogRuleSwitchKind
 import git.shin.adfree.model.LogTypeTab
 import git.shin.adfree.model.LogWindowTotals
 import git.shin.adfree.model.NetworkRequestLog
@@ -33,6 +35,7 @@ import git.shin.adfree.model.ThreatAnalysisResult
 import git.shin.adfree.model.UserScriptInfo
 import git.shin.adfree.model.UserScriptStoreState
 import git.shin.adfree.model.matchesLogSearch
+import git.shin.adfree.model.withAllowlistRuleEnabled
 import git.shin.adfree.security.ThreatAnalyzer
 import git.shin.adfree.update.UpdateInfo
 import git.shin.adfree.update.UpdateOutcome
@@ -467,6 +470,7 @@ class AdGuardViewModel(
             is AdGuardIntent.FilterStatusChanged -> _statusFilter.value = intent.status
             is AdGuardIntent.FilterLogTypeChanged -> _logTypeFilter.value = intent.tab
             is AdGuardIntent.InspectLog -> _inspectedLog.value = intent.log
+            is AdGuardIntent.SwitchLogRule -> switchLogRule(intent.rule, intent.enabled)
             is AdGuardIntent.AddCustomRule -> {
                 repository.addCustomRule(intent.rule)
                 _showCustomRuleDialog.value = false
@@ -1025,6 +1029,48 @@ class AdGuardViewModel(
         val name = coreEngine.exportCaCertificate()
         platform.openCertificateInstaller()
         return name
+    }
+
+    /**
+     * Switches one rule the log's detail panel lists, the way AdGuard does it:
+     * a user rule parks behind a `!` rather than disappearing, a list turns off
+     * whole, and both come back through the snackbar's action. The undo carries
+     * what was just written, so it lands correctly even if the panel closed in
+     * between and the rule is no longer on screen.
+     */
+    private fun switchLogRule(rule: LogRuleSwitch, enabled: Boolean) {
+        when (rule.kind) {
+            LogRuleSwitchKind.USER_RULE -> {
+                val next = withAllowlistRuleEnabled(rule.target, enabled)
+                if (next == rule.target) return
+                repository.replaceCustomRule(rule.target, next)
+                emit(
+                    AdGuardEffect.ShowUndoSnackbar(
+                        message = UiText.Formatted(
+                            if (enabled) Strings.log_rule_switched_on else Strings.log_rule_switched_off,
+                            next,
+                        ),
+                        actionLabel = UiText.Resource(Strings.common_undo),
+                        undo = AdGuardIntent.SwitchLogRule(rule.copy(target = next), !enabled),
+                    ),
+                )
+            }
+
+            LogRuleSwitchKind.FILTER_LIST -> {
+                if (rule.enabled == enabled) return
+                repository.toggleFilterList(rule.target, enabled)
+                emit(
+                    AdGuardEffect.ShowUndoSnackbar(
+                        message = UiText.Formatted(
+                            if (enabled) Strings.log_list_switched_on else Strings.log_list_switched_off,
+                            rule.label,
+                        ),
+                        actionLabel = UiText.Resource(Strings.common_undo),
+                        undo = AdGuardIntent.SwitchLogRule(rule.copy(enabled = !enabled), !enabled),
+                    ),
+                )
+            }
+        }
     }
 
     private fun emit(effect: AdGuardEffect) {
