@@ -526,6 +526,19 @@ fn migrate(conn: &Connection) -> Result<(), String> {
         )
         .map_err(|e| format!("migrate schema to v8: {e}"))?;
     }
+    if version < 9 {
+        // v9: the filtering log reads like AdGuard's: which kind of request the
+        // row was, and which page asked for it. Rows written before this read
+        // as unclassified rather than guessed at.
+        conn.execute_batch(
+            "BEGIN;
+             ALTER TABLE log_events ADD COLUMN req_type TEXT NOT NULL DEFAULT '';
+             ALTER TABLE log_events ADD COLUMN source TEXT NOT NULL DEFAULT '';
+             PRAGMA user_version = 9;
+             COMMIT;",
+        )
+        .map_err(|e| format!("migrate schema to v9: {e}"))?;
+    }
     Ok(())
 }
 
@@ -729,9 +742,10 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    /// A v7 database has the whole current schema except the domain index.
-    /// Opening it must add the index and keep the rows queryable by domain,
-    /// because the services breakdown is the first reader that groups on it.
+    /// A v7 database has the whole schema of its day, without the domain index
+    /// or the log's type/referrer columns. Opening it must add all three and
+    /// keep the rows queryable by domain, because the services breakdown is the
+    /// first reader that groups on it.
     #[test]
     fn a_v7_database_gains_the_domain_index() {
         let dir = std::env::temp_dir().join(format!("adfree-store-{}-v7", std::process::id()));
@@ -811,7 +825,7 @@ mod tests {
             let version: i64 = conn
                 .query_row("PRAGMA user_version", [], |r| r.get(0))
                 .expect("version read");
-            assert_eq!(version, 8);
+            assert_eq!(version, 9);
         }
         assert_eq!(
             store.log_usage_by_domain(1_000, -1),
@@ -823,6 +837,23 @@ mod tests {
             }],
             "the row written before the migration is still grouped by domain"
         );
+
+        // The v9 columns come along with the index. An old row reads as
+        // unclassified; nothing guesses a type it never saw.
+        let old = &store.log_page(0, 10)[0];
+        assert_eq!(old.req_type, "");
+        assert_eq!(old.source, "");
+        store.log_enqueue(&crate::events::with_type(
+            crate::events::with_source(
+                allow_event("new.example", "10.0.0.2", 1),
+                "https://old.example/page",
+            ),
+            crate::events::req_type::SCRIPT,
+        ));
+        store.log_flush();
+        let new = &store.log_page(0, 1)[0];
+        assert_eq!(new.req_type, "script");
+        assert_eq!(new.source, "https://old.example/page");
         drop(store);
         let _ = std::fs::remove_dir_all(&dir);
     }

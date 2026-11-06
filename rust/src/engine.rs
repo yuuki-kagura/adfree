@@ -913,6 +913,14 @@ pub(crate) fn log_mitm_block(block: &crate::mitm::proxy::MitmBlock<'_>) {
         Some(url) if !url.is_empty() => events::with_url(event, url),
         _ => event,
     };
+    // The two columns AdGuard's log shows beside the rule: what the request
+    // was fetched as, and which page asked for it.
+    let event = events::with_type(event, events::req_type::of(block.request_type));
+    let event = if block.source.is_empty() {
+        event
+    } else {
+        events::with_source(event, block.source)
+    };
     core.log_event(event);
     core.stats.add(&core.stats.bytes_saved, u64::from(saved));
 }
@@ -3598,21 +3606,24 @@ impl Core {
         } else {
             Vec::new()
         };
-        let event = events::with_app(
-            events::block_event(
-                events::ACTION_TCP_RESET,
-                &host,
-                // The port belongs to the destination: AdGuard's log shows the
-                // connection as `ip:port`, not the bare address.
-                &format!("{}:{}", pkt.dst_ip_text(), pkt.dst_port),
-                rule,
-                list,
-                category,
-                0,
-                saved as u32,
-                pkt.version == 6,
+        let event = events::with_type(
+            events::with_app(
+                events::block_event(
+                    events::ACTION_TCP_RESET,
+                    &host,
+                    // The port belongs to the destination: AdGuard's log shows the
+                    // connection as `ip:port`, not the bare address.
+                    &format!("{}:{}", pkt.dst_ip_text(), pkt.dst_port),
+                    rule,
+                    list,
+                    category,
+                    0,
+                    saved as u32,
+                    pkt.version == 6,
+                ),
+                first_app(&app_packages),
             ),
-            first_app(&app_packages),
+            events::req_type::CONNECTION,
         );
         self.log_event(event);
     }
@@ -3674,6 +3685,9 @@ impl Core {
                     ),
                     first_app(&packages),
                 );
+                // Every row this function writes is a DNS decision; the log's
+                // tabs say so.
+                let event = events::with_type(event, events::req_type::DNS);
                 self.log_event(event);
                 return;
             }
@@ -3693,16 +3707,19 @@ impl Core {
                     out.push(reply);
                     if cfg.log_allowed && self.logging_live() {
                         let packages = app_packages.unwrap_or_else(|| self.apps_for_udp(pkt));
-                        let event = events::with_traffic(
-                            events::with_answer(
-                                events::with_app(
-                                    events::allow_event(host, &self.dns_server_text(), 0),
-                                    first_app(&packages),
+                        let event = events::with_type(
+                            events::with_traffic(
+                                events::with_answer(
+                                    events::with_app(
+                                        events::allow_event(host, &self.dns_server_text(), 0),
+                                        first_app(&packages),
+                                    ),
+                                    &address.to_string(),
                                 ),
-                                &address.to_string(),
+                                0,
+                                reply_len,
                             ),
-                            0,
-                            reply_len,
+                            events::req_type::DNS,
                         );
                         self.log_event(event);
                     }
@@ -3754,19 +3771,22 @@ impl Core {
                     Vec::new()
                 }
             });
-            let event = events::with_app(
-                events::block_event(
-                    events::ACTION_BLOCK,
-                    host,
-                    &self.dns_server_text(),
-                    verdict.rule_text.as_deref().unwrap_or(""),
-                    verdict.list_name.as_deref().unwrap_or(""),
-                    verdict.category,
-                    latency_ns,
-                    saved as u32,
-                    pkt.version == 6,
+            let event = events::with_type(
+                events::with_app(
+                    events::block_event(
+                        events::ACTION_BLOCK,
+                        host,
+                        &self.dns_server_text(),
+                        verdict.rule_text.as_deref().unwrap_or(""),
+                        verdict.list_name.as_deref().unwrap_or(""),
+                        verdict.category,
+                        latency_ns,
+                        saved as u32,
+                        pkt.version == 6,
+                    ),
+                    first_app(&packages),
                 ),
-                first_app(&packages),
+                events::req_type::DNS,
             );
             self.log_event(event);
         } else {
@@ -3824,9 +3844,12 @@ impl Core {
                     .take()
                     .unwrap_or_else(|| self.apps_for_udp(pkt));
                 if smart_allowed {
-                    self.log_event(events::with_app(
-                        events::spared_event(host, &self.dns_server_text(), latency_ns),
-                        first_app(&packages),
+                    self.log_event(events::with_type(
+                        events::with_app(
+                            events::spared_event(host, &self.dns_server_text(), latency_ns),
+                            first_app(&packages),
+                        ),
+                        events::req_type::DNS,
                     ));
                 }
                 if cfg.log_allowed {
@@ -3834,6 +3857,7 @@ impl Core {
                         events::allow_event(host, &self.dns_server_text(), latency_ns),
                         first_app(&packages),
                     );
+                    event.req_type = events::req_type::DNS;
                     if let Some((answer, reply_len)) = &served {
                         if !answer.is_empty() {
                             event = events::with_answer(event, answer);

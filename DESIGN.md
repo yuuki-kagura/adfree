@@ -419,12 +419,15 @@ Downloads land in a temporary file and are renamed into place, so a killed
 process never leaves a half-written list behind. The file names predate the
 move from Kotlin, so installed apps keep their data without a migration.
 
-SQLite schema v3 (`PRAGMA user_version`; migrations are additive):
+SQLite schema v9 (`PRAGMA user_version`; migrations are additive):
 
 ```sql
 CREATE TABLE settings(
-  id INTEGER PRIMARY KEY CHECK (id = 1),
-  json TEXT NOT NULL, updated_ms INTEGER NOT NULL);
+  id INTEGER PRIMARY KEY,
+  json TEXT NOT NULL, updated_ms INTEGER NOT NULL);   -- legacy blobs, read once
+
+CREATE TABLE state(key TEXT PRIMARY KEY, json TEXT NOT NULL, updated_ms INTEGER NOT NULL);
+CREATE TABLE state_meta(key TEXT PRIMARY KEY, value TEXT NOT NULL);
 
 CREATE TABLE log_events(
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -432,13 +435,21 @@ CREATE TABLE log_events(
   domain TEXT NOT NULL, ip TEXT NOT NULL, rule TEXT NOT NULL, list_name TEXT NOT NULL,
   app TEXT NOT NULL DEFAULT '',
   latency_ns INTEGER NOT NULL DEFAULT 0, bytes_saved INTEGER NOT NULL DEFAULT 0,
-  ipv6 INTEGER NOT NULL DEFAULT 0);
+  ipv6 INTEGER NOT NULL DEFAULT 0,
+  transport INTEGER NOT NULL DEFAULT 0, roaming INTEGER NOT NULL DEFAULT 0,
+  flow_id INTEGER NOT NULL DEFAULT 0, url TEXT NOT NULL DEFAULT '',
+  dns_answer TEXT NOT NULL DEFAULT '', bytes_sent INTEGER NOT NULL DEFAULT 0,
+  bytes_recv INTEGER NOT NULL DEFAULT 0,
+  req_type TEXT NOT NULL DEFAULT '', source TEXT NOT NULL DEFAULT '');
 CREATE INDEX log_events_ts ON log_events(ts_ms);
+CREATE INDEX log_events_action ON log_events(action);
+CREATE INDEX log_events_transport_action ON log_events(transport, action);
+CREATE INDEX log_events_ts_domain ON log_events(ts_ms, domain);
 
-CREATE TABLE filter_lists(id INTEGER PRIMARY KEY, name TEXT, url TEXT, enabled INTEGER,
-  format INTEGER, category INTEGER, rule_count INTEGER, last_error TEXT,
-  updated_ms INTEGER, etag TEXT, last_modified TEXT);
-CREATE TABLE scripts(id TEXT PRIMARY KEY, name TEXT, url TEXT, enabled INTEGER, updated_ms INTEGER);
+CREATE TABLE flow_traffic(ts_ms INTEGER, app TEXT, transport INTEGER,
+  roaming INTEGER, sent INTEGER, recv INTEGER);
+CREATE INDEX flow_traffic_ts ON flow_traffic(ts_ms);
+CREATE INDEX flow_traffic_app ON flow_traffic(app, ts_ms);
 ```
 
 - WAL + `synchronous=NORMAL`; one writer thread (`adfree-db`) batches 500 ms or

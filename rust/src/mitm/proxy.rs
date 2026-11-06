@@ -149,6 +149,12 @@ pub struct MitmBlock<'a> {
     pub category: u8,
     /// The packages owning the flow, so the log can name the app.
     pub apps: &'a [String],
+    /// What the request was fetched as, in the filter's own word (`"script"`,
+    /// `"image"`), or `"connection"` for a host refused before any request
+    /// existed. The log turns this into the type column.
+    pub request_type: &'a str,
+    /// The referrer the request carried, empty when it carried none.
+    pub source: &'a str,
 }
 
 /// Where the HTTPS path reports what it blocked.
@@ -923,6 +929,10 @@ impl ProxySession {
                         list_name: verdict.list_name.as_deref(),
                         category: verdict.category,
                         apps: &self.apps,
+                        // Nothing was fetched: the connection itself is what
+                        // the lists refused, which is the log's Connection row.
+                        request_type: "connection",
+                        source: "",
                     });
                 }
                 // The relay resets the client flow when a step closes the
@@ -1522,6 +1532,13 @@ impl ProxySession {
             _ if request_type == "document" => url.clone(),
             _ => String::new(),
         };
+        // The log's `Source` is the referrer the request actually carried, not
+        // the page the rules were matched against: a top-level navigation is
+        // its own first party for `$domain`, but it does not come from itself.
+        let referrer = match facts.referer {
+            Some(referer) if !referer.is_empty() => referer.to_string(),
+            _ => String::new(),
+        };
         let closes = facts.closes;
         // What the request's body amounts to if the rules answer it here.
         let body = facts.body;
@@ -1558,6 +1575,8 @@ impl ProxySession {
                     list_name: answer.list_name.as_deref(),
                     category: answer.category,
                     apps,
+                    request_type,
+                    source: &referrer,
                 });
             }
         }

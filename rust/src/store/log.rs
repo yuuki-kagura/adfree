@@ -140,6 +140,11 @@ pub struct LogRow {
     pub dns_answer: String,
     pub bytes_sent: i64,
     pub bytes_recv: i64,
+    /// What kind of request the decision was about, named: `script`, `image`,
+    /// `dns`, `connection`. The log's tabs group on this.
+    pub req_type: String,
+    /// The referrer the request carried, empty unless it carried one.
+    pub source: String,
 }
 
 impl From<&Event> for LogRow {
@@ -165,6 +170,8 @@ impl From<&Event> for LogRow {
             dns_answer: e.answer().to_string(),
             bytes_sent: e.bytes_sent as i64,
             bytes_recv: e.bytes_recv as i64,
+            req_type: e.req_type_name().to_string(),
+            source: e.source().to_string(),
         }
     }
 }
@@ -263,7 +270,9 @@ fn write_batch(db: &Db, rows: &[LogRow], traffic: &[FlowTraffic]) -> rusqlite::R
                 r.url,
                 r.dns_answer,
                 r.bytes_sent,
-                r.bytes_recv
+                r.bytes_recv,
+                r.req_type,
+                r.source
             ])?;
         }
     }
@@ -280,12 +289,12 @@ fn write_batch(db: &Db, rows: &[LogRow], traffic: &[FlowTraffic]) -> rusqlite::R
 
 const COLUMNS: &str = "id, ts_ms, action, category, domain, ip, rule, list_name, \
                        latency_ns, bytes_saved, ipv6, app, transport, roaming, flow_id, \
-                       url, dns_answer, bytes_sent, bytes_recv";
+                       url, dns_answer, bytes_sent, bytes_recv, req_type, source";
 
 const INSERT_SQL: &str = "INSERT INTO log_events \
      (ts_ms, action, category, domain, ip, rule, list_name, latency_ns, bytes_saved, ipv6, app, \
-      transport, roaming, flow_id, url, dns_answer, bytes_sent, bytes_recv) \
-     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18)";
+      transport, roaming, flow_id, url, dns_answer, bytes_sent, bytes_recv, req_type, source) \
+     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20)";
 
 const INSERT_TRAFFIC_SQL: &str = "INSERT INTO flow_traffic \
      (ts_ms, app, transport, roaming, sent, recv) VALUES (?1, ?2, ?3, ?4, ?5, ?6)";
@@ -311,6 +320,8 @@ fn row_from(r: &rusqlite::Row<'_>) -> rusqlite::Result<LogRow> {
         dns_answer: r.get(16)?,
         bytes_sent: r.get(17)?,
         bytes_recv: r.get(18)?,
+        req_type: r.get(19)?,
+        source: r.get(20)?,
     })
 }
 

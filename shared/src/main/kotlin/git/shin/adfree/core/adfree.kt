@@ -3816,6 +3816,17 @@ data class LogEvent (
     var `bytesSent`: kotlin.Long
     , 
     var `bytesRecv`: kotlin.Long
+    , 
+    /**
+     * What the request was fetched as, in the log's own word (`"script"`,
+     * `"image"`, `"dns"`, `"connection"`); empty when unclassified.
+     */
+    var `requestType`: kotlin.String
+    , 
+    /**
+     * The page that asked for this request, when it named one.
+     */
+    var `source`: kotlin.String
     
 ){
     
@@ -3851,6 +3862,8 @@ public object FfiConverterTypeLogEvent: FfiConverterRustBuffer<LogEvent> {
             FfiConverterString.read(buf),
             FfiConverterLong.read(buf),
             FfiConverterLong.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterString.read(buf),
         )
     }
 
@@ -3873,7 +3886,9 @@ public object FfiConverterTypeLogEvent: FfiConverterRustBuffer<LogEvent> {
             FfiConverterString.allocationSize(value.`url`) +
             FfiConverterString.allocationSize(value.`dnsAnswer`) +
             FfiConverterLong.allocationSize(value.`bytesSent`) +
-            FfiConverterLong.allocationSize(value.`bytesRecv`)
+            FfiConverterLong.allocationSize(value.`bytesRecv`) +
+            FfiConverterString.allocationSize(value.`requestType`) +
+            FfiConverterString.allocationSize(value.`source`)
     )
 
     override fun write(value: LogEvent, buf: ByteBuffer) {
@@ -3896,6 +3911,8 @@ public object FfiConverterTypeLogEvent: FfiConverterRustBuffer<LogEvent> {
             FfiConverterString.write(value.`dnsAnswer`, buf)
             FfiConverterLong.write(value.`bytesSent`, buf)
             FfiConverterLong.write(value.`bytesRecv`, buf)
+            FfiConverterString.write(value.`requestType`, buf)
+            FfiConverterString.write(value.`source`, buf)
     }
 }
 

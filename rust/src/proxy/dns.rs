@@ -371,31 +371,37 @@ fn serve_one(listener: &Listener, query: &Inquiry, stop: &AtomicBool) {
             if listener.send(&message, query).is_ok() {
                 stats.inc(&stats.dns_replies);
             }
-            core.log_event(crate::events::with_app(
-                crate::events::block_event(
-                    crate::events::ACTION_BLOCK,
-                    &host,
-                    &server_text,
-                    &rule,
-                    &list,
-                    category,
-                    0,
-                    BYTES_PER_BLOCKED_REQUEST as u32,
-                    false,
+            core.log_event(crate::events::with_type(
+                crate::events::with_app(
+                    crate::events::block_event(
+                        crate::events::ACTION_BLOCK,
+                        &host,
+                        &server_text,
+                        &rule,
+                        &list,
+                        category,
+                        0,
+                        BYTES_PER_BLOCKED_REQUEST as u32,
+                        false,
+                    ),
+                    packages.first().map(String::as_str).unwrap_or(""),
                 ),
-                packages.first().map(String::as_str).unwrap_or(""),
+                crate::events::req_type::DNS,
             ));
         }
         Served::Rewritten { message, answer } => {
             stats.inc(&stats.dns_allowed);
             if listener.send(&message, query).is_ok() {
                 stats.inc(&stats.dns_replies);
-                core.log_event(crate::events::with_answer(
-                    crate::events::with_app(
-                        crate::events::allow_event(&host, &server_text, 0),
-                        packages.first().map(String::as_str).unwrap_or(""),
+                core.log_event(crate::events::with_type(
+                    crate::events::with_answer(
+                        crate::events::with_app(
+                            crate::events::allow_event(&host, &server_text, 0),
+                            packages.first().map(String::as_str).unwrap_or(""),
+                        ),
+                        &answer,
                     ),
-                    &answer,
+                    crate::events::req_type::DNS,
                 ));
             }
         }

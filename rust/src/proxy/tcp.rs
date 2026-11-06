@@ -150,19 +150,24 @@ fn handle(client: TcpStream, stop: &AtomicBool) {
             "proxy: {} refused by the app firewall",
             apps.first().map(String::as_str).unwrap_or("app")
         ));
-        core.log_event(crate::events::with_app(
-            crate::events::block_event(
-                crate::events::ACTION_BLOCK,
-                &addr.ip().to_string(),
-                &addr.to_string(),
-                reason,
-                "App firewall",
-                crate::filter::CAT_AD,
-                0,
-                0,
-                addr.is_ipv6(),
+        core.log_event(crate::events::with_type(
+            crate::events::with_app(
+                crate::events::block_event(
+                    crate::events::ACTION_BLOCK,
+                    &addr.ip().to_string(),
+                    &addr.to_string(),
+                    reason,
+                    "App firewall",
+                    crate::filter::CAT_AD,
+                    0,
+                    0,
+                    addr.is_ipv6(),
+                ),
+                apps.first().map(String::as_str).unwrap_or(""),
             ),
-            apps.first().map(String::as_str).unwrap_or(""),
+            // No request was ever made: the app firewall refused the
+            // connection itself, which is the log's Connection row.
+            crate::events::req_type::CONNECTION,
         ));
         reset_on_close(client_fd);
         return;

@@ -247,7 +247,7 @@ async fn handle_request(
     };
     // Everything the decision needs is copied out of the head first: the head
     // itself is edited below, which ends the borrow.
-    let Some((target, method, request_type, url, source)) = ({
+    let Some((target, method, request_type, url, source, referrer)) = ({
         let facts = request_facts(&head[..head_end]);
         facts.map(|facts| {
             let request_type = facts.request_type();
@@ -257,12 +257,19 @@ async fn handle_request(
                 _ if request_type == "document" => url.clone(),
                 _ => String::new(),
             };
+            // The log's Source is the carried referrer only; a document is its
+            // own first party for the rules, but it does not come from itself.
+            let referrer = match facts.referer {
+                Some(referer) if !referer.is_empty() => referer.to_string(),
+                _ => String::new(),
+            };
             (
                 facts.target.to_string(),
                 facts.method.to_string(),
                 request_type,
                 url,
                 source,
+                referrer,
             )
         })
     }) else {
@@ -302,6 +309,8 @@ async fn handle_request(
                 list_name: answer.list_name.as_deref(),
                 category: answer.category,
                 apps: &config.apps,
+                request_type,
+                source: &referrer,
             });
         }
         return reply_http1(&mut send_back, &answer.response).await;

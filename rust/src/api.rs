@@ -221,6 +221,11 @@ pub struct LogEvent {
     pub dns_answer: String,
     pub bytes_sent: i64,
     pub bytes_recv: i64,
+    /// What the request was fetched as, in the log's own word (`"script"`,
+    /// `"image"`, `"dns"`, `"connection"`); empty when unclassified.
+    pub request_type: String,
+    /// The page that asked for this request, when it named one.
+    pub source: String,
 }
 
 impl From<&events::Event> for LogEvent {
@@ -245,6 +250,8 @@ impl From<&events::Event> for LogEvent {
             dns_answer: e.answer().to_string(),
             bytes_sent: e.bytes_sent as i64,
             bytes_recv: e.bytes_recv as i64,
+            request_type: e.req_type_name().to_string(),
+            source: e.source().to_string(),
         }
     }
 }
@@ -271,6 +278,8 @@ impl From<&crate::store::LogRow> for LogEvent {
             dns_answer: r.dns_answer.clone(),
             bytes_sent: r.bytes_sent,
             bytes_recv: r.bytes_recv,
+            request_type: r.req_type.clone(),
+            source: r.source.clone(),
         }
     }
 }

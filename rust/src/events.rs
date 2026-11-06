@@ -20,11 +20,17 @@
 //! 15      app_len        u8
 //! 16..20  latency_ns     u32
 //! 20..24  bytes_saved    u32
-//! 24..    domain[domain_len] ip[ip_len] rule[rule_len] list[list_len]
+//! 24      req_type       u8   one of req_type::*
+//! 25..    domain[domain_len] ip[ip_len] rule[rule_len] list[list_len]
 //!         app[app_len]
 //!         flow_id u32, bytes_sent u32, bytes_recv u32,
-//!         url_len u8, answer_len u8, url[url_len], answer[answer_len]
+//!         url_len u8, answer_len u8, source_len u8,
+//!         url[url_len], answer[answer_len], source[source_len]
 //! ```
+//!
+//! `req_type` sits at the end of the header and the lengths of the last three
+//! strings at the end of the trailer, so a reader written against the older
+//! layout keeps every offset it already computes.
 
 pub const ACTION_ALLOW: u8 = 0;
 pub const ACTION_BLOCK: u8 = 1;
@@ -54,15 +60,74 @@ pub const MAX_APP: usize = 96;
 pub const MAX_URL: usize = 128;
 /// First address(es) of a DNS answer, when the engine produced it itself.
 pub const MAX_ANSWER: usize = 64;
-const RECORD_HEADER: usize = 24;
+/// The referrer a request carried. AdGuard's log shows it as `Source`, and it
+/// is what tells a user which page — or which app — asked for this one.
+pub const MAX_SOURCE: usize = 96;
+const RECORD_HEADER: usize = 25;
 /// Fixed bytes appended after the variable-name tail (flow id, traffic, the
-/// two length bytes).
-const RECORD_TRAILER: usize = 14;
+/// three length bytes).
+const RECORD_TRAILER: usize = 15;
+
+/// What kind of thing a decision was about, in the words the log's tabs use.
+///
+/// The filter speaks in rule modifiers (`$script`, `$image`), the log speaks in
+/// request kinds, and the two only agree at one edge: [`req_type::of`]. The
+/// names below are stable because the database row, the exported file and the
+/// UI's tabs all key on them.
+pub mod req_type {
+    pub const OTHER: u8 = 0;
+    pub const DOCUMENT: u8 = 1;
+    pub const STYLESHEET: u8 = 2;
+    pub const SCRIPT: u8 = 3;
+    pub const XHR: u8 = 4;
+    pub const IMAGE: u8 = 5;
+    pub const FONT: u8 = 6;
+    pub const MEDIA: u8 = 7;
+    pub const WEBSOCKET: u8 = 8;
+    pub const DNS: u8 = 9;
+    pub const CONNECTION: u8 = 10;
+
+    pub fn name(code: u8) -> &'static str {
+        match code {
+            DOCUMENT => "document",
+            STYLESHEET => "stylesheet",
+            SCRIPT => "script",
+            XHR => "xhr",
+            IMAGE => "image",
+            FONT => "font",
+            MEDIA => "media",
+            WEBSOCKET => "websocket",
+            DNS => "dns",
+            CONNECTION => "connection",
+            _ => "other",
+        }
+    }
+
+    /// Maps a resource name onto a code. A `$document` request and an iframe
+    /// are the same tab, and anything without a tab of its own — a CSP report,
+    /// a ping, an oddball modifier — is the `other` the last tab collects.
+    pub fn of(text: &str) -> u8 {
+        match text {
+            "document" | "subdocument" => DOCUMENT,
+            "stylesheet" => STYLESHEET,
+            "script" => SCRIPT,
+            "xmlhttprequest" => XHR,
+            "image" => IMAGE,
+            "font" => FONT,
+            "media" => MEDIA,
+            "websocket" => WEBSOCKET,
+            "dns" => DNS,
+            "connection" => CONNECTION,
+            _ => OTHER,
+        }
+    }
+}
+
 /// Events kept in the live ring. The durable log is the database the store
 /// writes first ([`crate::store`]); this ring only feeds the in-process tail,
-/// and an `Event` is ~560 bytes after the Phase 6 fields, so the previous
-/// 4 096 slots would have held ~2.2 MB of anonymous memory for a buffer a
-/// poll of the tail drains in one go.
+/// and an `Event` is ~660 bytes after the Phase 6 fields and the log's own type
+/// and referrer, so the previous 4 096 slots would have held ~2.2 MB of
+/// anonymous memory for a buffer a poll of the tail drains in one go.
 const CAPACITY: usize = 512;
 
 #[derive(Clone, Copy)]
@@ -78,6 +143,10 @@ pub struct Event {
     pub flow_id: u32,
     pub bytes_sent: u32,
     pub bytes_recv: u32,
+    /// One of [`req_type`]: what the decision was about, not which rule made
+    /// it. `OTHER` is the zero, so an event built without a type reads as the
+    /// tab AdGuard puts everything unclassified in.
+    pub req_type: u8,
     pub domain: [u8; MAX_DOMAIN],
     pub domain_len: u8,
     pub ip: [u8; MAX_IP],
@@ -92,6 +161,8 @@ pub struct Event {
     pub url_len: u8,
     pub answer: [u8; MAX_ANSWER],
     pub answer_len: u8,
+    pub source: [u8; MAX_SOURCE],
+    pub source_len: u8,
 }
 
 impl Event {
@@ -106,6 +177,7 @@ impl Event {
             flow_id: 0,
             bytes_sent: 0,
             bytes_recv: 0,
+            req_type: req_type::OTHER,
             domain: [0; MAX_DOMAIN],
             domain_len: 0,
             ip: [0; MAX_IP],
@@ -120,6 +192,8 @@ impl Event {
             url_len: 0,
             answer: [0; MAX_ANSWER],
             answer_len: 0,
+            source: [0; MAX_SOURCE],
+            source_len: 0,
         }
     }
 
@@ -166,6 +240,16 @@ impl Event {
 
     pub fn answer(&self) -> &str {
         std::str::from_utf8(&self.answer[..self.answer_len as usize]).unwrap_or("")
+    }
+
+    /// The referrer the request carried, when the decision had one.
+    pub fn source(&self) -> &str {
+        std::str::from_utf8(&self.source[..self.source_len as usize]).unwrap_or("")
+    }
+
+    /// The kind of request, named the way the log's tabs name it.
+    pub fn req_type_name(&self) -> &'static str {
+        req_type::name(self.req_type)
     }
 }
 
@@ -278,6 +362,7 @@ fn encode(ev: &Event, out: &mut Vec<u8>) -> bool {
     let alen = ev.app_len as usize;
     let ulen = ev.url_len as usize;
     let qlen = ev.answer_len as usize;
+    let slen = ev.source_len as usize;
     if dlen > MAX_DOMAIN
         || ilen > MAX_IP
         || rlen > MAX_RULE
@@ -285,6 +370,7 @@ fn encode(ev: &Event, out: &mut Vec<u8>) -> bool {
         || alen > MAX_APP
         || ulen > MAX_URL
         || qlen > MAX_ANSWER
+        || slen > MAX_SOURCE
     {
         return false;
     }
@@ -299,6 +385,9 @@ fn encode(ev: &Event, out: &mut Vec<u8>) -> bool {
     out.push(alen as u8);
     out.extend_from_slice(&ev.latency_ns.to_le_bytes());
     out.extend_from_slice(&ev.bytes_saved.to_le_bytes());
+    // Last of the header, so every offset a reader of the older fields
+    // already computes stays where it was.
+    out.push(ev.req_type);
     out.extend_from_slice(&ev.domain[..dlen]);
     out.extend_from_slice(&ev.ip[..ilen]);
     out.extend_from_slice(&ev.rule[..rlen]);
@@ -309,11 +398,13 @@ fn encode(ev: &Event, out: &mut Vec<u8>) -> bool {
     out.extend_from_slice(&ev.bytes_recv.to_le_bytes());
     out.push(ulen as u8);
     out.push(qlen as u8);
+    out.push(slen as u8);
     out.extend_from_slice(&ev.url[..ulen]);
     out.extend_from_slice(&ev.answer[..qlen]);
+    out.extend_from_slice(&ev.source[..slen]);
     debug_assert_eq!(
         out.len() - start,
-        RECORD_HEADER + RECORD_TRAILER + dlen + ilen + rlen + llen + alen + ulen + qlen
+        RECORD_HEADER + RECORD_TRAILER + dlen + ilen + rlen + llen + alen + ulen + qlen + slen
     );
     true
 }
@@ -342,6 +433,21 @@ pub fn with_answer(mut event: Event, answer: &str) -> Event {
 pub fn with_traffic(mut event: Event, sent: u32, recv: u32) -> Event {
     event.bytes_sent = sent;
     event.bytes_recv = recv;
+    event
+}
+
+/// Attaches the referrer a request carried, so the log can name what asked for
+/// it rather than only what answered.
+pub fn with_source(mut event: Event, source: &str) -> Event {
+    put_str(&mut event.source[..], &mut event.source_len, source);
+    event
+}
+
+/// Says what kind of thing the decision was about. Call sites that hold the
+/// filter's word for it map it with [`req_type::of`]; the DNS and TCP paths
+/// pass their own code.
+pub fn with_type(mut event: Event, code: u8) -> Event {
+    event.req_type = code;
     event
 }
 
@@ -495,7 +601,7 @@ mod tests {
         assert_eq!(n, 4);
         let first_domain = {
             let dlen = out[11] as usize;
-            std::str::from_utf8(&out[24..24 + dlen])
+            std::str::from_utf8(&out[RECORD_HEADER..RECORD_HEADER + dlen])
                 .unwrap()
                 .to_string()
         };
@@ -542,6 +648,61 @@ mod tests {
         let ev = with_app(allow_event("host.test", "", 0), &long);
         assert_eq!(ev.app_len, MAX_APP as u8);
         assert_eq!(ev.app(), &long[..MAX_APP]);
+    }
+
+    #[test]
+    fn the_filter_words_map_onto_the_tabs_the_log_shows() {
+        // The names are what the database row, the exported file and the UI's
+        // tabs all key on, so the mapping is the one place they are decided.
+        assert_eq!(req_type::name(req_type::of("script")), "script");
+        assert_eq!(req_type::name(req_type::of("stylesheet")), "stylesheet");
+        assert_eq!(req_type::name(req_type::of("xmlhttprequest")), "xhr");
+        assert_eq!(req_type::name(req_type::of("image")), "image");
+        assert_eq!(req_type::name(req_type::of("media")), "media");
+        assert_eq!(req_type::name(req_type::of("font")), "font");
+        assert_eq!(
+            req_type::name(req_type::of("subdocument")),
+            "document",
+            "an iframe is the HTML tab, not a tab of its own"
+        );
+        assert_eq!(
+            req_type::name(req_type::of("csp_report")),
+            "other",
+            "a modifier with no tab of its own lands in the last one"
+        );
+        assert_eq!(req_type::name(req_type::of("")), "other");
+        assert_eq!(req_type::name(req_type::DNS), "dns");
+        assert_eq!(req_type::name(req_type::CONNECTION), "connection");
+    }
+
+    #[test]
+    fn the_type_and_the_referrer_travel_with_the_event() {
+        let ev = with_source(
+            with_type(
+                block_event(ACTION_BLOCK, "host.test", "", "||banner", "Ads", 1, 0, 10, false),
+                req_type::SCRIPT,
+            ),
+            "https://host.test/page",
+        );
+        assert_eq!(ev.req_type_name(), "script");
+        assert_eq!(ev.source(), "https://host.test/page");
+
+        let mut log = EventLog::new(4);
+        log.push(ev);
+        let mut out = Vec::new();
+        assert_eq!(log.drain_into(&mut out, 4), 1);
+        // The type rides at the end of the header, where a reader of the older
+        // fields never looked, so nothing that parsed the record before shifts.
+        assert_eq!(out[24], req_type::SCRIPT);
+        let tail = out.len() - ev.source_len as usize;
+        assert_eq!(&out[tail..], b"https://host.test/page");
+    }
+
+    #[test]
+    fn a_long_referrer_is_truncated_like_the_other_fields() {
+        let ev = with_source(allow_event("host.test", "", 0), &"b".repeat(300));
+        assert_eq!(ev.source_len, MAX_SOURCE as u8);
+        assert_eq!(ev.source(), &"b".repeat(MAX_SOURCE));
     }
 
     #[test]
