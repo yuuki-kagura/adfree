@@ -140,6 +140,12 @@ class DesktopContainer(
     /** Loads persisted state once and keeps the language table in sync. */
     fun start(scope: CoroutineScope) {
         if (!engineAvailable) return
+        // The certificate has to exist before anything asks whether it is
+        // trusted: the core reads its own PEM to answer that, and a process
+        // that has not minted one yet answers "no" about a certificate it has
+        // never looked at. Android does this in its Application; the desktop
+        // has the same hour, and hydration acts on the answer.
+        coreEngine.ensureCa()
         repository.hydrateState()
         scope.launch {
             repository.settings.map { it.isProtectionActive }.collect { protectionWanted.value = it }
@@ -154,9 +160,9 @@ class DesktopContainer(
     /**
      * Filtering the machine's own traffic on a desktop is worth nothing while
      * TLS stays sealed, so HTTPS is the default here wherever the certificate
-     * can be made trusted: the CA goes into the system store through polkit —
-     * the same dialog the redirect rules ask with — and filtering comes on
-     * after it. Once per install, because a switch the user later turns off
+     * can be made trusted: the CA goes into the system store through polkit,
+     * the same authority the redirect rules are asked of, and filtering comes
+     * on after it. Once per install, because a switch the user later turns off
      * must stay off; Settings keeps offering the same ask by hand.
      *
      * The shell calls this rather than [start], and on its IO thread: the
@@ -170,10 +176,14 @@ class DesktopContainer(
         scope.launch(Dispatchers.IO) {
             if (!coreEngine.isCaTrusted()) {
                 val reason = platformHost.installSystemCa()
-                if (reason != null) {
-                    // Nothing is forced: an untrusted certificate would make
-                    // the engine a plain relay wearing a filtering switch.
-                    platformHost.toast(reason)
+                // The store is the authority, not the dialog: an ask that
+                // reported a refusal after the certificate had landed is a
+                // success, and one that came back clean while nothing is
+                // trusted must not switch HTTPS on. An untrusted certificate
+                // would make the engine a plain relay wearing a filtering
+                // switch.
+                if (!coreEngine.isCaTrusted()) {
+                    if (reason != null) platformHost.toast(reason)
                     return@launch
                 }
             }

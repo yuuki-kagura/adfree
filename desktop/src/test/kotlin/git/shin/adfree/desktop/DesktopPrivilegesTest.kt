@@ -55,27 +55,24 @@ class DesktopPrivilegesTest {
     }
 
     /**
-     * The certificate ask is the same mechanism with the opposite shape: it
-     * must run as root rather than as this uid, must report the helper's exit
-     * status back to the caller, and must not stay behind as a unit in the
-     * journal. None of that is visible from the app, and all of it is exactly
-     * what systemd-run refuses when a flag is spelled wrong.
+     * The certificate ask is the same authority with the opposite shape: root,
+     * for one write, and an answer the caller actually hears. It goes through
+     * `pkexec` rather than the systemd unit the engine uses, because a
+     * transient unit is started by a D-Bus call that gives up while a person is
+     * still reading the dialog. Both paths travel as arguments because the
+     * elevated process is handed a sanitized environment — a helper that read
+     * `ADFREE_CORE_LIB` would find nothing and say it had no core.
      */
     @Test
-    fun theCertificateUnitAsksRootForOneShortLivedInstall() {
-        val argv = DesktopPrivileges().caUnitArgv(
+    fun theCertificateAskWaitsForTheAnswerAndCarriesItsOwnPaths() {
+        val argv = DesktopPrivileges().caInstallArgv(
             command = "/usr/lib/jvm/java/bin/java",
             classpath = "/tmp/desktop/lib/adfree-desktop.jar:/tmp/desktop/lib/core.jar",
             pemPath = "/home/shin/.local/share/adfree/adfree-ca.pem",
             coreLibPath = "/home/shin/adfree/rust/target/release/libadfree_core.so",
         )
-        assertEquals("systemd-run", argv.first())
-        assertTrue(argv.contains("--service-type=oneshot"))
-        assertTrue("the caller has to hear the answer", argv.contains("--wait"))
-        assertTrue("--collect", argv.contains("--collect"))
-        assertTrue(argv.contains("--property=Environment=ADFREE_CORE_LIB=/home/shin/adfree/rust/target/release/libadfree_core.so"))
-        assertTrue("writing /etc is root's work, not this uid's", argv.none { it.startsWith("--uid=") })
-        assertTrue("no short -p= form", argv.none { it.startsWith("-p=") })
+        assertEquals("pkexec", argv.first())
+        assertTrue("no systemd properties", argv.none { it.startsWith("--property") })
         assertEquals(
             listOf(
                 "/usr/lib/jvm/java/bin/java",
@@ -84,8 +81,9 @@ class DesktopPrivilegesTest {
                 "/tmp/desktop/lib/adfree-desktop.jar:/tmp/desktop/lib/core.jar",
                 "git.shin.adfree.desktop.CaInstallKt",
                 "/home/shin/.local/share/adfree/adfree-ca.pem",
+                "/home/shin/adfree/rust/target/release/libadfree_core.so",
             ),
-            argv.takeLast(6),
+            argv.takeLast(7),
         )
     }
 

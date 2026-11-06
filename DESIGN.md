@@ -941,21 +941,46 @@ install and check resolve the same store rather than each naming a path.
 
 **Linux desktop: the ask.** A desktop has neither `su` nor an OS screen that
 could import a PEM, so `suPresent` is false and the gated toggle could never
-come on. The certificate is therefore installed the way the redirect rules are:
-`systemd-run --system --service-type=oneshot --wait --collect` asks polkit, and
-what it runs is `CaInstallKt` — one exported PEM in, one anchor file out, exit
-status zero only when the certificate reads back from the store. It is not a
-copy of the app with a different uid: a root process that opened the user's
-database would leave rows the signed-in app cannot write. `core_install_ca_pem`
-exists for that helper because it needs the trust-store answer and nothing
-else.
+come on. The certificate is therefore installed through polkit, like the
+redirect rules — but with `pkexec` rather than `systemd-run`, because starting
+a transient unit is a D-Bus call that gives up about twenty-five seconds later:
+a dialog nobody has finished reading yet fails with `Connection timed out` and
+installs nothing, which is the wrong answer to a person who meant to say yes.
+`pkexec` waits as long as the human takes and hands back the helper's own exit
+status. What it runs is `CaInstallKt` — an exported PEM and the core it links
+against, both as arguments, because the elevation gives the child an
+environment of its own — and it reports zero only when the certificate reads
+back from the store. It is not a copy of the app with a different uid: a root
+process that opened the user's database would leave rows the signed-in app
+cannot write. `core_install_ca_pem` exists for that helper because it needs the
+trust-store answer and nothing else.
 
-The same mechanism is why HTTPS filtering is the desktop default: on the first
+The same authority is why HTTPS filtering is the desktop default: on the first
 run, if the store does not hold the CA, the app asks for it and turns filtering
-on when the ask succeeds (`DesktopContainer.applyHttpsDefault`, remembered in
-`automation.properties` so a switch the user later turns off stays off). A
-dismissed dialog enables nothing — an engine that cannot terminate TLS is a
-relay, and a switch that says otherwise is the bug this gate exists to prevent.
+on once the store says it is trusted — the store is asked again rather than
+the dialog being believed, because the two can disagree
+(`DesktopContainer.applyHttpsDefault`, remembered in `automation.properties`
+so a switch the user later turns off stays off). A dismissed dialog enables
+nothing — an engine that cannot terminate TLS is a relay, and a switch that
+says otherwise is the bug this gate exists to prevent.
+
+**Linux desktop: what the redirect catches.** The desktop has no tunnel, so
+the `nft` output chain is the whole capture, and how much of the machine's
+name resolution it sees depends on how that machine resolves. Every UDP/TCP/53
+packet leaves through `output`, which includes the queries
+`systemd-resolved` forwards upstream — on a stub box (`resolv.conf` saying
+`nameserver 127.0.0.53`) that forwarded query is what AdFree filters, not the
+application's own. What leaves no packet at all is glibc's `resolve` NSS
+backend (`hosts: … resolve [!UNAVAIL=return] … dns`): it asks resolved over
+D-Bus, so a name answered there is filtered only to the degree the answer came
+from a query that was itself redirected. Resolved's cache is the same story —
+it answers without an upstream query, so a name that resolved before
+protection was armed can go on answering from cache until it expires, and
+flushing another process's cache is not AdFree's business; `resolvectl
+flush-caches` is the sentence a person types when they want it gone now. The
+engine's own upstream sockets carry `SO_MARK 0xad45` and every chain accepts
+that mark first, which is the only reason the redirect does not feed the proxy
+into itself.
 
 ## DNS
 

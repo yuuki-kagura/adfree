@@ -298,7 +298,14 @@ class AdGuardRepository(
             refreshAppUsage()
         }
         var settings = snapshot.protection.toModel()
-        if (settings.isHttpsFilteringEnabled && !engine.isCaTrusted()) {
+        // Only a certificate that exists can be untrusted. Asking the platform
+        // about a PEM the core has not minted yet answers "no", and this branch
+        // would then write the user's HTTPS switch off on a startup where
+        // nothing was actually wrong.
+        if (settings.isHttpsFilteringEnabled &&
+            engine.ensureCa().isNotBlank() &&
+            !engine.isCaTrusted()
+        ) {
             // Terminating TLS with a certificate the device no longer trusts
             // would break every page it touches. Persist the correction so the
             // engine config and the UI agree from the first frame.

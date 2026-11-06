@@ -15,12 +15,16 @@ import java.io.File
  * just filters only what is pointed at it — so the app says which of the two
  * it is and offers the one command that changes it, rather than telling the
  * user to open a terminal. Trusting the certificate is the same conversation
- * with a different capability: one short-lived unit as root, asked the same
- * way, because a desktop has no `su` and no OS screen that could import a PEM.
+ * with a different capability, answered by the system's own dialog because a
+ * desktop has no `su` and no OS screen that could import a PEM. A long-lived
+ * privileged process needs systemd to hand out `CAP_NET_ADMIN`; a one-shot
+ * helper only needs root for as long as it writes, so it asks through `pkexec`,
+ * which waits for the answer rather than for twenty-five seconds.
  */
 class DesktopPrivileges(
     private val nftBinary: String = "nft",
     private val systemdRun: String = "systemd-run",
+    private val pkexec: String = "pkexec",
     private val log: (String) -> Unit = { System.err.println("[desktop] $it") },
 ) {
 
@@ -144,68 +148,78 @@ class DesktopPrivileges(
 
     /**
      * Puts the CA in the system trust store through a short-lived root process,
-     * which is the desktop answer to Android's `su` consent dialog. polkit is
-     * asked by `systemd-run --wait`, so the dialog appears from the app and the
-     * exit status is the helper's own: zero only when the certificate reads
-     * back from the store.
+     * which is the desktop answer to Android's `su` consent dialog. `pkexec` is
+     * asked rather than `systemd-run`, even though the redirect rules use the
+     * latter: a transient unit is started by a D-Bus call that gives up on the
+     * dialog after about twenty-five seconds, so an answer given while someone
+     * is still reading the question arrives too late to be seen. `pkexec` waits
+     * for the human as long as they take and hands back the helper's own exit
+     * status, which is the only report that matters here.
      *
-     * The helper is [CaInstallKt] — one PEM in, one anchor file out. It is not
+     * The helper is [CaInstallKt] — two paths in, one anchor file out. It is not
      * this app with a different uid: a root instance would open the user's
      * database and leave rows the signed-in app cannot write.
      */
     fun requestRootCaInstall(pemPath: String, coreLibPath: String): PrivilegeOutcome {
         val command = ProcessHandle.current().info().command().orElse(null)
             ?: return PrivilegeOutcome.Failed("cannot read this process's own command line")
-        return run(*caUnitArgv(command, System.getProperty("java.class.path"), pemPath, coreLibPath).toTypedArray())
+        val argv = caInstallArgv(command, System.getProperty("java.class.path"), pemPath, coreLibPath)
+        return run(*argv.toTypedArray(), deniedExit = PKEXEC_DENIED)
     }
 
     /**
-     * The `systemd-run` call for that helper, as data rather than as a shell
-     * line: the flag forms here are the ones systemd accepts, and a mistake
-     * fails before polkit is ever asked, which looks like a machine with
-     * nothing to give.
+     * The `pkexec` call for that helper, as data rather than as a shell line.
+     * `pkexec` hands the child a sanitized environment, so nothing the helper
+     * needs travels in a variable: the certificate and the core it links
+     * against are both named on its command line.
      */
-    internal fun caUnitArgv(
+    internal fun caInstallArgv(
         command: String,
         classpath: String,
         pemPath: String,
         coreLibPath: String,
     ): List<String> = listOf(
-        systemdRun,
-        "--system",
-        "--unit=$CA_UNIT_NAME",
-        "--service-type=oneshot",
-        // The caller needs the answer, and nothing is left behind once it has
-        // it: a unit that stays in the journal would outlive the dialog.
-        "--wait",
-        "--collect",
-        // No `--uid`: writing to /etc is the one thing that does need root. The
-        // library is handed over by absolute path so the helper does not guess
-        // it from a working directory that is no longer this app's.
-        "--property=Environment=ADFREE_CORE_LIB=$coreLibPath",
+        pkexec,
         command,
         "--enable-native-access=ALL-UNNAMED",
         "-cp",
         classpath,
         CA_INSTALL_MAIN,
         pemPath,
+        coreLibPath,
     )
 
-    private fun run(vararg argv: String): PrivilegeOutcome = runCatching {
+    /**
+     * `deniedExit` is the code that means "the person said no" rather than
+     * "this machine cannot ask" — `pkexec` uses 126 for a dismissed dialog, and
+     * only systemd-shaped helpers report a refusal in words.
+     */
+    private fun run(vararg argv: String, deniedExit: Int = -1): PrivilegeOutcome = runCatching {
         val process = ProcessBuilder(*argv).redirectErrorStream(true).start()
         val output = process.inputStream.bufferedReader().readText().trim()
         val code = process.waitFor()
         when {
             code == 0 -> PrivilegeOutcome.Ok
+            // systemd gives up on its own D-Bus call after about twenty-five
+            // seconds, and the dialog is still sitting unanswered on the screen
+            // when it does: nothing was refused and nothing is broken, so the
+            // ask reads as retriable rather than as a machine that cannot grant.
+            // The phrase is systemd's own — matching "timed out" alone would
+            // catch a helper that printed a network error.
+            output.startsWith("Failed to start transient service unit") &&
+                output.contains("Connection timed out") -> PrivilegeOutcome.Denied(
+                "the authentication dialog was not answered in time; ask again while you are at the screen",
+            )
             // polkit reports a cancelled dialog as an authentication failure:
             // the user said no, which is an answer, not a broken setup.
-            output.contains("Auth") || output.contains("authentication") ->
+            code == deniedExit || output.contains("authorized") ||
+                output.contains("Auth") || output.contains("authentication") ->
                 PrivilegeOutcome.Denied(output.ifBlank { "the privilege dialog was dismissed" })
             else -> PrivilegeOutcome.Failed(output.ifBlank { "exit code $code" })
         }
     }.getOrElse { failure ->
-        // No nft, no systemd-run, no systemd: the layout simply is not available
-        // here, and explicit-proxy mode stays the honest answer.
+        // No nft, no systemd-run, no pkexec, no systemd: the layout simply is not
+        // available here, and explicit-proxy mode stays the honest answer.
         log("privilege helper unavailable: ${failure.message}")
         PrivilegeOutcome.Failed(failure.message ?: failure.javaClass.simpleName)
     }
@@ -218,7 +232,7 @@ class DesktopPrivileges(
         const val SO_MARK = 36
         const val FIREWALL_MARK = 0xad45
         const val UNIT_NAME = "adfree-desktop"
-        const val CA_UNIT_NAME = "adfree-ca-install"
+        const val PKEXEC_DENIED = 126
         const val CA_INSTALL_MAIN = "git.shin.adfree.desktop.CaInstallKt"
     }
 }
