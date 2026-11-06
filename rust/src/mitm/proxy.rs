@@ -136,7 +136,9 @@ impl Outcome {
     }
 }
 
-/// A request an intercepted session answered itself, for the app's log.
+/// One HTTPS or HTTP/3 request, for the app's log: both what a session
+/// answered itself (a URL-level block, a `$redirect` resource) and what it
+/// forwarded on with the answer that came back.
 #[derive(Clone, Copy)]
 pub struct MitmBlock<'a> {
     /// The host the request was for.
@@ -155,6 +157,29 @@ pub struct MitmBlock<'a> {
     pub request_type: &'a str,
     /// The referrer the request carried, empty when it carried none.
     pub source: &'a str,
+    /// A request the session forwarded to the origin rather than answered.
+    /// AdGuard's Filtering Log lists what it let through beside what it
+    /// stopped, so the row is written with the answer that came back.
+    pub allowed: bool,
+    /// What the session and its answer say about this request.
+    pub facts: MitmFacts<'a>,
+}
+
+/// The connection facts a log row records beside the decision itself.
+#[derive(Clone, Copy)]
+pub struct MitmFacts<'a> {
+    /// Which protocol carried the decision, an [`crate::events::protocol`]
+    /// code.
+    pub protocol: u8,
+    /// TLS version the upstream half negotiated, a [`crate::events::tls_ver`]
+    /// code; `NONE` when nothing was.
+    pub tls: u8,
+    /// The cipher suite of that session, empty when unknown.
+    pub cipher: &'static str,
+    /// The status the origin answered with; 0 when the request has no answer.
+    pub status: u16,
+    /// The media type the answer declared, empty when it declared none.
+    pub content_type: &'a str,
 }
 
 /// Where the HTTPS path reports what it blocked.
@@ -354,6 +379,15 @@ struct ResponseEdit {
     /// `[$path=…]` rules: the injection matches those rules against it. The
     /// request head is the only place the URL exists, so it rides along.
     page_url: Option<String>,
+    /// The three facts the log records once this request's answer arrives,
+    /// carried for the same reason as [`Self::page_url`]: a forwarded request
+    /// is a row in AdGuard's Filtering Log too, and by the time its response
+    /// head completes the head itself is long gone. An empty URL is the sign
+    /// that there is nothing to record — a request that never reached the
+    /// rules, or one the rules answered here, which was logged as a block.
+    log_url: String,
+    log_type: &'static str,
+    log_source: String,
 }
 
 /// State for a response whose body is streamed to the client as it is edited.
@@ -933,6 +967,16 @@ impl ProxySession {
                         // the lists refused, which is the log's Connection row.
                         request_type: "connection",
                         source: "",
+                        allowed: false,
+                        // An HTTPS host refused before a session existed: the
+                        // protocol is known, nothing else was ever negotiated.
+                        facts: MitmFacts {
+                            protocol: crate::events::protocol::HTTPS,
+                            tls: crate::events::tls_ver::NONE,
+                            cipher: "",
+                            status: 0,
+                            content_type: "",
+                        },
                     });
                 }
                 // The relay resets the client flow when a step closes the
@@ -1248,6 +1292,9 @@ impl ProxySession {
                 hls: plan.hls,
                 html: plan.html,
                 page_url: plan.page_url,
+                log_url: plan.log_url,
+                log_type: plan.log_type,
+                log_source: plan.log_source,
             });
             if let Some(fixed) = http::drop_undecodable_encodings(buffer, forced) {
                 *buffer = fixed;
@@ -1510,6 +1557,14 @@ impl ProxySession {
         // Only location rules (`[$path=…]`, `[$url=…]`, path-in-domain) read
         // it, so it is only carried when the loaded lists hold any.
         let page_url = filter.has_path_rules().then(|| url.clone());
+        let request_type = facts.request_type();
+        // The log's `Source` is the referrer the request actually carried, not
+        // the page the rules were matched against: a top-level navigation is
+        // its own first party for `$domain`, but it does not come from itself.
+        let referrer = match facts.referer {
+            Some(referer) if !referer.is_empty() => referer.to_string(),
+            _ => String::new(),
+        };
         // A `Content-Length` the proxy cannot read is a body it cannot count:
         // the bytes after the head can never be told from the next request, so
         // this exchange is never answered here — it goes to the origin whole,
@@ -1517,12 +1572,14 @@ impl ProxySession {
         if matches!(facts.body, Some(RequestBody::Unknown)) {
             return Ok(RequestPlan {
                 page_url,
+                log_url: url,
+                log_type: request_type,
+                log_source: referrer,
                 ..RequestPlan::default()
             });
         }
         let target = facts.target.to_string();
         let method = facts.method.to_string();
-        let request_type = facts.request_type();
         // A document is its own first party: with no referrer, the page every
         // rule asks about is the request's own URL. An empty source reads as a
         // third-party request from nowhere, which is what `$third-party`,
@@ -1530,13 +1587,6 @@ impl ProxySession {
         let source = match facts.referer {
             Some(referer) if !referer.is_empty() => referer.to_string(),
             _ if request_type == "document" => url.clone(),
-            _ => String::new(),
-        };
-        // The log's `Source` is the referrer the request actually carried, not
-        // the page the rules were matched against: a top-level navigation is
-        // its own first party for `$domain`, but it does not come from itself.
-        let referrer = match facts.referer {
-            Some(referer) if !referer.is_empty() => referer.to_string(),
             _ => String::new(),
         };
         let closes = facts.closes;
@@ -1568,6 +1618,10 @@ impl ProxySession {
                 .extend(send_to_client(&mut session.server, &answer.response)?);
             record_tls(stats, started, handshaking);
             if let Some(sink) = sink {
+                // The upstream half either finished its handshake or it did
+                // not; `negotiated` says which, and a refused request has no
+                // answer to report.
+                let (tls_ver, cipher) = tls::negotiated(&session.client);
                 sink(&MitmBlock {
                     host: &host,
                     url: Some(&url),
@@ -1577,10 +1631,30 @@ impl ProxySession {
                     apps,
                     request_type,
                     source: &referrer,
+                    allowed: false,
+                    // No origin was asked, so there is no answer to name —
+                    // but the session upstream is real, and says how it was
+                    // encrypted.
+                    facts: MitmFacts {
+                        protocol: crate::events::protocol::HTTPS,
+                        tls: tls_ver,
+                        cipher,
+                        status: 0,
+                        content_type: "",
+                    },
                 });
             }
+            // The row above is this request's: nothing is left to record when
+            // its (absent) response comes back.
+            return Ok(decision.plan);
         }
-        Ok(decision.plan)
+        let mut plan = decision.plan;
+        // A request that goes out is a log row with the origin's answer on it,
+        // so the three facts the head holds ride along on the plan.
+        plan.log_url = url;
+        plan.log_type = request_type;
+        plan.log_source = referrer;
+        Ok(plan)
     }
 
     /// Answers whatever the client asks the local injection origin.
@@ -1825,24 +1899,35 @@ impl ProxySession {
     /// Returns the bytes to hand to the client and how many bytes the rewrite
     /// added. Split out so it can be tested without a live TLS handshake.
     pub fn rewrite_response(&mut self, plain: &[u8]) -> (Vec<u8>, usize) {
-        // Nothing to hide and no header or body to edit: the connection
-        // bypasses the rewriter entirely. Header edits alone still need it —
-        // they are what `$csp`, `$permissions`, `$removeheader` and `$cookie`
-        // matched — and so does a body edit (`$replace`, `$jsonprune`,
-        // `$hls`).
+        // Nothing to hide, no header or body to edit and no answer for the log
+        // to name: the connection bypasses the rewriter entirely. Header edits
+        // alone still need it — they are what `$csp`, `$permissions`,
+        // `$removeheader` and `$cookie` matched — and so does a body edit
+        // (`$replace`, `$jsonprune`, `$hls`). So does a row: the only place a
+        // response's status and media type can be read is the head the state
+        // machine finds, and a forwarded request is a row like a blocked one.
+        let pending = self.head_requests.iter().any(|req| {
+            req.headers.is_some()
+                || req.cookies.is_some()
+                || req.replace.is_some()
+                || req.jsonprune.is_some()
+                || req.hls.is_some()
+                || (self.sink.is_some() && !req.log_url.is_empty())
+        });
         if self.script_src.is_empty()
             && self.cosmetic.is_none()
             && !self.stealth.blocks_web_rtc()
-            && !self.head_requests.iter().any(|req| {
-                req.headers.is_some()
-                    || req.cookies.is_some()
-                    || req.replace.is_some()
-                    || req.jsonprune.is_some()
-                    || req.hls.is_some()
-            })
+            && !pending
         {
             return (plain.to_vec(), 0);
         }
+        // The session facts every row this connection writes reports. A
+        // request only reaches the origin once the upstream handshake is over,
+        // so they are settled for the rest of the connection.
+        let (tls_ver, cipher) = match &self.state {
+            ProxyState::Active(session) => tls::negotiated(&session.client),
+            _ => (crate::events::tls_ver::NONE, ""),
+        };
         if !plain.is_empty() {
             self.resp_pending.extend_from_slice(plain);
         }
@@ -1874,6 +1959,34 @@ impl ProxySession {
                         continue;
                     }
                     let req = self.head_requests.pop_front().unwrap_or_default();
+                    // The request this answer belongs to is a log row of its
+                    // own: AdGuard's Filtering Log lists what it forwarded
+                    // beside what it stopped, with the status and the media
+                    // type the origin answered with. The head is the only
+                    // place either of those exists.
+                    if !req.log_url.is_empty() {
+                        if let Some(sink) = self.sink {
+                            let host = self.captured.as_deref().unwrap_or("");
+                            sink(&MitmBlock {
+                                host,
+                                url: Some(&req.log_url),
+                                rule: None,
+                                list_name: None,
+                                category: 0,
+                                apps: &self.apps,
+                                request_type: req.log_type,
+                                source: &req.log_source,
+                                allowed: true,
+                                facts: MitmFacts {
+                                    protocol: crate::events::protocol::HTTPS,
+                                    tls: tls_ver,
+                                    cipher,
+                                    status: info.status,
+                                    content_type: http::response_mime(&head).unwrap_or(""),
+                                },
+                            });
+                        }
+                    }
                     // What the injection will match `[$path=…]` rules
                     // against, until the next response head replaces it.
                     self.page_url = req.page_url;
@@ -3237,6 +3350,7 @@ mod tests {
             hls: None,
             html: None,
             page_url: None,
+            ..Default::default()
         });
 
         let body = br#"{"ads": [1, 2], "keep": 3}"#;
@@ -3252,6 +3366,59 @@ mod tests {
         assert!(text.contains(r#"{"keep":3}"#), "{text}");
         assert!(!text.contains("ads"), "{text}");
         assert!(text.contains("Content-Length: 10"), "{text}");
+    }
+
+    /// A request that reached the origin is a log row of its own, with the
+    /// status and media type the answer carried — on a connection with nothing
+    /// to inject and no rule matched, where the rewriter used to hand the bytes
+    /// straight back.
+    #[test]
+    fn a_forwarded_request_is_logged_with_what_came_back() {
+        static SEEN: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
+        fn capture(block: &MitmBlock<'_>) {
+            SEEN.lock().unwrap().push(format!(
+                "{} {} {} {} {} {} {}",
+                block.host,
+                block.allowed,
+                block.facts.status,
+                block.facts.content_type,
+                block.facts.protocol,
+                block.facts.tls,
+                block.url.unwrap_or(""),
+            ));
+        }
+        let ca = CertificateAuthority::generate().expect("ca");
+        let mut proxy = quiet_proxy(&ca);
+        proxy.set_sink(capture);
+        SEEN.lock().unwrap().clear();
+        proxy.captured = Some("origin.example.com".to_string());
+        proxy.head_requests.push_back(ResponseEdit {
+            info: http::RequestInfo {
+                head: false,
+                http10: false,
+            },
+            log_url: "https://origin.example.com/x".to_string(),
+            log_type: "script",
+            log_source: "https://page.example/".to_string(),
+            ..Default::default()
+        });
+
+        let response = "HTTP/1.1 404 Not Found\r\nContent-Type: text/plain; charset=utf-8\r\n\
+                        Content-Length: 4\r\n\r\nnope"
+            .as_bytes()
+            .to_vec();
+        let (out, injected) = proxy.rewrite_response(&response);
+        assert_eq!(injected, 0);
+        assert_eq!(out, response, "an untouched body travels byte for byte");
+        let seen = SEEN.lock().unwrap();
+        assert_eq!(
+            seen.as_slice(),
+            [
+                "origin.example.com true 404 text/plain 4 0 https://origin.example.com/x"
+                    .to_string()
+            ],
+            "one allowed row, naming the answer it belongs to"
+        );
     }
 
     /// An `$hls` plan the test engine produces for one request.
@@ -3310,6 +3477,7 @@ mod tests {
             hls: Some(plan),
             html: None,
             page_url: None,
+            ..Default::default()
         });
 
         let body = b"#EXTM3U\n#EXTINF:10,\nad.ts\n#EXTINF:10,\n01.ts\n";
@@ -3361,6 +3529,7 @@ mod tests {
             hls: None,
             html: None,
             page_url: None,
+            ..Default::default()
         });
 
         let response =
@@ -3417,6 +3586,7 @@ mod tests {
                 hls: None,
                 html: None,
                 page_url: None,
+                ..Default::default()
             });
         }
         // The first response — the shape the device showed: a JSON body
@@ -3472,6 +3642,7 @@ mod tests {
                 hls: None,
                 html: None,
                 page_url: None,
+                ..Default::default()
             });
         }
         let broken = b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\nzz\r\nnot hex at all";

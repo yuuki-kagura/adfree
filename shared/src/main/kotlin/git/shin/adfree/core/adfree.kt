@@ -3827,6 +3827,35 @@ data class LogEvent (
      * The page that asked for this request, when it named one.
      */
     var `source`: kotlin.String
+    , 
+    /**
+     * Which protocol carried the decision: 0 unknown, 1 DNS/UDP, 2 DoT,
+     * 3 DoH, 4 HTTPS, 5 QUIC, 6 TCP, 7 UDP. 0 means the core never recorded
+     * it, so the UI still has to infer from the action.
+     */
+    var `proto`: kotlin.Int
+    , 
+    /**
+     * TLS version the connection negotiated, as `"TLS 1.2"` / `"TLS 1.3"`;
+     * empty for a connection that was not encrypted.
+     */
+    var `tls`: kotlin.String
+    , 
+    /**
+     * Cipher suite name, e.g. `TLS_AES_256_GCM_SHA384`; empty when unknown.
+     */
+    var `cipher`: kotlin.String
+    , 
+    /**
+     * HTTP status the response carried; 0 when the decision was not made on
+     * a parsed HTTP response.
+     */
+    var `status`: kotlin.Int
+    , 
+    /**
+     * Response `Content-Type` up to its parameters, e.g. `text/html`.
+     */
+    var `contentType`: kotlin.String
     
 ){
     
@@ -3864,6 +3893,11 @@ public object FfiConverterTypeLogEvent: FfiConverterRustBuffer<LogEvent> {
             FfiConverterLong.read(buf),
             FfiConverterString.read(buf),
             FfiConverterString.read(buf),
+            FfiConverterInt.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterInt.read(buf),
+            FfiConverterString.read(buf),
         )
     }
 
@@ -3888,7 +3922,12 @@ public object FfiConverterTypeLogEvent: FfiConverterRustBuffer<LogEvent> {
             FfiConverterLong.allocationSize(value.`bytesSent`) +
             FfiConverterLong.allocationSize(value.`bytesRecv`) +
             FfiConverterString.allocationSize(value.`requestType`) +
-            FfiConverterString.allocationSize(value.`source`)
+            FfiConverterString.allocationSize(value.`source`) +
+            FfiConverterInt.allocationSize(value.`proto`) +
+            FfiConverterString.allocationSize(value.`tls`) +
+            FfiConverterString.allocationSize(value.`cipher`) +
+            FfiConverterInt.allocationSize(value.`status`) +
+            FfiConverterString.allocationSize(value.`contentType`)
     )
 
     override fun write(value: LogEvent, buf: ByteBuffer) {
@@ -3913,6 +3952,11 @@ public object FfiConverterTypeLogEvent: FfiConverterRustBuffer<LogEvent> {
             FfiConverterLong.write(value.`bytesRecv`, buf)
             FfiConverterString.write(value.`requestType`, buf)
             FfiConverterString.write(value.`source`, buf)
+            FfiConverterInt.write(value.`proto`, buf)
+            FfiConverterString.write(value.`tls`, buf)
+            FfiConverterString.write(value.`cipher`, buf)
+            FfiConverterInt.write(value.`status`, buf)
+            FfiConverterString.write(value.`contentType`, buf)
     }
 }
 

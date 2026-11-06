@@ -717,6 +717,28 @@ fn content_type_is_text(mime: &str) -> bool {
         )
 }
 
+/// The media type a response head declares, up to its parameters.
+///
+/// [`parse_response_head`] answers only whether a body is a page or text a
+/// rewrite can read; the log names the type itself, so the user can tell a
+/// script from a video without opening the URL.
+pub fn response_mime(head: &[u8]) -> Option<&str> {
+    for line in head.split_inclusive(|b| *b == b'\n') {
+        if line.len() < 13 || !line[..13].eq_ignore_ascii_case(b"content-type:") {
+            continue;
+        }
+        let value = line[13..].split(|b| *b == b';').next().unwrap_or(&line[13..]);
+        let Ok(value) = std::str::from_utf8(value) else {
+            return None;
+        };
+        let value = value.trim();
+        if !value.is_empty() {
+            return Some(value);
+        }
+    }
+    None
+}
+
 /// Parses a complete response head (up to and including the blank line).
 pub fn parse_response_head(head: &[u8]) -> ResponseHead {
     let mut info = ResponseHead {
@@ -1982,6 +2004,34 @@ mod tests {
         assert!(parse_response_head(n204).bodyless());
         let n100 = b"HTTP/1.1 100 Continue\r\n\r\n";
         assert!(parse_response_head(n100).bodyless());
+    }
+
+    /// The log names the media type the answer declared, not only whether it
+    /// was text: the parameters belong to the client, not to the row.
+    #[test]
+    fn a_response_names_its_media_type() {
+        assert_eq!(
+            response_mime(b"HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\n\r\n"),
+            Some("text/html")
+        );
+        // The header name is case-insensitive; the type itself is not.
+        assert_eq!(
+            response_mime(b"HTTP/1.1 200 OK\r\nCONTENT-TYPE: Application/JSON\r\n\r\n"),
+            Some("Application/JSON")
+        );
+        // A head that declares nothing says nothing, and a declared empty
+        // type is not a type either.
+        assert_eq!(
+            response_mime(b"HTTP/1.1 200 OK\r\nContent-Length: 1\r\n\r\n"),
+            None
+        );
+        assert_eq!(response_mime(b"HTTP/1.1 200 OK\r\nContent-Type: \r\n\r\n"), None);
+        // Only the header itself counts: `X-Content-Type-Options` is somebody
+        // else's business.
+        assert_eq!(
+            response_mime(b"HTTP/1.1 200 OK\r\nX-Content-Type-Options: nosniff\r\n\r\n"),
+            None
+        );
     }
 
     #[test]

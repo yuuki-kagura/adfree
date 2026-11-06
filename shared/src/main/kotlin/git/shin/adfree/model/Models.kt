@@ -23,14 +23,26 @@ enum class RequestCategory(val index: Int) {
     }
 }
 
-enum class ProtocolType {
-    DNS_UDP,
-    DNS_DOT,
-    DNS_DOH,
-    HTTPS,
-    QUIC,
-    TCP,
-    UDP,
+/**
+ * Transport a decision was made on. The codes are the core's own
+ * (`rust/src/events.rs::protocol`); zero means the row never said, which is
+ * every row written before the core recorded it, so those still read from
+ * the action.
+ */
+enum class ProtocolType(val code: Int) {
+    DNS_UDP(1),
+    DNS_DOT(2),
+    DNS_DOH(3),
+    HTTPS(4),
+    QUIC(5),
+    TCP(6),
+    UDP(7);
+
+    companion object {
+        /** null when the core left the code unset, so the caller may infer. */
+        fun fromCode(code: Int): ProtocolType? =
+            entries.firstOrNull { it.code == code }
+    }
 }
 
 /** Network the request travelled on; unknown for rows from older builds. */
@@ -89,6 +101,17 @@ data class NetworkRequestLog(
     val requestType: String? = null,
     /** The page that asked for this request, as the referrer the core read. */
     val source: String? = null,
+    /**
+     * TLS version the session to the origin settled on, as the core names it
+     * (`TLS 1.2`, `TLS 1.3`); null when no TLS termination was involved.
+     */
+    val tlsVersion: String? = null,
+    /** Cipher suite that session negotiated, e.g. `TLS1_3_AES_128_GCM_SHA256`. */
+    val cipher: String? = null,
+    /** Status the origin answered with, on the row whose request went out. */
+    val httpResponseStatus: Int? = null,
+    /** Response `Content-Type` with its parameters cut, e.g. `text/html`. */
+    val contentType: String? = null,
 ) {
     /**
      * The log's Name column. AdGuard prints the full request URL and, for a
@@ -109,7 +132,9 @@ data class NetworkRequestLog(
                 CoreActions.BLOCKED.toInt() -> FilterStatus.BLOCKED
                 else -> FilterStatus.BLOCKED
             }
-            val protocol = when (action) {
+            // The core says which transport it decided on; only a row from
+            // before it recorded that has to be read back from the action.
+            val protocol = ProtocolType.fromCode(event.proto) ?: when (action) {
                 CoreActions.BLOCKED.toInt() -> ProtocolType.DNS_UDP
                 CoreActions.TCP_RESET.toInt() -> ProtocolType.TCP
                 CoreActions.QUIC_DROP.toInt() -> ProtocolType.QUIC
@@ -139,6 +164,10 @@ data class NetworkRequestLog(
                 bytesReceived = event.bytesRecv,
                 requestType = event.requestType.ifBlank { null },
                 source = event.source.ifBlank { null },
+                tlsVersion = event.tls.ifBlank { null },
+                cipher = event.cipher.ifBlank { null },
+                httpResponseStatus = event.status.takeIf { it != 0 },
+                contentType = event.contentType.ifBlank { null },
             )
         }
     }

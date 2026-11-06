@@ -145,6 +145,19 @@ pub struct LogRow {
     pub req_type: String,
     /// The referrer the request carried, empty unless it carried one.
     pub source: String,
+    /// Which protocol the decision was made on, as the core's own code
+    /// ([`crate::events::protocol`]); 0 for rows written before it was kept.
+    pub proto: i64,
+    /// The TLS version the upstream session negotiated, named (`TLS 1.3`),
+    /// empty when nothing was encrypted.
+    pub tls: String,
+    /// The cipher suite of that session, in rustls' own name.
+    pub cipher: String,
+    /// The HTTP status the origin answered with; 0 when there was no HTTP
+    /// answer, which is every blocked row and every DNS row.
+    pub status: i64,
+    /// The MIME type the response declared, without its parameters.
+    pub ctype: String,
 }
 
 impl From<&Event> for LogRow {
@@ -172,6 +185,11 @@ impl From<&Event> for LogRow {
             bytes_recv: e.bytes_recv as i64,
             req_type: e.req_type_name().to_string(),
             source: e.source().to_string(),
+            proto: e.protocol() as i64,
+            tls: e.tls_name().to_string(),
+            cipher: e.cipher().to_string(),
+            status: i64::from(e.status),
+            ctype: e.content_type().to_string(),
         }
     }
 }
@@ -272,7 +290,12 @@ fn write_batch(db: &Db, rows: &[LogRow], traffic: &[FlowTraffic]) -> rusqlite::R
                 r.bytes_sent,
                 r.bytes_recv,
                 r.req_type,
-                r.source
+                r.source,
+                r.proto,
+                r.tls,
+                r.cipher,
+                r.status,
+                r.ctype
             ])?;
         }
     }
@@ -289,12 +312,14 @@ fn write_batch(db: &Db, rows: &[LogRow], traffic: &[FlowTraffic]) -> rusqlite::R
 
 const COLUMNS: &str = "id, ts_ms, action, category, domain, ip, rule, list_name, \
                        latency_ns, bytes_saved, ipv6, app, transport, roaming, flow_id, \
-                       url, dns_answer, bytes_sent, bytes_recv, req_type, source";
+                       url, dns_answer, bytes_sent, bytes_recv, req_type, source, \
+                       proto, tls, cipher, status, ctype";
 
 const INSERT_SQL: &str = "INSERT INTO log_events \
      (ts_ms, action, category, domain, ip, rule, list_name, latency_ns, bytes_saved, ipv6, app, \
-      transport, roaming, flow_id, url, dns_answer, bytes_sent, bytes_recv, req_type, source) \
-     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20)";
+      transport, roaming, flow_id, url, dns_answer, bytes_sent, bytes_recv, req_type, source, \
+      proto, tls, cipher, status, ctype) \
+     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25)";
 
 const INSERT_TRAFFIC_SQL: &str = "INSERT INTO flow_traffic \
      (ts_ms, app, transport, roaming, sent, recv) VALUES (?1, ?2, ?3, ?4, ?5, ?6)";
@@ -322,6 +347,11 @@ fn row_from(r: &rusqlite::Row<'_>) -> rusqlite::Result<LogRow> {
         bytes_recv: r.get(18)?,
         req_type: r.get(19)?,
         source: r.get(20)?,
+        proto: r.get(21)?,
+        tls: r.get(22)?,
+        cipher: r.get(23)?,
+        status: r.get(24)?,
+        ctype: r.get(25)?,
     })
 }
 

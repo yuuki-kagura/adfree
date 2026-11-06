@@ -12,7 +12,7 @@
 //! 0..8    ts_ms          u64
 //! 8       action         u8   0=allow 1=block 2=tcp-reset 3=udp-drop 4=quic-drop 5=hosts-block
 //! 9       category       u8
-//! 10      flags          u8   bit0=ipv6 bit1=has-rule bits2..3=transport bit4=roaming
+//! 10      flags          u8   bit0=ipv6 bit1=has-rule bits2..3=transport bit4=roaming bits5..7=protocol
 //! 11      domain_len     u8
 //! 12      ip_len         u8
 //! 13      rule_len       u8
@@ -21,14 +21,17 @@
 //! 16..20  latency_ns     u32
 //! 20..24  bytes_saved    u32
 //! 24      req_type       u8   one of req_type::*
-//! 25..    domain[domain_len] ip[ip_len] rule[rule_len] list[list_len]
+//! 25      tls_ver        u8   one of tls_ver::*
+//! 26..    domain[domain_len] ip[ip_len] rule[rule_len] list[list_len]
 //!         app[app_len]
 //!         flow_id u32, bytes_sent u32, bytes_recv u32,
-//!         url_len u8, answer_len u8, source_len u8,
-//!         url[url_len], answer[answer_len], source[source_len]
+//!         url_len u8, answer_len u8, source_len u8, cipher_len u8, ctype_len u8,
+//!         status u16,
+//!         url[url_len], answer[answer_len], source[source_len],
+//!         cipher[cipher_len], ctype[ctype_len]
 //! ```
 //!
-//! `req_type` sits at the end of the header and the lengths of the last three
+//! `req_type` and `tls_ver` sit at the end of the header and the lengths of the
 //! strings at the end of the trailer, so a reader written against the older
 //! layout keeps every offset it already computes.
 
@@ -47,6 +50,24 @@ const FLAG_IPV6: u8 = 0b0000_0001;
 const FLAG_HAS_RULE: u8 = 0b0000_0010;
 const FLAG_TRANSPORT_MASK: u8 = 0b0000_1100;
 const FLAG_ROAMING: u8 = 0b0001_0000;
+/// Which protocol the decision was made on, in the three bits above roaming.
+/// Zero means the row never said: the reader falls back on what the action
+/// implies, which is how the rows written before this byte exists still read.
+const FLAG_PROTOCOL_MASK: u8 = 0b1110_0000;
+const FLAG_PROTOCOL_SHIFT: u32 = 5;
+
+/// The transports a log row can name, in the order the UI's own enum lists
+/// them. `NONE` is zero so an event built without one stays unread.
+pub mod protocol {
+    pub const NONE: u8 = 0;
+    pub const DNS_UDP: u8 = 1;
+    pub const DNS_DOT: u8 = 2;
+    pub const DNS_DOH: u8 = 3;
+    pub const HTTPS: u8 = 4;
+    pub const QUIC: u8 = 5;
+    pub const TCP: u8 = 6;
+    pub const UDP: u8 = 7;
+}
 
 pub const MAX_DOMAIN: usize = 96;
 pub const MAX_IP: usize = 40;
@@ -63,10 +84,16 @@ pub const MAX_ANSWER: usize = 64;
 /// The referrer a request carried. AdGuard's log shows it as `Source`, and it
 /// is what tells a user which page — or which app — asked for this one.
 pub const MAX_SOURCE: usize = 96;
-const RECORD_HEADER: usize = 25;
+/// The cipher suite the upstream TLS session negotiated, in the IANA name
+/// rustls reports (`TLS13_AES_256_GCM_SHA384`). Longest real name is 39 bytes.
+pub const MAX_CIPHER: usize = 40;
+/// The MIME type the response declared, without its parameters. AdGuard names
+/// this `Content-Type`, and a truncated one still tells the user what arrived.
+pub const MAX_CTYPE: usize = 32;
+const RECORD_HEADER: usize = 26;
 /// Fixed bytes appended after the variable-name tail (flow id, traffic, the
-/// three length bytes).
-const RECORD_TRAILER: usize = 15;
+/// five length bytes, the response status).
+const RECORD_TRAILER: usize = 19;
 
 /// What kind of thing a decision was about, in the words the log's tabs use.
 ///
@@ -123,11 +150,31 @@ pub mod req_type {
     }
 }
 
+/// The TLS version a session actually negotiated, named the way the log shows
+/// it. The core chooses the spelling once so the database row, the exported
+/// file and the UI agree, exactly like [`req_type`].
+pub mod tls_ver {
+    /// Nothing was encrypted: a plaintext request, or a connection refused
+    /// before its handshake.
+    pub const NONE: u8 = 0;
+    pub const TLS12: u8 = 1;
+    pub const TLS13: u8 = 2;
+
+    pub fn name(code: u8) -> &'static str {
+        match code {
+            TLS12 => "TLS 1.2",
+            TLS13 => "TLS 1.3",
+            _ => "",
+        }
+    }
+}
+
 /// Events kept in the live ring. The durable log is the database the store
 /// writes first ([`crate::store`]); this ring only feeds the in-process tail,
-/// and an `Event` is ~660 bytes after the Phase 6 fields and the log's own type
-/// and referrer, so the previous 4 096 slots would have held ~2.2 MB of
-/// anonymous memory for a buffer a poll of the tail drains in one go.
+/// and an `Event` is past 700 bytes now that the TLS version, the cipher
+/// suite and the HTTP answer ride with it, so the previous 4 096 slots would
+/// have held ~3 MB of anonymous memory for a buffer a poll of the tail drains
+/// in one go.
 const CAPACITY: usize = 512;
 
 #[derive(Clone, Copy)]
@@ -147,6 +194,12 @@ pub struct Event {
     /// it. `OTHER` is the zero, so an event built without a type reads as the
     /// tab AdGuard puts everything unclassified in.
     pub req_type: u8,
+    /// One of [`tls_ver`]: what the upstream session negotiated, `NONE` when
+    /// nothing was encrypted or the row's decision never reached a handshake.
+    pub tls_ver: u8,
+    /// The HTTP status the origin answered with, 0 when the request never got
+    /// an HTTP answer (a block, a DNS row, a refused connection).
+    pub status: u16,
     pub domain: [u8; MAX_DOMAIN],
     pub domain_len: u8,
     pub ip: [u8; MAX_IP],
@@ -163,6 +216,10 @@ pub struct Event {
     pub answer_len: u8,
     pub source: [u8; MAX_SOURCE],
     pub source_len: u8,
+    pub cipher: [u8; MAX_CIPHER],
+    pub cipher_len: u8,
+    pub ctype: [u8; MAX_CTYPE],
+    pub ctype_len: u8,
 }
 
 impl Event {
@@ -178,6 +235,8 @@ impl Event {
             bytes_sent: 0,
             bytes_recv: 0,
             req_type: req_type::OTHER,
+            tls_ver: tls_ver::NONE,
+            status: 0,
             domain: [0; MAX_DOMAIN],
             domain_len: 0,
             ip: [0; MAX_IP],
@@ -194,6 +253,10 @@ impl Event {
             answer_len: 0,
             source: [0; MAX_SOURCE],
             source_len: 0,
+            cipher: [0; MAX_CIPHER],
+            cipher_len: 0,
+            ctype: [0; MAX_CTYPE],
+            ctype_len: 0,
         }
     }
 
@@ -212,6 +275,17 @@ impl Event {
 
     pub fn roaming(&self) -> bool {
         self.flags & FLAG_ROAMING != 0
+    }
+
+    /// Which protocol the row belongs to, as a [`protocol`] code. `NONE` when
+    /// the writer did not say, which is every row stored before this existed.
+    pub fn set_protocol(&mut self, code: u8) {
+        self.flags =
+            (self.flags & !FLAG_PROTOCOL_MASK) | ((code & 0b111) << FLAG_PROTOCOL_SHIFT);
+    }
+
+    pub fn protocol(&self) -> u8 {
+        (self.flags & FLAG_PROTOCOL_MASK) >> FLAG_PROTOCOL_SHIFT
     }
 
     pub fn domain(&self) -> &str {
@@ -250,6 +324,23 @@ impl Event {
     /// The kind of request, named the way the log's tabs name it.
     pub fn req_type_name(&self) -> &'static str {
         req_type::name(self.req_type)
+    }
+
+    /// The TLS version named the way the log shows it, empty when nothing was
+    /// encrypted or the row never reached a handshake.
+    pub fn tls_name(&self) -> &'static str {
+        tls_ver::name(self.tls_ver)
+    }
+
+    /// The cipher suite the upstream session negotiated.
+    pub fn cipher(&self) -> &str {
+        std::str::from_utf8(&self.cipher[..self.cipher_len as usize]).unwrap_or("")
+    }
+
+    /// The MIME type the response declared, empty when there was no HTTP
+    /// answer to declare one in.
+    pub fn content_type(&self) -> &str {
+        std::str::from_utf8(&self.ctype[..self.ctype_len as usize]).unwrap_or("")
     }
 }
 
@@ -363,6 +454,8 @@ fn encode(ev: &Event, out: &mut Vec<u8>) -> bool {
     let ulen = ev.url_len as usize;
     let qlen = ev.answer_len as usize;
     let slen = ev.source_len as usize;
+    let clen = ev.cipher_len as usize;
+    let tlen = ev.ctype_len as usize;
     if dlen > MAX_DOMAIN
         || ilen > MAX_IP
         || rlen > MAX_RULE
@@ -371,6 +464,8 @@ fn encode(ev: &Event, out: &mut Vec<u8>) -> bool {
         || ulen > MAX_URL
         || qlen > MAX_ANSWER
         || slen > MAX_SOURCE
+        || clen > MAX_CIPHER
+        || tlen > MAX_CTYPE
     {
         return false;
     }
@@ -388,6 +483,7 @@ fn encode(ev: &Event, out: &mut Vec<u8>) -> bool {
     // Last of the header, so every offset a reader of the older fields
     // already computes stays where it was.
     out.push(ev.req_type);
+    out.push(ev.tls_ver);
     out.extend_from_slice(&ev.domain[..dlen]);
     out.extend_from_slice(&ev.ip[..ilen]);
     out.extend_from_slice(&ev.rule[..rlen]);
@@ -399,12 +495,28 @@ fn encode(ev: &Event, out: &mut Vec<u8>) -> bool {
     out.push(ulen as u8);
     out.push(qlen as u8);
     out.push(slen as u8);
+    out.push(clen as u8);
+    out.push(tlen as u8);
+    out.extend_from_slice(&ev.status.to_le_bytes());
     out.extend_from_slice(&ev.url[..ulen]);
     out.extend_from_slice(&ev.answer[..qlen]);
     out.extend_from_slice(&ev.source[..slen]);
+    out.extend_from_slice(&ev.cipher[..clen]);
+    out.extend_from_slice(&ev.ctype[..tlen]);
     debug_assert_eq!(
         out.len() - start,
-        RECORD_HEADER + RECORD_TRAILER + dlen + ilen + rlen + llen + alen + ulen + qlen + slen
+        RECORD_HEADER
+            + RECORD_TRAILER
+            + dlen
+            + ilen
+            + rlen
+            + llen
+            + alen
+            + ulen
+            + qlen
+            + slen
+            + clen
+            + tlen
     );
     true
 }
@@ -448,6 +560,41 @@ pub fn with_source(mut event: Event, source: &str) -> Event {
 /// pass their own code.
 pub fn with_type(mut event: Event, code: u8) -> Event {
     event.req_type = code;
+    event
+}
+
+/// Says which protocol the decision was made on, so a row's transport is a
+/// fact the engine recorded rather than a guess from the action.
+pub fn with_protocol(mut event: Event, code: u8) -> Event {
+    event.set_protocol(code);
+    event
+}
+
+/// Says how the connection upstream was encrypted, with [`tls_ver::NONE`] for
+/// a row that never had an encrypted half to speak of.
+pub fn with_tls(mut event: Event, code: u8) -> Event {
+    event.tls_ver = code;
+    event
+}
+
+/// Says what the cipher suite of that session was, in rustls' own name.
+pub fn with_cipher(mut event: Event, cipher: &str) -> Event {
+    put_str(&mut event.cipher[..], &mut event.cipher_len, cipher);
+    event
+}
+
+/// Attaches the HTTP status the origin answered with. A request that never
+/// reached an origin has no status, which is why the field is 0 rather than a
+/// guess.
+pub fn with_status(mut event: Event, status: u16) -> Event {
+    event.status = status;
+    event
+}
+
+/// Attaches the MIME type the response declared, the fact that tells a user
+/// whether a request brought back a page, a script or a video.
+pub fn with_content_type(mut event: Event, mime: &str) -> Event {
+    put_str(&mut event.ctype[..], &mut event.ctype_len, mime);
     event
 }
 
@@ -542,7 +689,11 @@ mod tests {
 
     #[test]
     fn the_live_ring_stays_within_its_memory_budget() {
-        let ring_bytes = std::mem::size_of::<Event>() * CAPACITY;
+        let record = std::mem::size_of::<Event>();
+        // Naming the bound per record, not only per ring, is what tells a
+        // future field how much room it took and how much is left.
+        assert!(record <= 800, "one event is {record} bytes");
+        let ring_bytes = record * CAPACITY;
         // Phase 6 enrichment (url, dns answer, flow id, per-flow sizes) may
         // not push the ring past the ~3 MB budget the plan set for it.
         assert!(
@@ -703,6 +854,81 @@ mod tests {
         let ev = with_source(allow_event("host.test", "", 0), &"b".repeat(300));
         assert_eq!(ev.source_len, MAX_SOURCE as u8);
         assert_eq!(ev.source(), &"b".repeat(MAX_SOURCE));
+    }
+
+    #[test]
+    fn the_tls_facts_and_the_answer_travel_with_the_event() {
+        let ev = with_content_type(
+            with_status(
+                with_cipher(
+                    with_tls(allow_event("host.test", "", 0), tls_ver::TLS13),
+                    "TLS13_AES_256_GCM_SHA384",
+                ),
+                200,
+            ),
+            "text/html",
+        );
+        assert_eq!(ev.tls_name(), "TLS 1.3");
+        assert_eq!(ev.cipher(), "TLS13_AES_256_GCM_SHA384");
+        assert_eq!(ev.status, 200);
+        assert_eq!(ev.content_type(), "text/html");
+
+        let mut log = EventLog::new(4);
+        log.push(ev);
+        let mut out = Vec::new();
+        assert_eq!(log.drain_into(&mut out, 4), 1);
+        // The version rides at the end of the header, after the request type,
+        // where a reader of the older fields never looked.
+        assert_eq!(out[25], tls_ver::TLS13);
+        let dlen = out[11] as usize;
+        let ilen = out[12] as usize;
+        let tail = RECORD_HEADER + dlen + ilen;
+        // The trailer's fixed part ends with the status; the two new strings
+        // follow it, so nothing before them moved.
+        assert_eq!(out[tail + 17], 200);
+        assert_eq!(&out[tail + 19..], b"TLS13_AES_256_GCM_SHA384text/html");
+        assert_eq!(
+            out.len(),
+            RECORD_HEADER + RECORD_TRAILER + dlen + ilen + ev.cipher_len as usize
+                + ev.ctype_len as usize
+        );
+    }
+
+    #[test]
+    fn an_unencrypted_row_names_no_tls_version() {
+        // A plaintext request or a connection refused before its handshake has
+        // no encryption to report, and the UI leaves the row out rather than
+        // inventing one.
+        assert_eq!(tls_ver::name(tls_ver::NONE), "");
+        assert_eq!(Event::zeroed().tls_name(), "");
+        assert_eq!(Event::zeroed().status, 0);
+        assert!(Event::zeroed().cipher().is_empty());
+        assert!(Event::zeroed().content_type().is_empty());
+        let long = "c".repeat(200);
+        let ev = with_cipher(allow_event("host.test", "", 0), &long);
+        assert_eq!(ev.cipher_len, MAX_CIPHER as u8);
+        let mime = with_content_type(allow_event("host.test", "", 0), &"m".repeat(100));
+        assert_eq!(mime.ctype_len, MAX_CTYPE as u8);
+    }
+
+    #[test]
+    fn the_protocol_a_decision_made_on_is_recorded_separately() {
+        // The action says blocked or allowed; only the writer knows whether the
+        // decision was a DNS answer or a request torn out of an HTTPS session.
+        let mut ev = allow_event("host.test", "", 0);
+        assert_eq!(ev.protocol(), protocol::NONE);
+        ev.set_protocol(protocol::HTTPS);
+        assert_eq!(ev.protocol(), protocol::HTTPS);
+        // An unrelated update leaves both the protocol and the other bits.
+        ev.set_network(TRANSPORT_CELLULAR, true);
+        assert_eq!(ev.protocol(), protocol::HTTPS);
+        assert_eq!(ev.transport(), TRANSPORT_CELLULAR);
+        assert!(ev.roaming());
+        let mut v6 = block_event(ACTION_BLOCK, "host.test", "", "r", "l", 0, 0, 0, true);
+        v6.set_protocol(protocol::QUIC);
+        assert!(v6.flags & FLAG_IPV6 != 0);
+        assert_eq!(v6.protocol(), protocol::QUIC);
+        assert_eq!(v6.transport(), TRANSPORT_UNKNOWN);
     }
 
     #[test]

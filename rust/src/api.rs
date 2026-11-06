@@ -226,6 +226,20 @@ pub struct LogEvent {
     pub request_type: String,
     /// The page that asked for this request, when it named one.
     pub source: String,
+    /// Which protocol carried the decision: 0 unknown, 1 DNS/UDP, 2 DoT,
+    /// 3 DoH, 4 HTTPS, 5 QUIC, 6 TCP, 7 UDP. 0 means the core never recorded
+    /// it, so the UI still has to infer from the action.
+    pub proto: i32,
+    /// TLS version the connection negotiated, as `"TLS 1.2"` / `"TLS 1.3"`;
+    /// empty for a connection that was not encrypted.
+    pub tls: String,
+    /// Cipher suite name, e.g. `TLS_AES_256_GCM_SHA384`; empty when unknown.
+    pub cipher: String,
+    /// HTTP status the response carried; 0 when the decision was not made on
+    /// a parsed HTTP response.
+    pub status: i32,
+    /// Response `Content-Type` up to its parameters, e.g. `text/html`.
+    pub content_type: String,
 }
 
 impl From<&events::Event> for LogEvent {
@@ -252,6 +266,11 @@ impl From<&events::Event> for LogEvent {
             bytes_recv: e.bytes_recv as i64,
             request_type: e.req_type_name().to_string(),
             source: e.source().to_string(),
+            proto: e.protocol() as i32,
+            tls: e.tls_name().to_string(),
+            cipher: e.cipher().to_string(),
+            status: e.status as i32,
+            content_type: e.content_type().to_string(),
         }
     }
 }
@@ -280,6 +299,11 @@ impl From<&crate::store::LogRow> for LogEvent {
             bytes_recv: r.bytes_recv,
             request_type: r.req_type.clone(),
             source: r.source.clone(),
+            proto: r.proto as i32,
+            tls: r.tls.clone(),
+            cipher: r.cipher.clone(),
+            status: r.status as i32,
+            content_type: r.ctype.clone(),
         }
     }
 }

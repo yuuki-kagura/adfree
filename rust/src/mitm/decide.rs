@@ -50,6 +50,15 @@ pub(crate) struct RequestPlan {
     /// the response edit — which happens long after the head was read — can
     /// find it again.
     pub(crate) page_url: Option<String>,
+    /// What the log records once this request's answer arrives: the URL the
+    /// head carried, the resource it was fetched as, and the referrer it
+    /// named. The request head is the only place these exist, and a forwarded
+    /// request is a log row like a blocked one, so they ride to the response.
+    /// An empty URL means there is nothing to record, which is also the case
+    /// for a request the rules already answered here.
+    pub(crate) log_url: String,
+    pub(crate) log_type: &'static str,
+    pub(crate) log_source: String,
 }
 
 /// A locally served answer a rule decided on.

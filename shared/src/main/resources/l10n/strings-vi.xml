@@ -920,6 +920,10 @@
     <string name="log_detail_list">Nguồn bộ lọc</string>
     <string name="log_detail_url">URL</string>
     <string name="log_detail_dns_answer">Kết quả DNS</string>
+    <string name="log_detail_http_status">Mã trạng thái HTTP</string>
+    <string name="log_detail_content_type">Kiểu nội dung phản hồi</string>
+    <string name="log_detail_tls_version">Phiên bản TLS</string>
+    <string name="log_detail_cipher_suite">Bộ mã hóa TLS</string>
     <string name="log_detail_connection">Mã kết nối</string>
     <string name="log_detail_transfer">Dữ liệu truyền</string>
     <string name="log_detail_transport">Mạng</string>

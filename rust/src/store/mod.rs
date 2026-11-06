@@ -539,6 +539,27 @@ fn migrate(conn: &Connection) -> Result<(), String> {
         )
         .map_err(|e| format!("migrate schema to v9: {e}"))?;
     }
+    if version < 10 {
+        // v10: a row now says what its connection was encrypted with and what
+        // the answer actually contained — the TLS version, the cipher suite,
+        // the HTTP status and the MIME type — which is what AdGuard's details
+        // pane names. `proto` is the same fact for the transport the decision
+        // was made on, which until now could only be guessed from the action,
+        // so an HTTPS request blocked after TLS termination read as DNS.
+        // Rows written before this keep the empty defaults: the UI leaves the
+        // row out rather than inventing a value.
+        conn.execute_batch(
+            "BEGIN;
+             ALTER TABLE log_events ADD COLUMN proto INTEGER NOT NULL DEFAULT 0;
+             ALTER TABLE log_events ADD COLUMN tls TEXT NOT NULL DEFAULT '';
+             ALTER TABLE log_events ADD COLUMN cipher TEXT NOT NULL DEFAULT '';
+             ALTER TABLE log_events ADD COLUMN status INTEGER NOT NULL DEFAULT 0;
+             ALTER TABLE log_events ADD COLUMN ctype TEXT NOT NULL DEFAULT '';
+             PRAGMA user_version = 10;
+             COMMIT;",
+        )
+        .map_err(|e| format!("migrate schema to v10: {e}"))?;
+    }
     Ok(())
 }
 
@@ -825,7 +846,7 @@ mod tests {
             let version: i64 = conn
                 .query_row("PRAGMA user_version", [], |r| r.get(0))
                 .expect("version read");
-            assert_eq!(version, 9);
+            assert_eq!(version, 10);
         }
         assert_eq!(
             store.log_usage_by_domain(1_000, -1),
@@ -838,11 +859,17 @@ mod tests {
             "the row written before the migration is still grouped by domain"
         );
 
-        // The v9 columns come along with the index. An old row reads as
-        // unclassified; nothing guesses a type it never saw.
+        // The v9 and v10 columns come along with the index. An old row reads
+        // as unclassified; nothing guesses a type, a TLS version or a status it
+        // never saw.
         let old = &store.log_page(0, 10)[0];
         assert_eq!(old.req_type, "");
         assert_eq!(old.source, "");
+        assert_eq!(old.proto, 0);
+        assert_eq!(old.tls, "");
+        assert_eq!(old.cipher, "");
+        assert_eq!(old.status, 0);
+        assert_eq!(old.ctype, "");
         store.log_enqueue(&crate::events::with_type(
             crate::events::with_source(
                 allow_event("new.example", "10.0.0.2", 1),

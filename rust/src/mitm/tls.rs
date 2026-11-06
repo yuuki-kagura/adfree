@@ -615,6 +615,25 @@ pub fn client_handshaking(connection: &ClientConnection) -> bool {
     connection.is_handshaking()
 }
 
+/// What the upstream half settled on, for the log: a version code from
+/// [`crate::events::tls_ver`] and the cipher suite's own name.
+///
+/// Both are unknown until the server has answered the handshake, and rustls
+/// negotiates nothing below TLS 1.2, so those two codes are the whole range a
+/// session can report.
+pub fn negotiated(client: &ClientConnection) -> (u8, &'static str) {
+    let version = match client.protocol_version() {
+        Some(rustls::ProtocolVersion::TLSv1_2) => crate::events::tls_ver::TLS12,
+        Some(rustls::ProtocolVersion::TLSv1_3) => crate::events::tls_ver::TLS13,
+        _ => crate::events::tls_ver::NONE,
+    };
+    let cipher = client
+        .negotiated_cipher_suite()
+        .and_then(|suite| suite.suite().as_str())
+        .unwrap_or("");
+    (version, cipher)
+}
+
 /// The ALPN protocol negotiated on a server connection.
 pub fn server_alpn(connection: &ServerConnection) -> Option<Vec<u8>> {
     connection.alpn_protocol().map(|p| p.to_vec())

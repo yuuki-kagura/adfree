@@ -22,7 +22,8 @@ use crate::engine::StealthConfig;
 use crate::filter::FilterEngine;
 use crate::mitm::decide::{self, Injector, RequestContext, RequestPlan, ResponsePlans};
 use crate::mitm::proxy::{
-    request_facts, request_url, take_local_request, MitmBlock, MitmSink, ProxySession, LOCAL_ORIGIN,
+    request_facts, request_url, take_local_request, MitmBlock, MitmFacts, MitmSink, ProxySession,
+    LOCAL_ORIGIN,
 };
 use crate::mitm::tls::UpstreamTls;
 
@@ -311,10 +312,26 @@ async fn handle_request(
                 apps: &config.apps,
                 request_type,
                 source: &referrer,
+                allowed: false,
+                // The request was answered here: no origin was ever asked, so
+                // there is no session of ours and no answer to name.
+                facts: MitmFacts {
+                    protocol: crate::events::protocol::QUIC,
+                    tls: crate::events::tls_ver::NONE,
+                    cipher: "",
+                    status: 0,
+                    content_type: "",
+                },
             });
         }
         return reply_http1(&mut send_back, &answer.response).await;
     }
+    // A request that goes out to the origin is a log row as well: these three
+    // facts only exist in the head, and the answer they belong to arrives
+    // later, in `relay_response`.
+    plan.log_url = url;
+    plan.log_type = request_type;
+    plan.log_source = referrer;
 
     // The buffer holds the head alone, and the cookie/cookie-header edits
     // below can shrink it without moving the offset the decision reports, so
@@ -484,6 +501,32 @@ async fn relay_response(
     let host = config.server_name.as_str();
     let mut wire = serialize_response_head(status, &original);
     let info = crate::mitm::http::parse_response_head(&wire);
+    // The request this answer belongs to is a log row of its own, exactly like
+    // the HTTP/1.1 splice writes one: what the origin said is the point of
+    // looking. QUIC is always TLS 1.3, and the suite is not what this layer can
+    // reach.
+    if !plan.log_url.is_empty() {
+        if let Some(sink) = config.sink {
+            sink(&MitmBlock {
+                host,
+                url: Some(&plan.log_url),
+                rule: None,
+                list_name: None,
+                category: 0,
+                apps: &config.apps,
+                request_type: plan.log_type,
+                source: &plan.log_source,
+                allowed: true,
+                facts: MitmFacts {
+                    protocol: crate::events::protocol::QUIC,
+                    tls: crate::events::tls_ver::TLS13,
+                    cipher: "",
+                    status: status.as_u16(),
+                    content_type: crate::mitm::http::response_mime(&wire).unwrap_or(""),
+                },
+            });
+        }
+    }
 
     // A redirect's body is never rendered, so there is nothing to inject into
     // and nothing a list rewrites there. `$$` reads only a document that

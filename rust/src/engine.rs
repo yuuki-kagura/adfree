@@ -890,18 +890,27 @@ pub fn core() -> &'static Core {
     CORE.get_or_init(Core::new)
 }
 
-/// Reports a request the HTTPS path answered itself: a block scoped to a URL,
-/// or a `$redirect` resource standing in for one.
+/// Reports one request the HTTPS path saw, which is what AdGuard's Filtering
+/// Log is: the requests it answered itself *and* the ones it forwarded, each
+/// with the answer's own facts beside it.
 ///
 /// It runs wherever the session runs, so it goes through the process-wide
-/// engine exactly like the packet path — and, like the packet path, it counts
-/// the bytes the network never had to carry.
+/// engine exactly like the packet path — and, like the packet path, only a
+/// request that never reached an origin counts as bytes the network spared.
 pub(crate) fn log_mitm_block(block: &crate::mitm::proxy::MitmBlock<'_>) {
     let core = core();
-    let saved = BYTES_PER_BLOCKED_REQUEST as u32;
+    let saved = if block.allowed {
+        0
+    } else {
+        BYTES_PER_BLOCKED_REQUEST as u32
+    };
     let event = events::with_app(
         events::block_event(
-            events::ACTION_BLOCK,
+            if block.allowed {
+                events::ACTION_ALLOW
+            } else {
+                events::ACTION_BLOCK
+            },
             block.host,
             "",
             block.rule.unwrap_or(""),
@@ -925,8 +934,18 @@ pub(crate) fn log_mitm_block(block: &crate::mitm::proxy::MitmBlock<'_>) {
     } else {
         events::with_source(event, block.source)
     };
+    // What the session and the answer add: the protocol the decision was made
+    // on, how that connection was encrypted, and — for a request that reached
+    // an origin — what came back. A row that never got this far names nothing.
+    let event = events::with_protocol(event, block.facts.protocol);
+    let event = events::with_tls(event, block.facts.tls);
+    let event = events::with_cipher(event, block.facts.cipher);
+    let event = events::with_status(event, block.facts.status);
+    let event = events::with_content_type(event, block.facts.content_type);
     core.log_event(event);
-    core.stats.add(&core.stats.bytes_saved, u64::from(saved));
+    if !block.allowed {
+        core.stats.add(&core.stats.bytes_saved, u64::from(saved));
+    }
 }
 
 /// Attribution can name several owners of one flow — a uid with shared
@@ -965,7 +984,9 @@ pub(crate) fn record_flow_traffic(app: &str, sent: u64, recv: u64) {
 /// logged exactly like an HTTPS block.
 fn log_http3_block(block: &crate::mitm::proxy::MitmBlock<'_>) {
     let core = core();
-    core.stats.inc(&core.stats.quic_blocked);
+    if !block.allowed {
+        core.stats.inc(&core.stats.quic_blocked);
+    }
     log_mitm_block(block);
 }
 

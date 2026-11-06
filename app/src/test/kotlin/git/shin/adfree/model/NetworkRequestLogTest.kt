@@ -28,6 +28,11 @@ class NetworkRequestLogTest {
         bytesRecv: Long = 0L,
         requestType: String = "",
         source: String = "",
+        proto: Int = 0,
+        tls: String = "",
+        cipher: String = "",
+        status: Int = 0,
+        contentType: String = "",
     ) = LogEvent(
         id = id,
         tsMs = 1_700_000_000_000L,
@@ -50,6 +55,11 @@ class NetworkRequestLogTest {
         bytesRecv = bytesRecv,
         requestType = requestType,
         source = source,
+        proto = proto,
+        tls = tls,
+        cipher = cipher,
+        status = status,
+        contentType = contentType,
     )
 
     @Test
@@ -182,5 +192,52 @@ class NetworkRequestLogTest {
         assertEquals("dns://ads.example.com", dns.displayName)
         val plain = NetworkRequestLog.from(event(CoreActions.BLOCKED.toInt()))
         assertEquals("ads.example.com", plain.displayName)
+    }
+
+    @Test
+    fun `the protocol the core recorded wins over the one the action implies`() {
+        // An allowed HTTPS request used to read as plain UDP, because the only
+        // thing the row said was "nothing was blocked".
+        val https = NetworkRequestLog.from(
+            event(CoreActions.ALLOWED.toInt(), proto = ProtocolType.HTTPS.code),
+        )
+        assertEquals(ProtocolType.HTTPS, https.protocol)
+        val quic = NetworkRequestLog.from(
+            event(CoreActions.ALLOWED.toInt(), proto = ProtocolType.QUIC.code),
+        )
+        assertEquals(ProtocolType.QUIC, quic.protocol)
+        // A row from before the core said anything still falls back on the action.
+        assertEquals(
+            ProtocolType.DNS_UDP,
+            NetworkRequestLog.from(event(CoreActions.BLOCKED.toInt(), proto = 0)).protocol,
+        )
+    }
+
+    @Test
+    fun `the tls and response facts ride on the row`() {
+        val log = NetworkRequestLog.from(
+            event(
+                CoreActions.ALLOWED.toInt(),
+                proto = ProtocolType.HTTPS.code,
+                tls = "TLS 1.3",
+                cipher = "TLS_AES_256_GCM_SHA384",
+                status = 404,
+                contentType = "text/html",
+            ),
+        )
+        assertEquals("TLS 1.3", log.tlsVersion)
+        assertEquals("TLS_AES_256_GCM_SHA384", log.cipher)
+        assertEquals(404, log.httpResponseStatus)
+        assertEquals("text/html", log.contentType)
+    }
+
+    @Test
+    fun `a row with no encrypted session and no response names neither`() {
+        val log = NetworkRequestLog.from(event(CoreActions.BLOCKED.toInt()))
+        assertNull(log.tlsVersion)
+        assertNull(log.cipher)
+        assertNull(log.contentType)
+        // Zero is the core's "never parsed an HTTP response", not status 0.
+        assertNull(log.httpResponseStatus)
     }
 }

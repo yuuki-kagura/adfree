@@ -920,6 +920,10 @@
     <string name="log_detail_list">Filter source</string>
     <string name="log_detail_url">URL</string>
     <string name="log_detail_dns_answer">DNS answer</string>
+    <string name="log_detail_http_status">HTTP status</string>
+    <string name="log_detail_content_type">Response type</string>
+    <string name="log_detail_tls_version">TLS version</string>
+    <string name="log_detail_cipher_suite">Cipher suite</string>
     <string name="log_detail_connection">Connection ID</string>
     <string name="log_detail_transfer">Transferred</string>
     <string name="log_detail_transport">Network</string>

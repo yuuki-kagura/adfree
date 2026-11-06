@@ -1133,6 +1133,14 @@ private fun LogDetailBody(
                 label = L10n.get(Strings.log_col_type),
                 value = requestTypeLabel(log.requestType),
             )
+            // What the origin answered with travels on the request row, not on
+            // a row of its own.
+            log.httpResponseStatus?.let { code ->
+                DetailRow(label = L10n.get(Strings.log_detail_http_status), value = code.toString())
+            }
+            log.contentType?.let { mime ->
+                DetailRow(label = L10n.get(Strings.log_detail_content_type), value = mime)
+            }
             DetailRow(label = L10n.get(Strings.log_detail_category), value = requestCategoryLabel(log.category))
             // AdGuard names the page that asked for a request its log's
             // Source; here it is the referrer the request really carried.
@@ -1141,6 +1149,12 @@ private fun LogDetailBody(
             }
             log.dnsAnswer?.let { dnsAnswer ->
                 DetailRow(label = L10n.get(Strings.log_detail_dns_answer), value = dnsAnswer)
+            }
+            log.tlsVersion?.let { version ->
+                DetailRow(label = L10n.get(Strings.log_detail_tls_version), value = version)
+            }
+            log.cipher?.let { suite ->
+                DetailRow(label = L10n.get(Strings.log_detail_cipher_suite), value = suite)
             }
             Row(
                 modifier = Modifier.fillMaxWidth(),

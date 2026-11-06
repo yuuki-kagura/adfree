@@ -80,6 +80,37 @@ class LogExportTest {
     }
 
     @Test
+    fun `a forwarded request exports the transport and the answer it got`() {
+        val out = StringWriter()
+        writeLogCsv(
+            sequenceOf(
+                rowAt(3).copy(
+                    protocol = ProtocolType.HTTPS,
+                    tlsVersion = "TLS 1.3",
+                    cipher = "TLS_AES_256_GCM_SHA384",
+                    httpResponseStatus = 200,
+                    contentType = "text/html",
+                ),
+            ),
+            out,
+        )
+
+        val fields = out.toString().reader().readLines()[1].split(",")
+        assertEquals(ProtocolType.HTTPS.name, fields[4])
+        assertEquals("TLS 1.3", fields[20])
+        assertEquals("TLS_AES_256_GCM_SHA384", fields[21])
+        assertEquals("200", fields[22])
+        assertEquals("text/html", fields[23])
+
+        // A DNS row was never an encrypted session, so it names none of that.
+        val dnsFields = StringWriter().let { writer ->
+            writeLogCsv(sequenceOf(rowAt(4)), writer)
+            writer.toString().reader().readLines()[1].split(",")
+        }
+        assertEquals(4, dnsFields.subList(20, 24).count { it.isEmpty() })
+    }
+
+    @Test
     fun `an unknown app stays an empty field instead of the word null`() {
         val log = rowAt(1).copy(
             appPackage = null,
@@ -139,6 +170,6 @@ class LogExportTest {
 
     private companion object {
         /** The header and every row must keep the same number of columns. */
-        const val COLUMN_COUNT = 20
+        const val COLUMN_COUNT = 24
     }
 }
