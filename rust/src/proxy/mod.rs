@@ -22,6 +22,7 @@
 //! the app firewall and the event log.
 
 pub mod dns;
+pub mod egress;
 pub mod tcp;
 
 use std::os::unix::io::RawFd;
@@ -308,11 +309,41 @@ pub(crate) fn try_mark(fd: RawFd) {
 /// Dials `addr` with the proxy's own mark applied before the first packet, so
 /// the redirect rules skip this connection. Returns a nonblocking stream on
 /// success; the fd is closed on any failure.
+///
+/// Every attempt is reported to [`egress`], which is the only thing that lets
+/// the DNS half know whether this machine can carry the family it is about to
+/// hand out records for.
 pub(crate) fn dial_marked(addr: std::net::SocketAddr) -> Option<std::net::TcpStream> {
+    if addr.is_ipv6() && !egress::dial_worth_making() {
+        // The verdict knows how this ends and the client should not have been
+        // given the address in the first place: what is left is a record it
+        // cached earlier, or one it was told by a config. Refusing is faster
+        // for it than proving the verdict right, once per flow, in the dark.
+        return None;
+    }
+    match dial_fd(addr) {
+        Ok(fd) => {
+            egress::note_dial(addr, None);
+            use std::os::unix::io::FromRawFd;
+            // The fd is verified connected by `dial_fd`; std takes ownership
+            // from here.
+            Some(unsafe { std::net::TcpStream::from_raw_fd(fd) })
+        }
+        Err(kind) => {
+            egress::note_dial(addr, Some(kind));
+            None
+        }
+    }
+}
+
+/// The attempt itself: the connected fd, or why it failed in the terms the
+/// IPv6 verdict understands. The fd is closed here on every failure.
+fn dial_fd(addr: std::net::SocketAddr) -> Result<RawFd, egress::Failure> {
     let domain = if addr.is_ipv4() { libc::AF_INET } else { libc::AF_INET6 };
     let fd = unsafe { libc::socket(domain, libc::SOCK_STREAM | libc::SOCK_NONBLOCK | libc::SOCK_CLOEXEC, 0) };
     if fd < 0 {
-        return None;
+        // No such family on this machine at all.
+        return Err(egress::Failure::from_errno(last_errno()));
     }
     try_mark(fd);
     let (sa, len) = sockaddr_for(addr);
@@ -321,14 +352,16 @@ pub(crate) fn dial_marked(addr: std::net::SocketAddr) -> Option<std::net::TcpStr
         let err = std::io::Error::last_os_error();
         if err.raw_os_error() != Some(libc::EINPROGRESS) {
             unsafe { libc::close(fd) };
-            return None;
+            return Err(egress::Failure::from_errno(err.raw_os_error().unwrap_or(0)));
         }
         let deadline = std::time::Instant::now() + CONNECT_TIMEOUT;
         let left = deadline.saturating_duration_since(std::time::Instant::now());
         let slice = left.as_millis().min(i32::MAX as u128) as i32;
         if left.is_zero() || !poll_writable(fd, slice) {
             unsafe { libc::close(fd) };
-            return None;
+            // Nothing said either way inside the budget: the SYN went out and
+            // no answer came back, which is the shape of a black-holed route.
+            return Err(egress::Failure::Timeout);
         }
         // Writable means the attempt finished; SO_ERROR says whether it landed.
         let mut so_error: libc::c_int = 0;
@@ -344,12 +377,15 @@ pub(crate) fn dial_marked(addr: std::net::SocketAddr) -> Option<std::net::TcpStr
         }
         if so_error != 0 {
             unsafe { libc::close(fd) };
-            return None;
+            return Err(egress::Failure::from_errno(so_error));
         }
     }
-    // The fd is verified connected above; std takes ownership from here.
-    use std::os::unix::io::FromRawFd;
-    Some(unsafe { std::net::TcpStream::from_raw_fd(fd) })
+    Ok(fd)
+}
+
+/// `errno` as a number, for the failures that arrive without an `io::Error`.
+fn last_errno() -> i32 {
+    std::io::Error::last_os_error().raw_os_error().unwrap_or(0)
 }
 
 /// Sets the socket nonblocking (std's accepted sockets arrive blocking; every

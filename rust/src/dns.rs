@@ -383,6 +383,34 @@ pub fn answer_message(query: &Query<'_>, answers: &[IpAddr], ttl: u32) -> Option
     Some(body)
 }
 
+/// A NOERROR answer with the question in it and no records anywhere: NODATA.
+///
+/// This is what a name that has no IPv6 address looks like on the wire, so it
+/// is what the engine says when it knows the client could not use an IPv6
+/// address even if it had one — see [`crate::proxy::egress`]. An empty answer
+/// is the whole point: the client goes straight to `A` instead of opening a
+/// connection that cannot be carried.
+pub fn nodata_message(query: &Query<'_>) -> Option<Vec<u8>> {
+    if !query.has_question || query.q_end > query.body.len() {
+        return None;
+    }
+    let question = &query.body[12..query.q_end];
+    let mut body = Vec::with_capacity(12 + question.len());
+    let flags: u16 = 0x8000 // QR
+        | (query.flags & 0x7800) // opcode, echoed
+        | (query.flags & 0x0100) // RD, echoed
+        | 0x0080 // RA
+        | RCODE_NOERROR;
+    body.extend_from_slice(&query.id.to_be_bytes());
+    body.extend_from_slice(&flags.to_be_bytes());
+    body.extend_from_slice(&1u16.to_be_bytes()); // qdcount
+    body.extend_from_slice(&0u16.to_be_bytes()); // ancount
+    body.extend_from_slice(&0u16.to_be_bytes()); // nscount
+    body.extend_from_slice(&0u16.to_be_bytes()); // arcount
+    body.extend_from_slice(question);
+    Some(body)
+}
+
 /// [`answer_message`] wrapped into a complete IP packet back to the client.
 pub fn synthesize_answer(
     packet: &Packet<'_>,
@@ -1030,6 +1058,27 @@ mod tests {
         qname.extend_from_slice(&[0xc0, 0x0c, 0, 0, 1, 0, 1]);
         let body = make_query(&qname, TYPE_A);
         assert!(parse_query(&body).is_none());
+    }
+
+    #[test]
+    fn nodata_answers_the_question_with_no_records() {
+        let qname = [&b"\x07example"[..], &b"\x03com"[..]].concat();
+        let body = make_query(&qname, TYPE_AAAA);
+        let q = parse_query(&body).unwrap();
+        let msg = nodata_message(&q).unwrap();
+        assert_eq!(&msg[0..2], &0x1234u16.to_be_bytes(), "the id is echoed");
+        assert_eq!(msg[2] & 0x80, 0x80, "QR is set");
+        assert_eq!(msg[2] & 0x01, 0x01, "RD is echoed");
+        assert_eq!(msg[3] & 0x80, 0x80, "RA is set: this is an answer, not a shrug");
+        assert_eq!(msg[3] & 0x0f, 0, "no error to report");
+        assert_eq!(&msg[4..6], &1u16.to_be_bytes(), "one question");
+        assert_eq!(&msg[6..12], &[0, 0, 0, 0, 0, 0], "and nothing else");
+        assert_eq!(msg.len(), q.q_end, "the header plus the question, and nothing more");
+        // An answer with no records reads back as one.
+        let back = parse_query(&msg).unwrap();
+        assert!(!back.is_query());
+        assert_eq!(back.qname.as_str(), "example.com");
+        assert_eq!(back.qtype, TYPE_AAAA);
     }
 
     #[test]

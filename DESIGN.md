@@ -982,6 +982,31 @@ engine's own upstream sockets carry `SO_MARK 0xad45` and every chain accepts
 that mark first, which is the only reason the redirect does not feed the proxy
 into itself.
 
+**Linux desktop: the family the redirect cannot carry.** A redirect does not
+ask which family the client chose. The TCP listener is dual-stack, so an IPv6
+flow whose packets were redirected lands on it like any other, and
+`SO_ORIGINAL_DST` names a real global address the proxy then has to dial. If
+this machine's IPv6 route is a black hole — a tunnel interface up but carrying
+nothing, which is exactly the state measured here — the client is already
+committed: its SYN was answered locally, so happy-eyeballs has no race left to
+lose, and it waits while the proxy spends the 10 s connect budget and resets.
+Microsoft, Cloudflare and GitHub each took 10 s and failed with capture on,
+0.59–1.19 s with it off, on the same machine and the same links. The engine
+therefore keeps a verdict about IPv6 egress in `proxy/egress.rs`, fed by the
+proxy's own dials and nothing else: three failures in a row that the machine
+owns (`ETIMEDOUT`, `ENETUNREACH` and friends — a refused peer is that peer's
+affair) make the DNS half answer `AAAA` with NOERROR and no records, which is
+what a name without an IPv6 address looks like, so clients go to `A` in the
+same round trip. The suppression expires every 30 s and the query that falls
+out of it is answered normally as a re-probe, doubling to a 10-minute ceiling
+while the outage lasts; the first IPv6 dial that succeeds clears everything at
+once. The verdict spares the flows it cannot help either: while records are
+being withheld and no re-probe is outstanding, an IPv6 dial is refused rather
+than allowed to spend the connect budget on an answer that is already known,
+which is what a client holding an `AAAA` record it cached earlier now runs
+into. The Android tun path is untouched — it gets its addresses from the
+platform stack and has no part in this.
+
 ## DNS
 
 - **Encrypted upstreams** — DoT and DoH live in `dnssecure.rs`, not in the

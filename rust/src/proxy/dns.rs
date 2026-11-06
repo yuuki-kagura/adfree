@@ -309,6 +309,9 @@ fn serve_one(listener: &Listener, query: &Inquiry, stop: &AtomicBool) {
     enum Served {
         Blocked { message: Vec<u8>, rule: String, list: String, category: u8 },
         Rewritten { message: Vec<u8>, answer: String },
+        /// An answer with the question in it and no records: the address the
+        /// client asked for is one this machine could not use.
+        Nodata(Vec<u8>),
         Forwarded(Option<Vec<u8>>),
     }
 
@@ -346,6 +349,13 @@ fn serve_one(listener: &Listener, query: &Inquiry, stop: &AtomicBool) {
                 list: verdict.list_name.unwrap_or_default(),
                 category: verdict.category,
             }
+        } else if parsed.qtype == dns::TYPE_AAAA && super::egress::withhold_aaaa() {
+            // The proxy has just failed to dial the kind of address this
+            // answer would name, so the machine is not carrying IPv6. An empty
+            // answer sends the client to `A` in the same round trip; handing
+            // the record through would buy a connection the redirect catches
+            // and the proxy cannot finish — see [`super::egress`].
+            Served::Nodata(dns::nodata_message(&parsed).unwrap_or_default())
         } else {
             Served::Forwarded(forward_query(&query.body, stop))
         }
@@ -387,6 +397,18 @@ fn serve_one(listener: &Listener, query: &Inquiry, stop: &AtomicBool) {
                     ),
                     &answer,
                 ));
+            }
+        }
+        Served::Nodata(message) => {
+            if message.is_empty() {
+                return;
+            }
+            // Counted as an allowed reply: the lookup went through, it just
+            // named nothing. No log row — this repeats for every host on the
+            // machine while an outage lasts, and it is not a decision.
+            stats.inc(&stats.dns_allowed);
+            if listener.send(&message, query).is_ok() {
+                stats.inc(&stats.dns_replies);
             }
         }
         Served::Forwarded(reply) => match reply {
@@ -654,5 +676,87 @@ mod tests {
     fn free_port() -> u16 {
         let probe = std::net::UdpSocket::bind((Ipv4Addr::UNSPECIFIED, 0)).unwrap();
         probe.local_addr().unwrap().port()
+    }
+
+    /// Not part of the normal run: this dials IPv6 for real and asks the real
+    /// upstream, so it is `#[ignore]`d. It is the only way to watch the two
+    /// halves meet — the proxy's own failed dials turning into an empty `AAAA`
+    /// answer from a listener that is actually running:
+    ///
+    /// ```text
+    /// cargo test --lib -- proxy::dns::tests::a_route -- --ignored --nocapture
+    /// ```
+    #[test]
+    #[ignore = "dials IPv6 for real and needs the network"]
+    fn a_route_that_cannot_carry_ipv6_turns_aaaa_answers_empty() {
+        use std::time::{Duration, Instant};
+
+        let host = "one.one.one.one"; // both families, and it answers
+        let port = free_port();
+        let listeners = bind_listeners(port).expect("the DNS listeners");
+        let stop = Arc::new(AtomicBool::new(false));
+        let worker_stop = Arc::clone(&stop);
+        let worker = std::thread::spawn(move || serve_loop(listeners, worker_stop));
+
+        let ask = |qtype: u16| -> (u16, usize) {
+            let body = dns::build_query(host, qtype, 0x1234).expect("query");
+            let client = UdpSocket::bind((Ipv4Addr::UNSPECIFIED, 0)).expect("client socket");
+            client
+                .send_to(&body, SocketAddr::from((Ipv4Addr::LOCALHOST, port)))
+                .expect("send");
+            let mut buf = vec![0u8; 4096];
+            let deadline = Instant::now() + Duration::from_secs(15);
+            loop {
+                if Instant::now() > deadline {
+                    panic!(
+                        "the listener never answered qtype={qtype}; can this machine reach \
+                         `/run/systemd/resolve/resolv.conf`'s nameserver at all?"
+                    );
+                }
+                if poll_readable(client.as_raw_fd(), POLL_SLICE_MS) {
+                    if let Ok(n) = client.recv(&mut buf) {
+                        if n < 12 {
+                            panic!("the listener answered with less than a header");
+                        }
+                        return ((buf[3] & 0x0f) as u16, u16::from_be_bytes([buf[6], buf[7]]) as usize);
+                    }
+                }
+            }
+        };
+
+        let (rcode, records) = ask(dns::TYPE_AAAA);
+        println!("AAAA before the dials: rcode={rcode} records={records}");
+        assert_eq!(rcode, 0);
+        assert!(records > 0, "the harness must be able to see records at all");
+
+        // Three dials this machine cannot finish. Each costs the connect
+        // budget on a black-holed route and costs nothing where the family is
+        // not compiled in, so this is the slow half of the test either way.
+        let dead: SocketAddr = "[2001:db8::1]:443".parse().expect("documentation address");
+        for attempt in 1..=3 {
+            let started = Instant::now();
+            assert!(
+                crate::proxy::dial_marked(dead).is_none(),
+                "dial {attempt} must not land"
+            );
+            println!("dial {attempt} gave up after {:?}", started.elapsed());
+        }
+        assert!(
+            super::super::egress::withhold_aaaa(),
+            "three machine-level failures should have set the verdict"
+        );
+
+        let (rcode, records) = ask(dns::TYPE_AAAA);
+        println!("AAAA after the dials: rcode={rcode} records={records}");
+        assert_eq!(rcode, 0, "a withheld answer is a plain NOERROR, not an error");
+        assert_eq!(records, 0, "no IPv6 record may reach a client it would strand");
+
+        let (rcode, records) = ask(dns::TYPE_A);
+        println!("A after the dials: rcode={rcode} records={records}");
+        assert_eq!(rcode, 0);
+        assert!(records > 0, "only the family that cannot be carried is held back");
+
+        stop.store(true, Ordering::Relaxed);
+        let _ = worker.join();
     }
 }
