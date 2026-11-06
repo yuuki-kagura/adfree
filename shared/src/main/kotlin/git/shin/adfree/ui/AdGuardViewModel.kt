@@ -21,6 +21,7 @@ import git.shin.adfree.model.DnsBlockMode
 import git.shin.adfree.model.FilterStatus
 import git.shin.adfree.model.FirewallAccess
 import git.shin.adfree.model.FirewallAppChoice
+import git.shin.adfree.model.LogTypeTab
 import git.shin.adfree.model.LogWindowTotals
 import git.shin.adfree.model.NetworkRequestLog
 import git.shin.adfree.model.ProtectionSettings
@@ -31,6 +32,7 @@ import git.shin.adfree.model.ServiceUsage
 import git.shin.adfree.model.ThreatAnalysisResult
 import git.shin.adfree.model.UserScriptInfo
 import git.shin.adfree.model.UserScriptStoreState
+import git.shin.adfree.model.matchesLogSearch
 import git.shin.adfree.security.ThreatAnalyzer
 import git.shin.adfree.update.UpdateInfo
 import git.shin.adfree.update.UpdateOutcome
@@ -84,6 +86,7 @@ class AdGuardViewModel(
     private val _currentTab = MutableStateFlow(AdGuardTab.HOME)
     private val _searchQuery = MutableStateFlow("")
     private val _statusFilter = MutableStateFlow<FilterStatus?>(null)
+    private val _logTypeFilter = MutableStateFlow(LogTypeTab.ALL)
     private val _inspectedLog = MutableStateFlow<NetworkRequestLog?>(null)
     private val _showCustomRuleDialog = MutableStateFlow(false)
     private val _showCustomRuleEditor = MutableStateFlow(false)
@@ -175,7 +178,8 @@ class AdGuardViewModel(
                 LogTotals(total, blocked, allowed, window, services)
             },
             _searchQuery,
-        ) { head, logs, totals, query ->
+            _logTypeFilter,
+        ) { head, logs, totals, query, typeTab ->
             val (tab, settings, stats) = head
             UiPartA(
                 tab,
@@ -188,6 +192,7 @@ class AdGuardViewModel(
                 totals.window,
                 totals.services,
                 query,
+                typeTab,
             )
         },
         combine(
@@ -262,19 +267,18 @@ class AdGuardViewModel(
             }?.packageName ?: selected
         }
         val logs = a.logs.filter { log ->
-            val query = a.query
-            val matchesQuery = query.isBlank() ||
-                log.domain.contains(query, true) ||
-                log.matchedRule?.contains(query, true) == true ||
-                log.filterListName?.contains(query, true) == true ||
-                log.appPackage?.contains(query, true) == true
+            val matchesQuery = matchesLogSearch(log, a.query)
+            // The type tabs come first because they are the row's own
+            // classification, not a search: an unclassified row belongs to
+            // `Other` rather than disappearing from every tab.
+            val matchesType = a.typeTab.matches(log.requestType)
             val matchesStatus = b.status == null || log.status == b.status
             // Rows stored before attribution existed (or carried over from an
             // older database) still match through their `$app=` rule text.
             val matchesApp = selectedPackage == null ||
                 log.appPackage.equals(selectedPackage, true) ||
                 log.matchedRule?.contains(selectedPackage, true) == true
-            matchesQuery && matchesStatus && matchesApp
+            matchesQuery && matchesType && matchesStatus && matchesApp
         }
 
         val apps = b.apps.filter { app ->
@@ -321,6 +325,7 @@ class AdGuardViewModel(
             inspectedLog = c.inspected,
             searchQuery = a.query,
             statusFilter = b.status,
+            logTypeFilter = a.typeTab,
             showCustomRuleDialog = c.showCustomRule,
             showCustomRuleEditor = c.showEditor,
             inspectedApp = c.inspectedApp,
@@ -460,6 +465,7 @@ class AdGuardViewModel(
             is AdGuardIntent.SetBlockMode -> repository.setBlockMode(intent.mode)
             is AdGuardIntent.SearchQueryChanged -> _searchQuery.value = intent.query
             is AdGuardIntent.FilterStatusChanged -> _statusFilter.value = intent.status
+            is AdGuardIntent.FilterLogTypeChanged -> _logTypeFilter.value = intent.tab
             is AdGuardIntent.InspectLog -> _inspectedLog.value = intent.log
             is AdGuardIntent.AddCustomRule -> {
                 repository.addCustomRule(intent.rule)
@@ -1036,6 +1042,7 @@ class AdGuardViewModel(
         val windowTotals: LogWindowTotals,
         val services: List<ServiceUsage>,
         val query: String,
+        val typeTab: LogTypeTab,
     )
 
     /** The log-wide and windowed counters travel together. */

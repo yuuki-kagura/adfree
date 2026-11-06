@@ -1386,6 +1386,21 @@ issue tracker, release notes and measured behavior rather than from code.
   switches and are stored. AdFree offers the same three sets but reads the level
   back from the switches it would have written, so the radio can never claim a
   level the traffic is not getting after a restore or a foreign backup.
+- **The filtering log.** AdGuard for Windows is read through this screen, so it
+  is laid out as AdGuard lays it out: the request-type tabs along the top (All
+  requests, HTML, CSS, Javascript, Ajax, Image, Media, DNS, Connection, Other),
+  and a row that names the request, the rule that answered it, the list that
+  rule came from, the kind of request it was, the page that asked for it and the
+  process that asked. The two columns AdGuard fills from the browser are filled
+  from the engine here: the type is what the MITM path saw the resource fetched
+  as (`events::req_type`), and the source is the referrer the request actually
+  carried, not the page the rules were matched against. The process is the
+  desktop's own attribution (`proxy::peer`). One deliberate difference: this log
+  also has a Time column. AdGuard's is a session list that is gone when the app
+  closes, so naming the moment is a detail-pane matter; AdFree keeps seven days
+  of rows, and which moment a row is from is information the list itself needs.
+  The table appears once the pane is wide enough for its columns, and a phone
+  keeps the card layout it already reads well.
 
 ## Current limitations
 

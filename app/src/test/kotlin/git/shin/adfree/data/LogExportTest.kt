@@ -75,11 +75,21 @@ class LogExportTest {
         assertEquals("120", fields[9])
         assertEquals("4096", fields[10])
         assertEquals("7", fields[13])
+        assertEquals("stylesheet", fields[18])
+        assertEquals("https://example.com/page", fields[19])
     }
 
     @Test
     fun `an unknown app stays an empty field instead of the word null`() {
-        val log = rowAt(1).copy(appPackage = null, matchedRule = null, filterListName = null, url = null, dnsAnswer = null)
+        val log = rowAt(1).copy(
+            appPackage = null,
+            matchedRule = null,
+            filterListName = null,
+            url = null,
+            dnsAnswer = null,
+            requestType = null,
+            source = null,
+        )
         val out = StringWriter()
         writeLogCsv(sequenceOf(log), out)
 
@@ -123,10 +133,12 @@ class LogExportTest {
         latencyMicros = 120,
         dataSavedBytes = 4_096,
         flowId = id,
+        requestType = "stylesheet",
+        source = "https://example.com/page",
     )
 
     private companion object {
         /** The header and every row must keep the same number of columns. */
-        const val COLUMN_COUNT = 18
+        const val COLUMN_COUNT = 20
     }
 }

@@ -9,8 +9,10 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -77,9 +79,11 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import git.shin.adfree.data.AdGuardRepository
 import git.shin.adfree.model.FilterStatus
+import git.shin.adfree.model.LogTypeTab
 import git.shin.adfree.model.NetworkRequestLog
 import git.shin.adfree.model.NetworkTransport
 import git.shin.adfree.model.assetSizeLabel
+import git.shin.adfree.model.requestTypeLabel
 import git.shin.adfree.model.ProtocolType
 import git.shin.adfree.model.RequestCategory
 import git.shin.adfree.model.RuleDraft
@@ -117,6 +121,20 @@ private fun appLabelFor(appNames: Map<String, String>, packageName: String?): St
 
 /** One screen of filtered cards; past that the scroll trigger takes over. */
 private const val MIN_FILTERED_ROWS = 15
+
+// The log table's column widths, shared by the header and the rows so the two
+// can never drift apart. AdGuard's own order — Name, Rule, Filter, Type,
+// Source, Process — with the time first: this log is the durable seven-day one,
+// not AdGuard's session-only list, so which moment a row is from is information
+// the user needs here rather than in a detail pane.
+private const val COL_TIME = 1.1f
+private const val COL_NAME = 4.2f
+private const val COL_RULE = 2.6f
+private const val COL_FILTER = 1.6f
+private const val COL_TYPE = 1.2f
+private const val COL_SOURCE = 2.0f
+private const val COL_PROCESS = 1.4f
+private const val COL_STATUS = 1.1f
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -156,6 +174,7 @@ fun FilteringLogScreen(
     // whose matches are rarer than a page would leave too few rows to scroll
     // (or none at all). Pull older pages until the matches fill a few screens.
     val filterActive = state.statusFilter != null ||
+        state.logTypeFilter != LogTypeTab.ALL ||
         state.selectedAppFilter != null || state.searchQuery.isNotBlank()
     LaunchedEffect(filterActive, state.filteredLogs.size, state.logs.size, state.logTotal) {
         if (filterActive && state.filteredLogs.size < MIN_FILTERED_ROWS &&
@@ -302,6 +321,14 @@ fun FilteringLogScreen(
 
         Spacer(modifier = Modifier.height(10.dp))
 
+        // Request-type tabs, the strip across the top of AdGuard's own log.
+        LogTypeTabs(
+            selected = state.logTypeFilter,
+            onSelect = { viewModel.onIntent(AdGuardIntent.FilterLogTypeChanged(it)) },
+        )
+
+        Spacer(modifier = Modifier.height(10.dp))
+
         // Filter chips (All, Blocked, Allowed)
         Row(
             modifier = Modifier
@@ -408,81 +435,101 @@ fun FilteringLogScreen(
         }
 
         // Logs List
-        if (state.filteredLogs.isEmpty()) {
-            Box(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .padding(32.dp),
-                contentAlignment = Alignment.Center
-            ) {
-                Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                    Icon(
-                        imageVector = Icons.Default.FilterList,
-                        contentDescription = null,
-                        tint = AdGuardTextMuted,
-                        modifier = Modifier.size(48.dp)
-                    )
-                    Spacer(modifier = Modifier.height(12.dp))
-                    // "No traffic yet" is wrong when rows exist but the query
-                    // filters them all out; say which case this is.
-                    Text(
-                        text = L10n.get(if (filterActive) Strings.log_empty_filtered_title
-                            else Strings.log_empty_title
-                        ),
-                        fontSize = 15.sp,
-                        fontWeight = FontWeight.SemiBold,
-                        color = AdGuardTextSecondary
-                    )
-                    Text(
-                        text = L10n.get(if (filterActive) Strings.log_empty_filtered_body
-                            else Strings.log_empty_body
-                        ),
-                        fontSize = 12.sp,
-                        color = AdGuardTextMuted
-                    )
+        BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
+            // AdGuard's log is a table. Its columns only fit once the window is
+            // a window, so the desktop gets the table and a phone keeps the
+            // cards it already reads well.
+            val asTable = maxWidth >= 720.dp
+            if (state.filteredLogs.isEmpty()) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .padding(32.dp),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        Icon(
+                            imageVector = Icons.Default.FilterList,
+                            contentDescription = null,
+                            tint = AdGuardTextMuted,
+                            modifier = Modifier.size(48.dp)
+                        )
+                        Spacer(modifier = Modifier.height(12.dp))
+                        // "No traffic yet" is wrong when rows exist but the query
+                        // filters them all out; say which case this is.
+                        Text(
+                            text = L10n.get(if (filterActive) Strings.log_empty_filtered_title
+                                else Strings.log_empty_title
+                            ),
+                            fontSize = 15.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            color = AdGuardTextSecondary
+                        )
+                        Text(
+                            text = L10n.get(if (filterActive) Strings.log_empty_filtered_body
+                                else Strings.log_empty_body
+                            ),
+                            fontSize = 12.sp,
+                            color = AdGuardTextMuted
+                        )
+                    }
                 }
-            }
-        } else {
-            LazyColumn(
-                state = listState,
-                modifier = Modifier.fillMaxSize(),
-                verticalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                items(state.filteredLogs, key = { it.id }) { log ->
-                    LogItemCard(
-                        log = log,
-                        appLabel = appLabelFor(state.appNames, log.appPackage),
-                        onClick = { viewModel.onIntent(AdGuardIntent.InspectLog(log)) }
-                    )
-                }
+            } else {
+                LazyColumn(
+                    state = listState,
+                    modifier = Modifier.fillMaxSize(),
+                    verticalArrangement = Arrangement.spacedBy(if (asTable) 0.dp else 8.dp)
+                ) {
+                    if (asTable) {
+                        // The header is a row of the list: it scrolls with the
+                        // rows it names, exactly as AdGuard's does, and it keeps
+                        // its place when the last row is pulled in.
+                        item(key = "log_table_header") { LogTableHeader() }
+                    }
+                    items(state.filteredLogs, key = { it.id }) { log ->
+                        if (asTable) {
+                            LogTableRow(
+                                log = log,
+                                appLabel = appLabelFor(state.appNames, log.appPackage),
+                                onClick = { viewModel.onIntent(AdGuardIntent.InspectLog(log)) }
+                            )
+                        } else {
+                            LogItemCard(
+                                log = log,
+                                appLabel = appLabelFor(state.appNames, log.appPackage),
+                                onClick = { viewModel.onIntent(AdGuardIntent.InspectLog(log)) }
+                            )
+                        }
+                    }
 
-                // The screen mirrors a window of the database log; the scroll
-                // trigger above grows it, so the tail is a quiet hint. Once
-                // the in-RAM cap is hit, say so instead of spinning forever.
-                if (state.logs.size < state.logTotal) {
-                    item(key = "log_infinite_footer") {
-                        Column(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(vertical = 10.dp)
-                                .testTag("log_infinite_footer"),
-                            horizontalAlignment = Alignment.CenterHorizontally
-                        ) {
-                            if (state.logs.size >= AdGuardRepository.LOG_ROW_CAP) {
-                                Text(
-                                    text = L10n.format(Strings.log_window_capped,
-                                        state.logs.size,
-                                        state.logTotal,
-                                    ),
-                                    fontSize = 11.sp,
-                                    color = AdGuardTextMuted
-                                )
-                            } else {
-                                CircularProgressIndicator(
-                                    modifier = Modifier.size(18.dp),
-                                    color = AdGuardGreenPrimary,
-                                    strokeWidth = 2.dp
-                                )
+                    // The screen mirrors a window of the database log; the scroll
+                    // trigger above grows it, so the tail is a quiet hint. Once
+                    // the in-RAM cap is hit, say so instead of spinning forever.
+                    if (state.logs.size < state.logTotal) {
+                        item(key = "log_infinite_footer") {
+                            Column(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(vertical = 10.dp)
+                                    .testTag("log_infinite_footer"),
+                                horizontalAlignment = Alignment.CenterHorizontally
+                            ) {
+                                if (state.logs.size >= AdGuardRepository.LOG_ROW_CAP) {
+                                    Text(
+                                        text = L10n.format(Strings.log_window_capped,
+                                            state.logs.size,
+                                            state.logTotal,
+                                        ),
+                                        fontSize = 11.sp,
+                                        color = AdGuardTextMuted
+                                    )
+                                } else {
+                                    CircularProgressIndicator(
+                                        modifier = Modifier.size(18.dp),
+                                        color = AdGuardGreenPrimary,
+                                        strokeWidth = 2.dp
+                                    )
+                                }
                             }
                         }
                     }
@@ -587,6 +634,175 @@ private fun requestCategoryLabel(category: RequestCategory): String = when (cate
     RequestCategory.CUSTOM -> L10n.get(Strings.log_category_custom)
 }
 
+/**
+ * The request-type strip along the top of the log — AdGuard's own navigation,
+ * one tab per kind of request with `All requests` first. Every row belongs to
+ * exactly one tab, so this is a partition of the log rather than a filter that
+ * hides rows the user still wants to count.
+ */
+@Composable
+private fun LogTypeTabs(selected: LogTypeTab, onSelect: (LogTypeTab) -> Unit) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .horizontalScroll(rememberScrollState())
+            .testTag("log_type_tabs"),
+        horizontalArrangement = Arrangement.spacedBy(4.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        LogTypeTab.ordered.forEach { tab ->
+            val isSelected = tab == selected
+            Text(
+                text = L10n.get(tab.labelKey),
+                fontSize = 12.sp,
+                fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
+                color = if (isSelected) AdGuardGreenPrimary else AdGuardTextSecondary,
+                maxLines = 1,
+                modifier = Modifier
+                    .clip(RoundedCornerShape(8.dp))
+                    .background(
+                        if (isSelected) AdGuardGreenPrimary.copy(alpha = 0.14f) else Color.Transparent
+                    )
+                    .clickable { onSelect(tab) }
+                    .padding(horizontal = 10.dp, vertical = 6.dp)
+                    .testTag("log_type_tab_${tab.key}")
+            )
+        }
+    }
+}
+
+/** One cell of the log table, holding its column's share of the width. */
+@Composable
+private fun RowScope.LogCell(weight: Float, content: @Composable () -> Unit) {
+    Box(modifier = Modifier.weight(weight), contentAlignment = Alignment.CenterStart) {
+        content()
+    }
+}
+
+@Composable
+private fun RowScope.LogColumnTitle(text: String) {
+    Text(
+        text = text,
+        fontSize = 11.sp,
+        fontWeight = FontWeight.Bold,
+        color = AdGuardTextMuted,
+        maxLines = 1,
+        overflow = TextOverflow.Ellipsis,
+        modifier = Modifier.fillMaxWidth()
+    )
+}
+
+@Composable
+private fun RowScope.LogCellValue(
+    value: String,
+    color: Color = AdGuardTextSecondary,
+    monospace: Boolean = false,
+) {
+    Text(
+        text = value,
+        fontSize = 12.sp,
+        color = color,
+        fontFamily = if (monospace) FontFamily.Monospace else FontFamily.Default,
+        maxLines = 1,
+        overflow = TextOverflow.Ellipsis,
+        modifier = Modifier.fillMaxWidth()
+    )
+}
+
+@Composable
+private fun LogTableHeader() {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 10.dp, vertical = 8.dp)
+            .testTag("log_table_header"),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(10.dp)
+    ) {
+        LogCell(COL_TIME) { LogColumnTitle(L10n.get(Strings.log_detail_time)) }
+        LogCell(COL_NAME) { LogColumnTitle(L10n.get(Strings.log_col_name)) }
+        LogCell(COL_RULE) { LogColumnTitle(L10n.get(Strings.log_col_rule)) }
+        LogCell(COL_FILTER) { LogColumnTitle(L10n.get(Strings.log_col_filter)) }
+        LogCell(COL_TYPE) { LogColumnTitle(L10n.get(Strings.log_col_type)) }
+        LogCell(COL_SOURCE) { LogColumnTitle(L10n.get(Strings.log_col_source)) }
+        LogCell(COL_PROCESS) { LogColumnTitle(L10n.get(Strings.log_col_process)) }
+        LogCell(COL_STATUS) { LogColumnTitle(L10n.get(Strings.log_col_status)) }
+    }
+}
+
+/**
+ * One log row in AdGuard's table: the address the request went to, the rule
+ * that answered it, the list that rule came from, the kind of request it was,
+ * the page that asked, and the process that asked for it. A cell with nothing
+ * to say stays blank rather than filling the column with a placeholder — the
+ * columns are read as a set, and an invented value is harder to trust.
+ */
+@Composable
+fun LogTableRow(
+    log: NetworkRequestLog,
+    appLabel: String? = null,
+    onClick: () -> Unit
+) {
+    val statusColor = when (log.status) {
+        FilterStatus.BLOCKED -> AdGuardRedBlocked
+        FilterStatus.ALLOWED -> AdGuardGreenPrimary
+        FilterStatus.WHITELISTED -> AdGuardBlueDns
+    }
+    // AdGuard colours a blocked row red and a modified or whitelisted one
+    // green; the same signal here, kept faint enough for a screen of rows.
+    val rowTint = when (log.status) {
+        FilterStatus.BLOCKED -> AdGuardRedBlocked.copy(alpha = 0.07f)
+        FilterStatus.WHITELISTED -> AdGuardBlueDns.copy(alpha = 0.06f)
+        FilterStatus.ALLOWED -> Color.Transparent
+    }
+    val timeFormat = remember { SimpleDateFormat("HH:mm:ss", Locale.getDefault()) }
+
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(6.dp))
+            .background(rowTint)
+            .clickable { onClick() }
+            .padding(horizontal = 10.dp, vertical = 7.dp)
+            .testTag("log_row_${log.id}"),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(10.dp)
+    ) {
+        LogCell(COL_TIME) {
+            LogCellValue(timeFormat.format(Date(log.timestampMs)), AdGuardTextMuted, monospace = true)
+        }
+        LogCell(COL_NAME) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Box(
+                    modifier = Modifier
+                        .size(7.dp)
+                        .clip(CircleShape)
+                        .background(statusColor)
+                )
+                Spacer(modifier = Modifier.width(8.dp))
+                Text(
+                    text = log.displayName,
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.Medium,
+                    color = AdGuardTextPrimary,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f)
+                )
+            }
+        }
+        LogCell(COL_RULE) { LogCellValue(log.matchedRule.orEmpty()) }
+        LogCell(COL_FILTER) { LogCellValue(log.filterListName.orEmpty()) }
+        LogCell(COL_TYPE) { LogCellValue(requestTypeLabel(log.requestType)) }
+        LogCell(COL_SOURCE) { LogCellValue(log.source.orEmpty()) }
+        LogCell(COL_PROCESS) { LogCellValue(appLabel ?: log.appPackage.orEmpty()) }
+        LogCell(COL_STATUS) { LogCellValue(logStatusLabel(log.status), statusColor) }
+    }
+}
+
 @Composable
 fun LogItemCard(
     log: NetworkRequestLog,
@@ -656,7 +872,7 @@ fun LogItemCard(
                     )
                     Spacer(modifier = Modifier.width(8.dp))
                     Text(
-                        text = log.domain,
+                        text = log.displayName,
                         fontSize = 14.sp,
                         fontWeight = FontWeight.SemiBold,
                         color = AdGuardTextPrimary,
@@ -677,6 +893,13 @@ fun LogItemCard(
                         text = timeStr,
                         fontSize = 11.sp,
                         color = AdGuardTextMuted
+                    )
+                    // The same classification the desktop table gives a column
+                    // of its own, first in the line on a phone.
+                    Text(
+                        text = requestTypeLabel(log.requestType),
+                        fontSize = 11.sp,
+                        color = AdGuardTextSecondary
                     )
                     if (log.protocol.name.isNotEmpty()) {
                         Text(
@@ -883,6 +1106,15 @@ fun PacketInspectionSheetContent(
             }
             log.url?.let { url ->
                 DetailRow(label = L10n.get(Strings.log_detail_url), value = url)
+            }
+            DetailRow(
+                label = L10n.get(Strings.log_col_type),
+                value = requestTypeLabel(log.requestType),
+            )
+            // AdGuard names the page that asked for a request its log's
+            // Source; here it is the referrer the request really carried.
+            log.source?.let { referrer ->
+                DetailRow(label = L10n.get(Strings.log_col_source), value = referrer)
             }
             log.dnsAnswer?.let { dnsAnswer ->
                 DetailRow(label = L10n.get(Strings.log_detail_dns_answer), value = dnsAnswer)

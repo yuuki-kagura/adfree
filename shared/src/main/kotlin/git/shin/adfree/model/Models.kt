@@ -81,7 +81,25 @@ data class NetworkRequestLog(
     val dnsAnswer: String? = null,
     val bytesSent: Long = 0L,
     val bytesReceived: Long = 0L,
+    /**
+     * What kind of request this was, in the core's own name (`document`,
+     * `xhr`, `dns`, …); null when the row predates the classification or the
+     * engine never saw a resource to classify.
+     */
+    val requestType: String? = null,
+    /** The page that asked for this request, as the referrer the core read. */
+    val source: String? = null,
 ) {
+    /**
+     * The log's Name column. AdGuard prints the full request URL and, for a
+     * row that is not an HTTP request, a pseudo-URL naming the scheme — so a
+     * DNS lookup reads `dns://api.example.com` instead of a bare host. The
+     * port a connection row would need is not something the core records, so
+     * those rows keep the host alone rather than inventing one.
+     */
+    val displayName: String
+        get() = url ?: if (requestType == "dns") "dns://$domain" else domain
+
     companion object {
         /** Convert a [git.shin.adfree.core.LogEvent] into a UI model. */
         fun from(event: git.shin.adfree.core.LogEvent): NetworkRequestLog {
@@ -119,6 +137,8 @@ data class NetworkRequestLog(
                 dnsAnswer = event.dnsAnswer.ifBlank { null },
                 bytesSent = event.bytesSent,
                 bytesReceived = event.bytesRecv,
+                requestType = event.requestType.ifBlank { null },
+                source = event.source.ifBlank { null },
             )
         }
     }

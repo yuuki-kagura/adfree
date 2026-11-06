@@ -13,6 +13,7 @@ import git.shin.adfree.model.FilterList
 import git.shin.adfree.model.FilterStatus
 import git.shin.adfree.model.FirewallAccess
 import git.shin.adfree.model.LogLevel
+import git.shin.adfree.model.LogTypeTab
 import git.shin.adfree.model.LogWindowTotals
 import git.shin.adfree.model.NetworkRequestLog
 import git.shin.adfree.model.ProtectionSettings
@@ -70,6 +71,11 @@ data class AdGuardUiState(
     val inspectedLog: NetworkRequestLog? = null,
     val searchQuery: String = "",
     val statusFilter: FilterStatus? = null,
+    /**
+     * The log's request-type tab, the strip across the top of AdGuard's own
+     * log. `ALL` keeps every row.
+     */
+    val logTypeFilter: LogTypeTab = LogTypeTab.ALL,
     val showCustomRuleDialog: Boolean = false,
     val showCustomRuleEditor: Boolean = false,
     val inspectedApp: AppFirewallRule? = null,
@@ -140,6 +146,8 @@ sealed interface AdGuardIntent {
     data class SetBlockMode(val mode: DnsBlockMode) : AdGuardIntent
     data class SearchQueryChanged(val query: String) : AdGuardIntent
     data class FilterStatusChanged(val status: FilterStatus?) : AdGuardIntent
+    /** Picks the log's request-type tab; [LogTypeTab.ALL] clears it. */
+    data class FilterLogTypeChanged(val tab: LogTypeTab) : AdGuardIntent
     data class InspectLog(val log: NetworkRequestLog?) : AdGuardIntent
     data class AddCustomRule(val rule: String) : AdGuardIntent
     data class RemoveCustomRule(val rule: String) : AdGuardIntent

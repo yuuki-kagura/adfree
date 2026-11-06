@@ -26,6 +26,8 @@ class NetworkRequestLogTest {
         dnsAnswer: String = "",
         bytesSent: Long = 0L,
         bytesRecv: Long = 0L,
+        requestType: String = "",
+        source: String = "",
     ) = LogEvent(
         id = id,
         tsMs = 1_700_000_000_000L,
@@ -46,6 +48,8 @@ class NetworkRequestLogTest {
         dnsAnswer = dnsAnswer,
         bytesSent = bytesSent,
         bytesRecv = bytesRecv,
+        requestType = requestType,
+        source = source,
     )
 
     @Test
@@ -145,5 +149,38 @@ class NetworkRequestLogTest {
         assertNull(log.dnsAnswer)
         assertEquals(0L, log.bytesSent)
         assertEquals(0L, log.bytesReceived)
+    }
+
+    @Test
+    fun `the request type and the page that asked for it are carried over`() {
+        val log = NetworkRequestLog.from(
+            event(
+                CoreActions.BLOCKED.toInt(),
+                url = "https://cdn.example.com/app.css",
+                requestType = "stylesheet",
+                source = "https://shop.example/cart",
+            ),
+        )
+        assertEquals("stylesheet", log.requestType)
+        assertEquals("https://shop.example/cart", log.source)
+        assertNull(
+            "a row the core never classified has no type rather than a guessed one",
+            NetworkRequestLog.from(event(CoreActions.BLOCKED.toInt())).requestType,
+        )
+        assertNull(NetworkRequestLog.from(event(CoreActions.BLOCKED.toInt())).source)
+    }
+
+    @Test
+    fun `the name column is the url when there is one and a dns pseudo-url otherwise`() {
+        val http = NetworkRequestLog.from(
+            event(CoreActions.BLOCKED.toInt(), url = "https://cdn.example.com/app.css"),
+        )
+        assertEquals("https://cdn.example.com/app.css", http.displayName)
+        val dns = NetworkRequestLog.from(
+            event(CoreActions.BLOCKED.toInt(), requestType = "dns"),
+        )
+        assertEquals("dns://ads.example.com", dns.displayName)
+        val plain = NetworkRequestLog.from(event(CoreActions.BLOCKED.toInt()))
+        assertEquals("ads.example.com", plain.displayName)
     }
 }
