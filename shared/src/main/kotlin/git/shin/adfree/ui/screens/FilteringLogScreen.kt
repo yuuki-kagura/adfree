@@ -700,7 +700,13 @@ fun FilteringLogScreen(
     // window of the awkward size shows a sheet and a pane, or neither.
     if (inspected != null) {
         BoxWithConstraints {
-            if (maxWidth - SCREEN_PADDING_HORIZONTAL * 2 < TABLE_MIN_WIDTH) {
+            // The same decision the list above makes, from the same numbers: a
+            // row whose details would dock under a table this screen is not
+            // showing has to arrive as the sheet instead. Gating the sheet on
+            // the window width alone left a wide window in the card layout with
+            // a row that answered a click with nothing at all.
+            val asTable = adGuardLayout && maxWidth >= TABLE_MIN_WIDTH
+            if (!asTable) {
                 val sheetState = rememberModalBottomSheetState()
                 ModalBottomSheet(
                     onDismissRequest = {

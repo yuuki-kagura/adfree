@@ -71,8 +71,53 @@ import kotlinx.coroutines.launch
  * listeners and the redirect rules filtering, the way AdGuard for Windows
  * keeps filtering with its window shut.
  */
+/**
+ * The single-instance lock, or null when another window already holds it.
+ *
+ * Held for the life of the process through the returned channel: closing it
+ * releases the lock, which is exactly what a window that goes away should do.
+ */
+private fun acquireInstanceLock(dataRoot: java.io.File): java.nio.channels.FileChannel? {
+    return try {
+        dataRoot.mkdirs()
+        val channel = java.io.RandomAccessFile(java.io.File(dataRoot, "adfree.lock"), "rw").channel
+        val deadline = System.currentTimeMillis() + 10_000
+        while (System.currentTimeMillis() < deadline) {
+            val lock = try {
+                channel.tryLock()
+            } catch (_: java.nio.channels.OverlappingFileLockException) {
+                null
+            }
+            if (lock != null) return channel
+            Thread.sleep(250)
+        }
+        channel.close()
+        null
+    } catch (e: Exception) {
+        // A directory that cannot hold a lock file is not a reason to lose the
+        // window; it is the same window that would have said so.
+        System.err.println("[desktop] no instance lock: ${e.message}")
+        null
+    }
+}
+
 fun main() {
     val container = DesktopContainer()
+    // One engine, one set of listeners, one set of redirect rules. A second
+    // window is what takes the machine down rather than filtering it: the
+    // instance that holds the ports answers every redirected query, and if it
+    // is the one without `CAP_NET_ADMIN` its own upstream dials come straight
+    // back into it — DNS stops answering and nothing loads. The escalation to
+    // a privileged unit re-launches this same main, so the wait covers the
+    // hand-over: the instance being replaced has to let go before the new one
+    // reads the lock.
+    val lock = acquireInstanceLock(container.dataRoot)
+    if (lock == null) {
+        System.err.println(
+            "[desktop] AdFree is already running; this window will not start a second engine",
+        )
+        return
+    }
     val appScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     container.start(appScope)
     // The system bundle is not the only trust store: NSS applications read
