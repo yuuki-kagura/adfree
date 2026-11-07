@@ -160,7 +160,17 @@ private val SCREEN_PADDING_HORIZONTAL = 16.dp
 @Composable
 fun FilteringLogScreen(
     viewModel: AdGuardViewModel,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    /**
+     * The AdGuard-for-Windows shape: request-type tabs across the top and a
+     * table of columns once the pane is wide enough.
+     *
+     * Off by default, because the Activity tab is the app's own screen and
+     * keeps the card list it has always had. The desktop's separate Filtering
+     * log window turns it on: that window exists to be the AdGuard-style log,
+     * and it is a popup beside the tabbed UI rather than a replacement for it.
+     */
+    adGuardLayout: Boolean = false,
 ) {
     val state by viewModel.uiState.collectAsState()
     val listState = rememberLazyListState()
@@ -422,12 +432,16 @@ fun FilteringLogScreen(
         Spacer(modifier = Modifier.height(10.dp))
 
         // Request-type tabs, the strip across the top of AdGuard's own log.
-        LogTypeTabs(
-            selected = state.logTypeFilter,
-            onSelect = { viewModel.onIntent(AdGuardIntent.FilterLogTypeChanged(it)) },
-        )
+        // Only in the AdGuard-shaped surface: the Activity tab is the app's
+        // own screen and does not grow a second row of tabs under its chips.
+        if (adGuardLayout) {
+            LogTypeTabs(
+                selected = state.logTypeFilter,
+                onSelect = { viewModel.onIntent(AdGuardIntent.FilterLogTypeChanged(it)) },
+            )
 
-        Spacer(modifier = Modifier.height(10.dp))
+            Spacer(modifier = Modifier.height(10.dp))
+        }
 
         // Filter chips (All, Blocked, Allowed)
         Row(
@@ -537,9 +551,10 @@ fun FilteringLogScreen(
         // Logs List
         BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
             // AdGuard's log is a table. Its columns only fit once the window is
-            // a window, so the desktop gets the table and a phone keeps the
-            // cards it already reads well.
-            val asTable = maxWidth >= TABLE_MIN_WIDTH
+            // a window, so the AdGuard-shaped surface gets the table and a
+            // phone keeps the cards it already reads well. The Activity tab is
+            // not that surface: it keeps its cards at every width.
+            val asTable = adGuardLayout && maxWidth >= TABLE_MIN_WIDTH
             Column(modifier = Modifier.fillMaxSize()) {
                 Box(
                     modifier = Modifier.weight(if (asTable && inspected != null) 1.5f else 1f),

@@ -25,6 +25,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.Paint
 import androidx.compose.ui.graphics.painter.BitmapPainter
+import androidx.compose.ui.res.loadImageBitmap
 import androidx.compose.ui.graphics.painter.Painter
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.KeyEvent
@@ -74,6 +75,12 @@ fun main() {
     val container = DesktopContainer()
     val appScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     container.start(appScope)
+    // The system bundle is not the only trust store: NSS applications read
+    // their own database, and one a browser creates after this point would
+    // never see the certificate. Writing them every start is idempotent and
+    // costs a `certutil` per database, so it runs off the UI thread instead of
+    // hiding behind the once-per-install flag the HTTPS default uses.
+    appScope.launch(Dispatchers.IO) { container.platformHost.refreshUserTrustStores() }
     // The window is not up yet and does not need to be: the ask runs on its own
     // thread, so the certificate dialog the system raises never blocks it.
     container.applyHttpsDefault(appScope)
@@ -180,6 +187,10 @@ fun main() {
             onCloseRequest = { if (hasTray) hideWindow() else quit() },
             visible = visible,
             title = "AdFree",
+            // Without this the window (and the taskbar entry behind it) carries
+            // the JVM's own icon: a `java -cp …` launch has no application name
+            // for the shell to match, so the mark has to travel with the window.
+            icon = rememberAppIconPainter(),
             state = windowState,
             onPreviewKeyEvent = { event: KeyEvent ->
                 if (event.key == Key.Escape && event.type == KeyEventType.KeyDown) {
@@ -211,6 +222,7 @@ fun main() {
             Window(
                 onCloseRequest = { showFilteringLog = false },
                 title = "Filtering log",
+                icon = rememberAppIconPainter(),
                 state = filteringLogWindowState,
             ) {
                 val settings by container.repository.settings.collectAsState()
@@ -227,7 +239,13 @@ fun main() {
                         LocalResumeTick provides resumeTick,
                         LocalBackRegistry provides backRegistry,
                     ) {
-                        FilteringLogScreen(viewModel = container.viewModel)
+                        FilteringLogScreen(
+                            viewModel = container.viewModel,
+                            // This window is the AdGuard-for-Windows log: the
+                            // request-type tabs and the column table. The
+                            // Activity tab keeps the app's own card list.
+                            adGuardLayout = true,
+                        )
                     }
                 }
             }
@@ -238,27 +256,56 @@ fun main() {
 /** The status-field glyph size: every tray Linux offers is 24px or smaller. */
 private const val TRAY_ICON_PX = 24
 
-/** The app's dark/green palette, in the two colours a 24px glyph can carry. */
+/** The app's own mark, 192px, the same art the APK ships. */
+private const val APP_ICON_RESOURCE = "/icon/adfree.png"
+
+/**
+ * The app icon, read from the packaged resource.
+ *
+ * A tray entry and a window both want it, and a gradient-and-canvas guess is
+ * not the app: a status field that shows a different mark than the APK (or a
+ * blank square, when the surface is created before the toolkit is ready) is the
+ * icon the desktop cannot match to the app.
+ */
+private fun loadAppIcon(): ImageBitmap? = runCatching {
+    DesktopAppIconResource::class.java.getResourceAsStream(APP_ICON_RESOURCE)
+        ?.use { loadImageBitmap(it) }
+}.getOrNull()
+
+private object DesktopAppIconResource
+
+/** The dark/green palette, for the painted fallback below. */
 private val TrayGreen = Color(0xFF00D06C)
 private val TrayBg = Color(0xFF0A0E13)
 
-/** The app's own green mark, painted once: a tray needs an icon, not a photo. */
+/**
+ * The tray glyph: the app icon when it is on the classpath, and the old painted
+ * mark when it is not, so a run without resources still has a visible icon.
+ */
 @Composable
 private fun rememberTrayIcon(): Painter {
-    val bitmap = remember {
-        ImageBitmap(TRAY_ICON_PX, TRAY_ICON_PX).also { surface ->
-            val edge = TRAY_ICON_PX.toFloat()
-            val green = Paint().apply { color = TrayGreen }
-            val dark = Paint().apply { color = TrayBg }
-            Canvas(surface).apply {
-                drawRoundRect(0f, 0f, edge, edge, 6f, 6f, green)
-                drawRoundRect(4f, 3f, edge - 4f, edge - 3f, 5f, 5f, dark)
-                drawCircle(Offset(edge / 2f, edge / 2f), 4f, green)
-            }
-        }
-    }
+    val bitmap = remember { loadAppIcon() ?: paintedTrayGlyph() }
     return BitmapPainter(bitmap)
 }
+
+@Composable
+private fun rememberAppIconPainter(): Painter? {
+    val bitmap = remember { loadAppIcon() } ?: return null
+    return BitmapPainter(bitmap)
+}
+
+/** The fallback mark, painted once: a tray needs an icon, not a photo. */
+private fun paintedTrayGlyph(): ImageBitmap =
+    ImageBitmap(TRAY_ICON_PX, TRAY_ICON_PX).also { surface ->
+        val edge = TRAY_ICON_PX.toFloat()
+        val green = Paint().apply { color = TrayGreen }
+        val dark = Paint().apply { color = TrayBg }
+        Canvas(surface).apply {
+            drawRoundRect(0f, 0f, edge, edge, 6f, 6f, green)
+            drawRoundRect(4f, 3f, edge - 4f, edge - 3f, 5f, 5f, dark)
+            drawCircle(Offset(edge / 2f, edge / 2f), 4f, green)
+        }
+    }
 
 @Composable
 private fun DesktopHosts(
