@@ -228,29 +228,55 @@ fn name_of_process(pid: u32) -> Option<String> {
 /// fresh every time: it is one file, only two port columns are compared, and a
 /// connection that is not in it is a connection that is not ours to name.
 fn socket_of(client: SocketAddr, our: SocketAddr) -> Option<u64> {
-    let path = if client.is_ipv6() {
+    // The listener is dual-stack, so a loopback client arrives here as an
+    // IPv4-mapped IPv6 address while its own socket to the real host sits in
+    // the IPv4 table. The table is chosen by the address the kernel actually
+    // routes, not by the shape of the socket it arrived on.
+    let path = if client.ip().to_canonical().is_ipv6() {
         "/proc/net/tcp6"
     } else {
         "/proc/net/tcp"
     };
     let text = std::fs::read_to_string(path).ok()?;
+    // The exact pair answers when the connection reaches the proxy unrewritten
+    // (SOCKS and a browser told to use the proxy explicitly both do). The
+    // redirect does not: it rewrites the *destination* only, so the client's
+    // own socket still reads `→ the real host:443`, and the row that names the
+    // process can never match our port. What survives the rewrite is the
+    // client's source port, which is why that is the fallback key.
+    let mut redirected: Option<u64> = None;
+    let mut redirected_ambiguous = false;
     for line in text.lines().skip(1) {
-        let mut cols = line.split_whitespace();
-        let (_sl, local, remote) = match (cols.next(), cols.next(), cols.next()) {
-            (Some(a), Some(b), Some(c)) => (a, b, c),
-            _ => continue,
+        let cols: Vec<&str> = line.split_whitespace().collect();
+        // 0 the slot, 1 local, 2 remote, 3 state, 4..9 the queue pairs, the
+        // uid and the timeout, 9 the inode.
+        let (Some(local), Some(remote)) = (cols.get(1), cols.get(2)) else {
+            continue;
         };
-        if port_of(local) != Some(client.port()) || port_of(remote) != Some(our.port()) {
+        if port_of(local) != Some(client.port()) {
             continue;
         }
-        // inode, column 9: the state, the two queue and timer pairs, the uid
-        // and the timeout come between the address columns and it.
-        let inode = cols.nth(6)?.parse::<u64>().ok()?;
-        if inode != 0 {
+        let Some(inode) = cols.get(9).and_then(|i| i.parse::<u64>().ok()) else {
+            continue;
+        };
+        if inode == 0 {
+            continue;
+        }
+        if port_of(remote) == Some(our.port()) {
             return Some(inode);
         }
+        if redirected.is_some() {
+            // One source port, several sockets: the answer cannot be trusted to
+            // be this connection's, and a wrong process name would blame the
+            // wrong app in the log and in the `$app=` rules.
+            redirected_ambiguous = true;
+        }
+        redirected = Some(inode);
     }
-    None
+    if redirected_ambiguous {
+        return None;
+    }
+    redirected
 }
 
 /// The hex `port` half of an `ADDRESS:PORT` column.
@@ -322,6 +348,28 @@ mod tests {
             clients.push(client);
             accepted.push(stream);
         }
+    }
+
+    /// The redirect rewrites the destination, so the client's own socket says
+    /// `→ the real host:443` and never mentions the proxy's port. The source
+    /// port is what still identifies it, and finding the process through that
+    /// is what keeps the log's Process column (and every `$app=` rule) honest
+    /// on a Linux desktop.
+    #[test]
+    #[cfg(target_os = "linux")]
+    fn a_redirected_connection_is_named_through_its_source_port() {
+        let mut table = Table::new();
+        let real = TcpListener::bind("127.0.0.1:0").unwrap();
+        let client = TcpStream::connect(real.local_addr().unwrap()).unwrap();
+        let (accepted, from) = real.accept().unwrap();
+        // The port the redirect sent it to, which no row of the client's own
+        // socket names.
+        let our: SocketAddr = "127.0.0.1:3129".parse().unwrap();
+        let peer = table
+            .owner(from, our)
+            .expect("the source port alone names the process");
+        assert_eq!(peer.pid, std::process::id());
+        drop((accepted, client));
     }
 
     #[test]

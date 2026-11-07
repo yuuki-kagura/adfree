@@ -56,6 +56,8 @@ use std::sync::{Arc, Mutex, OnceLock, RwLock};
 
 /// Read size for the TUN descriptor.
 const TUN_BUF_BYTES: usize = 64 * 1024;
+/// The `state` row holding the app names that refused the CA.
+const CA_REJECTIONS_KEY: &str = "mitm.ca_rejecting_apps";
 
 /// How long the tun loop waits before re-checking the shutdown flag. Short
 /// because nothing wakes it but a packet or the timeout.
@@ -1152,6 +1154,18 @@ impl Core {
                 // first connection of an app must not fail again on every
                 // launch just to relearn it.
                 self.untrusted_clients.set_store(Arc::clone(&store));
+                // One refusal per app is a failed handshake the user had to
+                // sit through; the ones already learned are read back so a
+                // restart is not a reason to make them prove it again.
+                if let Some(text) = store.state_get(CA_REJECTIONS_KEY) {
+                    if let Ok(apps) = serde_json::from_str::<Vec<String>>(&text) {
+                        let mut learned =
+                            self.ca_rejecting_apps.write().unwrap_or_else(|e| e.into_inner());
+                        for app in apps {
+                            learned.insert(app);
+                        }
+                    }
+                }
                 let state = crate::state::StateStore::open(Arc::clone(&store));
                 let stored = self.store.set(store).is_ok();
                 let stated = self.state.set(state).is_ok();
@@ -4748,13 +4762,38 @@ impl Core {
     /// (numeric alerts from the CONNECTION_CLOSE).
     fn learn_ca_rejections(&self, apps: &[String], host: &str) {
         let mut learned = self.ca_rejecting_apps.write().unwrap();
+        let mut changed = false;
         for app in apps {
             if learned.insert(app.clone()) {
+                changed = true;
                 crate::logbuf::push(&format!(
                     "mitm {host}: {app} rejected the AdFree certificate, \
                      splicing its HTTPS verbatim from now on"
                 ));
             }
+        }
+        if changed {
+            self.save_ca_rejections(&learned);
+        }
+    }
+
+    /// Writes the set of apps that refuse the CA to the store, so the next
+    /// launch starts already knowing what this one learned.
+    fn save_ca_rejections(&self, learned: &HashSet<String>) {
+        let Some(store) = self.store.get() else {
+            return;
+        };
+        let mut apps: Vec<&String> = learned.iter().collect();
+        apps.sort();
+        let body = match serde_json::to_string(&apps) {
+            Ok(body) => body,
+            Err(e) => {
+                crate::logbuf::push_error(&format!("mitm: cannot encode the refusing apps: {e}"));
+                return;
+            }
+        };
+        if let Err(e) = store.state_set(CA_REJECTIONS_KEY, &body) {
+            crate::logbuf::push_error(&format!("mitm: cannot save the refusing apps: {e}"));
         }
     }
 
@@ -4995,6 +5034,11 @@ impl Core {
             crate::logbuf::push(&format!(
                 "mitm: retrying HTTPS decryption for {count} app(s) after the CA change"
             ));
+        }
+        if count > 0 {
+            if let Some(store) = self.store.get() {
+                let _ = store.state_set(CA_REJECTIONS_KEY, "[]");
+            }
         }
         drop(learned);
         // The per-client set is keyed by fingerprint rather than by package,
@@ -8300,6 +8344,43 @@ mod tests {
         .unwrap();
         core.set_secure_resolver(Some(doh));
         assert_eq!(core.dns_server_text(), "https://dns.example:443/dns-query");
+    }
+
+    /// A refusal costs the user a failed connection, so it is written to the
+    /// store the moment it is learned and read back by the next engine: the app
+    /// is spliced from the first connection of the next launch, not the second.
+    #[test]
+    fn a_refusing_app_is_remembered_across_engines() {
+        let root = std::env::temp_dir().join(format!(
+            "adfree-engine-refusal-{}-{}",
+            std::process::id(),
+            crate::util::now_ms()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+
+        let skipped = |core: &Core| core.effective_https_skip_apps().contains("node");
+
+        let first = Core::new();
+        assert!(first.set_data_root(root.to_str().unwrap()));
+        first.learn_ca_rejections(&["node".to_string()], "api.example.com");
+        assert!(skipped(&first));
+
+        // A second engine over the same root knows the app already refuses,
+        // without a handshake having to fail first.
+        let second = Core::new();
+        assert!(second.set_data_root(root.to_str().unwrap()));
+        assert!(
+            skipped(&second),
+            "a learned refusal must survive the engine it was learned in"
+        );
+
+        // A new certificate gives every app another chance, on disk too.
+        second.clear_ca_rejections();
+        let third = Core::new();
+        assert!(third.set_data_root(root.to_str().unwrap()));
+        assert!(!skipped(&third));
+
+        std::fs::remove_dir_all(&root).ok();
     }
 
     /// The platform pushes lists through the async path (`core_set_lists_async`),
