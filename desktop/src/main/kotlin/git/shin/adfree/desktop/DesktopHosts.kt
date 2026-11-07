@@ -9,6 +9,7 @@ import git.shin.adfree.platform.KeyValueStore
 import git.shin.adfree.platform.PlatformHost
 import git.shin.adfree.platform.TunnelControl
 import git.shin.adfree.platform.AppUpdate
+import git.shin.adfree.model.LocalProxySettings
 import git.shin.adfree.update.UpdateOutcome
 import git.shin.adfree.update.UpdateUiState
 import java.awt.Desktop
@@ -103,6 +104,10 @@ class DesktopPlatformHost(
     override fun supportsWindowHeader(): Boolean = true
 
     override fun localProxyStatus(): List<Pair<String, String>> = proxyStatus()
+
+    // The listeners are this platform's own, so their ports are the user's to
+    // move; Settings shows them where the Android host shows nothing at all.
+    override fun supportsLocalProxyPorts(): Boolean = true
 
     // The redirect that captures the machine's own traffic is a kernel
     // request, so the app asks the system for it through polkit — the desktop
@@ -237,6 +242,8 @@ class DesktopTunnelControl(
     private val coreEngine: CoreEngine,
     protectionWanted: StateFlow<Boolean>,
     private val privileges: DesktopPrivileges? = null,
+    /** Where the listeners are configured to bind; read at every start. */
+    private val localProxy: () -> LocalProxySettings = { LocalProxySettings() },
 ) : TunnelControl {
 
     override val isVpnActive: StateFlow<Boolean> = protectionWanted
@@ -246,17 +253,32 @@ class DesktopTunnelControl(
     override fun needsConsent(): Boolean = false
 
     override fun startVpnService() {
-        if (!coreEngine.startProxy()) {
-            System.err.println("[desktop] proxy listeners did not come up (ports taken?)")
+        val ports = localProxy()
+        val status = coreEngine.startProxy(ports.tcpPort, ports.dnsPort)
+        if (!status.running) {
+            // Say which listener refused and what the kernel said about it:
+            // the Home card shows the same words, and a bare "did not come up"
+            // would leave the user with a port to guess at.
+            val reasons = listOf(
+                "HTTP(S) :${ports.tcpPort}" to status.tcpError,
+                "DNS :${ports.dnsPort}" to status.dnsError,
+            ).filter { it.second.isNotBlank() }
+                .joinToString("; ") { (label, reason) -> "$label: $reason" }
+            System.err.println(
+                "[desktop] proxy listeners did not come up" +
+                    (if (reasons.isBlank()) "" else " — $reasons"),
+            )
             return
         }
         // With the mark in hand the redirect is safe to put in: the proxy can
         // tell its own traffic apart. Without it the rules would catch the
         // traffic the proxy dials and feed it back to itself, so protection
         // stays at what is pointed at it instead of taking the machine down.
+        // The rules name the ports the listeners actually took, not the ones
+        // the settings asked for.
         val helper = privileges ?: return
         if (!helper.canSetFirewallMark()) return
-        when (val outcome = helper.installRules(CoreEngine.PROXY_TCP_PORT, CoreEngine.PROXY_DNS_PORT)) {
+        when (val outcome = helper.installRules(status.tcpPort.toInt(), status.dnsPort.toInt())) {
             is PrivilegeOutcome.Ok -> System.err.println("[desktop] redirect rules installed")
             is PrivilegeOutcome.Denied -> System.err.println("[desktop] redirect rules: ${outcome.reason}")
             is PrivilegeOutcome.Failed -> System.err.println("[desktop] redirect rules: ${outcome.reason}")
@@ -269,9 +291,14 @@ class DesktopTunnelControl(
     }
 
     override fun restartVpnService() {
-        // Both listeners read the engine's live tables, so a config change
-        // needs no reconnect; only a stack that fell over has to come back.
-        if (isVpnActive.value && !coreEngine.isProxyRunning()) coreEngine.startProxy()
+        if (!isVpnActive.value) return
+        // The listeners hold the ports they were raised on and the redirect
+        // rules name those same numbers, so a restart has to take both down
+        // and put them back — a port the settings just moved would otherwise
+        // leave the proxy listening on the old one and the rules pointing at
+        // a port nobody holds.
+        if (coreEngine.isProxyRunning()) stopVpnService()
+        startVpnService()
     }
 
     override fun onPermissionResult(granted: Boolean) = Unit

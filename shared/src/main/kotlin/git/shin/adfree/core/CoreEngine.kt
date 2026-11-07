@@ -39,15 +39,27 @@ class CoreEngine(
      * DNS server on loopback — the shape AdGuard for Windows uses in place of
      * a VPN, since a desktop has no per-app tunnel to open. Kernel redirect
      * rules (or an explicit proxy setting) are what put traffic onto it.
-     * Returns false when the listeners cannot come up; protection stays off
-     * rather than pretending.
+     *
+     * The answer says which ports came up and, when a listener could not be
+     * raised, why: a bool would leave the screen reporting a filter that is
+     * quietly a plain relay with nothing to show for it.
      */
     fun startProxy(
         tcpPort: Int = PROXY_TCP_PORT,
         dnsPort: Int = PROXY_DNS_PORT,
-    ): Boolean = runCatching {
+    ): git.shin.adfree.core.ProxyStatus = runCatching {
         git.shin.adfree.core.coreStartProxy(tcpPort.toUShort(), dnsPort.toUShort())
-    }.getOrDefault(false)
+    }.getOrElse { error ->
+        // The core never answered, so the ports it was asked for are the only
+        // fact available — and the reason is the exception's own words.
+        git.shin.adfree.core.ProxyStatus(
+            running = false,
+            tcpPort = tcpPort.toUShort(),
+            dnsPort = dnsPort.toUShort(),
+            tcpError = error.message ?: error.toString(),
+            dnsError = "",
+        )
+    }
 
     fun stopProxy() {
         runCatching { git.shin.adfree.core.coreStopProxy() }
@@ -55,6 +67,22 @@ class CoreEngine(
 
     fun isProxyRunning(): Boolean =
         runCatching { git.shin.adfree.core.coreProxyRunning() }.getOrDefault(false)
+
+    /**
+     * What the listeners are doing right now: the ports they hold, or the
+     * reason the last attempt to raise them was refused. Cheap enough to read
+     * while composing a status card.
+     */
+    fun proxyStatus(): git.shin.adfree.core.ProxyStatus =
+        runCatching { git.shin.adfree.core.coreProxyStatus() }.getOrDefault(
+            git.shin.adfree.core.ProxyStatus(
+                running = false,
+                tcpPort = PROXY_TCP_PORT.toUShort(),
+                dnsPort = PROXY_DNS_PORT.toUShort(),
+                tcpError = "",
+                dnsError = "",
+            ),
+        )
 
     // ----------------------------------------------------------------- config
 

@@ -22,6 +22,7 @@ import git.shin.adfree.model.DnsBlockMode
 import git.shin.adfree.model.FilterStatus
 import git.shin.adfree.model.FirewallAccess
 import git.shin.adfree.model.FirewallAppChoice
+import git.shin.adfree.model.LocalProxySettings
 import git.shin.adfree.model.LogRuleSwitch
 import git.shin.adfree.model.LogRuleSwitchKind
 import git.shin.adfree.model.LogTypeTab
@@ -1026,6 +1027,26 @@ class AdGuardViewModel(
     fun setProxy(proxy: ProxySettings) {
         repository.updateProxy(proxy)
     }
+
+    /**
+     * Where the desktop's own filtering listeners bind — AdGuard for Windows'
+     * Port setting. The pair is saved first, so a rebind reads the new
+     * numbers; a filter that is up is then brought back on them together with
+     * the redirect rules that name the same ports, rather than being left on
+     * the ports the settings no longer describe.
+     */
+    fun setLocalProxy(localProxy: LocalProxySettings) {
+        if (!localProxy.isUsable) return
+        val listenersUp = coreEngine.isProxyRunning()
+        repository.updateLocalProxy(localProxy)
+        when {
+            listenersUp -> tunnel.restartVpnService()
+            tunnel.isVpnActive.value -> tunnel.startVpnService()
+        }
+    }
+
+    /** What the local listeners are doing: the ports they hold, or the refusal. */
+    fun localProxyStatus(): git.shin.adfree.core.ProxyStatus = coreEngine.proxyStatus()
 
     /** Creates (or recreates) the local CA and returns the new status. */
     fun createCa(onDone: (git.shin.adfree.core.MitmStatus?) -> Unit) {

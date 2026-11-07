@@ -145,14 +145,18 @@ Android 14+ user trust store path, is documented in
 A desktop has no per-app tunnel to open, so Linux filters traffic the way
 AdGuard for Windows does — a local transparent proxy rather than a VPN:
 
-- `rust/src/proxy` listens on port `3129` (HTTP/HTTPS) and `5300` (DNS)
-  and runs the same engine the tunnel does: the lists, the app firewall, the
+- `rust/src/proxy` listens on port `3129` (HTTP/HTTPS) and `5300` (DNS) —
+  both defaults, and both the user's to move from Settings, because a machine
+  that already holds one of those numbers has to be worked around — and runs
+  the same engine the tunnel does: the lists, the app firewall, the
   rewrites, the event log and, when HTTPS filtering is armed, the very same
   TLS-terminating session. A redirect only moves the port, so the sockets are
   bound to the wildcard address and answer on every address of the machine;
   each accepted flow is then checked against the addresses this host owns, so
   another machine on the network can neither use AdFree as a proxy nor as a
-  resolver.
+  resolver. A listener that cannot bind its port says so — which port, and
+  what the kernel answered — on the Home card and in Settings, instead of a
+  switch that reads "on" over a filter that is a plain relay.
 - Redirect rules move the machine's own traffic onto those listeners and refuse
   QUIC on UDP/443 so browsers fall back to the TCP that is filtered. The app
   generates and installs them itself (`desktop/.../DesktopPrivileges.kt`, the

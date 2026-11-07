@@ -972,6 +972,15 @@
     <string name="settings_routing_mode_title">Routing mode</string>
     <string name="settings_routing_local_vpn">Local VPN</string>
     <string name="settings_routing_socks5">SOCKS5 upstream</string>
+    <string name="settings_local_proxy_title">Local filtering listeners</string>
+    <string name="settings_local_proxy_subtitle">The ports this machine\'s own HTTP(S) proxy and DNS server listen on. Move them when something else already holds one of the numbers.</string>
+    <string name="settings_local_proxy_tcp_label">HTTP(S) proxy port</string>
+    <string name="settings_local_proxy_dns_label">DNS server port</string>
+    <string name="settings_local_proxy_apply">Apply ports</string>
+    <string name="settings_local_proxy_error">Ports must be between 1024 and 65535, and the two must differ</string>
+    <string name="settings_local_proxy_listening">Listening on 127.0.0.1:%1$d (HTTP(S)) and 127.0.0.1:%2$d (DNS)</string>
+    <string name="settings_local_proxy_stopped">Not listening — %1$s</string>
+    <string name="settings_local_proxy_stopped_quiet">Not listening</string>
     <string name="settings_notifications_title">App notifications</string>
     <string name="settings_notifications_subtitle">Open the OS switches for protection, firewall and update channels</string>
     <string name="settings_group_automation">Automation</string>

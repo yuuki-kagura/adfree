@@ -361,11 +361,21 @@ pub fn core_is_running() -> bool {
 
 /// Starts the desktop protection stack: a transparent TCP proxy and a DNS
 /// server on loopback (see [`crate::proxy`]). This is AdGuard-for-Windows'
-/// shape — local proxy plus redirect rules, not a VPN. Returns false when the
-/// listeners cannot come up (ports taken, proxy already running).
+/// shape — local proxy plus redirect rules, not a VPN. The record says which
+/// ports are live, and names the reason when a listener could not be raised,
+/// so the screen never reports a filter that is quietly a plain relay.
 #[uniffi::export]
-pub fn core_start_proxy(tcp_port: u16, dns_port: u16) -> bool {
-    guard(false, || crate::proxy::start(tcp_port, dns_port))
+pub fn core_start_proxy(tcp_port: u16, dns_port: u16) -> crate::proxy::ProxyStatus {
+    guard(crate::proxy::ProxyStatus::default(), || {
+        crate::proxy::start(tcp_port, dns_port)
+    })
+}
+
+/// What the listeners are doing now: the ports they hold, or why the last
+/// attempt to raise them was refused. Cheap enough to poll from a status card.
+#[uniffi::export]
+pub fn core_proxy_status() -> crate::proxy::ProxyStatus {
+    guard(crate::proxy::ProxyStatus::default(), crate::proxy::status)
 }
 
 #[uniffi::export]

@@ -23,6 +23,34 @@ data class ProxySettings(
 }
 
 /**
+ * Where the desktop's own filtering listeners are raised — AdGuard for Windows'
+ * shape: a local HTTP(S) proxy and a local DNS server that the machine's
+ * traffic is redirected onto.
+ *
+ * Both numbers are the user's to move, because a machine that already runs
+ * something on them has to be worked around rather than reformatted. Below
+ * [MIN_LISTENER_PORT] a bind needs root, and a listener that cannot bind is a
+ * filter that quietly relays, so a pair that does not fit is refused rather
+ * than clamped behind the user's back.
+ */
+data class LocalProxySettings(
+    val tcpPort: Int = 3129,
+    val dnsPort: Int = 5300,
+) {
+    /** Two listeners, two numbers, both ours to take. */
+    val isUsable: Boolean
+        get() = tcpPort in MIN_LISTENER_PORT..MAX_PORT &&
+            dnsPort in MIN_LISTENER_PORT..MAX_PORT &&
+            tcpPort != dnsPort
+
+    companion object {
+        /** Must match `MIN_LISTENER_PORT` in `rust/src/proxy/mod.rs`. */
+        const val MIN_LISTENER_PORT = 1024
+        const val MAX_PORT = 65535
+    }
+}
+
+/**
  * The SOCKS5 host the core can dial: an IPv4/IPv6 literal, never a name.
  *
  * Brackets from `[::1]` are stripped so the value is exactly what the core

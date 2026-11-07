@@ -93,6 +93,11 @@ class FullAppUiTest {
             // The routing row and the notification link hide with their capabilities.
             onNodeWithText(L10n.get(Strings.settings_routing_mode_title)).assertDoesNotExist()
             onNodeWithText(L10n.get(Strings.settings_notifications_title)).assertDoesNotExist()
+            // The desktop's own listener ports are the row a phone never sees:
+            // there the ports are not the user's to move, so nothing binds one.
+            onNodeWithText(L10n.get(Strings.settings_local_proxy_title)).assertExists()
+            onNodeWithText(L10n.get(Strings.settings_local_proxy_tcp_label)).assertExists()
+            onNodeWithText(L10n.get(Strings.settings_local_proxy_dns_label)).assertExists()
 
             // The desktop shell draws its own window header: the OS title bar
             // says nothing about where in the app you are, and there is no

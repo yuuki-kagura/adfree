@@ -71,13 +71,26 @@ class DesktopContainer(
     val platformHost = DesktopPlatformHost(
         File(dataRoot, "adfree-ca.pem"),
         // Read when the screen asks, so the card follows the listeners rather
-        // than a snapshot taken at startup.
+        // than a snapshot taken at startup. The ports are the ones the core
+        // actually holds while a filter is up, and the configured ones when it
+        // is not — plus the reason a bind was refused, which is the one thing
+        // a "stopped" alone never tells the user.
         proxyStatus = {
-            val up = coreEngine.isProxyRunning()
+            val status = coreEngine.proxyStatus()
+            val configured = repository.settings.value.localProxy
+            val tcp = if (status.running) status.tcpPort.toInt() else configured.tcpPort
+            val dns = if (status.running) status.dnsPort.toInt() else configured.dnsPort
             val marked = privileges.canSetFirewallMark()
+            // A port nothing listens on says why next to the number it tried:
+            // "stopped" alone would leave the user guessing which of the two
+            // listeners the kernel turned down.
+            fun endpoint(port: Int, reason: String): String {
+                val address = "127.0.0.1:$port"
+                return if (reason.isBlank()) address else "$address — $reason"
+            }
             listOf(
-                "HTTP(S)" to "127.0.0.1:${CoreEngine.PROXY_TCP_PORT}",
-                "DNS" to "127.0.0.1:${CoreEngine.PROXY_DNS_PORT}",
+                "HTTP(S)" to endpoint(tcp, status.tcpError),
+                "DNS" to endpoint(dns, status.dnsError),
                 // Which of the two layouts is in play decides whether anything
                 // reaches the filter at all, so the card says it plainly.
                 "Traffic" to if (marked) "the machine's own, redirected" else "only what is pointed here",
@@ -86,7 +99,7 @@ class DesktopContainer(
                     privileges.rulesInstalled() -> "installed"
                     else -> "not installed"
                 },
-                "State" to if (up) "listening" else "stopped",
+                "State" to if (status.running) "listening" else "stopped",
             )
         },
         privileges = privileges,
@@ -125,7 +138,15 @@ class DesktopContainer(
     val viewModel: AdGuardViewModel by lazy {
         AdGuardViewModel(
             repository = repository,
-            tunnel = DesktopTunnelControl(coreEngine, protectionWanted, privileges),
+            tunnel = DesktopTunnelControl(
+                coreEngine,
+                protectionWanted,
+                privileges,
+                // Read at every start rather than captured: the ports are the
+                // ones the user last applied, so the listeners and the
+                // redirect rules always name the same numbers.
+                localProxy = { repository.settings.value.localProxy },
+            ),
             threatAnalyzer = threatAnalyzer,
             coreEngine = coreEngine,
             platform = platformHost,

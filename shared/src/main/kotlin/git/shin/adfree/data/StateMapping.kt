@@ -10,6 +10,7 @@ import git.shin.adfree.core.DnsProviderRecord as CoreDnsProvider
 import git.shin.adfree.core.DnsRewrite as CoreDnsRewrite
 import git.shin.adfree.core.FirewallAccess as CoreFirewallAccess
 import git.shin.adfree.core.LogLevel as CoreLogLevel
+import git.shin.adfree.core.LocalProxyState as CoreLocalProxyState
 import git.shin.adfree.core.ProtectionState as CoreProtectionState
 import git.shin.adfree.core.ProxyAccess as CoreProxyAccess
 import git.shin.adfree.core.ProxyState as CoreProxyState
@@ -22,6 +23,7 @@ import git.shin.adfree.model.DnsBlockMode
 import git.shin.adfree.model.DnsProvider
 import git.shin.adfree.model.DnsRewriteRule
 import git.shin.adfree.model.FirewallAccess
+import git.shin.adfree.model.LocalProxySettings
 import git.shin.adfree.model.LogLevel
 import git.shin.adfree.model.ProtectionSettings
 import git.shin.adfree.model.ProtocolType
@@ -87,6 +89,7 @@ fun ProtectionSettings.toCoreState(): CoreProtectionState = CoreProtectionState(
     httpsOnlyHosts = httpsOnlyHosts,
     httpsOnlyMode = httpsOnlyMode,
     proxy = proxy.toCore(),
+    localProxy = localProxy.toCore(),
     appLanguage = appLanguage.toCore(),
     themeMode = themeMode.toCore(),
     autoStart = autoStart,
@@ -144,6 +147,7 @@ fun CoreProtectionState.toModel(): ProtectionSettings = ProtectionSettings(
     httpsOnlyHosts = httpsOnlyHosts,
     httpsOnlyMode = httpsOnlyMode,
     proxy = proxy.toModel(),
+    localProxy = localProxy.toModel(),
     appLanguage = appLanguage.toModel(),
     themeMode = themeMode.toModel(),
     autoStart = autoStart,
@@ -170,6 +174,21 @@ private fun CoreProxyState.toModel(): ProxySettings = ProxySettings(
     port = port.toInt(),
     username = username,
     password = password,
+)
+
+/**
+ * The desktop listener ports. Rust refuses a number below the privileged range
+ * on its own; the UI refuses it first, so what lands here is already a pair a
+ * listener can take without root.
+ */
+private fun LocalProxySettings.toCore(): CoreLocalProxyState = CoreLocalProxyState(
+    tcpPort = tcpPort.coerceIn(LocalProxySettings.MIN_LISTENER_PORT, LocalProxySettings.MAX_PORT).toUShort(),
+    dnsPort = dnsPort.coerceIn(LocalProxySettings.MIN_LISTENER_PORT, LocalProxySettings.MAX_PORT).toUShort(),
+)
+
+private fun CoreLocalProxyState.toModel(): LocalProxySettings = LocalProxySettings(
+    tcpPort = tcpPort.toInt(),
+    dnsPort = dnsPort.toInt(),
 )
 
 private fun DnsBlockMode.toCore(): CoreDnsBlockMode = when (this) {

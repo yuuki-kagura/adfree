@@ -397,6 +397,51 @@ mod tests {
         assert_eq!(restored.log_level, LogLevel::Warn);
     }
 
+    /// The listener ports are only usable if a listener can take them without
+    /// root, and never the same number twice: one port cannot serve both the
+    /// proxy and the DNS server, and a stack that binds only one of them
+    /// sends every lookup into a void.
+    #[test]
+    fn the_listener_ports_are_put_where_a_listener_can_take_them() {
+        let below_range = ProtectionState {
+            local_proxy: LocalProxyState {
+                tcp_port: 80,
+                dns_port: 53,
+            },
+            ..Default::default()
+        }
+        .sanitized();
+        assert_eq!(below_range.local_proxy.tcp_port, crate::proxy::DEFAULT_TCP_PORT);
+        assert_eq!(below_range.local_proxy.dns_port, crate::proxy::DEFAULT_DNS_PORT);
+
+        let tied = ProtectionState {
+            local_proxy: LocalProxyState {
+                tcp_port: crate::proxy::DEFAULT_DNS_PORT,
+                dns_port: crate::proxy::DEFAULT_DNS_PORT,
+            },
+            ..Default::default()
+        }
+        .sanitized();
+        assert_eq!(tied.local_proxy.tcp_port, crate::proxy::DEFAULT_DNS_PORT);
+        assert_ne!(
+            tied.local_proxy.tcp_port, tied.local_proxy.dns_port,
+            "the DNS port has to move off the port the TCP listener kept"
+        );
+        assert_eq!(tied.local_proxy.dns_port, crate::proxy::DEFAULT_DNS_PORT + 1);
+    }
+
+    /// An older blob names no listener ports at all: it must load with the
+    /// shipped pair rather than fail to parse, or every existing install
+    /// would lose its protection settings over a field it never wrote.
+    #[test]
+    fn a_blob_from_before_listener_ports_still_loads() {
+        let old: ProtectionState =
+            serde_json::from_str(r#"{"is_protection_active": true}"#).expect("old blob loads");
+        assert!(old.is_protection_active);
+        assert_eq!(old.local_proxy, LocalProxyState::default());
+        assert_eq!(old.local_proxy.tcp_port, crate::proxy::DEFAULT_TCP_PORT);
+    }
+
     #[test]
     fn a_fresh_store_gets_defaults_with_the_builtin_providers() {
         let (store, dir) = temp("defaults");

@@ -46,6 +46,11 @@ pub const FWMARK: u32 = 0xad45;
 pub const DEFAULT_TCP_PORT: u16 = 3129;
 pub const DEFAULT_DNS_PORT: u16 = 5300;
 
+/// Lowest port a listener may be moved to. Below it a bind needs root, and a
+/// desktop app that asks for the port and then quietly fails to bind it is
+/// worse than one that says the number is not its to take.
+pub const MIN_LISTENER_PORT: u16 = 1024;
+
 /// How long a connection may sit with no traffic before the thread retires it.
 const IDLE_TIMEOUT: Duration = Duration::from_secs(300);
 /// Dial timeout for the upstream half of a flow.
@@ -61,62 +66,133 @@ struct Run {
     stop: Arc<AtomicBool>,
     loops: Vec<std::thread::JoinHandle<()>>,
     running: bool,
+    /// The ports these listeners were bound on, so a caller can tell whether
+    /// what is up matches what the settings now ask for.
+    tcp_port: u16,
+    dns_port: u16,
 }
 
 static RUN: Mutex<Option<Run>> = Mutex::new(None);
 
+/// What the listeners are doing, and what refused them when they were last
+/// asked to come up.
+///
+/// The two error strings are the reason this is a record and not a bool: a
+/// switch that reads "off" tells the user nothing about the service already
+/// holding port 3129, and they cannot move the listener without knowing it.
+#[derive(uniffi::Record, Clone, Debug, Default, PartialEq, Eq)]
+pub struct ProxyStatus {
+    pub running: bool,
+    pub tcp_port: u16,
+    pub dns_port: u16,
+    pub tcp_error: String,
+    pub dns_error: String,
+}
+
+/// The last start attempt that did not come up. Cleared by a successful start
+/// and by a stop, so a deliberate shutdown never reads as a refusal.
+static FAILED: Mutex<Option<ProxyStatus>> = Mutex::new(None);
+
 /// When the interface list was last read, and what it held.
 static OWN: Mutex<Option<(std::time::Instant, Vec<std::net::IpAddr>)>> = Mutex::new(None);
 
-/// Starts both listeners. False when they cannot come up (port in use, proxy
-/// already running) — the caller then leaves protection off rather than
-/// pretending.
-pub fn start(tcp_port: u16, dns_port: u16) -> bool {
+/// Starts both listeners and says what came of it.
+///
+/// Both or neither: a stack that sees TCP but answers no lookup is a filter
+/// that quietly does nothing, and the redirect rules would send the machine's
+/// DNS to a port nobody listens on.
+pub fn start(tcp_port: u16, dns_port: u16) -> ProxyStatus {
     let mut guard = match RUN.lock() {
         Ok(guard) => guard,
-        Err(_) => return false,
+        // The record of which listener is live is exactly what could not be
+        // read, so nothing can be said about the ports from here.
+        Err(_) => {
+            return remember(ProxyStatus {
+                running: false,
+                tcp_port,
+                dns_port,
+                tcp_error: "the proxy state lock was poisoned".to_string(),
+                dns_error: String::new(),
+            });
+        }
     };
-    if guard.as_ref().is_some_and(|run| run.running) {
-        return false;
+    if let Some(run) = guard.as_ref().filter(|run| run.running) {
+        // Already up, which is not a failure — but the ports it asked for are
+        // not necessarily the ports it got, and that difference is the whole
+        // reason a caller has to rebind.
+        return ProxyStatus {
+            running: true,
+            tcp_port: run.tcp_port,
+            dns_port: run.dns_port,
+            tcp_error: String::new(),
+            dns_error: String::new(),
+        };
     }
-    let listener = match tcp::bind_listener(tcp_port) {
-        Ok(listener) => listener,
+    let (listener, tcp_bind) = match tcp::bind_listener(tcp_port) {
+        Ok(listener) => (Some(listener), String::new()),
         Err(e) => {
             crate::logbuf::push(&format!("proxy: TCP listener on {tcp_port}: {e}"));
-            return false;
+            (None, e.to_string())
         }
     };
-    let dns_listeners = match dns::bind_listeners(dns_port) {
-        Ok(listeners) => listeners,
+    let (dns_listeners, dns_bind) = match dns::bind_listeners(dns_port) {
+        Ok(listeners) => (Some(listeners), String::new()),
         Err(e) => {
             crate::logbuf::push(&format!("proxy: DNS listener on {dns_port}: {e}"));
-            return false;
+            (None, e.to_string())
         }
+    };
+    let (Some(listener), Some(dns_listeners)) = (listener, dns_listeners) else {
+        return remember(ProxyStatus {
+            running: false,
+            tcp_port,
+            dns_port,
+            tcp_error: tcp_bind,
+            dns_error: dns_bind,
+        });
     };
     let stop = Arc::new(AtomicBool::new(false));
     let mut loops = Vec::new();
     let tcp_stop = Arc::clone(&stop);
-    match std::thread::Builder::new()
+    let tcp_spawn = match std::thread::Builder::new()
         .name("adfree-proxy-tcp".into())
         // Same stack budget as the tun worker: the TLS termination and the
         // response rewriter run this deep here too.
         .stack_size(1024 * 1024)
         .spawn(move || tcp::accept_loop(listener, tcp_stop))
     {
-        Ok(worker) => loops.push(worker),
-        Err(e) => crate::logbuf::push(&format!("proxy: TCP accept loop: {e}")),
-    }
+        Ok(worker) => {
+            loops.push(worker);
+            String::new()
+        }
+        Err(e) => {
+            crate::logbuf::push(&format!("proxy: TCP accept loop: {e}"));
+            e.to_string()
+        }
+    };
     let dns_stop = Arc::clone(&stop);
-    match std::thread::Builder::new()
+    let dns_spawn = match std::thread::Builder::new()
         .name("adfree-proxy-dns".into())
         .stack_size(1024 * 1024)
         .spawn(move || dns::serve_loop(dns_listeners, dns_stop))
     {
-        Ok(worker) => loops.push(worker),
-        Err(e) => crate::logbuf::push(&format!("proxy: DNS loop: {e}")),
-    }
+        Ok(worker) => {
+            loops.push(worker);
+            String::new()
+        }
+        Err(e) => {
+            crate::logbuf::push(&format!("proxy: DNS loop: {e}"));
+            e.to_string()
+        }
+    };
     if loops.is_empty() {
-        return false;
+        return remember(ProxyStatus {
+            running: false,
+            tcp_port,
+            dns_port,
+            tcp_error: refused(&tcp_bind, &tcp_spawn),
+            dns_error: refused(&dns_bind, &dns_spawn),
+        });
     }
     crate::logbuf::push(&format!(
         "proxy: listening on 127.0.0.1:{tcp_port} (TCP) and :{dns_port} (DNS)"
@@ -125,13 +201,26 @@ pub fn start(tcp_port: u16, dns_port: u16) -> bool {
         stop,
         loops,
         running: true,
+        tcp_port,
+        dns_port,
     });
-    true
+    forget_failure();
+    ProxyStatus {
+        running: true,
+        tcp_port,
+        dns_port,
+        tcp_error: String::new(),
+        dns_error: String::new(),
+    }
 }
 
 /// Stops both listeners and waits for their threads to return. Live
 /// connections notice the flag within one poll slice and retire.
 pub fn stop() {
+    // A shutdown the user asked for is not a refusal — and that holds whether
+    // or not a stack was up: the reason an earlier attempt was refused belongs
+    // to that attempt, and must not keep explaining a stop that was deliberate.
+    forget_failure();
     let taken = RUN.lock().ok().and_then(|mut guard| guard.take());
     let Some(run) = taken else {
         return;
@@ -146,6 +235,50 @@ pub fn stop() {
 
 pub fn is_running() -> bool {
     RUN.lock().map(|run| run.as_ref().is_some_and(|run| run.running)).unwrap_or(false)
+}
+
+/// What the listeners are doing now: the ports they hold, or the reason the
+/// last attempt to raise them was refused. A stack that never ran answers with
+/// nothing at all rather than a stale complaint.
+pub fn status() -> ProxyStatus {
+    if let Ok(guard) = RUN.lock() {
+        if let Some(run) = guard.as_ref().filter(|run| run.running) {
+            return ProxyStatus {
+                running: true,
+                tcp_port: run.tcp_port,
+                dns_port: run.dns_port,
+                ..Default::default()
+            };
+        }
+    }
+    FAILED.lock().ok().and_then(|failed| failed.clone()).unwrap_or_default()
+}
+
+/// Keeps a failed attempt so the screen can still explain it after the call
+/// that produced it has returned, and hands the same record back to that call.
+fn remember(status: ProxyStatus) -> ProxyStatus {
+    if let Ok(mut failed) = FAILED.lock() {
+        *failed = Some(status.clone());
+    }
+    status
+}
+
+fn forget_failure() {
+    if let Ok(mut failed) = FAILED.lock() {
+        *failed = None;
+    }
+}
+
+/// One listener can be refused twice: by `bind`, and by the thread that would
+/// have served it. Both are the reason it is not listening, so neither is
+/// dropped to make the message shorter.
+fn refused(bind: &str, spawn: &str) -> String {
+    match (bind.is_empty(), spawn.is_empty()) {
+        (true, _) => spawn.to_string(),
+        (_, true) => bind.to_string(),
+        _ if bind == spawn => bind.to_string(),
+        _ => format!("{bind}; {spawn}"),
+    }
 }
 
 /// Takes one connection slot for the lifetime of a thread. `Drop` gives it
@@ -569,7 +702,7 @@ mod lifecycle_tests {
             );
             stream.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok").unwrap();
         });
-        assert!(start(31329, 35353), "listeners must come up on free ports");
+        assert!(start(31329, 35353).running, "listeners must come up on free ports");
         let mut client = TcpStream::connect("127.0.0.1:31329").unwrap();
         client
             .write_all(format!("GET http://127.0.0.1:{origin_port}/probe HTTP/1.1\r\nHost: x\r\n\r\n").as_bytes())
@@ -598,7 +731,7 @@ mod lifecycle_tests {
             wildcard: false,
             address: pinned,
         }]);
-        assert!(start(31331, 35355), "listeners must come up on free ports");
+        assert!(start(31331, 35355).running, "listeners must come up on free ports");
         let socket = std::net::UdpSocket::bind("127.0.0.1:0").unwrap();
         socket
             .send_to(
@@ -644,7 +777,7 @@ mod lifecycle_tests {
                 .write_all(b"HTTP/1.1 204 No Content\r\nContent-Length: 0\r\n\r\n")
                 .unwrap();
         });
-        assert!(start(31332, 35356), "listeners must come up on free ports");
+        assert!(start(31332, 35356).running, "listeners must come up on free ports");
         let mut client = TcpStream::connect("[::1]:31332").unwrap();
         client
             .write_all(
@@ -669,7 +802,7 @@ mod lifecycle_tests {
     #[test]
     fn the_proxy_refuses_to_proxy_itself() {
         let _guard = PROXY_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        assert!(start(31330, 35354), "listeners must come up on free ports");
+        assert!(start(31330, 35354).running, "listeners must come up on free ports");
         let mut client = TcpStream::connect("127.0.0.1:31330").unwrap();
         client
             .write_all(b"GET http://127.0.0.1:31330/probe HTTP/1.1\r\nHost: x\r\n\r\n")
@@ -684,6 +817,64 @@ mod lifecycle_tests {
             "the self-request must be refused, not dialled; log was {log:?}"
         );
         assert!(reply.is_empty(), "a refusal carries no answer, it just closes");
+    }
+
+    /// A port somebody else already listens on is refused, and the refusal
+    /// keeps its reason: `start` says it, `status` still says it afterwards,
+    /// and only a clean start or a stop puts the explanation away.
+    #[test]
+    fn a_taken_port_is_refused_and_says_why() {
+        let _guard = PROXY_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let squatter = TcpListener::bind("127.0.0.1:0").unwrap();
+        let tcp_port = squatter.local_addr().unwrap().port();
+        // A DNS port this test just released, so the one number is not a
+        // guess about what else the machine has open.
+        let probe = std::net::UdpSocket::bind("127.0.0.1:0").unwrap();
+        let dns_port = probe.local_addr().unwrap().port();
+        drop(probe);
+
+        let attempt = start(tcp_port, dns_port);
+        assert!(!attempt.running, "a listener on a taken port must not claim to run");
+        assert!(!attempt.tcp_error.is_empty(), "the TCP refusal owes a reason");
+        assert!(attempt.dns_error.is_empty(), "the DNS port was free: {}", attempt.dns_error);
+        assert!(!is_running(), "a half-bound stack is not a running proxy");
+
+        let seen = status();
+        assert!(!seen.running);
+        assert_eq!(seen.tcp_port, tcp_port, "the screen must name the port it tried");
+        assert!(!seen.tcp_error.is_empty(), "status() must still explain the refusal");
+        assert!(
+            std::net::UdpSocket::bind(("127.0.0.1", dns_port)).is_ok(),
+            "the half that did bind must not stay held behind a failed start"
+        );
+
+        // A stop the user asked for puts the explanation away even when there
+        // was nothing running to stop: "refused because the port was taken"
+        // would otherwise keep describing a shutdown that was deliberate.
+        stop();
+        let after_stop = status();
+        assert!(!after_stop.running);
+        assert!(
+            after_stop.tcp_error.is_empty() && after_stop.dns_error.is_empty(),
+            "a stop ends the complaint: {after_stop:?}"
+        );
+
+        // A later success both answers and wipes the stale complaint.
+        let other = TcpListener::bind("127.0.0.1:0").unwrap();
+        let free_tcp = other.local_addr().unwrap().port();
+        drop(other);
+        assert!(start(free_tcp, dns_port).running, "free ports must come up");
+        let live = status();
+        assert!(live.running && live.tcp_port == free_tcp && live.dns_port == dns_port);
+        assert!(live.tcp_error.is_empty() && live.dns_error.is_empty(), "{live:?}");
+        stop();
+        let after = status();
+        assert!(!after.running);
+        assert!(
+            after.tcp_error.is_empty() && after.dns_error.is_empty(),
+            "a stop the user asked for is not a refusal: {after:?}"
+        );
+        drop(squatter);
     }
 
     /// The listeners answer on every local address, so what keeps the network

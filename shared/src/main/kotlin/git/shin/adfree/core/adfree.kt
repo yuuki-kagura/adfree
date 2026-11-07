@@ -801,6 +801,8 @@ internal object IntegrityCheckingUniffiLib {
     ): Int
     external fun uniffi_adfree_core_checksum_func_core_proxy_running(
     ): Int
+    external fun uniffi_adfree_core_checksum_func_core_proxy_status(
+    ): Int
     external fun uniffi_adfree_core_checksum_func_core_relay_count(
     ): Int
     external fun uniffi_adfree_core_checksum_func_core_remove_root_ca(
@@ -1007,6 +1009,8 @@ internal object UniffiLib {
     ): Byte
     external fun uniffi_adfree_core_fn_func_core_proxy_running(uniffi_out_err: UniffiRustCallStatus, 
     ): Byte
+    external fun uniffi_adfree_core_fn_func_core_proxy_status(uniffi_out_err: UniffiRustCallStatus, 
+    ): RustBuffer.ByValue
     external fun uniffi_adfree_core_fn_func_core_relay_count(uniffi_out_err: UniffiRustCallStatus, 
     ): Int
     external fun uniffi_adfree_core_fn_func_core_remove_root_ca(uniffi_out_err: UniffiRustCallStatus, 
@@ -1070,7 +1074,7 @@ internal object UniffiLib {
     external fun uniffi_adfree_core_fn_func_core_start(`tunFd`: Int,uniffi_out_err: UniffiRustCallStatus, 
     ): Unit
     external fun uniffi_adfree_core_fn_func_core_start_proxy(`tcpPort`: Short,`dnsPort`: Short,uniffi_out_err: UniffiRustCallStatus, 
-    ): Byte
+    ): RustBuffer.ByValue
     external fun uniffi_adfree_core_fn_func_core_state_load(uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
     external fun uniffi_adfree_core_fn_func_core_stats(uniffi_out_err: UniffiRustCallStatus, 
@@ -1331,6 +1335,9 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
     if ((lib.uniffi_adfree_core_checksum_func_core_proxy_running() and 0xFFFF) != 59086) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
+    if ((lib.uniffi_adfree_core_checksum_func_core_proxy_status() and 0xFFFF) != 33741) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
     if ((lib.uniffi_adfree_core_checksum_func_core_relay_count() and 0xFFFF) != 38928) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
@@ -1424,7 +1431,7 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
     if ((lib.uniffi_adfree_core_checksum_func_core_start() and 0xFFFF) != 51365) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if ((lib.uniffi_adfree_core_checksum_func_core_start_proxy() and 0xFFFF) != 23268) {
+    if ((lib.uniffi_adfree_core_checksum_func_core_start_proxy() and 0xFFFF) != 22697) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if ((lib.uniffi_adfree_core_checksum_func_core_state_load() and 0xFFFF) != 43672) {
@@ -3750,6 +3757,52 @@ public object FfiConverterTypeHostVerdictBinding: FfiConverterRustBuffer<HostVer
 
 
 /**
+ * The ports the desktop listeners are raised on.
+ *
+ * AdGuard for Windows lets both numbers be moved because a machine that
+ * already runs a proxy on 3128, or has handed 5300 to something else, has to
+ * be worked around rather than reformatted. A listener that cannot bind is a
+ * filter that quietly relays, so the app needs a port it can actually take.
+ */
+data class LocalProxyState (
+    var `tcpPort`: kotlin.UShort
+    , 
+    var `dnsPort`: kotlin.UShort
+    
+){
+    
+
+    
+
+    
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeLocalProxyState: FfiConverterRustBuffer<LocalProxyState> {
+    override fun read(buf: ByteBuffer): LocalProxyState {
+        return LocalProxyState(
+            FfiConverterUShort.read(buf),
+            FfiConverterUShort.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: LocalProxyState) = (
+            FfiConverterUShort.allocationSize(value.`tcpPort`) +
+            FfiConverterUShort.allocationSize(value.`dnsPort`)
+    )
+
+    override fun write(value: LocalProxyState, buf: ByteBuffer) {
+            FfiConverterUShort.write(value.`tcpPort`, buf)
+            FfiConverterUShort.write(value.`dnsPort`, buf)
+    }
+}
+
+
+
+/**
  * One line of the Activity log.
  */
 data class LogEvent (
@@ -4256,6 +4309,11 @@ data class ProtectionState (
     var `proxy`: ProxyState
     , 
     /**
+     * Desktop only: where the local filtering listeners live.
+     */
+    var `localProxy`: LocalProxyState
+    , 
+    /**
      * BCP-47 language picked in the app; `System` follows the device.
      */
     var `appLanguage`: AppLanguage
@@ -4356,6 +4414,7 @@ public object FfiConverterTypeProtectionState: FfiConverterRustBuffer<Protection
             FfiConverterSequenceString.read(buf),
             FfiConverterBoolean.read(buf),
             FfiConverterTypeProxyState.read(buf),
+            FfiConverterTypeLocalProxyState.read(buf),
             FfiConverterTypeAppLanguage.read(buf),
             FfiConverterTypeThemeMode.read(buf),
             FfiConverterBoolean.read(buf),
@@ -4414,6 +4473,7 @@ public object FfiConverterTypeProtectionState: FfiConverterRustBuffer<Protection
             FfiConverterSequenceString.allocationSize(value.`httpsOnlyHosts`) +
             FfiConverterBoolean.allocationSize(value.`httpsOnlyMode`) +
             FfiConverterTypeProxyState.allocationSize(value.`proxy`) +
+            FfiConverterTypeLocalProxyState.allocationSize(value.`localProxy`) +
             FfiConverterTypeAppLanguage.allocationSize(value.`appLanguage`) +
             FfiConverterTypeThemeMode.allocationSize(value.`themeMode`) +
             FfiConverterBoolean.allocationSize(value.`autoStart`) +
@@ -4471,6 +4531,7 @@ public object FfiConverterTypeProtectionState: FfiConverterRustBuffer<Protection
             FfiConverterSequenceString.write(value.`httpsOnlyHosts`, buf)
             FfiConverterBoolean.write(value.`httpsOnlyMode`, buf)
             FfiConverterTypeProxyState.write(value.`proxy`, buf)
+            FfiConverterTypeLocalProxyState.write(value.`localProxy`, buf)
             FfiConverterTypeAppLanguage.write(value.`appLanguage`, buf)
             FfiConverterTypeThemeMode.write(value.`themeMode`, buf)
             FfiConverterBoolean.write(value.`autoStart`, buf)
@@ -4545,6 +4606,67 @@ public object FfiConverterTypeProxyState: FfiConverterRustBuffer<ProxyState> {
             FfiConverterUShort.write(value.`port`, buf)
             FfiConverterString.write(value.`username`, buf)
             FfiConverterString.write(value.`password`, buf)
+    }
+}
+
+
+
+/**
+ * What the listeners are doing, and what refused them when they were last
+ * asked to come up.
+ *
+ * The two error strings are the reason this is a record and not a bool: a
+ * switch that reads "off" tells the user nothing about the service already
+ * holding port 3129, and they cannot move the listener without knowing it.
+ */
+data class ProxyStatus (
+    var `running`: kotlin.Boolean
+    , 
+    var `tcpPort`: kotlin.UShort
+    , 
+    var `dnsPort`: kotlin.UShort
+    , 
+    var `tcpError`: kotlin.String
+    , 
+    var `dnsError`: kotlin.String
+    
+){
+    
+
+    
+
+    
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeProxyStatus: FfiConverterRustBuffer<ProxyStatus> {
+    override fun read(buf: ByteBuffer): ProxyStatus {
+        return ProxyStatus(
+            FfiConverterBoolean.read(buf),
+            FfiConverterUShort.read(buf),
+            FfiConverterUShort.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterString.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: ProxyStatus) = (
+            FfiConverterBoolean.allocationSize(value.`running`) +
+            FfiConverterUShort.allocationSize(value.`tcpPort`) +
+            FfiConverterUShort.allocationSize(value.`dnsPort`) +
+            FfiConverterString.allocationSize(value.`tcpError`) +
+            FfiConverterString.allocationSize(value.`dnsError`)
+    )
+
+    override fun write(value: ProxyStatus, buf: ByteBuffer) {
+            FfiConverterBoolean.write(value.`running`, buf)
+            FfiConverterUShort.write(value.`tcpPort`, buf)
+            FfiConverterUShort.write(value.`dnsPort`, buf)
+            FfiConverterString.write(value.`tcpError`, buf)
+            FfiConverterString.write(value.`dnsError`, buf)
     }
 }
 
@@ -6887,6 +7009,20 @@ public object FfiConverterSequenceTypeUidApps: FfiConverterRustBuffer<List<UidAp
     
 
         /**
+         * What the listeners are doing now: the ports they hold, or why the last
+         * attempt to raise them was refused. Cheap enough to poll from a status card.
+         */ fun `coreProxyStatus`(): ProxyStatus {
+            return FfiConverterTypeProxyStatus.lift(
+    uniffiRustCall() { _status ->
+    UniffiLib.uniffi_adfree_core_fn_func_core_proxy_status(
+    
+        _status)
+}
+    )
+    }
+    
+
+        /**
          * Number of relays currently alive (for the UI).
          */ fun `coreRelayCount`(): kotlin.UInt {
             return FfiConverterUInt.lift(
@@ -7340,10 +7476,11 @@ public object FfiConverterSequenceTypeUidApps: FfiConverterRustBuffer<List<UidAp
         /**
          * Starts the desktop protection stack: a transparent TCP proxy and a DNS
          * server on loopback (see [`crate::proxy`]). This is AdGuard-for-Windows'
-         * shape — local proxy plus redirect rules, not a VPN. Returns false when the
-         * listeners cannot come up (ports taken, proxy already running).
-         */ fun `coreStartProxy`(`tcpPort`: kotlin.UShort, `dnsPort`: kotlin.UShort): kotlin.Boolean {
-            return FfiConverterBoolean.lift(
+         * shape — local proxy plus redirect rules, not a VPN. The record says which
+         * ports are live, and names the reason when a listener could not be raised,
+         * so the screen never reports a filter that is quietly a plain relay.
+         */ fun `coreStartProxy`(`tcpPort`: kotlin.UShort, `dnsPort`: kotlin.UShort): ProxyStatus {
+            return FfiConverterTypeProxyStatus.lift(
     uniffiRustCall() { _status ->
     UniffiLib.uniffi_adfree_core_fn_func_core_start_proxy(
     

@@ -44,6 +44,7 @@ import git.shin.adfree.model.ProtectionStats
 import git.shin.adfree.model.ProtectionSettings
 import git.shin.adfree.model.StealthPreset
 import git.shin.adfree.model.ProxySettings
+import git.shin.adfree.model.LocalProxySettings
 import git.shin.adfree.model.ProtocolType
 import git.shin.adfree.model.RequestCategory
 import git.shin.adfree.platform.AppInventory
@@ -697,6 +698,15 @@ class AdGuardRepository(
     /** Routing mode: outbound SOCKS5 for new TCP flows, or direct. */
     fun updateProxy(proxy: ProxySettings) {
         updateSettings { it.copy(proxy = proxy) }
+    }
+
+    /**
+     * Desktop: where the local filtering listeners are raised. The pair is
+     * saved as it was typed — a number a listener cannot take is refused by
+     * the UI, not silently moved behind the user's back.
+     */
+    fun updateLocalProxy(localProxy: LocalProxySettings) {
+        updateSettings { it.copy(localProxy = localProxy) }
     }
 
     fun toggleFirewall(enabled: Boolean) =

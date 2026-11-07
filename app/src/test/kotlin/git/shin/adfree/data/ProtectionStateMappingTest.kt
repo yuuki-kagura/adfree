@@ -3,6 +3,7 @@ package git.shin.adfree.data
 import git.shin.adfree.model.AppFirewallRule
 import git.shin.adfree.model.FirewallAccess
 import git.shin.adfree.model.LogLevel
+import git.shin.adfree.model.LocalProxySettings
 import git.shin.adfree.model.ProtectionSettings
 import git.shin.adfree.model.StealthPreset
 import org.junit.Assert.assertEquals
@@ -52,6 +53,22 @@ class ProtectionStateMappingTest {
 
         assertEquals("203.0.113.9", back.maskIp)
         assertEquals("", ProtectionSettings().maskIp)
+    }
+
+    @Test
+    fun the_listener_ports_survive_the_core_round_trip() {
+        val settings = ProtectionSettings(
+            localProxy = LocalProxySettings(tcpPort = 3131, dnsPort = 5353),
+        )
+
+        val back = settings.toCoreState().toModel()
+
+        assertEquals(LocalProxySettings(tcpPort = 3131, dnsPort = 5353), back.localProxy)
+        // A full-record save must not drop the ports when nothing edited them.
+        assertEquals(
+            LocalProxySettings(),
+            ProtectionSettings().toCoreState().toModel().localProxy,
+        )
     }
 
     @Test

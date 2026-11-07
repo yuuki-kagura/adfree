@@ -972,6 +972,15 @@
     <string name="settings_routing_mode_title">Chế độ định tuyến</string>
     <string name="settings_routing_local_vpn">VPN cục bộ</string>
     <string name="settings_routing_socks5">SOCKS5 thượng nguồn</string>
+    <string name="settings_local_proxy_title">Bộ lắng nghe lọc cục bộ</string>
+    <string name="settings_local_proxy_subtitle">Các cổng mà proxy HTTP(S) và máy chủ DNS của chính máy này lắng nghe. Đổi chúng khi đã có thứ khác chiếm một trong hai cổng đó.</string>
+    <string name="settings_local_proxy_tcp_label">Cổng proxy HTTP(S)</string>
+    <string name="settings_local_proxy_dns_label">Cổng máy chủ DNS</string>
+    <string name="settings_local_proxy_apply">Áp dụng cổng</string>
+    <string name="settings_local_proxy_error">Cổng phải từ 1024 đến 65535 và hai cổng phải khác nhau</string>
+    <string name="settings_local_proxy_listening">Đang lắng nghe trên 127.0.0.1:%1$d (HTTP(S)) và 127.0.0.1:%2$d (DNS)</string>
+    <string name="settings_local_proxy_stopped">Không đang lắng nghe — %1$s</string>
+    <string name="settings_local_proxy_stopped_quiet">Không đang lắng nghe</string>
     <string name="settings_notifications_title">Thông báo ứng dụng</string>
     <string name="settings_notifications_subtitle">Mở công tắc hệ thống cho kênh bảo vệ, tường lửa và cập nhật</string>
     <string name="settings_group_automation">Tự động hóa</string>

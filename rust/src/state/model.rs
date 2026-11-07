@@ -123,6 +123,62 @@ impl Default for ProxyState {
     }
 }
 
+/// The ports the desktop listeners are raised on.
+///
+/// AdGuard for Windows lets both numbers be moved because a machine that
+/// already runs a proxy on 3128, or has handed 5300 to something else, has to
+/// be worked around rather than reformatted. A listener that cannot bind is a
+/// filter that quietly relays, so the app needs a port it can actually take.
+#[derive(uniffi::Record, Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct LocalProxyState {
+    pub tcp_port: u16,
+    pub dns_port: u16,
+}
+
+impl Default for LocalProxyState {
+    fn default() -> Self {
+        LocalProxyState {
+            tcp_port: crate::proxy::DEFAULT_TCP_PORT,
+            dns_port: crate::proxy::DEFAULT_DNS_PORT,
+        }
+    }
+}
+
+impl LocalProxyState {
+    /// Puts both numbers where a listener can be raised without root, and
+    /// splits a tie: one port cannot carry two listeners, and a stack that
+    /// binds the TCP half and no DNS half sends every lookup into a void.
+    pub fn sanitized(mut self) -> Self {
+        self.tcp_port = listener_port(self.tcp_port, crate::proxy::DEFAULT_TCP_PORT);
+        self.dns_port = listener_port(self.dns_port, crate::proxy::DEFAULT_DNS_PORT);
+        if self.tcp_port == self.dns_port {
+            self.dns_port = alternate_dns_port(self.tcp_port);
+        }
+        self
+    }
+}
+
+fn listener_port(port: u16, fallback: u16) -> u16 {
+    if port < crate::proxy::MIN_LISTENER_PORT {
+        fallback
+    } else {
+        port
+    }
+}
+
+/// The default DNS port first — it is the one nothing else on a desktop
+/// normally claims — then a neighbour of the port it collided with.
+fn alternate_dns_port(tcp_port: u16) -> u16 {
+    let default = crate::proxy::DEFAULT_DNS_PORT;
+    if default != tcp_port {
+        return default;
+    }
+    // Only reached when the TCP port *is* the DNS default, so the neighbour is
+    // well inside the listener range.
+    tcp_port.checked_add(1).unwrap_or(tcp_port - 1)
+}
+
 /// Everything the switches screen edits.
 ///
 /// This mirrors the UI model one-to-one; `Default` is the only definition of
@@ -197,6 +253,8 @@ pub struct ProtectionState {
     pub https_only_hosts: Vec<String>,
     pub https_only_mode: bool,
     pub proxy: ProxyState,
+    /// Desktop only: where the local filtering listeners live.
+    pub local_proxy: LocalProxyState,
     /// BCP-47 language picked in the app; `System` follows the device.
     pub app_language: AppLanguage,
     pub theme_mode: ThemeMode,
@@ -282,6 +340,7 @@ impl Default for ProtectionState {
             https_only_hosts: Vec::new(),
             https_only_mode: false,
             proxy: ProxyState::default(),
+            local_proxy: LocalProxyState::default(),
             app_language: AppLanguage::System,
             theme_mode: ThemeMode::System,
             auto_start: false,
@@ -302,6 +361,7 @@ impl ProtectionState {
     /// so the engine never sees duplicates or empty patterns.
     pub fn sanitized(mut self) -> Self {
         self.filter_auto_update_hours = self.filter_auto_update_hours.min(168);
+        self.local_proxy = self.local_proxy.sanitized();
         self.https_skip_hosts = normalize_hosts(self.https_skip_hosts);
         self.https_only_hosts = normalize_hosts(self.https_only_hosts);
         if !matches!(

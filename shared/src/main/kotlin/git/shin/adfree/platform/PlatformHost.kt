@@ -78,6 +78,14 @@ interface PlatformHost {
     fun localProxyStatus(): List<Pair<String, String>> = emptyList()
 
     /**
+     * The platform raises its own local listeners, so their ports are the
+     * user's to move and Settings says where they are. Android's listeners
+     * are not configurable — it has none; the tunnel takes the device — so it
+     * leaves this off rather than showing two numbers nothing binds.
+     */
+    fun supportsLocalProxyPorts(): Boolean = false
+
+    /**
      * The host can ask the system for the privilege that putting the machine's
      * own traffic onto the filter needs. Android gets it from the VPN consent
      * dialog it already raises, so it leaves this off; a desktop has no tunnel

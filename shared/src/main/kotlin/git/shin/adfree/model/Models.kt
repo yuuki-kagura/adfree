@@ -740,6 +740,11 @@ data class ProtectionSettings(
     val httpsOnlyMode: Boolean = false,
     /** Routing mode: send new TCP flows through a SOCKS5 proxy instead of direct. */
     val proxy: ProxySettings = ProxySettings(),
+    /**
+     * Where this machine's own filtering listeners bind. Desktop only: a phone
+     * has no port of its own to move, its tunnel captures the device.
+     */
+    val localProxy: LocalProxySettings = LocalProxySettings(),
     /** In-app language; `SYSTEM` follows the device. */
     val appLanguage: AppLanguage = AppLanguage.SYSTEM,
     /** Light/dark choice; `SYSTEM` follows the device. */

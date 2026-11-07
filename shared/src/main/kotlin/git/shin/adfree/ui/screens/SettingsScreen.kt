@@ -23,6 +23,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Bolt
@@ -74,14 +75,17 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import git.shin.adfree.core.DnsRewriteValidation
 import git.shin.adfree.core.MitmStatus
+import git.shin.adfree.core.ProxyStatus
 import git.shin.adfree.data.AutomationControl
 import git.shin.adfree.model.AppLanguage
 import git.shin.adfree.model.DnsProvider
 import git.shin.adfree.model.DnsRewriteRule
+import git.shin.adfree.model.LocalProxySettings
 import git.shin.adfree.model.LogLevel
 import git.shin.adfree.model.ProtectionSettings
 import git.shin.adfree.model.ProtocolType
@@ -203,6 +207,20 @@ fun SettingsScreen(
                         else Strings.settings_routing_local_vpn,
                     ),
                     value = if (proxyActive) "${proxy.host}:${proxy.port}" else null,
+                )
+
+                Spacer(modifier = Modifier.height(10.dp))
+            }
+
+            // The other side of the same coin: this platform's own listeners.
+            // A number a listener cannot bind is a filter that relays nothing,
+            // so the ports are the user's to move and the core's answer about
+            // them is read right here rather than from the Home card alone.
+            if (platform.supportsLocalProxyPorts()) {
+                LocalListenerSection(
+                    saved = state.settings.localProxy,
+                    status = viewModel.localProxyStatus(),
+                    onSave = viewModel::setLocalProxy,
                 )
 
                 Spacer(modifier = Modifier.height(10.dp))
@@ -732,6 +750,157 @@ private fun SettingsValueRow(
             }
         }
     }
+}
+
+/**
+ * The ports this machine's own listeners bind — AdGuard for Windows' `Port`
+ * setting for its local proxy and DNS server.
+ *
+ * Both fields edit a draft and nothing reaches the core until Apply, the way
+ * the routing section above behaves: a half-typed port must never become a
+ * binding. The line under the fields is the core's own answer, not a guess —
+ * a refused bind keeps its reason here, so a listener that could not come up
+ * reads as a filter that is off rather than as one that is quietly relaying.
+ */
+@Composable
+private fun LocalListenerSection(
+    saved: LocalProxySettings,
+    status: ProxyStatus,
+    onSave: (LocalProxySettings) -> Unit,
+) {
+    var tcpText by remember(saved) { mutableStateOf(saved.tcpPort.toString()) }
+    var dnsText by remember(saved) { mutableStateOf(saved.dnsPort.toString()) }
+    var error by remember(saved) { mutableStateOf<String?>(null) }
+
+    val tcp = tcpText.toIntOrNull()
+    val dns = dnsText.toIntOrNull()
+
+    fun save() {
+        if (tcp == null || dns == null) {
+            error = Strings.settings_local_proxy_error
+            return
+        }
+        val draft = LocalProxySettings(tcpPort = tcp, dnsPort = dns)
+        if (!draft.isUsable) {
+            error = Strings.settings_local_proxy_error
+            return
+        }
+        error = null
+        onSave(draft)
+    }
+
+    val refusal = listOf(status.tcpError, status.dnsError)
+        .filter { it.isNotBlank() }
+        .joinToString("; ")
+
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(14.dp),
+        colors = CardDefaults.cardColors(containerColor = AdGuardDarkSurface),
+        border = CardDefaults.outlinedCardBorder().copy(
+            brush = androidx.compose.ui.graphics.Brush.linearGradient(
+                listOf(AdGuardDarkOutline, AdGuardBlueDns.copy(alpha = 0.2f)),
+            ),
+        ),
+    ) {
+        Column(modifier = Modifier.padding(14.dp)) {
+            Text(
+                text = L10n.get(Strings.settings_local_proxy_title),
+                fontSize = 14.sp,
+                fontWeight = FontWeight.SemiBold,
+                color = AdGuardTextPrimary,
+            )
+            Text(
+                text = L10n.get(Strings.settings_local_proxy_subtitle),
+                fontSize = 11.sp,
+                color = AdGuardTextSecondary,
+            )
+            Spacer(modifier = Modifier.height(10.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                ListenerPortField(
+                    label = L10n.get(Strings.settings_local_proxy_tcp_label),
+                    text = tcpText,
+                    isError = error != null,
+                    onValueChange = {
+                        tcpText = it.filter(Char::isDigit).take(5)
+                        error = null
+                    },
+                    modifier = Modifier.weight(1f),
+                )
+                ListenerPortField(
+                    label = L10n.get(Strings.settings_local_proxy_dns_label),
+                    text = dnsText,
+                    isError = error != null,
+                    onValueChange = {
+                        dnsText = it.filter(Char::isDigit).take(5)
+                        error = null
+                    },
+                    modifier = Modifier.weight(1f),
+                )
+            }
+            if (error != null) {
+                Spacer(modifier = Modifier.height(6.dp))
+                Text(L10n.get(Strings.settings_local_proxy_error), fontSize = 11.sp, color = AdGuardRedBlocked)
+            }
+            Spacer(modifier = Modifier.height(10.dp))
+            TextButton(onClick = { save() }) {
+                Text(
+                    L10n.get(Strings.settings_local_proxy_apply),
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = AdGuardBlueDns,
+                )
+            }
+            Spacer(modifier = Modifier.height(4.dp))
+            Text(
+                text = when {
+                    status.running -> L10n.format(
+                        Strings.settings_local_proxy_listening,
+                        status.tcpPort.toInt(),
+                        status.dnsPort.toInt(),
+                    )
+                    refusal.isNotBlank() -> L10n.format(Strings.settings_local_proxy_stopped, refusal)
+                    else -> L10n.get(Strings.settings_local_proxy_stopped_quiet)
+                },
+                fontSize = 11.sp,
+                fontFamily = FontFamily.Monospace,
+                color = when {
+                    status.running -> AdGuardGreenPrimary
+                    refusal.isNotBlank() -> AdGuardRedBlocked
+                    else -> AdGuardTextMuted
+                },
+            )
+        }
+    }
+}
+
+/** One port of the pair: digits only, because anything else is not a port. */
+@Composable
+private fun ListenerPortField(
+    label: String,
+    text: String,
+    isError: Boolean,
+    onValueChange: (String) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    OutlinedTextField(
+        value = text,
+        onValueChange = onValueChange,
+        label = { Text(label, fontSize = 11.sp) },
+        singleLine = true,
+        isError = isError,
+        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+        modifier = modifier,
+        shape = RoundedCornerShape(10.dp),
+        colors = androidx.compose.material3.OutlinedTextFieldDefaults.colors(
+            focusedBorderColor = AdGuardBlueDns,
+            unfocusedBorderColor = AdGuardDarkOutline,
+            focusedTextColor = AdGuardTextPrimary,
+            unfocusedTextColor = AdGuardTextPrimary,
+            focusedLabelColor = AdGuardBlueDns,
+            unfocusedLabelColor = AdGuardTextSecondary,
+        ),
+    )
 }
 
 /**

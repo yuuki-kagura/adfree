@@ -1276,7 +1276,9 @@ Practical consequences per platform:
   service, and UID attribution from `/proc` keeps `$app` rules working. Or, the
   way AdGuard for Windows does it, `rust/src/proxy` runs a local transparent
   proxy (127.0.0.1:3129) and DNS server (:5300 — 5353 belongs to mDNS on
-  Linux) that `tools/adfree-linux.nft` redirects onto. A redirect lives in the
+  Linux; both are defaults the Settings screen lets the user move, and a bind
+  that fails keeps its reason in `proxy::status`) that `tools/adfree-linux.nft`
+  redirects onto. A redirect lives in the
   nat **output** hook, because a locally generated packet never passes
   prerouting, and it must be `redirect` rather than `dnat to 127.0.0.1`: the
   output hook has already made its routing decision, so only a port change is
