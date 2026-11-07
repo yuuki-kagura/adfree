@@ -4739,17 +4739,6 @@ impl Core {
     /// not trust the AdFree CA. Remember the owner so its next connection is
     /// handed to the origin untouched — DNS filtering and `$app=` rules still
     /// apply, the TLS payload just stays encrypted. Logged once per app.
-    /// The client left without ever sending a request after the handshake: it
-    /// refused the certificate, and the app it belongs to is spliced from now
-    /// on. Called by the proxy listener, which is the one place that sees the
-    /// close and knows the process behind it.
-    pub fn note_client_refusal(&self, host: &str, apps: &[String]) {
-        if apps.is_empty() || host.is_empty() {
-            return;
-        }
-        self.learn_ca_rejections(apps, host);
-    }
-
     pub(crate) fn note_client_cert_rejection(&self, err: &str, apps: &[String], host: &str) {
         if apps.is_empty() || !Self::client_rejected_certificate(err) {
             return;

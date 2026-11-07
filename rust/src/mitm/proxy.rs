@@ -958,24 +958,23 @@ impl ProxySession {
             ProxyState::Plain | ProxyState::Local(_) => return None,
             _ => {}
         }
-        // The name of the process is the better key when the platform has one:
-        // it is what the `$app=` rules and the per-app HTTPS exclusions already
-        // use, and it does not touch any other program that happens to share a
-        // TLS stack with this one (Node and `curl` are the same OpenSSL shape).
-        // Whoever arms the session learns that part; this only remembers the
-        // pair when nothing else can name the client.
-        if self.apps.is_empty() {
-            let fingerprint = self.client_fingerprint.clone().unwrap_or_default();
-            let learned = self
-                .untrusted
-                .as_deref()
-                .is_some_and(|untrusted| untrusted.note(&name, &fingerprint));
-            if learned {
-                crate::logbuf::push(&format!(
-                    "mitm {name}: client closed without a request after the handshake, splicing \
-                     this host for this client from now on"
-                ));
-            }
+        // Learned as `(host, client fingerprint)` and never per app: a close
+        // with no request is a *shape*, not a statement, and browsers open
+        // speculative connections and drop them all the time (every preconnect
+        // looks exactly like this). Excluding a whole app on that evidence
+        // would silently switch HTTPS filtering off for the one program that
+        // matters most. Only a real alert — the client saying it refused the
+        // certificate — is allowed to speak for an app.
+        let fingerprint = self.client_fingerprint.clone().unwrap_or_default();
+        let learned = self
+            .untrusted
+            .as_deref()
+            .is_some_and(|untrusted| untrusted.note(&name, &fingerprint));
+        if learned {
+            crate::logbuf::push(&format!(
+                "mitm {name}: client closed without a request after the handshake, splicing \
+                 this host for this client from now on"
+            ));
         }
         Some(name)
     }

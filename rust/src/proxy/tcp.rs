@@ -301,9 +301,7 @@ fn handle(client: TcpStream, stop: &AtomicBool) {
                     // request refused the certificate (see
                     // `ProxySession::on_client_eof`).
                     if let Some(session) = session.as_mut() {
-                        if let Some(host) = session.on_client_eof() {
-                            core.note_client_refusal(&host, &apps);
-                        }
+                        session.on_client_eof();
                     }
                     break;
                 }

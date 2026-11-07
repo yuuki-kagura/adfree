@@ -96,6 +96,18 @@ impl UntrustedClients {
 
     /// Every host learned so far, with the number of clients that refused it.
     /// The log writes these out; nothing decides on them.
+    /// The fingerprints remembered for one host, sorted: what a test needs to
+    /// say that the pair was learned and nothing wider was.
+    pub(crate) fn fingerprints(&self, host: &str) -> Vec<String> {
+        let entries = self.entries.lock().unwrap_or_else(|e| e.into_inner());
+        let mut found: Vec<String> = entries
+            .get(host)
+            .map(|set| set.iter().cloned().collect())
+            .unwrap_or_default();
+        found.sort();
+        found
+    }
+
     pub(crate) fn snapshot(&self) -> Vec<(String, usize)> {
         let mut hosts: Vec<(String, usize)> = self
             .entries

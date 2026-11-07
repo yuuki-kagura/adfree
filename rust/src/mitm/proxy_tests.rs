@@ -896,12 +896,13 @@ fn a_client_that_hangs_up_without_a_request_is_learned() {
     );
 }
 
-/// When the platform can name the process, the refusal is learned per app and
-/// the fingerprint is left alone: Node and `curl` are the same OpenSSL shape,
-/// and condemning the pair would cost every other program built on it its
-/// filtering on that host.
+/// A close with no request says a *shape* refused, not an app. Browsers open
+/// speculative connections and drop them constantly (every preconnect looks
+/// exactly like a refusal), so the verdict here is scoped to the host and the
+/// client fingerprint: a browser on that host keeps being filtered, and only
+/// the stack that actually left gets spliced.
 #[test]
-fn a_named_app_is_not_learned_as_a_client_fingerprint() {
+fn a_close_without_a_request_splices_the_pair_not_the_app() {
     use rustls::pki_types::ServerName;
     use rustls::ClientConnection;
 
@@ -918,21 +919,21 @@ fn a_named_app_is_not_learned_as_a_client_fingerprint() {
     )
     .expect("pending session");
     proxy.set_untrusted(Arc::clone(&untrusted));
-    proxy.set_apps(vec!["node".to_string()]);
+    proxy.set_apps(vec!["chrome".to_string()]);
 
     let roots = rustls::RootCertStore::empty();
     let name = ServerName::try_from("api.example.com".to_string()).expect("server name");
     let mut client = ClientConnection::new(tls::client_config_with(roots), name).expect("client");
     let hello = tls::take_client_outbound(&mut client);
-    let step = proxy.on_client_payload(&hello).expect("first flight");
-    assert!(!step.to_client.is_empty(), "the proxy terminated and answered");
+    proxy.on_client_payload(&hello).expect("first flight");
 
-    // The client never finished: it left. The host comes back, the set stays
-    // empty, and the engine learns the app instead.
     assert_eq!(Some("api.example.com".to_string()), proxy.on_client_eof());
+    let learned = untrusted.fingerprints("api.example.com");
+    assert_eq!(learned.len(), 1, "one fingerprint, not one per app");
+    assert!(untrusted.refuses("api.example.com", &learned[0]));
     assert!(
-        untrusted.is_empty(),
-        "a named app must be learned per app, not per fingerprint"
+        !untrusted.refuses("api.example.com", "a-browser-fingerprint"),
+        "another client on the same host keeps being filtered"
     );
 }
 
