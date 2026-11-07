@@ -828,6 +828,126 @@ fn a_certificate_alert_is_learned_for_that_client_and_host() {
     assert!(!retry.server_handshaking(), "the flow is on the plain path");
 }
 
+/// A client that hangs up right after the handshake without ever sending a
+/// request is the one remaining shape of a refused certificate: many stacks
+/// reset the socket instead of sending the alert, and the reset takes the
+/// alert record with it. The close itself is the evidence.
+#[test]
+fn a_client_that_hangs_up_without_a_request_is_learned() {
+    use rustls::pki_types::ServerName;
+    use rustls::ClientConnection;
+
+    let mitm_ca = CertificateAuthority::generate().expect("mitm ca");
+    let untrusted = crate::mitm::untrusted::UntrustedClients::new();
+
+    let mut proxy = {
+        let resolver = Arc::new(SniCertResolver::new(Arc::new(
+            CertificateAuthority::from_pem(&mitm_ca.cert_pem(), &mitm_ca.key_pem())
+                .expect("restore"),
+        )));
+        let mut proxy = ProxySession::new_pending(
+            resolver,
+            tls::UpstreamTls::system(),
+            "/adfree-user.js".into(),
+            Arc::from(""),
+        )
+        .expect("pending session");
+        proxy.set_untrusted(Arc::clone(&untrusted));
+        proxy
+    };
+
+    // A client that does trust the CA, so the handshake completes: this is
+    // about the close, not the certificate.
+    let mut roots = rustls::RootCertStore::empty();
+    roots
+        .add(rustls::pki_types::CertificateDer::from(mitm_ca.cert_der()))
+        .expect("browser root");
+    let name = ServerName::try_from("api.example.com".to_string()).expect("server name");
+    let mut client = ClientConnection::new(tls::client_config_with(roots), name).expect("client");
+
+    // Drive the handshake to completion without a request in between.
+    let mut plain = Vec::new();
+    for _round in 0..8 {
+        let wire = tls::take_client_outbound(&mut client);
+        if wire.is_empty() && !proxy.server_handshaking() {
+            break;
+        }
+        let out = proxy.on_client_payload(&wire).expect("client step");
+        if !out.to_client.is_empty() {
+            feed_browser(&mut client, &out.to_client, &mut plain);
+        }
+    }
+    assert!(!proxy.server_handshaking(), "the handshake completed");
+
+    assert_eq!(
+        Some("api.example.com".to_string()),
+        proxy.on_client_eof(),
+        "a close with no request after the handshake names the host it happened on"
+    );
+    assert_eq!(
+        vec![("api.example.com".to_string(), 1)],
+        untrusted.snapshot(),
+        "the pair is remembered once"
+    );
+    assert_eq!(
+        Some("api.example.com".to_string()),
+        proxy.on_client_eof(),
+        "a second close still names the host; learning it twice is not news"
+    );
+}
+
+/// When the platform can name the process, the refusal is learned per app and
+/// the fingerprint is left alone: Node and `curl` are the same OpenSSL shape,
+/// and condemning the pair would cost every other program built on it its
+/// filtering on that host.
+#[test]
+fn a_named_app_is_not_learned_as_a_client_fingerprint() {
+    use rustls::pki_types::ServerName;
+    use rustls::ClientConnection;
+
+    let mitm_ca = CertificateAuthority::generate().expect("mitm ca");
+    let untrusted = crate::mitm::untrusted::UntrustedClients::new();
+    let resolver = Arc::new(SniCertResolver::new(Arc::new(
+        CertificateAuthority::from_pem(&mitm_ca.cert_pem(), &mitm_ca.key_pem()).expect("restore"),
+    )));
+    let mut proxy = ProxySession::new_pending(
+        resolver,
+        tls::UpstreamTls::system(),
+        "/adfree-user.js".into(),
+        Arc::from(""),
+    )
+    .expect("pending session");
+    proxy.set_untrusted(Arc::clone(&untrusted));
+    proxy.set_apps(vec!["node".to_string()]);
+
+    let roots = rustls::RootCertStore::empty();
+    let name = ServerName::try_from("api.example.com".to_string()).expect("server name");
+    let mut client = ClientConnection::new(tls::client_config_with(roots), name).expect("client");
+    let hello = tls::take_client_outbound(&mut client);
+    let step = proxy.on_client_payload(&hello).expect("first flight");
+    assert!(!step.to_client.is_empty(), "the proxy terminated and answered");
+
+    // The client never finished: it left. The host comes back, the set stays
+    // empty, and the engine learns the app instead.
+    assert_eq!(Some("api.example.com".to_string()), proxy.on_client_eof());
+    assert!(
+        untrusted.is_empty(),
+        "a named app must be learned per app, not per fingerprint"
+    );
+}
+
+/// The same close after a request is an ordinary end of conversation, not a
+/// refusal: nothing may be learned from it.
+#[test]
+fn an_ordinary_close_after_a_request_is_not_learned() {
+    let ca = CertificateAuthority::generate().expect("mitm ca");
+    let mut proxy = build_proxy(&ca, "/adfree-user.js");
+    let untrusted = crate::mitm::untrusted::UntrustedClients::new();
+    proxy.set_untrusted(untrusted);
+    // No handshake, no capture: a plain close says nothing about the CA.
+    assert_eq!(None, proxy.on_client_eof());
+}
+
 /// The same host reached by a client that does accept the CA keeps being
 /// terminated: the learned pair is per fingerprint, so one app giving up on
 /// the certificate cannot cost a browser its filtering.

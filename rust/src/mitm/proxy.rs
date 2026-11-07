@@ -308,6 +308,10 @@ pub struct ProxySession {
     /// been read. Stored on the session because the refusal arrives *after*
     /// the pending state is gone.
     client_fingerprint: Option<String>,
+    /// How many application bytes the client sent after its handshake. Zero
+    /// is how a refused certificate looks from here: the client saw the leaf
+    /// and left without a request (see [`Self::on_client_eof`]).
+    client_plain_bytes: usize,
     /// The upstream settings, kept only while the active half was armed with
     /// ECH: a server that rejects the offer gets one retry from these. `None`
     /// means the upstream is plain (or already retried once).
@@ -657,6 +661,7 @@ impl ProxySession {
             https_skip_apps: Arc::new(HashSet::new()),
             untrusted: None,
             client_fingerprint: None,
+            client_plain_bytes: 0,
             upstream_plain: None,
             client_discard: None,
             apps: Vec::new(),
@@ -711,6 +716,7 @@ impl ProxySession {
             https_skip_apps: Arc::new(HashSet::new()),
             untrusted: None,
             client_fingerprint: None,
+            client_plain_bytes: 0,
             upstream_plain: None,
             client_discard: None,
             apps: Vec::new(),
@@ -778,6 +784,7 @@ impl ProxySession {
             https_skip_apps: Arc::new(HashSet::new()),
             untrusted: None,
             client_fingerprint: None,
+            client_plain_bytes: 0,
             upstream_plain: None,
             client_discard: None,
             apps: Vec::new(),
@@ -908,6 +915,12 @@ impl ProxySession {
         if !refused {
             return;
         }
+        if !self.apps.is_empty() {
+            // The engine learns this one per app (`note_client_cert_rejection`),
+            // which is the precise key; a fingerprint would also condemn every
+            // other program built on the same TLS stack.
+            return;
+        }
         let fingerprint = self.client_fingerprint.clone().unwrap_or_default();
         if untrusted.note(&name, &fingerprint) {
             crate::logbuf::push(&format!(
@@ -915,6 +928,56 @@ impl ProxySession {
                  client from now on"
             ));
         }
+    }
+
+    /// The client closed its side. Learns a refused certificate when the close
+    /// has that shape, and returns whether anything new was learned.
+    ///
+    /// This is the signal the alert cannot always give. A client built on
+    /// OpenSSL answers the leaf with `unknown_ca`, but many stacks — Node's
+    /// undici among them — destroy the socket in the same breath, and the RST
+    /// takes the alert record with it. What is left is the shape of the
+    /// connection: a completed handshake, not one application byte, then a
+    /// close. A client that trusts the certificate has no reason to close
+    /// there, and a browser's speculative preconnect is the one false positive
+    /// — it costs that host one spliced flow per learned pair, not filtering
+    /// anywhere else.
+    pub fn on_client_eof(&mut self) -> Option<String> {
+        let Some(name) = self.captured.clone() else {
+            return None;
+        };
+        // A client that sent a byte of its own after the handshake was talking
+        // to the origin, whatever happened next. Zero bytes means it took one
+        // look at the certificate and left.
+        if self.client_plain_bytes > 0 {
+            return None;
+        }
+        // A plain or spliced flow never presented a certificate at all; the
+        // local origin serves our own page and has no client of the user's.
+        match &self.state {
+            ProxyState::Plain | ProxyState::Local(_) => return None,
+            _ => {}
+        }
+        // The name of the process is the better key when the platform has one:
+        // it is what the `$app=` rules and the per-app HTTPS exclusions already
+        // use, and it does not touch any other program that happens to share a
+        // TLS stack with this one (Node and `curl` are the same OpenSSL shape).
+        // Whoever arms the session learns that part; this only remembers the
+        // pair when nothing else can name the client.
+        if self.apps.is_empty() {
+            let fingerprint = self.client_fingerprint.clone().unwrap_or_default();
+            let learned = self
+                .untrusted
+                .as_deref()
+                .is_some_and(|untrusted| untrusted.note(&name, &fingerprint));
+            if learned {
+                crate::logbuf::push(&format!(
+                    "mitm {name}: client closed without a request after the handshake, splicing \
+                     this host for this client from now on"
+                ));
+            }
+        }
+        Some(name)
     }
 
     fn step_client_payload(&mut self, payload: &[u8]) -> Result<Outcome, String> {
@@ -977,6 +1040,10 @@ impl ProxySession {
             return Ok(self.splice_pending_verbatim());
         }
         state.raw.extend_from_slice(payload);
+        // The name this session ends up presenting a certificate for, if it
+        // gets that far: every splice and block decision returns before this
+        // is set, so a flow that never showed a leaf is never learned as one.
+        let mut presented: Option<String> = None;
         if let tls::Flight::Hello {
             ech_len,
             server_name,
@@ -986,6 +1053,7 @@ impl ProxySession {
         {
             let name = server_name.as_deref().unwrap_or("?");
             self.client_fingerprint = Some(fingerprint.clone());
+            presented = Some(name.to_string());
             if self.https_skip.matches(name)
                 || (self.https_only_mode && !self.https_only.matches(name))
             {
@@ -1131,6 +1199,15 @@ impl ProxySession {
                 // and filtered as usual.
             }
         }
+        // Every splice decision is behind us: from here the session presents a
+        // certificate for this name, and a client that leaves without a
+        // request refused it.
+        // Recorded here rather than on the transition to Active: a client that
+        // refuses the leaf never finishes the handshake, so the close would
+        // otherwise arrive with no name to learn from.
+        if presented.is_some() {
+            self.captured = presented;
+        }
         let started = Instant::now();
         let handshaking = tls::server_handshaking(&state.server);
         let fed = feed_server(&mut state.server, payload);
@@ -1246,6 +1323,9 @@ impl ProxySession {
         let ProxyState::Active(session) = &mut self.state else {
             return Ok(Outcome::default());
         };
+        // Anything the client says after its handshake is a request, and a
+        // client that says nothing before hanging up refused the certificate.
+        self.client_plain_bytes += plain.len();
         let mut outcome = Outcome::default();
         if tls::server_handshaking(&session.server) {
             // Our own handshake answers go back to the client.

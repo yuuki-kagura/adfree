@@ -835,6 +835,10 @@ pub struct Core {
     /// Local CA used to forge certs for HTTPS filtering; `failed()` stands for
     /// "no CA loaded yet".
     pub mitm_ca: RwLock<Arc<crate::mitm::ca::CertificateAuthority>>,
+    /// Whether a CA has been loaded into `mitm_ca` yet. The placeholder the
+    /// engine starts with is not a certificate anybody learned against, so the
+    /// first load must not read as a change.
+    mitm_ca_loaded: std::sync::atomic::AtomicBool,
     /// User scripts injected into HTML responses.
     pub mitm_scripts: RwLock<crate::mitm::script::ScriptSet>,
     /// Shared per-SNI leaf resolver for the TLS termination.
@@ -1090,6 +1094,7 @@ impl Core {
             mitm_ca: RwLock::new(Arc::new(crate::mitm::ca::CertificateAuthority::failed(
                 "not initialised",
             ))),
+            mitm_ca_loaded: std::sync::atomic::AtomicBool::new(false),
             mitm_scripts: RwLock::new(crate::mitm::script::ScriptSet::new()),
             mitm_resolver: RwLock::new(None),
             relays: Mutex::new(crate::mitm::relay::RelayTable::new()),
@@ -1143,6 +1148,10 @@ impl Core {
                 // Opening the state runs the one-time import from the blobs
                 // older builds wrote, so it must happen before the platform
                 // reads the state back.
+                // What clients have refused the CA survives a restart: the
+                // first connection of an app must not fail again on every
+                // launch just to relearn it.
+                self.untrusted_clients.set_store(Arc::clone(&store));
                 let state = crate::state::StateStore::open(Arc::clone(&store));
                 let stored = self.store.set(store).is_ok();
                 let stated = self.state.set(state).is_ok();
@@ -4716,6 +4725,17 @@ impl Core {
     /// not trust the AdFree CA. Remember the owner so its next connection is
     /// handed to the origin untouched — DNS filtering and `$app=` rules still
     /// apply, the TLS payload just stays encrypted. Logged once per app.
+    /// The client left without ever sending a request after the handshake: it
+    /// refused the certificate, and the app it belongs to is spliced from now
+    /// on. Called by the proxy listener, which is the one place that sees the
+    /// close and knows the process behind it.
+    pub fn note_client_refusal(&self, host: &str, apps: &[String]) {
+        if apps.is_empty() || host.is_empty() {
+            return;
+        }
+        self.learn_ca_rejections(apps, host);
+    }
+
     pub(crate) fn note_client_cert_rejection(&self, err: &str, apps: &[String], host: &str) {
         if apps.is_empty() || !Self::client_rejected_certificate(err) {
             return;
@@ -4941,12 +4961,19 @@ impl Core {
     /// placeholder — key.
     pub fn set_mitm_ca(&self, ca: Arc<crate::mitm::ca::CertificateAuthority>) {
         // `ensure_ca` re-loads the same pair on every UI refresh; only a real
-        // key change invalidates what the apps learned about the old one.
+        // key change invalidates what the apps learned about the old one. The
+        // very first load is not a change: an empty slot means this engine has
+        // not held a CA yet — it says nothing about the certificate the set on
+        // disk was learned against, and clearing there would throw away what
+        // the last launch learned.
         let changed = {
             let current = self.mitm_ca.read().unwrap();
-            current.cert_der() != ca.cert_der()
+            self.mitm_ca_loaded.load(std::sync::atomic::Ordering::Relaxed)
+                && current.cert_der() != ca.cert_der()
         };
         *self.mitm_ca.write().unwrap() = ca;
+        self.mitm_ca_loaded
+            .store(true, std::sync::atomic::Ordering::Relaxed);
         *self.mitm_resolver.write().unwrap() = None;
         if changed {
             // Live flows were terminated with leaves from the old key; a new

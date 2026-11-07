@@ -157,10 +157,13 @@ refuses the certificate, it says so in a TLS alert, and that is learned per
 `(host, client fingerprint)` — the shape of the ClientHello, which tells a
 browser from a `fetch()` call. Those connections are spliced verbatim from then
 on (`rust/src/mitm/untrusted.rs`): the app keeps working, DNS filtering still
-applies to it, and a browser on the same host keeps being filtered. The first
-connection after the app starts still fails once, because that is the attempt
-the proxy learns from; installing the system CA clears what was learned, so a
-client that comes to trust it is decrypted again.
+applies to it, and a browser on the same host keeps being filtered. That
+verdict is remembered across restarts, in the same database as the rest of the
+state (`state` table, key `mitm.untrusted_clients`), so an app rediscovers the
+splice once per certificate rather than once per launch — a fresh profile, or a
+restart before the first refusal, is the only time it fails once. Installing
+the system CA clears what was learned, so a client that comes to trust it is
+decrypted again.
 
 ## Desktop protection on Linux
 

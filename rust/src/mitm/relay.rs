@@ -513,6 +513,13 @@ impl Relay {
     /// The client sent a FIN. Shut our write side to the peer down and
     /// acknowledge: a FIN consumes one sequence number.
     pub fn on_client_fin(&mut self) -> Option<Vec<u8>> {
+        // A client that never sent a request before its FIN refused the
+        // certificate (see `ProxySession::on_client_eof`).
+        if let Some(session) = self.session.as_mut() {
+            // No process name reaches this path: the session falls back to the
+            // `(host, client fingerprint)` pair it remembers itself.
+            session.on_client_eof();
+        }
         self.client_fin = true;
         self.last_ms = now_ms();
         self.flow.acked_seq = self.flow.acked_seq.wrapping_add(1);

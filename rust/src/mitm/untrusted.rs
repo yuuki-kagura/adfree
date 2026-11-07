@@ -35,11 +35,18 @@ use std::sync::{Arc, Mutex};
 /// cannot grow the map without end.
 const MAX_HOSTS: usize = 256;
 
+/// The `state` row the learned pairs survive a restart in.
+const STATE_KEY: &str = "mitm.untrusted_clients";
+
 /// The remembered `(host → client fingerprints)` pairs.
 #[derive(Default)]
 pub struct UntrustedClients {
     /// One entry per host, holding the fingerprints seen refusing it.
     entries: Mutex<HashMap<String, HashSet<String>>>,
+    /// The database the set is written back to, once the platform has handed
+    /// the data root down. Without it the set lives as long as the engine,
+    /// which is what a platform that never calls `set_store` gets.
+    store: Mutex<Option<Arc<crate::store::Store>>>,
 }
 
 impl UntrustedClients {
@@ -60,10 +67,15 @@ impl UntrustedClients {
             // for the hosts that no longer fit.
             return false;
         }
-        entries
+        let learned = entries
             .entry(host.to_string())
             .or_default()
-            .insert(fingerprint.to_string())
+            .insert(fingerprint.to_string());
+        if learned {
+            drop(entries);
+            self.save();
+        }
+        learned
     }
 
     /// Whether this client has already refused the certificate for `host`.
@@ -111,6 +123,62 @@ impl UntrustedClients {
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .clear();
+        self.save();
+    }
+
+    /// Points the set at the store: loads what an earlier run learned and
+    /// writes every later change back.
+    ///
+    /// Persisted because the evidence costs one failed handshake per app, and
+    /// a restart is not a reason to make the user watch that again. Installing
+    /// the system CA clears the set, so a stale verdict cannot outlive the
+    /// certificate it was learned against.
+    pub fn set_store(&self, store: Arc<crate::store::Store>) {
+        // An engine that ran before this was a database row may have left its
+        // own file behind; it is not read any more, so it is not left to
+        // suggest otherwise.
+        std::fs::remove_file(store.root().join("untrusted-clients.json")).ok();
+        if let Some(text) = store.state_get(STATE_KEY) {
+            match serde_json::from_str::<HashMap<String, HashSet<String>>>(&text) {
+                Ok(learned) => {
+                    let mut entries = self.entries.lock().unwrap_or_else(|e| e.into_inner());
+                    for (host, fingerprints) in learned.into_iter().take(MAX_HOSTS) {
+                        entries.entry(host).or_default().extend(fingerprints);
+                    }
+                }
+                Err(e) => crate::logbuf::push_error(&format!(
+                    "mitm: unreadable certificate-refusal memory: {e}"
+                )),
+            }
+        }
+        *self.store.lock().unwrap_or_else(|e| e.into_inner()) = Some(store);
+    }
+
+    /// Writes the current set out, if the platform gave it somewhere to go.
+    ///
+    /// One row in the same database as everything else the app remembers: the
+    /// write is a single upsert into a page already in cache, and the set is
+    /// small (one entry per app that refused, not per connection).
+    fn save(&self) {
+        let store = self.store.lock().unwrap_or_else(|e| e.into_inner()).clone();
+        let Some(store) = store else {
+            return;
+        };
+        let snapshot: HashMap<String, HashSet<String>> = self
+            .entries
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone();
+        let body = match serde_json::to_string(&snapshot) {
+            Ok(body) => body,
+            Err(e) => {
+                crate::logbuf::push_error(&format!("mitm: cannot encode the refusal memory: {e}"));
+                return;
+            }
+        };
+        if let Err(e) = store.state_set(STATE_KEY, &body) {
+            crate::logbuf::push_error(&format!("mitm: cannot save the refusal memory: {e}"));
+        }
     }
 }
 
@@ -162,6 +230,41 @@ mod tests {
         // A host already present keeps learning new clients.
         assert!(set.note("h0.example", "other-fp"));
         assert_eq!(MAX_HOSTS, set.snapshot().len());
+    }
+
+    /// A restart must not cost the same app another failed handshake: what was
+    /// learned is written to the data root and read back by the next engine.
+    #[test]
+    fn the_set_survives_a_restart_through_the_store() {
+        let root = std::env::temp_dir().join(format!(
+            "adfree-untrusted-{}-{:?}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0)
+        ));
+        let store = Arc::new(crate::store::Store::open(&root).expect("store"));
+
+        let first = UntrustedClients::new();
+        first.set_store(Arc::clone(&store));
+        assert!(first.note("api.example.com", "node-fp"));
+
+        // The next engine over the same database finds it already learned.
+        let second = UntrustedClients::new();
+        second.set_store(Arc::clone(&store));
+        assert!(second.refuses("api.example.com", "node-fp"));
+        assert!(!second.refuses("api.example.com", "chrome-fp"));
+
+        // Installing the CA clears the memory in the database too.
+        second.clear();
+        let third = UntrustedClients::new();
+        third.set_store(Arc::clone(&store));
+        assert!(third.is_empty(), "a cleared set must not come back");
+        assert!(!third.refuses("api.example.com", "node-fp"));
+
+        drop(store);
+        std::fs::remove_dir_all(&root).ok();
     }
 
     #[test]

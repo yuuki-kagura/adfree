@@ -296,7 +296,17 @@ fn handle(client: TcpStream, stop: &AtomicBool) {
                         break;
                     }
                 }
-                Read::Closed => break,
+                Read::Closed => {
+                    // A client that finished the handshake and left without a
+                    // request refused the certificate (see
+                    // `ProxySession::on_client_eof`).
+                    if let Some(session) = session.as_mut() {
+                        if let Some(host) = session.on_client_eof() {
+                            core.note_client_refusal(&host, &apps);
+                        }
+                    }
+                    break;
+                }
                 Read::Retry => {}
             }
         }
