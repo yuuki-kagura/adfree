@@ -91,6 +91,10 @@ class DesktopContainer(
             listOf(
                 "HTTP(S)" to endpoint(tcp, status.tcpError),
                 "DNS" to endpoint(dns, status.dnsError),
+                // The switch from Settings says whether this machine's own
+                // conversations reach the filter at all, so the card shows
+                // which way it is set rather than leaving it to memory.
+                "Loopback" to if (configured.filterLocalhost) "filtered like anything else" else "left alone",
                 // Which of the two layouts is in play decides whether anything
                 // reaches the filter at all, so the card says it plainly.
                 "Traffic" to if (marked) "the machine's own, redirected" else "only what is pointed here",

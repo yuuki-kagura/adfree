@@ -981,6 +981,8 @@
     <string name="settings_local_proxy_listening">Listening on 127.0.0.1:%1$d (HTTP(S)) and 127.0.0.1:%2$d (DNS)</string>
     <string name="settings_local_proxy_stopped">Not listening — %1$s</string>
     <string name="settings_local_proxy_stopped_quiet">Not listening</string>
+    <string name="settings_local_proxy_filter_localhost_title">Filter localhost</string>
+    <string name="settings_local_proxy_filter_localhost_subtitle">Off leaves this machine\'s own conversations — a local dev server, the stub resolver — untouched by the filter</string>
     <string name="settings_notifications_title">App notifications</string>
     <string name="settings_notifications_subtitle">Open the OS switches for protection, firewall and update channels</string>
     <string name="settings_group_automation">Automation</string>

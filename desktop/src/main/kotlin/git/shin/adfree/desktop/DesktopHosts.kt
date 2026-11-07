@@ -254,7 +254,7 @@ class DesktopTunnelControl(
 
     override fun startVpnService() {
         val ports = localProxy()
-        val status = coreEngine.startProxy(ports.tcpPort, ports.dnsPort)
+        val status = coreEngine.startProxy(ports.tcpPort, ports.dnsPort, ports.filterLocalhost)
         if (!status.running) {
             // Say which listener refused and what the kernel said about it:
             // the Home card shows the same words, and a bare "did not come up"
@@ -275,10 +275,16 @@ class DesktopTunnelControl(
         // traffic the proxy dials and feed it back to itself, so protection
         // stays at what is pointed at it instead of taking the machine down.
         // The rules name the ports the listeners actually took, not the ones
-        // the settings asked for.
+        // the settings asked for, and carry the same loopback switch the core
+        // just took — the two halves must not disagree about whether this
+        // machine's own conversations are filtered.
         val helper = privileges ?: return
         if (!helper.canSetFirewallMark()) return
-        when (val outcome = helper.installRules(status.tcpPort.toInt(), status.dnsPort.toInt())) {
+        when (val outcome = helper.installRules(
+            status.tcpPort.toInt(),
+            status.dnsPort.toInt(),
+            ports.filterLocalhost,
+        )) {
             is PrivilegeOutcome.Ok -> System.err.println("[desktop] redirect rules installed")
             is PrivilegeOutcome.Denied -> System.err.println("[desktop] redirect rules: ${outcome.reason}")
             is PrivilegeOutcome.Failed -> System.err.println("[desktop] redirect rules: ${outcome.reason}")

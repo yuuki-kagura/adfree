@@ -42,13 +42,16 @@ class CoreEngine(
      *
      * The answer says which ports came up and, when a listener could not be
      * raised, why: a bool would leave the screen reporting a filter that is
-     * quietly a plain relay with nothing to show for it.
+     * quietly a plain relay with nothing to show for it. `filterLocalhost` is
+     * the loopback switch — off, a flow to this machine's own addresses is
+     * carried rather than judged.
      */
     fun startProxy(
         tcpPort: Int = PROXY_TCP_PORT,
         dnsPort: Int = PROXY_DNS_PORT,
+        filterLocalhost: Boolean = true,
     ): git.shin.adfree.core.ProxyStatus = runCatching {
-        git.shin.adfree.core.coreStartProxy(tcpPort.toUShort(), dnsPort.toUShort())
+        git.shin.adfree.core.coreStartProxy(tcpPort.toUShort(), dnsPort.toUShort(), filterLocalhost)
     }.getOrElse { error ->
         // The core never answered, so the ports it was asked for are the only
         // fact available — and the reason is the exception's own words.

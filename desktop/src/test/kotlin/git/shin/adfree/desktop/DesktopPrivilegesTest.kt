@@ -31,6 +31,39 @@ class DesktopPrivilegesTest {
     }
 
     /**
+     * "Filter localhost" off has to reach every chain that would otherwise
+     * take a loopback packet: the two redirects (web and DNS) and the QUIC
+     * refusal each need the accept ahead of their own rule, and the switch
+     * on must leave the documented ruleset exactly as it was.
+     */
+    @Test
+    fun theLoopbackSwitchDecidesWhetherLoopbackIsLeftAlone() {
+        val privileges = DesktopPrivileges()
+
+        // On — the shipped default: no loopback accept anywhere (test above
+        // pins the default spelling to the hand-written ruleset).
+        val filtered = privileges.ruleset(CoreEngine.PROXY_TCP_PORT, CoreEngine.PROXY_DNS_PORT)
+        assertTrue("the shipped default still filters localhost", "ip daddr 127.0.0.1 accept" !in filtered)
+
+        val bypassed = privileges.ruleset(3130, 5301, filterLocalhost = false)
+        // Three chains, three chances for a loopback packet to slip through
+        // without the accept: http redirect, dns redirect, quic refusal.
+        assertEquals(
+            "every chain needs the loopback accept: $bypassed",
+            3,
+            Regex("ip daddr 127\\.0\\.0\\.1 accept").findAll(bypassed).count(),
+        )
+        assertEquals(
+            "IPv6 loopback is localhost too: $bypassed",
+            3,
+            Regex("ip6 daddr ::1 accept").findAll(bypassed).count(),
+        )
+        assertTrue("the redirect still follows", "redirect to :3130" in bypassed)
+        assertTrue("the QUIC refusal still follows", "udp dport 443 reject" in bypassed)
+        assertTrue("the mark still comes first", "meta mark 0xad45 accept" in bypassed)
+    }
+
+    /**
      * systemd-run rejects `-p=Key=Value` as an assignment with an empty key,
      * and it does so before polkit is asked — so a mistyped flag looks exactly
      * like a machine that refuses to grant anything.

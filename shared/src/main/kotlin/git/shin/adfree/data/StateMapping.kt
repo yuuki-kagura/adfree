@@ -184,11 +184,13 @@ private fun CoreProxyState.toModel(): ProxySettings = ProxySettings(
 private fun LocalProxySettings.toCore(): CoreLocalProxyState = CoreLocalProxyState(
     tcpPort = tcpPort.coerceIn(LocalProxySettings.MIN_LISTENER_PORT, LocalProxySettings.MAX_PORT).toUShort(),
     dnsPort = dnsPort.coerceIn(LocalProxySettings.MIN_LISTENER_PORT, LocalProxySettings.MAX_PORT).toUShort(),
+    filterLocalhost = filterLocalhost,
 )
 
 private fun CoreLocalProxyState.toModel(): LocalProxySettings = LocalProxySettings(
     tcpPort = tcpPort.toInt(),
     dnsPort = dnsPort.toInt(),
+    filterLocalhost = filterLocalhost,
 )
 
 private fun DnsBlockMode.toCore(): CoreDnsBlockMode = when (this) {

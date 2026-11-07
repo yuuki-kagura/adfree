@@ -32,10 +32,16 @@ data class ProxySettings(
  * [MIN_LISTENER_PORT] a bind needs root, and a listener that cannot bind is a
  * filter that quietly relays, so a pair that does not fit is refused rather
  * than clamped behind the user's back.
+ *
+ * [filterLocalhost] is AdGuard for Windows' "Filter localhost": on, this
+ * machine's own conversations are filtered like any other; off, they keep
+ * whatever they were talking to — a local dev server, the stub resolver —
+ * and the redirect rules step aside for loopback destinations.
  */
 data class LocalProxySettings(
     val tcpPort: Int = 3129,
     val dnsPort: Int = 5300,
+    val filterLocalhost: Boolean = true,
 ) {
     /** Two listeners, two numbers, both ours to take. */
     val isUsable: Boolean

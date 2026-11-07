@@ -1073,7 +1073,7 @@ internal object UniffiLib {
     ): Unit
     external fun uniffi_adfree_core_fn_func_core_start(`tunFd`: Int,uniffi_out_err: UniffiRustCallStatus, 
     ): Unit
-    external fun uniffi_adfree_core_fn_func_core_start_proxy(`tcpPort`: Short,`dnsPort`: Short,uniffi_out_err: UniffiRustCallStatus, 
+    external fun uniffi_adfree_core_fn_func_core_start_proxy(`tcpPort`: Short,`dnsPort`: Short,`filterLocalhost`: Byte,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
     external fun uniffi_adfree_core_fn_func_core_state_load(uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
@@ -1431,7 +1431,7 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
     if ((lib.uniffi_adfree_core_checksum_func_core_start() and 0xFFFF) != 51365) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if ((lib.uniffi_adfree_core_checksum_func_core_start_proxy() and 0xFFFF) != 22697) {
+    if ((lib.uniffi_adfree_core_checksum_func_core_start_proxy() and 0xFFFF) != 16698) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if ((lib.uniffi_adfree_core_checksum_func_core_state_load() and 0xFFFF) != 43672) {
@@ -3768,6 +3768,14 @@ data class LocalProxyState (
     var `tcpPort`: kotlin.UShort
     , 
     var `dnsPort`: kotlin.UShort
+    , 
+    /**
+     * AdGuard for Windows' "Filter localhost": on, this machine's own
+     * conversations are filtered like any other; off, they keep whatever
+     * they were talking to — a local dev server, the stub resolver — and
+     * never reach the filter to be judged.
+     */
+    var `filterLocalhost`: kotlin.Boolean
     
 ){
     
@@ -3786,17 +3794,20 @@ public object FfiConverterTypeLocalProxyState: FfiConverterRustBuffer<LocalProxy
         return LocalProxyState(
             FfiConverterUShort.read(buf),
             FfiConverterUShort.read(buf),
+            FfiConverterBoolean.read(buf),
         )
     }
 
     override fun allocationSize(value: LocalProxyState) = (
             FfiConverterUShort.allocationSize(value.`tcpPort`) +
-            FfiConverterUShort.allocationSize(value.`dnsPort`)
+            FfiConverterUShort.allocationSize(value.`dnsPort`) +
+            FfiConverterBoolean.allocationSize(value.`filterLocalhost`)
     )
 
     override fun write(value: LocalProxyState, buf: ByteBuffer) {
             FfiConverterUShort.write(value.`tcpPort`, buf)
             FfiConverterUShort.write(value.`dnsPort`, buf)
+            FfiConverterBoolean.write(value.`filterLocalhost`, buf)
     }
 }
 
@@ -7479,14 +7490,17 @@ public object FfiConverterSequenceTypeUidApps: FfiConverterRustBuffer<List<UidAp
          * shape — local proxy plus redirect rules, not a VPN. The record says which
          * ports are live, and names the reason when a listener could not be raised,
          * so the screen never reports a filter that is quietly a plain relay.
-         */ fun `coreStartProxy`(`tcpPort`: kotlin.UShort, `dnsPort`: kotlin.UShort): ProxyStatus {
+         * `filter_localhost` is the loopback switch: off, a flow to this machine's
+         * own addresses is carried rather than filtered.
+         */ fun `coreStartProxy`(`tcpPort`: kotlin.UShort, `dnsPort`: kotlin.UShort, `filterLocalhost`: kotlin.Boolean): ProxyStatus {
             return FfiConverterTypeProxyStatus.lift(
     uniffiRustCall() { _status ->
     UniffiLib.uniffi_adfree_core_fn_func_core_start_proxy(
     
         
         FfiConverterUShort.lower(`tcpPort`),
-        FfiConverterUShort.lower(`dnsPort`),_status)
+        FfiConverterUShort.lower(`dnsPort`),
+        FfiConverterBoolean.lower(`filterLocalhost`),_status)
 }
     )
     }

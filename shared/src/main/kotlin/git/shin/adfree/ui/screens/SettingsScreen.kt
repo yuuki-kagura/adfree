@@ -761,6 +761,7 @@ private fun SettingsValueRow(
  * binding. The line under the fields is the core's own answer, not a guess —
  * a refused bind keeps its reason here, so a listener that could not come up
  * reads as a filter that is off rather than as one that is quietly relaying.
+ * The loopback switch below travels on its own, carrying the applied pair.
  */
 @Composable
 private fun LocalListenerSection(
@@ -870,6 +871,31 @@ private fun LocalListenerSection(
                     else -> AdGuardTextMuted
                 },
             )
+            Spacer(modifier = Modifier.height(12.dp))
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = L10n.get(Strings.settings_local_proxy_filter_localhost_title),
+                        fontSize = 13.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        color = AdGuardTextPrimary,
+                    )
+                    Text(
+                        text = L10n.get(Strings.settings_local_proxy_filter_localhost_subtitle),
+                        fontSize = 11.sp,
+                        color = AdGuardTextSecondary,
+                    )
+                }
+                Spacer(modifier = Modifier.width(8.dp))
+                // The switch travels on its own, the way AdGuard's does, and
+                // carries the ports that were last Applied — never the
+                // half-typed draft: flipping a neighbouring switch must not
+                // turn a number the user has not confirmed into a binding.
+                Switch(
+                    checked = saved.filterLocalhost,
+                    onCheckedChange = { onSave(saved.copy(filterLocalhost = it)) },
+                )
+            }
         }
     }
 }

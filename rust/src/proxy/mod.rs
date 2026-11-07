@@ -62,6 +62,13 @@ const MAX_CONNECTIONS: usize = 512;
 
 static LIVE: AtomicUsize = AtomicUsize::new(0);
 
+/// AdGuard for Windows' "Filter localhost", read per flow: with it off a
+/// conversation this machine is having with itself is relayed untouched —
+/// never intercepted, never judged by the lists. Written by [start], which
+/// the settings screen restarts through when the switch moves, so the value
+/// in play is always the one the rules were installed for.
+static FILTER_LOCALHOST: AtomicBool = AtomicBool::new(true);
+
 struct Run {
     stop: Arc<AtomicBool>,
     loops: Vec<std::thread::JoinHandle<()>>,
@@ -100,8 +107,11 @@ static OWN: Mutex<Option<(std::time::Instant, Vec<std::net::IpAddr>)>> = Mutex::
 ///
 /// Both or neither: a stack that sees TCP but answers no lookup is a filter
 /// that quietly does nothing, and the redirect rules would send the machine's
-/// DNS to a port nobody listens on.
-pub fn start(tcp_port: u16, dns_port: u16) -> ProxyStatus {
+/// DNS to a port nobody listens on. `filter_localhost` is the loopback switch
+/// the settings screen edits: it decides whether a flow to this machine's own
+/// addresses is filtered or merely carried.
+pub fn start(tcp_port: u16, dns_port: u16, filter_localhost: bool) -> ProxyStatus {
+    FILTER_LOCALHOST.store(filter_localhost, Ordering::Relaxed);
     let mut guard = match RUN.lock() {
         Ok(guard) => guard,
         // The record of which listener is live is exactly what could not be
@@ -235,6 +245,12 @@ pub fn stop() {
 
 pub fn is_running() -> bool {
     RUN.lock().map(|run| run.as_ref().is_some_and(|run| run.running)).unwrap_or(false)
+}
+
+/// Whether a flow to this machine's own addresses is filtered or carried.
+/// The answer is the settings screen's switch, taken at the last start.
+pub fn filters_loopback() -> bool {
+    FILTER_LOCALHOST.load(Ordering::Relaxed)
 }
 
 /// What the listeners are doing now: the ports they hold, or the reason the
@@ -702,7 +718,7 @@ mod lifecycle_tests {
             );
             stream.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok").unwrap();
         });
-        assert!(start(31329, 35353).running, "listeners must come up on free ports");
+        assert!(start(31329, 35353, true).running, "listeners must come up on free ports");
         let mut client = TcpStream::connect("127.0.0.1:31329").unwrap();
         client
             .write_all(format!("GET http://127.0.0.1:{origin_port}/probe HTTP/1.1\r\nHost: x\r\n\r\n").as_bytes())
@@ -731,7 +747,7 @@ mod lifecycle_tests {
             wildcard: false,
             address: pinned,
         }]);
-        assert!(start(31331, 35355).running, "listeners must come up on free ports");
+        assert!(start(31331, 35355, true).running, "listeners must come up on free ports");
         let socket = std::net::UdpSocket::bind("127.0.0.1:0").unwrap();
         socket
             .send_to(
@@ -777,7 +793,7 @@ mod lifecycle_tests {
                 .write_all(b"HTTP/1.1 204 No Content\r\nContent-Length: 0\r\n\r\n")
                 .unwrap();
         });
-        assert!(start(31332, 35356).running, "listeners must come up on free ports");
+        assert!(start(31332, 35356, true).running, "listeners must come up on free ports");
         let mut client = TcpStream::connect("[::1]:31332").unwrap();
         client
             .write_all(
@@ -802,7 +818,7 @@ mod lifecycle_tests {
     #[test]
     fn the_proxy_refuses_to_proxy_itself() {
         let _guard = PROXY_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        assert!(start(31330, 35354).running, "listeners must come up on free ports");
+        assert!(start(31330, 35354, true).running, "listeners must come up on free ports");
         let mut client = TcpStream::connect("127.0.0.1:31330").unwrap();
         client
             .write_all(b"GET http://127.0.0.1:31330/probe HTTP/1.1\r\nHost: x\r\n\r\n")
@@ -833,7 +849,7 @@ mod lifecycle_tests {
         let dns_port = probe.local_addr().unwrap().port();
         drop(probe);
 
-        let attempt = start(tcp_port, dns_port);
+        let attempt = start(tcp_port, dns_port, true);
         assert!(!attempt.running, "a listener on a taken port must not claim to run");
         assert!(!attempt.tcp_error.is_empty(), "the TCP refusal owes a reason");
         assert!(attempt.dns_error.is_empty(), "the DNS port was free: {}", attempt.dns_error);
@@ -863,7 +879,7 @@ mod lifecycle_tests {
         let other = TcpListener::bind("127.0.0.1:0").unwrap();
         let free_tcp = other.local_addr().unwrap().port();
         drop(other);
-        assert!(start(free_tcp, dns_port).running, "free ports must come up");
+        assert!(start(free_tcp, dns_port, true).running, "free ports must come up");
         let live = status();
         assert!(live.running && live.tcp_port == free_tcp && live.dns_port == dns_port);
         assert!(live.tcp_error.is_empty() && live.dns_error.is_empty(), "{live:?}");
@@ -875,6 +891,29 @@ mod lifecycle_tests {
             "a stop the user asked for is not a refusal: {after:?}"
         );
         drop(squatter);
+    }
+
+    /// The loopback switch belongs to the stack being raised: what the start
+    /// was asked for is what flows are judged by, and the next start with the
+    /// opposite choice takes over — the settings screen restarts through the
+    /// listeners and the redirect rules together when the switch moves.
+    #[test]
+    fn the_loopback_switch_is_the_one_the_start_was_asked_for() {
+        let _guard = PROXY_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let other = TcpListener::bind("127.0.0.1:0").unwrap();
+        let tcp_port = other.local_addr().unwrap().port();
+        drop(other);
+        let probe = std::net::UdpSocket::bind("127.0.0.1:0").unwrap();
+        let dns_port = probe.local_addr().unwrap().port();
+        drop(probe);
+
+        assert!(start(tcp_port, dns_port, false).running, "listeners must come up on free ports");
+        assert!(!filters_loopback(), "a start told to leave loopback alone must leave it alone");
+        stop();
+
+        assert!(start(tcp_port, dns_port, true).running, "the same free ports must come back");
+        assert!(filters_loopback(), "the next start takes the choice it was given");
+        stop();
     }
 
     /// The listeners answer on every local address, so what keeps the network

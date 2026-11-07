@@ -134,6 +134,11 @@ impl Default for ProxyState {
 pub struct LocalProxyState {
     pub tcp_port: u16,
     pub dns_port: u16,
+    /// AdGuard for Windows' "Filter localhost": on, this machine's own
+    /// conversations are filtered like any other; off, they keep whatever
+    /// they were talking to — a local dev server, the stub resolver — and
+    /// never reach the filter to be judged.
+    pub filter_localhost: bool,
 }
 
 impl Default for LocalProxyState {
@@ -141,6 +146,7 @@ impl Default for LocalProxyState {
         LocalProxyState {
             tcp_port: crate::proxy::DEFAULT_TCP_PORT,
             dns_port: crate::proxy::DEFAULT_DNS_PORT,
+            filter_localhost: true,
         }
     }
 }

@@ -981,6 +981,8 @@
     <string name="settings_local_proxy_listening">Đang lắng nghe trên 127.0.0.1:%1$d (HTTP(S)) và 127.0.0.1:%2$d (DNS)</string>
     <string name="settings_local_proxy_stopped">Không đang lắng nghe — %1$s</string>
     <string name="settings_local_proxy_stopped_quiet">Không đang lắng nghe</string>
+    <string name="settings_local_proxy_filter_localhost_title">Lọc localhost</string>
+    <string name="settings_local_proxy_filter_localhost_subtitle">Tắt để các kết nối nội bộ của chính máy này — server dev local, trình phân giải cục bộ — không bị bộ lọc đụng tới</string>
     <string name="settings_notifications_title">Thông báo ứng dụng</string>
     <string name="settings_notifications_subtitle">Mở công tắc hệ thống cho kênh bảo vệ, tường lửa và cập nhật</string>
     <string name="settings_group_automation">Tự động hóa</string>

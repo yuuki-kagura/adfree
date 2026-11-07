@@ -364,10 +364,12 @@ pub fn core_is_running() -> bool {
 /// shape — local proxy plus redirect rules, not a VPN. The record says which
 /// ports are live, and names the reason when a listener could not be raised,
 /// so the screen never reports a filter that is quietly a plain relay.
+/// `filter_localhost` is the loopback switch: off, a flow to this machine's
+/// own addresses is carried rather than filtered.
 #[uniffi::export]
-pub fn core_start_proxy(tcp_port: u16, dns_port: u16) -> crate::proxy::ProxyStatus {
+pub fn core_start_proxy(tcp_port: u16, dns_port: u16, filter_localhost: bool) -> crate::proxy::ProxyStatus {
     guard(crate::proxy::ProxyStatus::default(), || {
-        crate::proxy::start(tcp_port, dns_port)
+        crate::proxy::start(tcp_port, dns_port, filter_localhost)
     })
 }
 

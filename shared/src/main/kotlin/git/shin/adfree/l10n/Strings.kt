@@ -938,6 +938,8 @@ object Strings {
     const val settings_local_proxy_listening = "settings_local_proxy_listening"
     const val settings_local_proxy_stopped = "settings_local_proxy_stopped"
     const val settings_local_proxy_stopped_quiet = "settings_local_proxy_stopped_quiet"
+    const val settings_local_proxy_filter_localhost_title = "settings_local_proxy_filter_localhost_title"
+    const val settings_local_proxy_filter_localhost_subtitle = "settings_local_proxy_filter_localhost_subtitle"
     const val settings_notifications_title = "settings_notifications_title"
     const val settings_notifications_subtitle = "settings_notifications_subtitle"
     const val settings_group_automation = "settings_group_automation"

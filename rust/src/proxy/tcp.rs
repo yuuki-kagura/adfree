@@ -183,7 +183,15 @@ fn handle(client: TcpStream, stop: &AtomicBool) {
     }
 
     let local = addr.ip() == crate::mitm::proxy::local_origin_addr();
+    // AdGuard for Windows' "Filter localhost": off leaves this machine's own
+    // conversations alone — a local dev server is not intercepted, its
+    // certificate not swapped for ours, because the destination is this very
+    // machine rather than a host out there being judged. The app firewall has
+    // already decided above whether this app may dial at all: that question
+    // is about the app, not about what it is fetching.
+    let filter_localhost = super::filters_loopback();
     let mitm_armed = core.mitm_ready(&cfg)
+        && (filter_localhost || !addr.ip().is_loopback())
         && core.mitm_port.load(Ordering::Relaxed) == addr.port();
     if local && !mitm_armed {
         crate::logbuf::push("proxy: local origin asked without HTTPS filtering");

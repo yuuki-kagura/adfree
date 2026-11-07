@@ -35,4 +35,15 @@ class LocalProxySettingsTest {
         assertFalse(LocalProxySettings(tcpPort = 65536, dnsPort = 5300).isUsable)
         assertFalse(LocalProxySettings(tcpPort = 3129, dnsPort = -1).isUsable)
     }
+
+    @Test
+    fun `localhost is filtered until the user says otherwise`() {
+        // The shipped default is AdGuard's own: local traffic filtered, so a
+        // pre-switch install and a fresh one behave the same.
+        assertTrue(LocalProxySettings().filterLocalhost)
+        assertFalse(LocalProxySettings(filterLocalhost = false).filterLocalhost)
+        // The switch is not a port: an unusable pair does not become usable
+        // because the loopback choice was made, nor the other way round.
+        assertFalse(LocalProxySettings(tcpPort = 80, filterLocalhost = false).isUsable)
+    }
 }

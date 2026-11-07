@@ -163,7 +163,11 @@ AdGuard for Windows does — a local transparent proxy rather than a VPN:
   same ruleset as `tools/adfree-linux.nft` for anyone who prefers to apply it
   by hand) — but only when it can mark its own sockets, because without the
   mark the redirect catches the traffic the proxy dials and feeds it back to
-  itself.
+  itself. AdGuard for Windows' **Filter localhost** switch sits in the same
+  Settings section: off, loopback accepts come ahead of every redirect and of
+  the QUIC refusal, and the proxy relays a flow to this machine's own
+  addresses untouched — a local dev server keeps its own certificate, the
+  stub resolver keeps its own answers.
 
 The listeners put the firewall mark `0xad45` on the sockets they dial
 themselves, which is what keeps the redirect out of a loop, and the DNS

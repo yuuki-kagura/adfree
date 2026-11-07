@@ -44,25 +44,39 @@ class DesktopPrivileges(
      * own traffic out of the loop, so the rules only make sense alongside it —
      * [installRules] refuses without it rather than taking the machine's DNS
      * and web traffic into a loop.
+     *
+     * `filterLocalhost` is AdGuard for Windows' "Filter localhost": off, the
+     * loopback accepts come before every redirect and before the QUIC
+     * refusal, so this machine's conversations with itself — a local dev
+     * server, the stub resolver, an HTTP/3 service next door — keep their own
+     * answers instead of reaching the filter. Only loopback: a neighbour on
+     * the LAN is still the filter's business, and the mark stays first so the
+     * proxy's own dials never loop either way.
      */
-    fun ruleset(tcpPort: Int, dnsPort: Int): String {
+    fun ruleset(tcpPort: Int, dnsPort: Int, filterLocalhost: Boolean = true): String {
         val mark = FIREWALL_MARK.toString(16)
+        val bypass = if (filterLocalhost) {
+            ""
+        } else {
+            "\n                    ip daddr 127.0.0.1 accept" +
+                "\n                    ip6 daddr ::1 accept"
+        }
         return """
             table inet adfree {
                 chain http {
                     type nat hook output priority -100; policy accept;
-                    meta mark 0x$mark accept
+                    meta mark 0x$mark accept$bypass
                     meta l4proto tcp tcp dport { 80, 443 } redirect to :$tcpPort
                 }
                 chain dns {
                     type nat hook output priority -100; policy accept;
-                    meta mark 0x$mark accept
+                    meta mark 0x$mark accept$bypass
                     meta l4proto udp udp dport 53 redirect to :$dnsPort
                     meta l4proto tcp tcp dport 53 redirect to :$dnsPort
                 }
                 chain quic {
                     type filter hook output priority 0; policy accept;
-                    meta mark 0x$mark accept
+                    meta mark 0x$mark accept$bypass
                     udp dport 443 reject with icmpx type admin-prohibited
                 }
             }
@@ -74,7 +88,7 @@ class DesktopPrivileges(
      * dropped first because `nft -f` appends — applying the same file twice
      * would leave two redirects on every port.
      */
-    fun installRules(tcpPort: Int, dnsPort: Int): PrivilegeOutcome {
+    fun installRules(tcpPort: Int, dnsPort: Int, filterLocalhost: Boolean = true): PrivilegeOutcome {
         if (!canSetFirewallMark()) {
             return PrivilegeOutcome.Denied(
                 "this process cannot mark its own sockets, so the redirect would loop its traffic",
@@ -83,7 +97,7 @@ class DesktopPrivileges(
         removeRules()
         val file = File.createTempFile("adfree-", ".nft")
         return try {
-            file.writeText(ruleset(tcpPort, dnsPort))
+            file.writeText(ruleset(tcpPort, dnsPort, filterLocalhost))
             run(nftBinary, "-f", file.absolutePath)
         } finally {
             file.delete()

@@ -407,6 +407,7 @@ mod tests {
             local_proxy: LocalProxyState {
                 tcp_port: 80,
                 dns_port: 53,
+                ..Default::default()
             },
             ..Default::default()
         }
@@ -418,6 +419,7 @@ mod tests {
             local_proxy: LocalProxyState {
                 tcp_port: crate::proxy::DEFAULT_DNS_PORT,
                 dns_port: crate::proxy::DEFAULT_DNS_PORT,
+                ..Default::default()
             },
             ..Default::default()
         }
@@ -440,6 +442,34 @@ mod tests {
         assert!(old.is_protection_active);
         assert_eq!(old.local_proxy, LocalProxyState::default());
         assert_eq!(old.local_proxy.tcp_port, crate::proxy::DEFAULT_TCP_PORT);
+    }
+
+    /// The loopback switch is remembered like the ports: an install that
+    /// never wrote it filters localhost (the shipped default, and the choice
+    /// its redirect rules were always installed with), and a deliberate
+    /// choice not to survives the save that carries it.
+    #[test]
+    fn the_loopback_switch_defaults_on_and_keeps_a_deliberate_off() {
+        let untouched: ProtectionState =
+            serde_json::from_str("{}").expect("empty blob loads");
+        assert!(untouched.local_proxy.filter_localhost);
+
+        let ports_only: ProtectionState = serde_json::from_str(
+            r#"{"local_proxy":{"tcp_port":3131,"dns_port":5353}}"#,
+        )
+        .expect("a blob with ports but no switch loads");
+        assert!(ports_only.local_proxy.filter_localhost, "a pre-switch install still filters localhost");
+        assert_eq!(ports_only.local_proxy.tcp_port, 3131);
+
+        let off = ProtectionState {
+            local_proxy: LocalProxyState {
+                filter_localhost: false,
+                ..Default::default()
+            },
+            ..Default::default()
+        }
+        .sanitized();
+        assert!(!off.local_proxy.filter_localhost, "sanitizing ports must not touch the switch");
     }
 
     #[test]

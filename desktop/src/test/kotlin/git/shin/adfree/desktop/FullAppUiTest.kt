@@ -98,6 +98,9 @@ class FullAppUiTest {
             onNodeWithText(L10n.get(Strings.settings_local_proxy_title)).assertExists()
             onNodeWithText(L10n.get(Strings.settings_local_proxy_tcp_label)).assertExists()
             onNodeWithText(L10n.get(Strings.settings_local_proxy_dns_label)).assertExists()
+            // …and with them the loopback switch that decides whether this
+            // machine's own conversations reach the filter at all.
+            onNodeWithText(L10n.get(Strings.settings_local_proxy_filter_localhost_title)).assertExists()
 
             // The desktop shell draws its own window header: the OS title bar
             // says nothing about where in the app you are, and there is no

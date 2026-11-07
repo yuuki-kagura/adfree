@@ -72,6 +72,19 @@ class ProtectionStateMappingTest {
     }
 
     @Test
+    fun the_loopback_switch_survives_the_core_round_trip() {
+        val off = ProtectionSettings(
+            localProxy = LocalProxySettings(filterLocalhost = false),
+        )
+
+        assertFalse(off.toCoreState().toModel().localProxy.filterLocalhost)
+        assertTrue(
+            "the shipped default must come back from the core unchanged",
+            ProtectionSettings().toCoreState().toModel().localProxy.filterLocalhost,
+        )
+    }
+
+    @Test
     fun log_level_survives_the_core_round_trip() {
         val settings = ProtectionSettings(logLevel = LogLevel.DEBUG)
 
