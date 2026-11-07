@@ -118,6 +118,21 @@ interface PlatformHost {
     fun installSystemCa(): String? = null
 
     /**
+     * The host can also take the CA back out of the system trust store.
+     *
+     * Separate from [supportsSystemCaInstall] because the two are not the same
+     * authority on every platform: a desktop asks polkit for both, while a
+     * phone has `su` and reports it through the core's root-trust status.
+     */
+    fun supportsSystemCaRemoval(): Boolean = false
+
+    /**
+     * Asks the system to remove the application CA. Null when it is gone from
+     * every store the host owns; otherwise the system's answer.
+     */
+    fun removeSystemCa(): String? = null
+
+    /**
      * The shell draws a window header: the section name, one step back, and
      * the app-wide menu (settings export/import, activity export). A phone
      * gets all three from the system — the status bar, the back gesture and

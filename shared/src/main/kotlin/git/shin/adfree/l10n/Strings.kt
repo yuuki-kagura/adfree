@@ -1073,6 +1073,7 @@ object Strings {
     const val settings_ca_install_system = "settings_ca_install_system"
     const val settings_ca_remove_system = "settings_ca_remove_system"
     const val settings_ca_system_installed = "settings_ca_system_installed"
+    const val settings_ca_removed_system = "settings_ca_removed_system"
     const val settings_ca_stage = "settings_ca_stage"
     const val settings_manage_scripts = "settings_manage_scripts"
     const val settings_cert_gate_title = "settings_cert_gate_title"

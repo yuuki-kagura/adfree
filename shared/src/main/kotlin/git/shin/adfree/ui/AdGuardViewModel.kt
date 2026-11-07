@@ -973,6 +973,21 @@ class AdGuardViewModel(
     /** True when the CA is present in the device trust store. */
     fun isCaTrusted(): Boolean = coreEngine.isCaTrusted()
 
+    /**
+     * The desktop shape of [removeRootCa]: the host's own elevation prompt takes
+     * the CA out of the distro store, and the host also clears the user-owned
+     * stores (NSS) that no system bundle reaches. Off the main thread because
+     * the dialog blocks; `onDone` receives null when the certificate is gone.
+     */
+    fun removeSystemCa(onDone: (String?) -> Unit) {
+        scope.launch {
+            val reason = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                runCatching { platform.removeSystemCa() }
+                    .getOrElse { failure -> failure.message ?: "the trust store did not answer" }
+            }
+            onDone(reason)
+        }
+    }
     /** The stored body of a user script; screens never hold the engine. */
     fun scriptText(id: String): String = coreEngine.scriptText(id).orEmpty()
 

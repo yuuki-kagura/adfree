@@ -64,6 +64,104 @@ class DesktopPrivilegesTest {
     }
 
     /**
+     * The table has to die with the unit — including when the unit dies the
+     * way no shutdown hook can answer. A hard kill leaves redirect rules aimed
+     * at a listener nobody holds, which takes the machine's DNS down with it,
+     * and only a root-owned sweep can put that right afterwards. `ExecStopPost`
+     * is systemd's own answer: it runs on every way the unit can end.
+     */
+    @Test
+    fun theElevatedUnitSweepsItsRedirectRulesWhenItEnds() {
+        val argv = DesktopPrivileges(nftBinary = "/usr/bin/nft").engineUnitArgv(
+            command = "/usr/lib/jvm/java/bin/java",
+            arguments = listOf("git.shin.adfree.desktop.AdFreeDesktopKt"),
+            environment = emptyMap(),
+        )
+        val sweep = argv.filter { it.startsWith("--property=ExecStopPost=") }
+        assertEquals("exactly one sweep", 1, sweep.size)
+        assertEquals(
+            "the sweep runs nft by absolute path, and its failure is not the unit's",
+            "--property=ExecStopPost=-/usr/bin/nft delete table inet adfree",
+            sweep.single(),
+        )
+    }
+
+    /**
+     * `Exec*=` verbs are not resolved through the unit's `PATH`, so a bare
+     * `nft` would be a command systemd cannot find — silently, since the sweep
+     * is prefixed to ignore failure. The path this process would have used has
+     * to be handed over as an absolute one.
+     */
+    @Test
+    fun theSweepResolvesNftToAnAbsolutePath() {
+        val resolved = DesktopPrivileges(nftBinary = "nft").nftForUnitCommand()
+        assertTrue(
+            "a bare nft must be resolved on PATH, got $resolved",
+            resolved.startsWith("/") && File(resolved).isFile,
+        )
+    }
+
+    private fun home(vararg relative: String): java.io.File {
+        val root = java.io.File.createTempFile("adfree-priv", "").let { it.delete(); it.mkdirs(); it }
+        relative.forEach { path ->
+            val file = java.io.File(root, path)
+            if (path.endsWith("/")) file.mkdirs() else {
+                file.parentFile.mkdirs()
+                file.writeText("")
+            }
+        }
+        return root
+    }
+
+    /**
+     * Removal travels through the same `pkexec` helper as the install, with a
+     * mode word where the install carries a path: an anchor directory is
+     * root-owned, so a removal that only cleared the user's own stores would
+     * leave the certificate trusted by every OpenSSL program on the machine.
+     */
+    @Test
+    fun removingTheSystemCaUsesTheSameHelperInRemovalMode() {
+        val argv = DesktopPrivileges().caRemoveArgv(
+            command = "/usr/lib/jvm/java/bin/java",
+            classpath = "/tmp/desktop/lib/adfree-desktop.jar:/tmp/desktop/lib/core.jar",
+            coreLibPath = "/tmp/libadfree_core.so",
+        )
+        assertEquals("pkexec", argv.first())
+        assertEquals(
+            listOf(
+                "git.shin.adfree.desktop.CaInstallKt",
+                CA_REMOVE_MODE,
+                "/tmp/libadfree_core.so",
+            ),
+            argv.takeLast(3),
+        )
+        assertTrue("no certificate path travels for a removal", argv.none { it.endsWith(".pem") })
+    }
+
+    /**
+     * Taking the certificate out of the NSS databases is a `certutil -D` per
+     * database, and the nickname must match the one the install wrote or the
+     * removal silently does nothing.
+     */
+    @Test
+    fun removingClearsEveryNssDatabaseByNickname() {
+        val commands = mutableListOf<List<String>>()
+        val stores = DesktopTrustStores(
+            home = home(".pki/nssdb/", ".mozilla/firefox/p1/cert9.db"),
+            runner = { argv -> commands += argv; 0 to "" },
+        )
+        val results = stores.remove()
+        assertEquals(2, results.size)
+        assertTrue(results.all { it.ok })
+        assertEquals(2, commands.size)
+        commands.forEach { argv ->
+            assertEquals("-D", argv[1])
+            assertEquals(DesktopTrustStores.NICKNAME, argv[argv.indexOf("-n") + 1])
+            assertTrue(argv.last().startsWith("sql:"))
+        }
+    }
+
+    /**
      * systemd-run rejects `-p=Key=Value` as an assignment with an empty key,
      * and it does so before polkit is asked — so a mistyped flag looks exactly
      * like a machine that refuses to grant anything.
@@ -118,6 +216,85 @@ class DesktopPrivilegesTest {
             ),
             argv.takeLast(7),
         )
+    }
+
+    /**
+     * The argv the elevated unit is built from must not come from
+     * `ProcessHandle.Info.arguments()`: that returns an empty Optional once the
+     * kernel cmdline passes about one page, and a Gradle-run classpath is
+     * several. An empty list here starts `java` with no main class, which
+     * prints the usage text and exits — the exact shape of the crash this
+     * guards. `/proc/self/cmdline` has no such ceiling, so the reader is
+     * checked against a live process instead of a mock.
+     */
+    @Test
+    fun theProcessArgvIsReadPastThePageSizedLimit() {
+        val raw = java.nio.file.Files.readAllBytes(java.nio.file.Paths.get("/proc/self/cmdline"))
+        val argv = DesktopPrivileges().selfArgv()
+        assertTrue("this process must be readable from /proc", argv != null)
+        // Same bytes, same split: the reader is a faithful view of the kernel's
+        // own record, so it cannot silently drop the tail of a long cmdline.
+        assertEquals(
+            String(raw, Charsets.UTF_8).split('\u0000').dropLastWhile { it.isEmpty() },
+            argv,
+        )
+        // And when the cmdline is long enough to defeat ProcessHandle, the two
+        // readers disagree — which is the whole reason this one exists.
+        if (raw.size > 4096) {
+            assertTrue(
+                "ProcessHandle is expected to give up past a page",
+                ProcessHandle.current().info().arguments().isEmpty,
+            )
+        }
+    }
+
+    /**
+     * `systemd-run` returns zero when the unit is *started*, not when it stays
+     * up, so a successful ask has to be confirmed against the unit itself.
+     */
+    @Test
+    fun aStartedUnitIsNotMistakenForARunningOne() {
+        val argv = DesktopPrivileges().engineUnitArgv(
+            command = "/usr/lib/jvm/java/bin/java",
+            arguments = listOf("-cp", "/tmp/lib/*", "git.shin.adfree.desktop.AdFreeDesktopKt"),
+            environment = emptyMap(),
+        )
+        assertTrue("the unit is named so it can be polled", argv.contains("--unit=adfree-desktop"))
+    }
+
+    /**
+     * A transient unit starts in `/`, so the working directory has to travel
+     * with the ask. `findCoreLibrary` resolves the core relative to it, and an
+     * elevated instance that inherits `/` reports `libadfree_core.so not
+     * found` while the window that asked had just found it.
+     */
+    @Test
+    fun theUnitCarriesTheWorkingDirectoryTheCoreIsFoundFrom() {
+        val argv = DesktopPrivileges().engineUnitArgv(
+            command = "/usr/lib/jvm/java/bin/java",
+            arguments = listOf("-cp", "/tmp/lib/*", "git.shin.adfree.desktop.AdFreeDesktopKt"),
+            environment = emptyMap(),
+            workingDirectory = "/home/shin/adfree",
+        )
+        assertTrue(
+            "the unit must not start in /: $argv",
+            argv.contains("--property=WorkingDirectory=/home/shin/adfree"),
+        )
+    }
+
+    /**
+     * An unknown working directory is left out rather than sent as an empty
+     * property, which systemd rejects before polkit is ever asked.
+     */
+    @Test
+    fun anUnknownWorkingDirectoryIsOmittedRatherThanSentEmpty() {
+        val argv = DesktopPrivileges().engineUnitArgv(
+            command = "/usr/lib/jvm/java/bin/java",
+            arguments = listOf("git.shin.adfree.desktop.AdFreeDesktopKt"),
+            environment = emptyMap(),
+            workingDirectory = "  ",
+        )
+        assertTrue("no blank property", argv.none { it.startsWith("--property=WorkingDirectory=") })
     }
 
     /** Comment and blank lines carry no meaning to nft, so they are not compared. */

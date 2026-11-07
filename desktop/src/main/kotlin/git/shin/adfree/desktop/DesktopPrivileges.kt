@@ -4,6 +4,16 @@ import com.sun.jna.Library
 import com.sun.jna.Native
 import com.sun.jna.ptr.IntByReference
 import java.io.File
+import java.nio.file.Files
+import java.nio.file.Paths
+
+/**
+ * The first argument [CaInstall] reads as "take the certificate out" instead of
+ * a PEM path. One spelling shared by the argv builder and the helper, because a
+ * helper that compared a different word would sit in the install branch and
+ * report a missing certificate file.
+ */
+internal const val CA_REMOVE_MODE = "remove"
 
 /**
  * What the desktop needs from the system, and how it asks for it.
@@ -25,6 +35,7 @@ class DesktopPrivileges(
     private val nftBinary: String = "nft",
     private val systemdRun: String = "systemd-run",
     private val pkexec: String = "pkexec",
+    private val systemctl: String = "systemctl",
     private val log: (String) -> Unit = { System.err.println("[desktop] $it") },
 ) {
 
@@ -125,11 +136,122 @@ class DesktopPrivileges(
      * binds the same ports.
      */
     fun requestPrivilegedEngine(environment: Map<String, String>): PrivilegeOutcome {
-        val self = ProcessHandle.current().info()
-        val command = self.command().orElse(null)
+        val self = selfArgv()
             ?: return PrivilegeOutcome.Failed("cannot read this process's own command line")
-        val argv = engineUnitArgv(command, self.arguments().orElse(emptyArray()).toList(), environment)
-        return run(*argv.toTypedArray())
+        val argv = engineUnitArgv(
+            command = self.first(),
+            arguments = self.drop(1),
+            environment = environment,
+            workingDirectory = System.getProperty("user.dir"),
+        )
+        // The unit name is fixed, and `systemd-run` refuses to start a unit
+        // that already exists. A transient unit left active by an earlier
+        // instance — a crash, a second window, or a hand-run `systemd-run` —
+        // would otherwise make every later privileged start fail with
+        // "Unit … was already loaded". Clear it, then start ours.
+        stopStaleUnit()
+        val outcome = run(*argv.toTypedArray())
+        if (outcome !is PrivilegeOutcome.Ok) return outcome
+        // `systemd-run` reports success once the unit has been *started*, not
+        // once it has stayed up. A command line it could not exec — or a JVM
+        // that died on its first line — leaves a unit that is already gone by
+        // the time the caller reads this, and handing the window over to it
+        // would close the only instance the user has.
+        return awaitUnitRunning()
+    }
+
+    /**
+     * This process's own argv, read from `/proc` rather than from
+     * `ProcessHandle`.
+     *
+     * `ProcessHandle.Info.arguments()` returns an empty Optional once the
+     * kernel's cmdline passes roughly one page (4096 bytes), and a Gradle-run
+     * classpath is several pages of jar paths — 7 KB on this machine. An empty
+     * argument list here is not a cosmetic loss: the elevated unit would start
+     * `java` with no main class, print the usage text and exit, which reads
+     * exactly like a machine that refused the privilege. `/proc/self/cmdline`
+     * carries the same bytes with no such ceiling.
+     */
+    internal fun selfArgv(): List<String>? = runCatching {
+        val raw = Files.readAllBytes(Paths.get("/proc/self/cmdline"))
+        String(raw, Charsets.UTF_8)
+            .split('\u0000')
+            .dropLastWhile { it.isEmpty() }
+            .takeIf { it.isNotEmpty() }
+    }.getOrNull()
+
+    /**
+     * Whether the unit this app just asked for is actually up. Polled rather
+     * than read once: a unit that is going to fail does so a moment after
+     * `systemd-run` returns, and a single immediate read can catch it in the
+     * window where it still looks alive.
+     */
+    private fun awaitUnitRunning(): PrivilegeOutcome {
+        repeat(UNIT_START_CHECKS) {
+            if (unitActive()) return PrivilegeOutcome.Ok
+            Thread.sleep(UNIT_START_POLL_MS)
+        }
+        return PrivilegeOutcome.Failed(
+            "the privileged instance started and exited at once; see `journalctl -u $UNIT_NAME`",
+        )
+    }
+
+    /**
+     * Stops a transient unit left over from an earlier run and waits for it to
+     * read as inactive, so the following `systemd-run` can take the name.
+     *
+     * Best-effort on purpose: most of the time there is no unit to stop and
+     * `systemctl` says so on its own, and a stop that needs an authorization
+     * the user has not given is not worth failing the start over — the start
+     * itself will ask, and fail with its own message if the name is still held.
+     */
+    private fun stopStaleUnit() {
+        val stopped = runCatching {
+            val process = ProcessBuilder(systemctl, "stop", UNIT_NAME)
+                .redirectErrorStream(true)
+                .start()
+            process.inputStream.bufferedReader().readText()
+            process.waitFor()
+        }.getOrDefault(-1)
+        // Only wait when something was actually there: `is-active` on a unit
+        // that is not loaded is cheap but a needless fork on every start.
+        if (stopped == 0 || unitActive()) {
+            var attempts = 0
+            while (attempts < UNIT_START_CHECKS && unitActive()) {
+                Thread.sleep(UNIT_START_POLL_MS)
+                attempts++
+            }
+        }
+    }
+
+    /** Read-only, so it needs no privilege of its own. */
+    private fun unitActive(): Boolean = runCatching {
+        ProcessBuilder(systemctl, "is-active", UNIT_NAME)
+            .redirectErrorStream(true)
+            .start()
+            .let { process ->
+                val text = process.inputStream.bufferedReader().readText().trim()
+                process.waitFor() == 0 && text == "active"
+            }
+    }.getOrDefault(false)
+
+    /**
+     * The `nft` path as the unit's `ExecStopPost` needs it: absolute.
+     *
+     * systemd resolves `Exec*=` verbs by their own absolute path, not through
+     * the unit's `PATH`, so a bare `nft` would be a command not found — and the
+     * one time the sweep matters is the time nobody is watching. A configured
+     * absolute path is kept as is; a bare name is searched for on this
+     * process's `PATH`.
+     */
+    internal fun nftForUnitCommand(): String {
+        if (nftBinary.startsWith("/")) return nftBinary
+        val found = System.getenv("PATH").orEmpty()
+            .split(File.pathSeparator)
+            .filter { it.isNotBlank() }
+            .map { File(it, nftBinary) }
+            .firstOrNull { it.isFile && it.canExecute() }
+        return found?.absolutePath ?: nftBinary
     }
 
     /**
@@ -141,6 +263,7 @@ class DesktopPrivileges(
         command: String,
         arguments: List<String>,
         environment: Map<String, String>,
+        workingDirectory: String? = null,
     ): List<String> {
         val argv = mutableListOf(
             systemdRun,
@@ -154,6 +277,23 @@ class DesktopPrivileges(
             "--property=AmbientCapabilities=CAP_NET_ADMIN",
             "--property=CapabilityBoundingSet=CAP_NET_ADMIN",
         )
+        // The mark and the redirect rules live and die together, but the JVM
+        // shutdown hook that removes them only runs on a clean exit. A unit
+        // that is SIGKILLed — a stop that outlives `TimeoutStopSec`, an OOM
+        // kill, a crash — leaves `table inet adfree` behind, and rules aimed at
+        // a listener nobody holds are a machine with no DNS and no web: every
+        // query the redirect captures is dropped, including the proxy's own.
+        // `ExecStopPost` is run by systemd itself on every way the unit can
+        // end, with the unit's capability set, so the table is swept even when
+        // no Java code gets to say goodbye.
+        argv += "--property=ExecStopPost=-${nftForUnitCommand()} delete table inet adfree"
+        // A transient unit starts in `/`, not in the directory the app was
+        // launched from. `findCoreLibrary` resolves the core relative to the
+        // working directory, so without this the elevated instance looks for
+        // `rust/target/release/libadfree_core.so` under `/` and reports the
+        // core missing — while the window that asked for the privilege had
+        // found it a moment earlier.
+        workingDirectory?.takeIf { it.isNotBlank() }?.let { argv += "--property=WorkingDirectory=$it" }
         environment.forEach { (key, value) -> argv += "--property=Environment=$key=$value" }
         argv += command
         argv += arguments
@@ -175,11 +315,46 @@ class DesktopPrivileges(
      * database and leave rows the signed-in app cannot write.
      */
     fun requestRootCaInstall(pemPath: String, coreLibPath: String): PrivilegeOutcome {
-        val command = ProcessHandle.current().info().command().orElse(null)
+        val command = selfArgv()?.first()
             ?: return PrivilegeOutcome.Failed("cannot read this process's own command line")
         val argv = caInstallArgv(command, System.getProperty("java.class.path"), pemPath, coreLibPath)
         return run(*argv.toTypedArray(), deniedExit = PKEXEC_DENIED)
     }
+
+    /**
+     * The same `pkexec` helper, in the opposite direction.
+     *
+     * Removing an anchor is a write in a root-owned directory, exactly as
+     * adding one is, so it asks through the same dialog instead of hoping a
+     * passwordless `sudo` exists — which on a desktop session it usually does
+     * not.
+     */
+    fun requestRootCaRemove(coreLibPath: String): PrivilegeOutcome {
+        val command = selfArgv()?.first()
+            ?: return PrivilegeOutcome.Failed("cannot read this process's own command line")
+        val argv = caRemoveArgv(command, System.getProperty("java.class.path"), coreLibPath)
+        return run(*argv.toTypedArray(), deniedExit = PKEXEC_DENIED)
+    }
+
+    /**
+     * The removal `pkexec` call. The helper reads its first argument as a mode
+     * rather than a path, so no certificate has to travel: `coreRemoveRootCa`
+     * finds the anchor by the CA the core already holds.
+     */
+    internal fun caRemoveArgv(
+        command: String,
+        classpath: String,
+        coreLibPath: String,
+    ): List<String> = listOf(
+        pkexec,
+        command,
+        "--enable-native-access=ALL-UNNAMED",
+        "-cp",
+        classpath,
+        CA_INSTALL_MAIN,
+        CA_REMOVE_MODE,
+        coreLibPath,
+    )
 
     /**
      * The `pkexec` call for that helper, as data rather than as a shell line.
@@ -247,6 +422,11 @@ class DesktopPrivileges(
         const val FIREWALL_MARK = 0xad45
         const val UNIT_NAME = "adfree-desktop"
         const val PKEXEC_DENIED = 126
+        // A unit that fails does it within a few hundred milliseconds; ten
+        // reads at 100 ms is long enough to see it and short enough that a
+        // healthy start is not held up.
+        const val UNIT_START_CHECKS = 10
+        const val UNIT_START_POLL_MS = 100L
         const val CA_INSTALL_MAIN = "git.shin.adfree.desktop.CaInstallKt"
     }
 }

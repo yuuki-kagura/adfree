@@ -140,6 +140,17 @@ HTTPS module until the store contains the CA. The full flow, including the
 Android 14+ user trust store path, is documented in
 [DESIGN.md](DESIGN.md#installing-the-certificate).
 
+On Linux "installed" means every store an application actually reads, not just
+the one `curl` reads: the distro anchor directory (OpenSSL/GnuTLS/curl/Go/Python),
+the NSS databases Chromium, Brave, Edge, Electron and each Firefox profile keep
+(`~/.pki/nssdb` and `~/.mozilla/firefox/*/cert9.db`), and — on the distros that
+generate it from the anchor directory — the Java keystore. AdFree writes the NSS
+databases itself on every start, so a browser or Electron app installed later
+still finds the certificate. Programs that ship their own CA bundle instead of
+reading any system store are the one case no install can reach: Node.js is the
+visible one, and it needs `NODE_EXTRA_CA_CERTS=<path to the PEM>` or Node 22+'s
+`--use-system-ca` in the environment it is started with.
+
 ## Desktop protection on Linux
 
 A desktop has no per-app tunnel to open, so Linux filters traffic the way

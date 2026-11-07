@@ -45,6 +45,8 @@ class DesktopPlatformHost(
     private val coreLibrary: File? = null,
     /** Writes the certificate where the helper can read it; null when there is none. */
     private val exportCaPem: () -> String? = { null },
+    /** The user-owned stores (NSS) the system bundle does not reach. */
+    private val trustStores: DesktopTrustStores = DesktopTrustStores(),
 ) : PlatformHost {
 
     /** Toasts the window pipes into the scaffold's snackbar host. */
@@ -130,6 +132,14 @@ class DesktopPlatformHost(
             ).forEach { key ->
                 System.getenv(key)?.let { value -> put(key, value) }
             }
+            // The elevated instance is a fresh JVM with a sanitized
+            // environment, so it has to be told where the core is even when
+            // this process was not: `findCoreLibrary` resolves it relative to
+            // the working directory, and a shell that never exported
+            // `ADFREE_CORE_LIB` leaves the child to guess. This process already
+            // found the library — hand the absolute path over instead of
+            // hoping the child repeats the search.
+            coreLibrary?.let { put("ADFREE_CORE_LIB", it.absolutePath) }
         }
         val outcome = helper.requestPrivilegedEngine(env)
         return when (outcome) {
@@ -154,6 +164,57 @@ class DesktopPlatformHost(
         val exported = exportCaPem() ?: caFile?.takeIf(File::isFile)?.absolutePath
             ?: return "no certificate to install yet"
         return when (val outcome = helper.requestRootCaInstall(exported, library.absolutePath)) {
+            is PrivilegeOutcome.Ok -> {
+                // The system bundle is one store of several: NSS applications
+                // (Chromium, Electron, Firefox) read their own database, and on
+                // a distro that ships Mozilla's roots as `libnssckbi.so` the
+                // anchor directory never reaches them. The certificate landing
+                // in the bundle is therefore not the same as the browser
+                // trusting it, and fixing that per application — an environment
+                // variable here, a flag there — is not something a packaged app
+                // can be given. Write the store itself.
+                trustStores.installAndLog(File(exported))
+                null
+            }
+            is PrivilegeOutcome.Denied -> outcome.reason
+            is PrivilegeOutcome.Failed -> outcome.reason
+        }
+    }
+
+    /**
+     * Makes the user-owned trust stores agree with the system bundle, on every
+     * start.
+     *
+     * Idempotent and cheap, so it is not gated on the once-per-install flag the
+     * HTTPS default uses: a browser installed *after* the certificate was is
+     * exactly the case that flag misses — NSS would create its database at the
+     * browser's first launch, and that database would never hear about the CA.
+     */
+    fun refreshUserTrustStores() {
+        val pem = caFile?.takeIf(File::isFile) ?: exportCaPem()?.let(::File)?.takeIf(File::isFile) ?: return
+        trustStores.installAndLog(pem)
+    }
+
+    override fun supportsSystemCaRemoval(): Boolean = privileges != null && coreLibrary != null
+
+    /**
+     * Takes the certificate out of every store this install put it in: the NSS
+     * databases first (they are the user's own files and need no dialogue),
+     * then the distro anchor directory through the same `pkexec` helper that
+     * wrote it.
+     *
+     * A host that reports a refusal from the system store still removes the NSS
+     * entries: leaving a trusted CA in a browser after the user asked to remove
+     * it is worse than reporting half a removal.
+     */
+    override fun removeSystemCa(): String? {
+        val helper = privileges ?: return null
+        val library = coreLibrary
+            ?: return "the filtering core was not found, so nothing can remove the certificate"
+        for (store in trustStores.remove()) {
+            if (!store.ok) System.err.println("[trust] NSS database not updated (${store.path}): ${store.detail}")
+        }
+        return when (val outcome = helper.requestRootCaRemove(library.absolutePath)) {
             is PrivilegeOutcome.Ok -> null
             is PrivilegeOutcome.Denied -> outcome.reason
             is PrivilegeOutcome.Failed -> outcome.reason

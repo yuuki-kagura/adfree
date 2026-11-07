@@ -1242,18 +1242,40 @@ internal fun HttpsFilterSection(
                                         fontSize = 11.sp,
                                     )
                                 }
-                                if (trust.installed && !platform.supportsSystemCaInstall()) {
+                                if (trust.installed &&
+                                    (!platform.supportsSystemCaInstall() || platform.supportsSystemCaRemoval())
+                                ) {
                                     OutlinedButton(
                                         enabled = !rootBusy,
                                         onClick = {
                                             rootBusy = true
-                                            viewModel.removeRootCa { result ->
+                                            // On a desktop the store is written
+                                            // through polkit, so a `su`-shaped
+                                            // removal would fail where the
+                                            // install succeeded: use the host's
+                                            // own path when it has one.
+                                            val finish: (String?) -> Unit = { reason ->
                                                 rootBusy = false
-                                                rootTrust = result
+                                                rootTrust = viewModel.rootTrustStatus()
                                                 caTrusted = viewModel.isCaTrusted()
-                                                result?.detailCode?.let { code ->
-                                                    CoreText.trustDetail(code)?.let {
-                                                        platform.toast(it.asString())
+                                                when {
+                                                    reason != null -> platform.toast(reason)
+                                                    else -> platform.toast(
+                                                        L10n.get(Strings.settings_ca_removed_system),
+                                                    )
+                                                }
+                                            }
+                                            if (platform.supportsSystemCaRemoval()) {
+                                                viewModel.removeSystemCa(finish)
+                                            } else {
+                                                viewModel.removeRootCa { result ->
+                                                    rootBusy = false
+                                                    rootTrust = result
+                                                    caTrusted = viewModel.isCaTrusted()
+                                                    result?.detailCode?.let { code ->
+                                                        CoreText.trustDetail(code)?.let {
+                                                            platform.toast(it.asString())
+                                                        }
                                                     }
                                                 }
                                             }

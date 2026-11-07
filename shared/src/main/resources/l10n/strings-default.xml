@@ -1116,6 +1116,7 @@
     <string name="settings_ca_install_system">Install system CA (root)</string>
     <string name="settings_ca_remove_system">Remove system CA</string>
     <string name="settings_ca_system_installed">The system now trusts the AdFree certificate</string>
+    <string name="settings_ca_removed_system">The AdFree certificate was removed from the trust stores</string>
     <string name="settings_ca_stage">Stage: %1$s • %2$d scripts • %3$d certs issued</string>
     <string name="settings_manage_scripts">Manage extensions</string>
     <string name="settings_cert_gate_title">Certificate required</string>
