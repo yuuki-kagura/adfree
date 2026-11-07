@@ -70,11 +70,33 @@ pub(crate) fn bind_listeners(port: u16) -> std::io::Result<Vec<Listener>> {
 }
 
 fn bind_one(addr: IpAddr, port: u16, v6: bool) -> std::io::Result<Listener> {
-    let socket = UdpSocket::bind(SocketAddr::new(addr, port))?;
-    let fd = socket.as_raw_fd();
+    // The socket is built by hand rather than with `UdpSocket::bind` because
+    // `IPV6_V6ONLY` has to be set *before* the bind, not after. Linux defaults
+    // to `bindv6only=0`, so a `::` socket that is already bound has claimed the
+    // v4 half of the port as well — and the v4 listener above holds it, so the
+    // bind fails with `EADDRINUSE` and the machine is left with no IPv6
+    // resolver at all. Setting the option on a bound socket is too late: the
+    // kernel has already made the decision it describes.
+    let domain = if v6 { libc::AF_INET6 } else { libc::AF_INET };
+    let fd = unsafe {
+        libc::socket(
+            domain,
+            libc::SOCK_DGRAM | libc::SOCK_CLOEXEC,
+            0,
+        )
+    };
+    if fd < 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    // Every early return past this point owns the fd and has to close it.
+    let close_on_err = |fd: RawFd, err: std::io::Error| -> std::io::Result<Listener> {
+        unsafe { libc::close(fd) };
+        Err(err)
+    };
+
     if v6 {
         // Paired with the v4 socket above, so this one must not also claim the
-        // v4 half of the port.
+        // v4 half of the port. Set here, while the socket is still unbound.
         let on: libc::c_int = 1;
         sockopt(fd, libc::IPPROTO_IPV6, libc::IPV6_V6ONLY, &on as *const _ as *const _);
         sockopt(fd, libc::IPPROTO_IPV6, libc::IPV6_RECVPKTINFO, &on as *const _ as *const _);
@@ -90,6 +112,18 @@ fn bind_one(addr: IpAddr, port: u16, v6: bool) -> std::io::Result<Listener> {
     let transparent = if v6 { libc::IPV6_TRANSPARENT } else { libc::IP_TRANSPARENT };
     let level = if v6 { libc::IPPROTO_IPV6 } else { libc::SOL_IP };
     sockopt(fd, level, transparent, &on as *const _ as *const _);
+
+    let (sa, len) = sockaddr_for(SocketAddr::new(addr, port));
+    let rc = unsafe {
+        libc::bind(fd, &sa as *const libc::sockaddr_storage as *const libc::sockaddr, len)
+    };
+    if rc != 0 {
+        return close_on_err(fd, std::io::Error::last_os_error());
+    }
+
+    // `FromRawFd` takes ownership, so the fd must not be closed after this.
+    use std::os::unix::io::FromRawFd;
+    let socket = unsafe { UdpSocket::from_raw_fd(fd) };
     socket.set_nonblocking(true)?;
     Ok(Listener { socket, v6 })
 }
@@ -704,6 +738,31 @@ mod tests {
         std::fs::write(&blank, "options edns0\nnameserver\n").unwrap();
         assert_eq!(first_real_nameserver(blank.to_str().unwrap()), None);
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Both families have to come up on one port. `IPV6_V6ONLY` decides
+    /// whether the `::` socket also claims the v4 half, and Linux defaults to
+    /// `bindv6only=0` — so setting it *after* the bind is setting it after the
+    /// kernel has already answered the question. The v6 bind then collides with
+    /// the v4 listener that is already holding the port, `bind_listeners`
+    /// swallows the error as "this machine has no IPv6", and every IPv6 query
+    /// goes unanswered on a machine that has IPv6 just fine.
+    #[test]
+    fn both_families_bind_on_the_same_port() {
+        let listeners = bind_listeners(free_port()).expect("the DNS listeners");
+        assert!(
+            listeners.iter().any(|l| !l.v6),
+            "the v4 listener is required"
+        );
+        // A machine without a v6 stack legitimately has one listener; a
+        // machine with one must not be silently reduced to the same shape.
+        if std::net::UdpSocket::bind((Ipv6Addr::UNSPECIFIED, 0)).is_ok() {
+            assert!(
+                listeners.iter().any(|l| l.v6),
+                "this machine has IPv6, so the v6 listener must be up: {} listeners",
+                listeners.len()
+            );
+        }
     }
 
     #[test]
