@@ -48,6 +48,7 @@ import git.shin.adfree.platform.LocalPlatformHost
 import git.shin.adfree.platform.LocalResumeTick
 import git.shin.adfree.ui.AdGuardApp
 import git.shin.adfree.ui.AdGuardIntent
+import git.shin.adfree.ui.screens.FilteringLogScreen
 import git.shin.adfree.ui.AdGuardTab
 import git.shin.adfree.ui.theme.MyApplicationTheme
 import kotlinx.coroutines.CoroutineScope
@@ -98,6 +99,8 @@ fun main() {
         var visible by remember { mutableStateOf(true) }
         var paused by remember { mutableStateOf(false) }
         var pauseJob by remember { mutableStateOf<Job?>(null) }
+        var showFilteringLog by remember { mutableStateOf(false) }
+        val filteringLogWindowState = rememberWindowState(width = 900.dp, height = 700.dp)
 
         val showWindow: () -> Unit = {
             visible = true
@@ -158,6 +161,7 @@ fun main() {
                 onAction = { if (visible) Unit else showWindow() },
                 menu = {
                     Item(L10n.get(Strings.tray_open), onClick = { showWindow() })
+                    Item("Filtering log", onClick = { showFilteringLog = true })
                     Separator()
                     Item(L10n.get(Strings.tray_pause_30s), onClick = { pauseFiltering(30_000) })
                     Item(L10n.get(Strings.tray_pause_1h), onClick = { pauseFiltering(3_600_000) })
@@ -200,6 +204,32 @@ fun main() {
                 MissingCoreScreen(container.dataRoot.absolutePath)
             } else {
                 DesktopHosts(container, resumeTick, backRegistry)
+            }
+        }
+
+        if (showFilteringLog) {
+            Window(
+                onCloseRequest = { showFilteringLog = false },
+                title = "Filtering log",
+                state = filteringLogWindowState,
+            ) {
+                val settings by container.repository.settings.collectAsState()
+                MyApplicationTheme(
+                    darkTheme = when (settings.themeMode) {
+                        ThemeMode.SYSTEM, ThemeMode.DARK -> true
+                        ThemeMode.LIGHT -> false
+                    },
+                ) {
+                    CompositionLocalProvider(
+                        LocalPlatformHost provides container.platformHost,
+                        LocalFileHost provides container.fileHost,
+                        LocalAppInventory provides container.inventory,
+                        LocalResumeTick provides resumeTick,
+                        LocalBackRegistry provides backRegistry,
+                    ) {
+                        FilteringLogScreen(viewModel = container.viewModel)
+                    }
+                }
             }
         }
     }
