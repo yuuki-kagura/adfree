@@ -159,8 +159,9 @@ on. The app keeps working, DNS filtering still applies to it, and a browser on
 the same host keeps being filtered.
 
 What is learned is the *app*, when the proxy can name the process that opened
-the connection (the desktop can, from the kernel's socket table; that is the
-same name the log's Process column shows and the `$app=` rules match). Only
+the connection (the desktop can, from the kernel's socket table, for TCP and for
+the UDP sockets that ask the DNS listener; that is the same name the log's
+Process column shows and the `$app=` rules match). Only
 when nothing names the client does it fall back to the `(host, ClientHello
 fingerprint)` pair — the shape of the TLS stack, which is coarse: Node and
 `curl` send the same one, so condemning the pair would cost every other

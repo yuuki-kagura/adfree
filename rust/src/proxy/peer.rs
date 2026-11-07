@@ -95,6 +95,19 @@ impl Table {
         })
     }
 
+    /// The process behind a *UDP* socket, by its local port: the DNS listener
+    /// receives a lookup from a socket the kernel names the same way, and on a
+    /// desktop that is the only thing that can say which program asked (the
+    /// platform's uid→package table is an Android answer and is empty here).
+    pub fn owner_udp(&mut self, port: u16) -> Option<Peer> {
+        let inode = udp_socket_of(port)?;
+        let pid = self.pid_of(inode)?;
+        Some(Peer {
+            pid,
+            name: self.name_of(pid)?,
+        })
+    }
+
     fn pid_of(&mut self, inode: u64) -> Option<u32> {
         let now = Instant::now();
         if self.trusted(&now, WALK_GAP_MS) {
@@ -279,6 +292,31 @@ fn socket_of(client: SocketAddr, our: SocketAddr) -> Option<u64> {
     redirected
 }
 
+/// The inode of the unconnected-or-connected UDP socket whose local port is
+/// `port`, looked for in both address families (a resolver client may bind
+/// either, and the listener sees only its address).
+fn udp_socket_of(port: u16) -> Option<u64> {
+    for path in ["/proc/net/udp", "/proc/net/udp6"] {
+        let Ok(text) = std::fs::read_to_string(path) else {
+            continue;
+        };
+        for line in text.lines().skip(1) {
+            let cols: Vec<&str> = line.split_whitespace().collect();
+            let Some(local) = cols.get(1) else { continue };
+            if port_of(local) != Some(port) {
+                continue;
+            }
+            let Some(inode) = cols.get(9).and_then(|i| i.parse::<u64>().ok()) else {
+                continue;
+            };
+            if inode != 0 {
+                return Some(inode);
+            }
+        }
+    }
+    None
+}
+
 /// The hex `port` half of an `ADDRESS:PORT` column.
 fn port_of(field: &str) -> Option<u16> {
     u16::from_str_radix(field.rsplit(':').next()?, 16).ok()
@@ -370,6 +408,26 @@ mod tests {
             .expect("the source port alone names the process");
         assert_eq!(peer.pid, std::process::id());
         drop((accepted, client));
+    }
+
+    /// The DNS listener gets a datagram and nothing else: no address pair, no
+    /// connection, and on a desktop no uid→package table. The socket's own
+    /// row in the kernel's UDP table still names the process that asked, which
+    /// is what the log's Process column has to show for a DNS row.
+    #[test]
+    #[cfg(target_os = "linux")]
+    fn a_udp_socket_names_its_process_by_local_port() {
+        let mut table = Table::new();
+        let socket = std::net::UdpSocket::bind("127.0.0.1:0").unwrap();
+        let port = socket.local_addr().unwrap().port();
+        let peer = table
+            .owner_udp(port)
+            .expect("the socket's own row names the process");
+        assert_eq!(peer.pid, std::process::id());
+        assert!(!peer.name.is_empty());
+        drop(socket);
+        // The row is gone with the socket, and no guess is made in its place.
+        assert!(udp_socket_of(port).is_none());
     }
 
     #[test]

@@ -4940,7 +4940,19 @@ impl Core {
     /// answers, as the TUN path does without a platform callback).
     pub(crate) fn apps_for_local_port(&self, port: u16) -> Vec<String> {
         let uid = self.uidmap.lock().unwrap().lookup(port);
-        self.packages_for_uid(uid)
+        let packages = self.packages_for_uid(uid);
+        if !packages.is_empty() {
+            return packages;
+        }
+        // A desktop has no uid→package table to consult; the process behind
+        // the socket is the answer, exactly as it is for the TCP listeners.
+        match self.peers.lock() {
+            Ok(mut table) => table
+                .owner_udp(port)
+                .map(|peer| vec![peer.name])
+                .unwrap_or_default(),
+            Err(_) => Vec::new(),
+        }
     }
 
     /// The user rewrite for one host, if any (family filtering is the
