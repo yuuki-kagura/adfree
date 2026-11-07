@@ -298,6 +298,16 @@ pub struct ProxySession {
     /// in this set splices the flow verbatim, the same exit as a host on
     /// [`Self::https_skip`]; DNS filtering still applies.
     https_skip_apps: Arc<HashSet<String>>,
+    /// Hosts learned to refuse this proxy's certificate, per client
+    /// fingerprint (see [`crate::mitm::untrusted`]). A match is spliced
+    /// verbatim before rustls sees the hello: a client whose own root set does
+    /// not hold our CA cannot be terminated for, however many stores the
+    /// machine trusts it in.
+    untrusted: Option<Arc<crate::mitm::untrusted::UntrustedClients>>,
+    /// The fingerprint of the client that opened this flow, once its hello has
+    /// been read. Stored on the session because the refusal arrives *after*
+    /// the pending state is gone.
+    client_fingerprint: Option<String>,
     /// The upstream settings, kept only while the active half was armed with
     /// ECH: a server that rejects the offer gets one retry from these. `None`
     /// means the upstream is plain (or already retried once).
@@ -645,6 +655,8 @@ impl ProxySession {
             https_only: Arc::new(crate::mitm::hosts::HostPatterns::default()),
             https_only_mode: false,
             https_skip_apps: Arc::new(HashSet::new()),
+            untrusted: None,
+            client_fingerprint: None,
             upstream_plain: None,
             client_discard: None,
             apps: Vec::new(),
@@ -697,6 +709,8 @@ impl ProxySession {
             https_only: Arc::new(crate::mitm::hosts::HostPatterns::default()),
             https_only_mode: false,
             https_skip_apps: Arc::new(HashSet::new()),
+            untrusted: None,
+            client_fingerprint: None,
             upstream_plain: None,
             client_discard: None,
             apps: Vec::new(),
@@ -762,6 +776,8 @@ impl ProxySession {
             https_only: Arc::new(crate::mitm::hosts::HostPatterns::default()),
             https_only_mode: false,
             https_skip_apps: Arc::new(HashSet::new()),
+            untrusted: None,
+            client_fingerprint: None,
             upstream_plain: None,
             client_discard: None,
             apps: Vec::new(),
@@ -822,6 +838,17 @@ impl ProxySession {
         self.https_skip_apps = apps;
     }
 
+    /// Installs the engine's set of clients that refused the CA. Learned from
+    /// TLS alerts at the handshake; a remembered pair splices the flow verbatim
+    /// so the app keeps working without the machine's stores having to reach
+    /// it (see [`crate::mitm::untrusted`]).
+    pub fn set_untrusted(
+        &mut self,
+        untrusted: Arc<crate::mitm::untrusted::UntrustedClients>,
+    ) {
+        self.untrusted = Some(untrusted);
+    }
+
     /// The SNI captured from the ClientHello, once it has arrived.
     pub fn captured_sni(&self) -> Option<String> {
         self.captured.clone()
@@ -854,6 +881,43 @@ impl ProxySession {
     /// during the handshake the resulting wire bytes must be handed to the
     /// client, not the peer.
     pub fn on_client_payload(&mut self, payload: &[u8]) -> Result<Outcome, String> {
+        let outcome = self.step_client_payload(payload);
+        if let Err(e) = &outcome {
+            self.note_certificate_refusal(payload, e);
+        }
+        outcome
+    }
+
+    /// Records that this client refused the certificate, when the failure says
+    /// it did.
+    ///
+    /// The evidence arrives in two shapes, and both are read here rather than at
+    /// the point of failure: a TLS 1.2 client's alert is a plaintext record,
+    /// while a TLS 1.3 one is encrypted — rustls decrypts it and reports the
+    /// refusal in words. Runs after the step that consumed the bytes, because
+    /// the learning needs the session the failing step was borrowing.
+    fn note_certificate_refusal(&mut self, payload: &[u8], err: &str) {
+        let Some(untrusted) = self.untrusted.as_deref() else {
+            return;
+        };
+        let Some(name) = self.captured.clone() else {
+            return;
+        };
+        let refused = tls::client_certificate_alert(payload).is_some()
+            || crate::engine::error_names_cert_rejection(err);
+        if !refused {
+            return;
+        }
+        let fingerprint = self.client_fingerprint.clone().unwrap_or_default();
+        if untrusted.note(&name, &fingerprint) {
+            crate::logbuf::push(&format!(
+                "mitm {name}: client rejected the certificate, splicing this host for this \
+                 client from now on"
+            ));
+        }
+    }
+
+    fn step_client_payload(&mut self, payload: &[u8]) -> Result<Outcome, String> {
         match &mut self.state {
             // Not TLS: the relay degrades to a transparent splice.
             ProxyState::Plain => Ok(Outcome {
@@ -917,9 +981,11 @@ impl ProxySession {
             ech_len,
             server_name,
             alpn_http1,
+            fingerprint,
         } = tls::first_flight(&state.raw)
         {
             let name = server_name.as_deref().unwrap_or("?");
+            self.client_fingerprint = Some(fingerprint.clone());
             if self.https_skip.matches(name)
                 || (self.https_only_mode && !self.https_only.matches(name))
             {
@@ -991,6 +1057,22 @@ impl ProxySession {
                     ..Outcome::default()
                 });
             }
+            if self
+                .untrusted
+                .as_deref()
+                .is_some_and(|untrusted| untrusted.refuses(name, &fingerprint))
+            {
+                // This client answered our certificate with a certificate
+                // alert on an earlier connection: its own root set does not
+                // hold the CA, and no store this machine writes reaches it.
+                // Splicing keeps the app working; DNS filtering still applies
+                // to the name, and every other client keeps its filtering on
+                // this host.
+                crate::logbuf::push(&format!(
+                    "mitm {name}: this client refused the CA before, splicing verbatim"
+                ));
+                return Ok(self.splice_pending_verbatim());
+            }
             if crate::mitm::doh::is_endpoint(name) {
                 // Encrypted DNS is unfilterable by definition, and the DoH
                 // client needs HTTP/2 — the MITM would negotiate HTTP/1.1 and
@@ -1059,6 +1141,8 @@ impl ProxySession {
                 if captured.is_some() {
                     // Mid-handshake failure: the client has already seen our
                     // answers, splicing raw bytes now would corrupt the flow.
+                    // Whether it was a refusal of the certificate is decided by
+                    // the caller, which still has the session to write to.
                     return Err(e);
                 }
                 // Not a ClientHello: splice the stream through untouched.

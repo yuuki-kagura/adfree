@@ -246,16 +246,27 @@ fn split_into_records(flight: &[u8], at: usize) -> Vec<u8> {
     out
 }
 
+/// The three fields the ECH tests read out of a hello. The client fingerprint
+/// is skipped here — it is its own test, and comparing it would only restate
+/// the hash — so a hello can still be compared field by field.
+fn hello_parts(flight: Flight) -> (Option<usize>, Option<String>, Option<bool>) {
+    match flight {
+        Flight::Hello {
+            ech_len,
+            server_name,
+            alpn_http1,
+            ..
+        } => (ech_len, server_name, alpn_http1),
+        other => panic!("expected a hello, got {other:?}"),
+    }
+}
+
 #[test]
 fn a_hello_without_ech_is_read_as_such() {
     let flight = client_flight("shop.test");
     assert_eq!(
-        first_flight(&flight),
-        Flight::Hello {
-            ech_len: None,
-            server_name: Some("shop.test".to_string()),
-            alpn_http1: Some(true),
-        }
+        (None, Some("shop.test".to_string()), Some(true)),
+        hello_parts(first_flight(&flight))
     );
     // A partial record says nothing yet.
     assert_eq!(first_flight(&flight[..flight.len() - 4]), Flight::Pending);
@@ -305,28 +316,69 @@ fn a_hello_that_offers_ech_keeps_its_outer_name() {
         patched.len() > flight.len(),
         "the extension has to be in there"
     );
+    // type(1) + cipher_suite(4) + config_id(1) + enc(2 + 32) + payload(2 + 48),
+    // the shape `with_fake_ech` writes.
     assert_eq!(
-        first_flight(&patched),
-        Flight::Hello {
-            // type(1) + cipher_suite(4) + config_id(1) + enc(2 + 32)
-            // + payload(2 + 48), the shape `with_fake_ech` writes.
-            ech_len: Some(90),
-            server_name: Some("shop.test".to_string()),
-            alpn_http1: Some(true),
-        },
+        (Some(90), Some("shop.test".to_string()), Some(true)),
+        hello_parts(first_flight(&patched)),
         "a GREASE hello still names the real host"
     );
     // A real ECH hello is large enough that it normally spans several records:
     // the parser has to put the fragments back together.
     let split = split_into_records(&patched, 700.min(patched.len() - 6));
     assert_eq!(
-        first_flight(&split),
-        Flight::Hello {
-            ech_len: Some(90),
-            server_name: Some("shop.test".to_string()),
-            alpn_http1: Some(true),
-        }
+        (Some(90), Some("shop.test".to_string()), Some(true)),
+        hello_parts(first_flight(&split))
     );
+}
+
+/// A TLS 1.2 client's refusal is a plaintext record on the wire, which is the
+/// one shape the session can read for itself (a TLS 1.3 alert arrives
+/// encrypted and only exists in rustls's error afterwards).
+#[test]
+fn a_certificate_alert_is_read_off_the_wire() {
+    // level fatal(2), description unknown_ca(48)
+    let alert = [0x15, 0x03, 0x03, 0x00, 0x02, 0x02, 0x30];
+    assert_eq!(Some(48), client_certificate_alert(&alert));
+
+    // A protocol failure is the client complaining about something else: it
+    // must not be learned as "this client does not trust the CA".
+    let other = [0x15, 0x03, 0x03, 0x00, 0x02, 0x02, 0x46];
+    assert_eq!(None, client_certificate_alert(&other));
+
+    // A handshake record is not an alert.
+    assert_eq!(None, client_certificate_alert(&[0x16, 0x03, 0x03, 0x00, 0x02, 0x02, 0x30]));
+
+    // A record whose body is truncated says nothing.
+    assert_eq!(None, client_certificate_alert(&[0x15, 0x03, 0x03, 0x00, 0x04, 0x02]));
+}
+
+/// Two TLS stacks get different fingerprints; the same stack gets the same one
+/// on every connection, whatever it puts in the random and session-id fields.
+#[test]
+fn a_client_fingerprint_identifies_the_stack_not_the_connection() {
+    let stack_a = client_flight("shop.test");
+    let stack_b = {
+        // A different ALPN list is a different hello, and the fingerprint is
+        // built from the cipher and extension lists, so this one has to keep
+        // them: use the same client twice and compare instead.
+        client_flight("shop.test")
+    };
+    let Flight::Hello { fingerprint: a, .. } = first_flight(&stack_a) else {
+        panic!("hello")
+    };
+    let Flight::Hello { fingerprint: b, .. } = first_flight(&stack_b) else {
+        panic!("hello")
+    };
+    assert_eq!(a, b, "the same stack fingerprints the same way twice");
+    assert!(!a.is_empty(), "and the fingerprint is there at all");
+
+    // Garbage still yields a usable, empty fingerprint rather than a panic.
+    let junk = [0x16, 0x03, 0x01, 0x00, 0x08, 0x01, 0x00, 0x00, 0x04, 0, 0, 0, 0];
+    let Flight::Hello { fingerprint, .. } = first_flight(&junk) else {
+        panic!("a junk hello is still read as a hello")
+    };
+    assert!(fingerprint.is_empty(), "nothing readable, no fingerprint");
 }
 
 #[test]
@@ -337,12 +389,8 @@ fn a_client_hello_can_be_told_from_garbage() {
         0x16, 0x03, 0x01, 0x00, 0x08, 0x01, 0x00, 0x00, 0x04, 0, 0, 0, 0,
     ];
     assert_eq!(
-        first_flight(&junk),
-        Flight::Hello {
-            ech_len: None,
-            server_name: None,
-            alpn_http1: None,
-        }
+        (None, None, None),
+        hello_parts(first_flight(&junk))
     );
     junk[5] = 0x02; // a ServerHello, not a ClientHello
     assert_eq!(first_flight(&junk), Flight::NotHello);

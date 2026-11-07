@@ -731,6 +731,12 @@ pub enum Flight {
         /// protocol the MITM speaks. `None` when the hello carries no ALPN
         /// extension at all: those are terminated as before.
         alpn_http1: Option<bool>,
+        /// The shape of this client's hello, as [`client_hello_fingerprint`]
+        /// reads it: which TLS stack the connection comes from. It is what
+        /// tells a browser from a `fetch()` call on the same host, and the
+        /// only thing that makes "this client does not trust the CA" a fact
+        /// about one client instead of all of them.
+        fingerprint: String,
     },
 }
 
@@ -777,6 +783,7 @@ pub fn first_flight(bytes: &[u8]) -> Flight {
                         ech_len: None,
                         server_name: None,
                         alpn_http1: None,
+                        fingerprint: String::new(),
                     };
                 };
                 return Flight::Hello {
@@ -785,11 +792,117 @@ pub fn first_flight(bytes: &[u8]) -> Flight {
                     server_name: server_name_of(extensions),
                     alpn_http1: extension(extensions, EXT_ALPN)
                         .map(|list| alpn_offers(list, ALPN_H1)),
+                    fingerprint: client_hello_fingerprint(body, extensions),
                 };
             }
         }
         if off == bytes.len() {
             return Flight::Pending;
+        }
+    }
+}
+
+/// The shape of a ClientHello, as a stable short string.
+///
+/// It is a JA3 in all but the name: the cipher suites a client offers, then the
+/// extension types it attaches, in the order it sends them. Two Chrome builds
+/// agree, a browser and a Node `fetch()` call do not, and a client that pins its
+/// own roots looks the same on every connection it makes — which is exactly the
+/// pair of properties the certificate-refusal set needs
+/// ([`crate::mitm::untrusted`]).
+///
+/// The randomness in a hello (the `random` field, the session id, key shares,
+/// GREASE values) is deliberately left out: the fingerprint has to identify the
+/// stack, not the connection.
+fn client_hello_fingerprint(hello: &[u8], extensions: &[u8]) -> String {
+    use std::hash::{Hash, Hasher};
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    // Sorted, not in wire order: rustls — and Chromium after it — permutes the
+    // extensions on every hello, so the order identifies the connection rather
+    // than the stack. What is left (which extensions, which in shape, over
+    // which cipher suites) is what a TLS stack cannot randomize away.
+    let mut types = extension_types(extensions);
+    types.sort_unstable();
+    types.hash(&mut hasher);
+    cipher_suites(hello).hash(&mut hasher);
+    format!("{:016x}", hasher.finish())
+}
+
+/// The cipher suites the hello offers, in its order. Empty when the hello is
+/// too short to hold them, which rustls rejects a moment later anyway.
+fn cipher_suites(hello: &[u8]) -> &[u8] {
+    let mut off = 2 + 32;
+    let Some(session) = hello.get(off) else {
+        return &[];
+    };
+    off += 1 + *session as usize;
+    let Some(len) = hello
+        .get(off..off + 2)
+        .map(|b| u16::from_be_bytes([b[0], b[1]]) as usize)
+    else {
+        return &[];
+    };
+    off += 2;
+    hello.get(off..off.saturating_add(len)).unwrap_or(&[])
+}
+
+/// The extension types the hello attaches, in its order. GREASE types are kept:
+/// they are as much a part of a stack's fingerprint as anything else, and they
+/// are what makes a Chromium hello differ from a hand-written one.
+fn extension_types(extensions: &[u8]) -> Vec<u16> {
+    let mut types = Vec::new();
+    let mut off = 0usize;
+    loop {
+        let Some(header) = extensions.get(off..off + 4) else {
+            return types;
+        };
+        let kind = u16::from_be_bytes([header[0], header[1]]);
+        let len = u16::from_be_bytes([header[2], header[3]]) as usize;
+        types.push(kind);
+        off += 4 + len;
+        if off >= extensions.len() {
+            return types;
+        }
+    }
+}
+
+/// The certificate problem a client named in a TLS alert, when this flight
+/// carries one.
+///
+/// A client that does not hold our CA answers the certificate with a fatal
+/// alert rather than by hanging up: `unknown_ca` (48) from anything built on
+/// OpenSSL/BoringSSL, `bad_certificate` (42) or `certificate_unknown` (46) from
+/// a stack that prefers those, `access_denied` (49) from a pinning client. All
+/// of them mean the same thing here — this client will never accept the
+/// certificate, whatever is in the machine's stores.
+///
+/// The alert is read off the wire rather than out of rustls's error because the
+/// evidence has to name *this* client, and by the time rustls reports a failed
+/// handshake the record that carried the alert is no longer reachable.
+pub fn client_certificate_alert(bytes: &[u8]) -> Option<u8> {
+    let mut off = 0usize;
+    loop {
+        let Some(header) = bytes.get(off..off + 5) else {
+            return None;
+        };
+        let len = u16::from_be_bytes([header[3], header[4]]) as usize;
+        let body = match bytes.get(off + 5..off + 5 + len) {
+            Some(body) => body,
+            None => return None,
+        };
+        // Alert records carry a level, then the description.
+        if header[0] == 0x15 && body.len() >= 2 {
+            let description = body[1];
+            // One table for both TLS paths: the QUIC bridge already classifies
+            // the alerts its CONNECTION_CLOSE carries by the same set, and two
+            // spellings of "this client refused the certificate" would drift.
+            if crate::engine::cert_alert_is_rejection(description) {
+                return Some(description);
+            }
+        }
+        off += 5 + len;
+        if off >= bytes.len() {
+            return None;
         }
     }
 }

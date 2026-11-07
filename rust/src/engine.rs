@@ -113,6 +113,21 @@ pub(crate) fn cert_alert_is_rejection(alert: u8) -> bool {
     CERT_ALERTS.iter().any(|(_, code)| *code == alert)
 }
 
+/// Did a failed handshake fail because the client refused our certificate?
+///
+/// The alert a TLS 1.3 client sends after seeing the leaf is encrypted, so it
+/// cannot be read off the wire: rustls decrypts it and reports it in words.
+/// This is the reading of those words, and the one place they are spelled out —
+/// the session learns the refusal from it, and the engine's per-app set is fed
+/// by the same answer.
+pub(crate) fn error_names_cert_rejection(err: &str) -> bool {
+    // An origin-facing feed reports the *server's* alerts too; only the client
+    // half's verdict may condemn a client.
+    err.contains("received fatal alert")
+        && !err.contains("client process_new_packets")
+        && CERT_ALERTS.iter().any(|(name, _)| err.contains(name))
+}
+
 /// The TTL one synthetic answer may carry: the shortest record's, held inside
 /// the range a search engine's endpoint is worth trusting for.
 fn record_ttl(records: &[(std::net::IpAddr, u32)]) -> u32 {
@@ -854,6 +869,11 @@ pub struct Core {
     /// (see [`crate::mitm::ech`]). Public like the other state the tests and
     /// the platform poke at.
     pub ech_hosts: Arc<crate::mitm::ech::EchHosts>,
+    /// Clients that refused the proxy's certificate, per host and client
+    /// fingerprint. Learned from the TLS alert they answer with, and the reason
+    /// a flow is spliced instead of terminated for them (see
+    /// [`crate::mitm::untrusted`]).
+    pub untrusted_clients: Arc<crate::mitm::untrusted::UntrustedClients>,
     /// The HTTPS website lists, parsed once per config change and shared with
     /// every connection (see [`crate::mitm::hosts`]).
     https_hosts: RwLock<HttpsHosts>,
@@ -1082,6 +1102,7 @@ impl Core {
             upstream_config: RwLock::new(crate::mitm::tls::UpstreamTls::system()),
             mitm_port: AtomicU16::new(crate::mitm::relay::MITM_PORT),
             ech_hosts: Arc::new(crate::mitm::ech::EchHosts::new()),
+            untrusted_clients: crate::mitm::untrusted::UntrustedClients::new(),
             https_hosts: RwLock::new(HttpsHosts::default()),
             https_skip_apps: RwLock::new(Arc::new(HashSet::new())),
             ca_rejecting_apps: RwLock::new(HashSet::new()),
@@ -3077,6 +3098,10 @@ impl Core {
                     // a refusal from one of them can be learned as "requires
                     // ECH" (see `mitm::ech`).
                     proxy.set_ech_hosts(Arc::clone(&self.ech_hosts), cfg.full_ech);
+                    // Clients that refused the CA in an earlier life of this
+                    // engine: spliced before rustls can offer a certificate
+                    // they will not accept.
+                    proxy.set_untrusted(Arc::clone(&self.untrusted_clients));
                     let https = self.https_hosts.read().unwrap().clone();
                     proxy.set_https_hosts(https.skip, https.only, https.only_mode);
                     // The TLS half learns the hostname before the first
@@ -4684,9 +4709,7 @@ impl Core {
     /// The origin-facing feed is prefixed `client process_new_packets` and its
     /// alerts must not condemn the app, so those never match.
     fn client_rejected_certificate(err: &str) -> bool {
-        err.contains("received fatal alert")
-            && !err.contains("client process_new_packets")
-            && CERT_ALERTS.iter().any(|(name, _)| err.contains(name))
+        error_names_cert_rejection(err)
     }
 
     /// The client-facing half just received a certificate alert: the app does
@@ -4947,10 +4970,21 @@ impl Core {
             ));
         }
         drop(learned);
+        // The per-client set is keyed by fingerprint rather than by package,
+        // so the desktop's unattributed flows are learned there. A new CA — or
+        // the same one newly installed into a store that reaches an app — is
+        // the one event that makes those verdicts stale.
+        let clients = self.untrusted_clients.snapshot().len();
+        self.untrusted_clients.clear();
+        if clients > 0 {
+            crate::logbuf::push(&format!(
+                "mitm: retrying HTTPS decryption for {clients} host(s) a client refused"
+            ));
+        }
         // The QUIC path remembered five-tuples whose client refused the leaf;
         // those verdicts lapse with the rejection they came from.
         self.h3_spliced.lock().unwrap().clear();
-        count
+        count + clients
     }
 
     pub fn resolver_addr(&self) -> SocketAddr {
@@ -6248,7 +6282,13 @@ mod tests {
         // `Relay::serves`), which is what keeps a reused port from being read as
         // a retransmission of someone else's flow, and the peer-socket token the
         // forwarder's `epoll` registration is keyed on.
-        assert!(relay <= 1056, "a TCP relay is {relay} B");
+        // 1088 rather than 1056: the relay carries a pointer to the engine's
+        // certificate-refusal set plus the fingerprint of the client that
+        // opened the flow, which is what lets a client whose own roots refuse
+        // the CA keep working without its host being terminated (see
+        // `mitm::untrusted`). Two words, on the one structure that is per
+        // connection.
+        assert!(relay <= 1088, "a TCP relay is {relay} B");
         assert!(udp <= 192, "a datagram mapping is {udp} B");
         assert!(h3 <= 112, "a terminated QUIC flow is {h3} B");
         // The worst case for both datagram tables at the caps the engine

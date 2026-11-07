@@ -683,6 +683,7 @@ fn arm_session(
     session.set_apps(apps.to_vec());
     session.set_https_skip_apps(core.effective_https_skip_apps());
     session.set_ech_hosts(Arc::clone(&core.ech_hosts), cfg.full_ech);
+    session.set_untrusted(Arc::clone(&core.untrusted_clients));
     let (skip, only, only_mode) = core.https_host_lists();
     session.set_https_hosts(skip, only, only_mode);
     session.set_host_filter(core.filter_engine());

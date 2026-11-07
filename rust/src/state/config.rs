@@ -90,6 +90,22 @@ pub fn apply(state: &StateStore, core: &Core, private_dns_strict: bool) -> Confi
     core.set_dns_rewrites(plan.rewrites);
     core.set_app_network_policy(plan.policy.network);
     core.set_https_skip_apps(plan.policy.https_skip_apps);
+    // Hosts some client refused the certificate for are spliced rather than
+    // terminated. The set is rebuilt from traffic, so it is worth one line
+    // here: without it the reason a host stopped being filtered exists only in
+    // the log of the connection that taught it.
+    if !core.untrusted_clients.is_empty() {
+        let hosts = core
+            .untrusted_clients
+            .snapshot()
+            .into_iter()
+            .map(|(host, clients)| format!("{host} ({clients})"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        crate::logbuf::push(&format!(
+            "proxy: splicing these hosts for clients that refused the CA: {hosts}"
+        ));
+    }
     core.set_resolver(plan.upstream);
     core.set_secure_resolver(plan.secure);
     core.set_backup_resolver(plan.backup);

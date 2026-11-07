@@ -23,6 +23,7 @@ pub mod segment;
 pub mod stealth;
 pub mod tcp;
 pub mod tls;
+pub mod untrusted;
 
 #[cfg(test)]
 mod e2e_tests;

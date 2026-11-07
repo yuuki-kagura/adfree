@@ -3586,15 +3586,19 @@ fn a_client_without_ech_is_still_terminated() {
     let _conn = handshake(&mut tcp, client_config(ca_der));
 
     let forwarded = await_listener(&mut tcp, &seen);
-    assert_eq!(
-        tls::first_flight(&forwarded),
+    match tls::first_flight(&forwarded) {
         tls::Flight::Hello {
-            ech_len: None,
-            server_name: Some("shop.test".to_string()),
-            alpn_http1: Some(true),
-        },
-        "the proxy's own hello must name the host and not offer ECH"
-    );
+            ech_len,
+            server_name,
+            alpn_http1,
+            ..
+        } => {
+            assert_eq!(None, ech_len, "the proxy's hello must not offer ECH");
+            assert_eq!(Some("shop.test".to_string()), server_name);
+            assert_eq!(Some(true), alpn_http1);
+        }
+        other => panic!("the proxy's own hello must come back: {other:?}"),
+    }
 }
 
 /// A host that advertises ECH needs two bare refusals within the window before

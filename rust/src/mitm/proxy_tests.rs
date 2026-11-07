@@ -745,6 +745,146 @@ fn an_app_with_https_filtering_off_is_spliced_untouched() {
     assert_eq!(proxy.captured_sni(), None, "no name was captured");
 }
 
+/// A client whose own root set does not hold the CA — a Node binary, a Rust
+/// program linking `webpki-roots`, a pinning game client — answers the
+/// certificate with a fatal alert. That alert is the only evidence the proxy
+/// gets, and it has to be enough: the next hello from the same client is
+/// spliced instead of terminated, so the app works with filtering still on
+/// everywhere else.
+#[test]
+fn a_certificate_alert_is_learned_for_that_client_and_host() {
+    use crate::mitm::tls::Flight;
+    use rustls::pki_types::ServerName;
+    use rustls::ClientConnection;
+
+    let mitm_ca = CertificateAuthority::generate().expect("mitm ca");
+    let resolver = Arc::new(SniCertResolver::new(Arc::new(
+        CertificateAuthority::from_pem(&mitm_ca.cert_pem(), &mitm_ca.key_pem()).expect("restore"),
+    )));
+    let mut proxy = ProxySession::new_pending(
+        resolver,
+        tls::UpstreamTls::system(),
+        "/adfree-user.js".into(),
+        Arc::from(""),
+    )
+    .expect("pending session");
+    let untrusted = crate::mitm::untrusted::UntrustedClients::new();
+    proxy.set_untrusted(Arc::clone(&untrusted));
+
+    // A client that trusts nothing of ours: an empty root store is the shape
+    // of every stack with its own bundled roots.
+    let roots = rustls::RootCertStore::empty();
+    let name = ServerName::try_from("api.example.com".to_string()).expect("server name");
+    let mut client = ClientConnection::new(tls::client_config_with(roots), name).expect("client");
+    let hello = tls::take_client_outbound(&mut client);
+    assert!(!hello.is_empty(), "the client has a first flight");
+
+    let step = proxy.on_client_payload(&hello).expect("first flight");
+    assert!(!step.to_client.is_empty(), "the proxy terminated and answered");
+
+    // The client reads our certificate and refuses it: rustls writes the alert
+    // it wants to send, which is the bytes the proxy has to learn from.
+    let mut cursor = std::io::Cursor::new(step.to_client.as_slice());
+    while client.read_tls(&mut cursor).expect("read") > 0 {}
+    assert!(
+        client.process_new_packets().is_err(),
+        "an empty root store must reject the forged leaf"
+    );
+    let alert = tls::take_client_outbound(&mut client);
+    assert!(!alert.is_empty(), "the client answered with an alert record");
+
+    // The handshake dies, as it must — but the refusal is remembered.
+    let err = proxy.on_client_payload(&alert).expect_err("handshake dies");
+    eprintln!("DEBUG alert error: {err}");
+    assert!(
+        untrusted.refuses("api.example.com", &{
+            let Flight::Hello { fingerprint, .. } = tls::first_flight(&hello) else {
+                panic!("hello")
+            };
+            fingerprint
+        }),
+        "the pair must be learned from the alert"
+    );
+
+    // The refusal killed that flow, as it must; the retry is a new connection,
+    // which is what the relay opens.
+    let resolver = Arc::new(SniCertResolver::new(Arc::new(
+        CertificateAuthority::from_pem(&mitm_ca.cert_pem(), &mitm_ca.key_pem()).expect("restore"),
+    )));
+    let mut retry = ProxySession::new_pending(
+        resolver,
+        tls::UpstreamTls::system(),
+        "/adfree-user.js".into(),
+        Arc::from(""),
+    )
+    .expect("pending session");
+    retry.set_untrusted(Arc::clone(&untrusted));
+    let again = retry.on_client_payload(&hello).expect("second flight");
+    assert_eq!(
+        again.to_peer, hello,
+        "the retry must reach the origin untouched"
+    );
+    assert!(again.to_client.is_empty(), "nothing is terminated any more");
+    assert!(!retry.server_handshaking(), "the flow is on the plain path");
+}
+
+/// The same host reached by a client that does accept the CA keeps being
+/// terminated: the learned pair is per fingerprint, so one app giving up on
+/// the certificate cannot cost a browser its filtering.
+#[test]
+fn learning_a_client_does_not_splice_the_same_host_for_a_browser() {
+    use crate::mitm::tls::Flight;
+    use rustls::pki_types::ServerName;
+
+    let mitm_ca = CertificateAuthority::generate().expect("mitm ca");
+    let untrusted = crate::mitm::untrusted::UntrustedClients::new();
+
+    let browser_hello = {
+        let mut roots = rustls::RootCertStore::empty();
+        roots
+            .add(rustls::pki_types::CertificateDer::from(mitm_ca.cert_der()))
+            .expect("browser root");
+        let name = ServerName::try_from("api.example.com".to_string()).expect("server name");
+        let mut browser = rustls::ClientConnection::new(
+            tls::client_config_with(roots),
+            name,
+        )
+        .expect("browser");
+        tls::take_client_outbound(&mut browser)
+    };
+    let Flight::Hello {
+        server_name,
+        fingerprint,
+        ..
+    } = tls::first_flight(&browser_hello)
+    else {
+        panic!("hello")
+    };
+    let host = server_name.expect("sni");
+
+    // Some other stack refused the certificate for this very host.
+    untrusted.note(&host, "node-fingerprint");
+    assert!(!untrusted.refuses(&host, &fingerprint));
+
+    let resolver = Arc::new(SniCertResolver::new(Arc::new(
+        CertificateAuthority::from_pem(&mitm_ca.cert_pem(), &mitm_ca.key_pem()).expect("restore"),
+    )));
+    let mut proxy = ProxySession::new_pending(
+        resolver,
+        tls::UpstreamTls::system(),
+        "/adfree-user.js".into(),
+        Arc::from(""),
+    )
+    .expect("pending session");
+    proxy.set_untrusted(untrusted);
+
+    let step = proxy.on_client_payload(&browser_hello).expect("first flight");
+    assert!(
+        !step.to_client.is_empty(),
+        "a client that trusts the CA is still terminated"
+    );
+}
+
 /// A Chrome-style first flight: the ALPN list is the only thing that says the
 /// client would not speak HTTP/1.1, which is what the MITM can terminate.
 fn h2_only_hello(ca: &CertificateAuthority, name: &str) -> Vec<u8> {
