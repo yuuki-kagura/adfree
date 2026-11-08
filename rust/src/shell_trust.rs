@@ -9,9 +9,15 @@
 //! new host fails the handshake, and only a fresh process — one whose first
 //! connection the proxy has already learned — gets through.
 //!
-//! The knob Node honours for this is `NODE_USE_SYSTEM_CA`: it makes Node load
-//! the distro's OpenSSL bundle at `/etc/ssl/certs`, a store the anchor install
-//! already wrote the CA into. A packaged application cannot set a user's
+//! Two knobs are written, because no single one covers the Node builds in use:
+//! `NODE_EXTRA_CA_CERTS` names our certificate and every Node release reads it,
+//! while `NODE_USE_SYSTEM_CA=1` (Node 22.15 and later) loads the distro's
+//! OpenSSL bundle at `/etc/ssl/certs`, a store the anchor install already wrote
+//! the CA into. Setting both means a binary that honours one still trusts the
+//! CA even if it ignores the other — an older Node, or one that never got the
+//! system flag. The named file is the exported `adfree-ca.pem` under the data
+//! root, which the app rewrites in place when the CA is renewed, so the path
+//! stays valid across a renewal. A packaged application cannot set a user's
 //! environment, but it can write the file that user's shell already reads on
 //! every start. This module does exactly that, for the shells actually present
 //! on the machine and for the login shell named by `$SHELL`, between markers so
@@ -135,8 +141,8 @@ fn write(file: &Path, line: &str) -> Edit {
     }
     out.push_str(START);
     out.push('\n');
-    out.push_str("# Added by AdFree. Makes Node read the system CA store, which\n");
-    out.push_str("# holds the AdFree CA, so Node CLIs (`pi`, npm) trust it.\n");
+    out.push_str("# Added by AdFree. Makes Node trust the AdFree CA, so Node CLIs\n");
+    out.push_str("# (`pi`, npm, a node server) work through the filter.\n");
     out.push_str(line);
     out.push('\n');
     out.push_str(END);
@@ -189,17 +195,20 @@ fn without_block(text: &str) -> String {
 
 /// fish spells an exported variable differently from a POSIX shell.
 ///
-/// One boolean: `NODE_USE_SYSTEM_CA=1` makes Node load the distro's OpenSSL
-/// bundle at `/etc/ssl/certs`, which the anchor install already wrote the CA
-/// into. There is no certificate path to keep in sync as the CA is renewed, and
-/// every Node CLI — `pi`, `npm`, a node server — inherits the trust from its
-/// shell. Node honours this from 22.15 onward; older builds would need
-/// `NODE_EXTRA_CA_CERTS` naming the certificate instead.
-fn line_for(file: &Path, _pem_path: &str) -> String {
+/// Both knobs, because each covers Node builds the other misses:
+/// `NODE_EXTRA_CA_CERTS` names the certificate directly and is read by every
+/// Node release, while `NODE_USE_SYSTEM_CA=1` (22.15 onward) loads the distro's
+/// OpenSSL bundle at `/etc/ssl/certs`, which the anchor install already wrote
+/// the CA into. The path handed out is the exported PEM in the data root, which
+/// the app rewrites in place when the CA is renewed — so it cannot go stale the
+/// way a one-off export from an older install would.
+fn line_for(file: &Path, pem_path: &str) -> String {
     if file.to_string_lossy().ends_with("config.fish") {
-        "set -gx NODE_USE_SYSTEM_CA 1".to_string()
+        format!(
+            "set -gx NODE_EXTRA_CA_CERTS \"{pem_path}\"\nset -gx NODE_USE_SYSTEM_CA 1"
+        )
     } else {
-        "export NODE_USE_SYSTEM_CA=1".to_string()
+        format!("export NODE_EXTRA_CA_CERTS=\"{pem_path}\"\nexport NODE_USE_SYSTEM_CA=1")
     }
 }
 
@@ -234,11 +243,18 @@ mod tests {
         let bash = std::fs::read_to_string(home.join(".bashrc")).unwrap();
         assert!(bash.contains("alias ll"), "kept the user's lines: {bash}");
         assert!(bash.contains("export NODE_USE_SYSTEM_CA=1"), "bash gets the system-CA knob: {bash}");
-        assert!(!bash.contains("NODE_EXTRA_CA_CERTS"), "no stale extra-cert line: {bash}");
+        assert!(
+            bash.contains(&format!("export NODE_EXTRA_CA_CERTS=\"{pem}\"")),
+            "bash gets the named certificate too, for Node builds without the flag: {bash}"
+        );
 
         let fish = std::fs::read_to_string(home.join(".config/fish/config.fish")).unwrap();
         assert!(fish.contains("EDITOR vim"), "kept the user's lines: {fish}");
         assert!(fish.contains("set -gx NODE_USE_SYSTEM_CA 1"), "fish gets the system-CA knob: {fish}");
+        assert!(
+            fish.contains(&format!("set -gx NODE_EXTRA_CA_CERTS \"{pem}\"")),
+            "fish gets the named certificate too: {fish}"
+        );
     }
 
     #[test]
