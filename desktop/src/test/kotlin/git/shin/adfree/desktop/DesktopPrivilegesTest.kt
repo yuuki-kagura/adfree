@@ -418,6 +418,65 @@ class DesktopPrivilegesTest {
     }
 
     /**
+     * A unit that is already filtering is not restarted.
+     *
+     * Every program on this machine reaches the internet through that unit
+     * while it runs, so a restart is a hole in the protection and a broken
+     * connection for whatever was in the middle of sending something — the
+     * reason a second window used to cost the user a chat upload. Asking is
+     * cheap; restarting is not.
+     */
+    @Test
+    fun aUnitThatIsAlreadyFilteringIsLeftRunning() {
+        val calls = recordingSystemctl()
+        val privileges = DesktopPrivileges(
+            systemctl = calls.first,
+            servicePath = "/etc/systemd/system/adfree-desktop.service",
+            stamp = File("/nonexistent/adfree/privileged-setup.version"),
+            serviceActive = { true },
+            listenerAnswers = { port -> port == 3129 },
+        )
+        assertEquals(PrivilegeOutcome.Ok, privileges.requestPrivilegedEngine(emptyMap(), 3129))
+        // A unit this check cannot reinstall (the stamp says a stranger set the
+        // machine up) still has to answer without touching systemd at all.
+        assertTrue("the ask that had nothing to do asked systemd: ${calls.second()}", calls.second().isEmpty())
+    }
+
+    /**
+     * The other half of the same question: a unit systemd calls active whose
+     * ports nobody answers on is the case a restart exists for. The rules are
+     * still pointing at a closed socket, and a machine in that state sends its
+     * traffic nowhere.
+     */
+    @Test
+    fun anActiveUnitWithNoListenerIsRestarted() {
+        val calls = recordingSystemctl()
+        val privileges = DesktopPrivileges(
+            systemctl = calls.first,
+            servicePath = "/etc/systemd/system/adfree-desktop.service",
+            stamp = File("/nonexistent/adfree/privileged-setup.version"),
+            serviceActive = { true },
+            listenerAnswers = { false },
+        )
+        val outcome = privileges.requestPrivilegedEngine(emptyMap(), 3129)
+        assertEquals(PrivilegeOutcome.Ok, outcome)
+        assertEquals(listOf("restart adfree-desktop"), calls.second())
+    }
+
+    /** A `systemctl` that runs for real and writes down what it was asked. */
+    private fun recordingSystemctl(): Pair<String, () -> List<String>> {
+        val dir = File(System.getProperty("java.io.tmpdir"), "adfree-systemctl-${System.nanoTime()}")
+        dir.mkdirs()
+        val log = File(dir, "calls")
+        val script = File(dir, "systemctl")
+        script.writeText("#!/bin/sh\nprintf '%s\\n' \"\$*\" >> " + log.absolutePath + "\nexit 0\n")
+        script.setExecutable(true)
+        return script.absolutePath to {
+            if (log.isFile) log.readLines().filter { it.isNotBlank() } else emptyList()
+        }
+    }
+
+    /**
      * `systemctl` returns zero when the unit is *started*, not when it stays up,
      * so a start has to be confirmed against the unit itself: a JVM that died on
      * its first line leaves nothing behind but an exit status.

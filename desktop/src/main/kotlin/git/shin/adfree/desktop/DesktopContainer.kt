@@ -78,6 +78,9 @@ class DesktopContainer(
         onEngineTakeover = { onEngineTakeover() },
         coreLibrary = coreLibrary,
         exportCaPem = { coreEngine.exportCaCertificate() },
+        // Read at the ask, not captured: the ports are the user's to move, and
+        // the probe has to look at the one the unit was told to take.
+        privilegedPort = { repository.settings.value.localProxy.tcpPort },
     )
     val fileHost = DesktopFileHost()
     val inventory = DesktopAppInventory()

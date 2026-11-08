@@ -47,6 +47,12 @@ class DesktopPlatformHost(
     private val exportCaPem: () -> String? = { null },
     /** The user-owned stores (NSS) the system bundle does not reach. */
     private val trustStores: DesktopTrustStores = DesktopTrustStores(),
+    /**
+     * The port the protection unit's proxy listens on. Asked before a restart
+     * so a unit that is already filtering is left running: the machine's open
+     * connections through it belong to other programs.
+     */
+    private val privilegedPort: () -> Int = { DesktopPrivileges.DEFAULT_PROXY_PORT },
 ) : PlatformHost {
 
     /** Toasts the window pipes into the scaffold's snackbar host. */
@@ -143,7 +149,7 @@ class DesktopPlatformHost(
             // hoping the child repeats the search.
             coreLibrary?.let { put("ADFREE_CORE_LIB", it.absolutePath) }
         }
-        val outcome = helper.requestPrivilegedEngine(env)
+        val outcome = helper.requestPrivilegedEngine(env, privilegedPort())
         return when (outcome) {
             is PrivilegeOutcome.Ok -> {
                 System.err.println("[desktop] the privileged instance is up; this window is leaving")

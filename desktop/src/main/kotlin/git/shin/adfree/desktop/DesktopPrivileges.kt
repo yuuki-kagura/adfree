@@ -50,6 +50,23 @@ class DesktopPrivileges(
         System.getenv("XDG_DATA_HOME") ?: File(System.getProperty("user.home"), ".local/share").absolutePath,
         "adfree/privileged-setup.version",
     ),
+    /**
+     * Whether the protection unit is running, and whether something answers on
+     * the local proxy port. Both are read-only questions; the tests replace
+     * them so a machine's own systemd and sockets are not the test's business.
+     */
+    private val serviceActive: () -> Boolean = {
+        runCatching {
+            ProcessBuilder(systemctl, "is-active", UNIT_NAME)
+                .redirectErrorStream(true)
+                .start()
+                .let { process ->
+                    val text = process.inputStream.bufferedReader().readText().trim()
+                    process.waitFor() == 0 && text == "active"
+                }
+        }.getOrDefault(false)
+    },
+    private val listenerAnswers: (Int) -> Boolean = ::probeProxyListener,
 ) {
 
     /** True when this process may mark its own sockets, i.e. holds `CAP_NET_ADMIN`. */
@@ -391,10 +408,24 @@ class DesktopPrivileges(
      * The caller must have released the listeners first: the unit it starts
      * binds the same ports.
      */
-    fun requestPrivilegedEngine(environment: Map<String, String>): PrivilegeOutcome {
+    fun requestPrivilegedEngine(
+        environment: Map<String, String>,
+        proxyPort: Int = DEFAULT_PROXY_PORT,
+    ): PrivilegeOutcome {
         if (!privilegedServiceInstalled()) {
             val installed = installPrivilegedService(environment)
             if (installed !is PrivilegeOutcome.Ok) return installed
+        }
+        // A unit that is already filtering is left alone. Restarting it would
+        // drop every connection the machine has open through the proxy — a
+        // message being sent in another window, a call in progress — and buy
+        // nothing: the instance this ask wanted is the one already running.
+        // The listener has to answer, though: systemd calls a unit active for
+        // as long as its process lives, and a process that lost its ports is
+        // exactly the case a restart is for.
+        if (unitActive() && listenerAnswers(proxyPort)) {
+            log("the privileged instance is already filtering; leaving it running")
+            return PrivilegeOutcome.Ok
         }
         return startInstalledService()
     }
@@ -436,15 +467,7 @@ class DesktopPrivileges(
     }
 
     /** Read-only, so it needs no privilege of its own. */
-    private fun unitActive(): Boolean = runCatching {
-        ProcessBuilder(systemctl, "is-active", UNIT_NAME)
-            .redirectErrorStream(true)
-            .start()
-            .let { process ->
-                val text = process.inputStream.bufferedReader().readText().trim()
-                process.waitFor() == 0 && text == "active"
-            }
-    }.getOrDefault(false)
+    private fun unitActive(): Boolean = serviceActive()
 
     /**
      * The `nft` path as the unit's `ExecStopPost` needs it: absolute.
@@ -600,9 +623,31 @@ class DesktopPrivileges(
         // healthy start is not held up.
         const val UNIT_START_CHECKS = 10
         const val UNIT_START_POLL_MS = 100L
+        /** The port the desktop proxy listens on when the settings say nothing. */
+        const val DEFAULT_PROXY_PORT = 3129
+        /** How long a probe waits for the local proxy to accept a connection. */
+        const val LISTENER_PROBE_MS = 400
         const val CA_INSTALL_MAIN = "git.shin.adfree.desktop.CaInstallKt"
     }
 }
+
+/**
+ * True when a connection to `port` on loopback is accepted.
+ *
+ * A unit systemd calls active is not enough on its own: an instance that died
+ * between installing the redirect and taking its ports leaves the rules
+ * pointing at a closed socket, which is a machine whose traffic disappears
+ * rather than a machine that is protected.
+ */
+private fun probeProxyListener(port: Int): Boolean = runCatching {
+    java.net.Socket().use { socket ->
+        socket.connect(
+            java.net.InetSocketAddress(java.net.InetAddress.getByName("127.0.0.1"), port),
+            DesktopPrivileges.LISTENER_PROBE_MS,
+        )
+    }
+    true
+}.getOrDefault(false)
 
 /**
  * One argument as systemd reads it. Left bare when nothing in it is syntax — an
