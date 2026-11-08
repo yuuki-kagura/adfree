@@ -327,6 +327,9 @@ class DesktopTunnelControl(
     override fun needsConsent(): Boolean = false
 
     override fun startVpnService() {
+        // A start means filtering: the transient pause the tray set must not
+        // outlive the protection it was pausing.
+        coreEngine.setProtectionPaused(false)
         val ports = localProxy()
         val status = coreEngine.startProxy(ports.tcpPort, ports.dnsPort, ports.filterLocalhost)
         if (!status.running) {
@@ -366,6 +369,7 @@ class DesktopTunnelControl(
     }
 
     override fun stopVpnService() {
+        coreEngine.setProtectionPaused(false)
         System.err.println("[desktop] protection stopping: removing rules and listeners")
         privileges?.removeRules()
         coreEngine.stopProxy()

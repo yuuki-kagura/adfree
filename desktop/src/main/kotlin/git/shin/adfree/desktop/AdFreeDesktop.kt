@@ -131,10 +131,18 @@ fun main() {
     container.applyHttpsDefault(appScope)
     val resumeTick = MutableStateFlow(0L)
     val backRegistry = BackRegistry()
+    // A Wayland session draws AWT's XEmbed icon through KDE's
+    // `xembedsniproxy`, which paints it and then delivers no clicks back: the
+    // menu there can never open. StatusNotifierItem is the protocol the shell
+    // does answer, so it is tried first, and AWT stays the fallback for
+    // sessions with no StatusNotifier host at all.
+    // `main` is not a composable, so the icon's lifetime is the process's:
+    // it is closed by `quit` below.
+    val sni = TraySni.start()
     // Hiding is only a detour when there is a status field to come back
     // through. Many Linux sessions have no tray owner at all, and a hidden
     // window there is an app the user cannot reach: close quits instead.
-    val hasTray = java.awt.SystemTray.isSupported()
+    val hasTray = sni != null || java.awt.SystemTray.isSupported()
     // Whatever ends the process — the tray, a signal, a crash of the UI thread
     // — the listeners go down with it. Left up, native threads keep the JVM
     // from finishing and the ports stay taken. The redirect goes first: rules
@@ -154,21 +162,32 @@ fun main() {
         var showFilteringLog by remember { mutableStateOf(false) }
         val filteringLogWindowState = rememberWindowState(width = 900.dp, height = 700.dp)
 
+        // Bumped by every "show me" request, because a window that is already
+        // visible (only minimised or covered) does not change `visible` and so
+        // would never be raised again.
+        var raiseTick by remember { mutableStateOf(0) }
         val showWindow: () -> Unit = {
             visible = true
+            raiseTick += 1
             container.repository.setUiVisible(true)
             // Same tick the Activity's ON_RESUME maps to: coming back from the
             // tray re-reads what only a foreground pass can see.
             resumeTick.value += 1
         }
         val hideWindow: () -> Unit = {
+            closeTrayMenu()
             visible = false
             container.repository.setUiVisible(false)
-            trayState.sendNotification(
-                Notification("AdFree", L10n.get(Strings.tray_hidden), Notification.Type.None),
-            )
+            if (sni != null) {
+                sni.notify("AdFree", L10n.get(Strings.tray_hidden))
+            } else {
+                trayState.sendNotification(
+                    Notification("AdFree", L10n.get(Strings.tray_hidden), Notification.Type.None),
+                )
+            }
         }
         val quit: () -> Unit = {
+            closeTrayMenu()
             pauseJob?.cancel()
             container.repository.setUiVisible(false)
             // The listeners are native threads: left up, they keep the JVM
@@ -177,6 +196,7 @@ fun main() {
             // first for the same reason it goes first in the shutdown hook.
             if (container.privileges.canSetFirewallMark()) container.privileges.removeRules()
             container.coreEngine.stopProxy()
+            sni?.close()
             appScope.cancel()
             exitApplication()
         }
@@ -187,43 +207,78 @@ fun main() {
             onDispose { container.onEngineTakeover = {} }
         }
 
+        // Pausing stops the filtering but not the listeners, and the flag the
+        // window reads is the persisted protection record: without writing it
+        // the Home card kept saying "filtering" while the tray said otherwise.
         val resumeFiltering: () -> Unit = {
             pauseJob?.cancel()
             pauseJob = null
             container.coreEngine.setProtectionPaused(false)
+            container.repository.toggleProtection(true)
             paused = false
         }
         val pauseFiltering: (Long) -> Unit = { millis ->
             pauseJob?.cancel()
             container.coreEngine.setProtectionPaused(true)
+            container.repository.toggleProtection(false)
             paused = true
             pauseJob = appScope.launch {
                 delay(millis)
                 container.coreEngine.setProtectionPaused(false)
+                container.repository.toggleProtection(true)
                 paused = false
                 pauseJob = null
             }
         }
 
-        if (hasTray) {
+        // One place decides what a menu row does, so the D-Bus menu and the
+        // AWT one cannot drift apart.
+        val handleCommand: (TrayCommand) -> Unit = { command ->
+            when (command) {
+                TrayCommand.OPEN -> showWindow()
+                TrayCommand.LOG -> showFilteringLog = true
+                TrayCommand.PAUSE_30S -> pauseFiltering(30_000)
+                TrayCommand.PAUSE_1H -> pauseFiltering(3_600_000)
+                TrayCommand.RESUME -> resumeFiltering()
+                TrayCommand.EXIT -> quit()
+            }
+        }
+
+        // The icon's clicks land on D-Bus threads; this drains them where the
+        // window's own state lives, so a menu item does exactly what the same
+        // action does from inside the app.
+        if (sni != null) {
+            LaunchedEffect(sni) {
+                for (request in sni.requests) {
+                    when (request) {
+                        is TrayRequest.Command -> handleCommand(request.command)
+                        is TrayRequest.Menu -> showTrayMenu(request.x, request.y, paused) { chosen ->
+                            sni.requests.trySend(TrayRequest.Command(chosen))
+                        }
+                    }
+                }
+            }
+            // The icon says whether filtering is running; the menu greys out
+            // whichever of the pause/resume entries cannot be used.
+            LaunchedEffect(paused) { sni.setPaused(paused) }
+            DisposableEffect(sni) { onDispose { sni.close() } }
+        }
+
+        if (hasTray && sni == null) {
             Tray(
                 icon = rememberTrayIcon(),
                 state = trayState,
                 tooltip = "AdFree",
                 onAction = { if (visible) Unit else showWindow() },
                 menu = {
-                    Item(L10n.get(Strings.tray_open), onClick = { showWindow() })
-                    Item("Filtering log", onClick = { showFilteringLog = true })
-                    Separator()
-                    Item(L10n.get(Strings.tray_pause_30s), onClick = { pauseFiltering(30_000) })
-                    Item(L10n.get(Strings.tray_pause_1h), onClick = { pauseFiltering(3_600_000) })
-                    Item(
-                        text = L10n.get(Strings.tray_resume),
-                        enabled = paused,
-                        onClick = { resumeFiltering() },
-                    )
-                    Separator()
-                    Item(L10n.get(Strings.tray_exit), onClick = { quit() })
+                    for (entry in trayMenuEntries(paused)) {
+                        val command = entry.command
+                        if (command == null) {
+                            Separator()
+                        } else {
+                            Item(entry.label, enabled = entry.enabled, onClick = { handleCommand(command) })
+                        }
+                    }
                 },
             )
         }
@@ -256,6 +311,19 @@ fun main() {
                 }
             },
         ) {
+            // A hidden-to-tray window comes back where it was left, which on
+            // this desktop means behind whatever the user was working in and
+            // without the keyboard: raising it is what makes "open AdFree"
+            // from the tray look like it did something.
+            LaunchedEffect(visible, raiseTick) {
+                if (visible) {
+                    // Minimised is not hidden: the window is mapped the whole
+                    // time, so it has to be restored before it can be raised.
+                    window.extendedState = java.awt.Frame.NORMAL
+                    window.toFront()
+                    window.requestFocus()
+                }
+            }
             if (!container.engineAvailable) {
                 MissingCoreScreen(container.dataRoot.absolutePath)
             } else {
