@@ -30,8 +30,17 @@ dependencies {
     // The host asks libc whether this process may mark its own sockets — that
     // is what decides whether the redirect layout can be installed at all.
     implementation(libs.jna)
+    // AWT's tray is XEmbed: on a Wayland session KDE owns the tray through
+    // xembedsniproxy, which shows the icon but delivers no clicks, so the
+    // Compose tray menu is unreachable. Talking StatusNotifierItem to the
+    // session bus is what KDE actually listens to.
+    implementation(libs.dbus.java.core)
+    implementation(libs.dbus.java.native.unixsocket)
 
     testImplementation(libs.junit)
+    // dbus-java reports a failed send through SLF4J only, and without a provider
+    // the reason a signal never left the bus is lost.
+    testRuntimeOnly("org.slf4j:slf4j-simple:2.0.17")
     testImplementation(compose.desktop.uiTestJUnit4)
     testImplementation(compose.desktop.currentOs)
     testImplementation(compose.materialIconsExtended)
