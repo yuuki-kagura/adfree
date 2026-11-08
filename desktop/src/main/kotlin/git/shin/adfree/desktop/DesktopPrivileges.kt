@@ -209,6 +209,12 @@ class DesktopPrivileges(
     ): PrivilegeOutcome {
         val self = selfArgv()
             ?: return PrivilegeOutcome.Failed("cannot read this process's own command line")
+        // A unit pins one command line forever, so it must be a line that can
+        // start on its own. Gradle's worker cannot: it talks to the run that
+        // spawned it over stdin, and systemd gives it an empty one. Writing
+        // such a unit would leave the machine with protection that comes up
+        // green and dies on every boot, which is worse than not offering it.
+        unstartableCommand(self)?.let { return PrivilegeOutcome.Failed(it) }
         val user = System.getProperty("user.name")
             ?: return PrivilegeOutcome.Failed("cannot tell which user this is")
         val staging = runCatching {
@@ -470,6 +476,23 @@ class DesktopPrivileges(
     private fun unitActive(): Boolean = serviceActive()
 
     /**
+     * Why this command line cannot be a unit's `ExecStart`, or null when it can.
+     *
+     * The desktop app itself is an ordinary `java -cp … MainKt` line. A Gradle
+     * worker — what the test task and an IDE-launched session look like — is a
+     * bootstrap that waits for a handshake on stdin, so a unit built from it
+     * starts, reads end-of-file and exits.
+     */
+    internal fun unstartableCommand(argv: List<String>): String? {
+        val joined = argv.joinToString(" ")
+        if (joined.contains("GradleWorkerMain") || joined.contains("worker.org.gradle")) {
+            return "this window was started by Gradle, whose worker cannot start again on its own; " +
+                "install the protection unit from the packaged app"
+        }
+        return null
+    }
+
+    /**
      * The `nft` path as the unit's `ExecStopPost` needs it: absolute.
      *
      * systemd resolves `Exec*=` verbs by their own absolute path, not through
@@ -616,7 +639,7 @@ class DesktopPrivileges(
         const val POLKIT_PATH = "/etc/polkit-1/rules.d/50-adfree-desktop.rules"
         const val SETUP_MAIN = "git.shin.adfree.desktop.PrivilegedSetupKt"
         /** Written into [stamp]; an older stamp means the install is redone. */
-        const val SETUP_VERSION = 2
+        const val SETUP_VERSION = 3
         const val PKEXEC_DENIED = 126
         // A unit that fails does it within a few hundred milliseconds; ten
         // reads at 100 ms is long enough to see it and short enough that a

@@ -418,6 +418,36 @@ class DesktopPrivilegesTest {
     }
 
     /**
+     * The unit pins one command line for as long as it exists, so it may only
+     * be built from a line systemd can start. Gradle's worker is the trap: it
+     * is what `:desktop:test` and an IDE session look like, it starts fine on
+     * its own machine because the run that spawned it is still there, and it
+     * reads end-of-file and dies the moment systemd starts it at boot.
+     */
+    @Test
+    fun aUnitIsNeverBuiltFromACommandThatCannotStartOnItsOwn() {
+        val privileges = DesktopPrivileges()
+        val worker = listOf(
+            "/usr/lib/jvm/java-17-openjdk/bin/java",
+            "@/home/shin/.gradle/.tmp/gradle-worker-classpath1234txt",
+            "-ea",
+            "worker.org.gradle.process.internal.worker.GradleWorkerMain",
+        )
+        assertTrue("a Gradle worker cannot be a unit", privileges.unstartableCommand(worker) != null)
+        assertTrue(
+            "the app's own command line can",
+            privileges.unstartableCommand(
+                listOf(
+                    "/usr/lib/jvm/java-17-openjdk/bin/java",
+                    "-cp",
+                    "/opt/adfree/lib/*",
+                    "git.shin.adfree.desktop.AdFreeDesktopKt",
+                ),
+            ) == null,
+        )
+    }
+
+    /**
      * A unit that is already filtering is not restarted.
      *
      * Every program on this machine reaches the internet through that unit
@@ -429,10 +459,11 @@ class DesktopPrivilegesTest {
     @Test
     fun aUnitThatIsAlreadyFilteringIsLeftRunning() {
         val calls = recordingSystemctl()
+        val installed = installedOnThisMachine()
         val privileges = DesktopPrivileges(
             systemctl = calls.first,
-            servicePath = "/etc/systemd/system/adfree-desktop.service",
-            stamp = File("/nonexistent/adfree/privileged-setup.version"),
+            servicePath = installed.first,
+            stamp = installed.second,
             serviceActive = { true },
             listenerAnswers = { port -> port == 3129 },
         )
@@ -451,16 +482,33 @@ class DesktopPrivilegesTest {
     @Test
     fun anActiveUnitWithNoListenerIsRestarted() {
         val calls = recordingSystemctl()
+        val installed = installedOnThisMachine()
         val privileges = DesktopPrivileges(
             systemctl = calls.first,
-            servicePath = "/etc/systemd/system/adfree-desktop.service",
-            stamp = File("/nonexistent/adfree/privileged-setup.version"),
+            servicePath = installed.first,
+            stamp = installed.second,
             serviceActive = { true },
             listenerAnswers = { false },
         )
         val outcome = privileges.requestPrivilegedEngine(emptyMap(), 3129)
         assertEquals(PrivilegeOutcome.Ok, outcome)
         assertEquals(listOf("restart adfree-desktop"), calls.second())
+    }
+
+    /**
+     * A machine that already carries this version's install: a unit file where
+     * the app expects one and a stamp saying this app wrote it. Without both,
+     * an ask would start the one-time install, and a test may not write root's
+     * files.
+     */
+    private fun installedOnThisMachine(): Pair<String, File> {
+        val dir = File(System.getProperty("java.io.tmpdir"), "adfree-install-${System.nanoTime()}")
+        dir.mkdirs()
+        val unit = File(dir, "adfree-desktop.service").apply { writeText("[Unit]\n") }
+        val stamp = File(dir, "privileged-setup.version").apply {
+            writeText(DesktopPrivileges.SETUP_VERSION.toString())
+        }
+        return unit.absolutePath to stamp
     }
 
     /** A `systemctl` that runs for real and writes down what it was asked. */
