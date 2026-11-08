@@ -1,6 +1,8 @@
 package git.shin.adfree.desktop
 
 import git.shin.adfree.platform.AppInventory
+import git.shin.adfree.core.coreExportNodeCa
+import git.shin.adfree.core.coreRemoveNodeCa
 import git.shin.adfree.platform.CaExporter
 import git.shin.adfree.platform.DnsPrivacyMode
 import git.shin.adfree.platform.FileHost
@@ -193,6 +195,14 @@ class DesktopPlatformHost(
     fun refreshUserTrustStores() {
         val pem = caFile?.takeIf(File::isFile) ?: exportCaPem()?.let(::File)?.takeIf(File::isFile) ?: return
         trustStores.installAndLog(pem)
+        // Node ignores NSS and the system bundle alike, so the one store it
+        // does read — `NODE_EXTRA_CA_CERTS` — is set where a desktop app can
+        // set it: the user's own shell configuration. The core writes it, the
+        // same as every other store, so the app process stays a UI.
+        for (edit in coreExportNodeCa(pem.absolutePath)) {
+            if (edit.ok) System.err.println("[shell] Node CA exported to shell config: ${edit.path}")
+            else System.err.println("[shell] shell config skipped (${edit.path}): ${edit.detail}")
+        }
     }
 
     override fun supportsSystemCaRemoval(): Boolean = privileges != null && coreLibrary != null
@@ -213,6 +223,9 @@ class DesktopPlatformHost(
             ?: return "the filtering core was not found, so nothing can remove the certificate"
         for (store in trustStores.remove()) {
             if (!store.ok) System.err.println("[trust] NSS database not updated (${store.path}): ${store.detail}")
+        }
+        for (edit in coreRemoveNodeCa()) {
+            if (!edit.ok) System.err.println("[shell] shell config not updated (${edit.path}): ${edit.detail}")
         }
         return when (val outcome = helper.requestRootCaRemove(library.absolutePath)) {
             is PrivilegeOutcome.Ok -> null

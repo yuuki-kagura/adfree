@@ -1635,6 +1635,48 @@ pub fn core_install_ca_pem(pem: String) -> RootTrustBinding {
     })
 }
 
+/// One shell rc file and whether AdFree's `NODE_EXTRA_CA_CERTS` block landed
+/// in it, mirroring [`crate::shell_trust::Edit`].
+#[derive(uniffi::Record, Clone, Debug, Default)]
+pub struct NodeCaEditBinding {
+    pub path: String,
+    pub ok: bool,
+    pub detail: String,
+}
+
+impl From<crate::shell_trust::Edit> for NodeCaEditBinding {
+    fn from(value: crate::shell_trust::Edit) -> Self {
+        Self { path: value.path, ok: value.ok, detail: value.detail }
+    }
+}
+
+/// Writes `NODE_EXTRA_CA_CERTS` for `pem_path` into the user's shell config.
+///
+/// Node reads neither the system bundle nor NSS, so without this a Node CLI
+/// rejects the CA on every host it has not seen before. Runs in the app's own
+/// process — these are the signed-in user's rc files, not root's.
+#[uniffi::export]
+pub fn core_export_node_ca(pem_path: String) -> Vec<NodeCaEditBinding> {
+    guard(Vec::new(), || {
+        crate::shell_trust::install(&pem_path)
+            .into_iter()
+            .map(NodeCaEditBinding::from)
+            .collect()
+    })
+}
+
+/// Removes the `NODE_EXTRA_CA_CERTS` block from every shell rc file that has
+/// one, so an uninstall does not leave a stale trust line behind.
+#[uniffi::export]
+pub fn core_remove_node_ca() -> Vec<NodeCaEditBinding> {
+    guard(Vec::new(), || {
+        crate::shell_trust::remove()
+            .into_iter()
+            .map(NodeCaEditBinding::from)
+            .collect()
+    })
+}
+
 /// PEM of the CA private key.
 ///
 /// Only used to re-load the CA on the next launch, so the user installs the

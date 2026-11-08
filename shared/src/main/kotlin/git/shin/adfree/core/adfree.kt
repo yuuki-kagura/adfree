@@ -753,6 +753,8 @@ internal object IntegrityCheckingUniffiLib {
     ): Int
     external fun uniffi_adfree_core_checksum_func_core_excluded_packages(
     ): Int
+    external fun uniffi_adfree_core_checksum_func_core_export_node_ca(
+    ): Int
     external fun uniffi_adfree_core_checksum_func_core_filter_build_errors(
     ): Int
     external fun uniffi_adfree_core_checksum_func_core_filter_fetch(
@@ -804,6 +806,8 @@ internal object IntegrityCheckingUniffiLib {
     external fun uniffi_adfree_core_checksum_func_core_proxy_status(
     ): Int
     external fun uniffi_adfree_core_checksum_func_core_relay_count(
+    ): Int
+    external fun uniffi_adfree_core_checksum_func_core_remove_node_ca(
     ): Int
     external fun uniffi_adfree_core_checksum_func_core_remove_root_ca(
     ): Int
@@ -961,6 +965,8 @@ internal object UniffiLib {
     ): RustBuffer.ByValue
     external fun uniffi_adfree_core_fn_func_core_excluded_packages(uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
+    external fun uniffi_adfree_core_fn_func_core_export_node_ca(`pemPath`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    ): RustBuffer.ByValue
     external fun uniffi_adfree_core_fn_func_core_filter_build_errors(uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
     external fun uniffi_adfree_core_fn_func_core_filter_fetch(`id`: RustBuffer.ByValue,`url`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
@@ -1013,6 +1019,8 @@ internal object UniffiLib {
     ): RustBuffer.ByValue
     external fun uniffi_adfree_core_fn_func_core_relay_count(uniffi_out_err: UniffiRustCallStatus, 
     ): Int
+    external fun uniffi_adfree_core_fn_func_core_remove_node_ca(uniffi_out_err: UniffiRustCallStatus, 
+    ): RustBuffer.ByValue
     external fun uniffi_adfree_core_fn_func_core_remove_root_ca(uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
     external fun uniffi_adfree_core_fn_func_core_reset_ca(uniffi_out_err: UniffiRustCallStatus, 
@@ -1263,6 +1271,9 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
     if ((lib.uniffi_adfree_core_checksum_func_core_excluded_packages() and 0xFFFF) != 50683) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
+    if ((lib.uniffi_adfree_core_checksum_func_core_export_node_ca() and 0xFFFF) != 21910) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
     if ((lib.uniffi_adfree_core_checksum_func_core_filter_build_errors() and 0xFFFF) != 43396) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
@@ -1339,6 +1350,9 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if ((lib.uniffi_adfree_core_checksum_func_core_relay_count() and 0xFFFF) != 38928) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if ((lib.uniffi_adfree_core_checksum_func_core_remove_node_ca() and 0xFFFF) != 11658) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if ((lib.uniffi_adfree_core_checksum_func_core_remove_root_ca() and 0xFFFF) != 20351) {
@@ -4178,6 +4192,53 @@ public object FfiConverterTypeMitmStatus: FfiConverterRustBuffer<MitmStatus> {
 
 
 /**
+ * One shell rc file and whether AdFree's `NODE_EXTRA_CA_CERTS` block landed
+ * in it, mirroring [`crate::shell_trust::Edit`].
+ */
+data class NodeCaEditBinding (
+    var `path`: kotlin.String
+    , 
+    var `ok`: kotlin.Boolean
+    , 
+    var `detail`: kotlin.String
+    
+){
+    
+
+    
+
+    
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeNodeCaEditBinding: FfiConverterRustBuffer<NodeCaEditBinding> {
+    override fun read(buf: ByteBuffer): NodeCaEditBinding {
+        return NodeCaEditBinding(
+            FfiConverterString.read(buf),
+            FfiConverterBoolean.read(buf),
+            FfiConverterString.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: NodeCaEditBinding) = (
+            FfiConverterString.allocationSize(value.`path`) +
+            FfiConverterBoolean.allocationSize(value.`ok`) +
+            FfiConverterString.allocationSize(value.`detail`)
+    )
+
+    override fun write(value: NodeCaEditBinding, buf: ByteBuffer) {
+            FfiConverterString.write(value.`path`, buf)
+            FfiConverterBoolean.write(value.`ok`, buf)
+            FfiConverterString.write(value.`detail`, buf)
+    }
+}
+
+
+
+/**
  * Everything the switches screen edits.
  *
  * This mirrors the UI model one-to-one; `Default` is the only definition of
@@ -6380,6 +6441,34 @@ public object FfiConverterSequenceTypeLogEvent: FfiConverterRustBuffer<List<LogE
 /**
  * @suppress
  */
+public object FfiConverterSequenceTypeNodeCaEditBinding: FfiConverterRustBuffer<List<NodeCaEditBinding>> {
+    override fun read(buf: ByteBuffer): List<NodeCaEditBinding> {
+        val len = buf.getInt()
+        return List<NodeCaEditBinding>(len) {
+            FfiConverterTypeNodeCaEditBinding.read(buf)
+        }
+    }
+
+    override fun allocationSize(value: List<NodeCaEditBinding>): ULong {
+        val sizeForLength = 4UL
+        val sizeForItems = value.map { FfiConverterTypeNodeCaEditBinding.allocationSize(it) }.sum()
+        return sizeForLength + sizeForItems
+    }
+
+    override fun write(value: List<NodeCaEditBinding>, buf: ByteBuffer) {
+        buf.putInt(value.size)
+        value.iterator().forEach {
+            FfiConverterTypeNodeCaEditBinding.write(it, buf)
+        }
+    }
+}
+
+
+
+
+/**
+ * @suppress
+ */
 public object FfiConverterSequenceTypeScriptBinding: FfiConverterRustBuffer<List<ScriptBinding>> {
     override fun read(buf: ByteBuffer): List<ScriptBinding> {
         val len = buf.getInt()
@@ -6680,6 +6769,24 @@ public object FfiConverterSequenceTypeUidApps: FfiConverterRustBuffer<List<UidAp
     UniffiLib.uniffi_adfree_core_fn_func_core_excluded_packages(
     
         _status)
+}
+    )
+    }
+    
+
+        /**
+         * Writes `NODE_EXTRA_CA_CERTS` for `pem_path` into the user's shell config.
+         *
+         * Node reads neither the system bundle nor NSS, so without this a Node CLI
+         * rejects the CA on every host it has not seen before. Runs in the app's own
+         * process — these are the signed-in user's rc files, not root's.
+         */ fun `coreExportNodeCa`(`pemPath`: kotlin.String): List<NodeCaEditBinding> {
+            return FfiConverterSequenceTypeNodeCaEditBinding.lift(
+    uniffiRustCall() { _status ->
+    UniffiLib.uniffi_adfree_core_fn_func_core_export_node_ca(
+    
+        
+        FfiConverterString.lower(`pemPath`),_status)
 }
     )
     }
@@ -7039,6 +7146,20 @@ public object FfiConverterSequenceTypeUidApps: FfiConverterRustBuffer<List<UidAp
             return FfiConverterUInt.lift(
     uniffiRustCall() { _status ->
     UniffiLib.uniffi_adfree_core_fn_func_core_relay_count(
+    
+        _status)
+}
+    )
+    }
+    
+
+        /**
+         * Removes the `NODE_EXTRA_CA_CERTS` block from every shell rc file that has
+         * one, so an uninstall does not leave a stale trust line behind.
+         */ fun `coreRemoveNodeCa`(): List<NodeCaEditBinding> {
+            return FfiConverterSequenceTypeNodeCaEditBinding.lift(
+    uniffiRustCall() { _status ->
+    UniffiLib.uniffi_adfree_core_fn_func_core_remove_node_ca(
     
         _status)
 }

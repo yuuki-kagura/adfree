@@ -37,6 +37,7 @@ pub mod pathmask;
 pub mod proxy;
 pub mod safesearch;
 pub mod services;
+pub mod shell_trust;
 pub mod smart;
 pub mod socks5;
 pub mod state;
