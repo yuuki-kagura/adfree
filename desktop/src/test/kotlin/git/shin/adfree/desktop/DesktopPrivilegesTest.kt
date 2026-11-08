@@ -3,6 +3,7 @@ package git.shin.adfree.desktop
 import git.shin.adfree.core.CoreEngine
 import java.io.File
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -261,6 +262,31 @@ class DesktopPrivilegesTest {
         val output = process.inputStream.bufferedReader().readText().trim()
         assertEquals("systemd rejected the unit:\n$output", 0, process.waitFor())
         directory.deleteRecursively()
+    }
+
+    /**
+     * "Installed" is a question about this app's own record, not about a file
+     * root owns: a machine set up by an older version has a unit that is there
+     * and a rule polkitd cannot read, and asking only whether the unit exists
+     * would leave that machine prompting on every start forever.
+     */
+    @Test
+    fun anOlderInstallIsRedoneRatherThanTrusted() {
+        val directory = java.nio.file.Files.createTempDirectory("adfree-install").toFile()
+        val unit = File(directory, "adfree-desktop.service").apply { writeText("[Unit]\n") }
+        val stamp = File(directory, "stamp")
+
+        val fresh = DesktopPrivileges(servicePath = unit.absolutePath, stamp = stamp)
+        assertFalse("a unit without a stamp is an old install", fresh.privilegedServiceInstalled())
+
+        stamp.writeText("1")
+        assertFalse("an older stamp is an old install", fresh.privilegedServiceInstalled())
+
+        stamp.writeText(DesktopPrivileges.SETUP_VERSION.toString())
+        assertTrue("the unit plus this version's stamp is installed", fresh.privilegedServiceInstalled())
+
+        unit.delete()
+        assertFalse("no unit, no install", fresh.privilegedServiceInstalled())
     }
 
     /**

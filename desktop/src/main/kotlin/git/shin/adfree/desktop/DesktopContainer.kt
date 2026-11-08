@@ -74,42 +74,6 @@ class DesktopContainer(
 
     val platformHost = DesktopPlatformHost(
         File(dataRoot, "adfree-ca.pem"),
-        // Read when the screen asks, so the card follows the listeners rather
-        // than a snapshot taken at startup. The ports are the ones the core
-        // actually holds while a filter is up, and the configured ones when it
-        // is not — plus the reason a bind was refused, which is the one thing
-        // a "stopped" alone never tells the user.
-        proxyStatus = {
-            val status = coreEngine.proxyStatus()
-            val configured = repository.settings.value.localProxy
-            val tcp = if (status.running) status.tcpPort.toInt() else configured.tcpPort
-            val dns = if (status.running) status.dnsPort.toInt() else configured.dnsPort
-            val marked = privileges.canSetFirewallMark()
-            // A port nothing listens on says why next to the number it tried:
-            // "stopped" alone would leave the user guessing which of the two
-            // listeners the kernel turned down.
-            fun endpoint(port: Int, reason: String): String {
-                val address = "127.0.0.1:$port"
-                return if (reason.isBlank()) address else "$address — $reason"
-            }
-            listOf(
-                "HTTP(S)" to endpoint(tcp, status.tcpError),
-                "DNS" to endpoint(dns, status.dnsError),
-                // The switch from Settings says whether this machine's own
-                // conversations reach the filter at all, so the card shows
-                // which way it is set rather than leaving it to memory.
-                "Loopback" to if (configured.filterLocalhost) "filtered like anything else" else "left alone",
-                // Which of the two layouts is in play decides whether anything
-                // reaches the filter at all, so the card says it plainly.
-                "Traffic" to if (marked) "the machine's own, redirected" else "only what is pointed here",
-                "Rules" to when {
-                    !marked -> "not installed (no CAP_NET_ADMIN)"
-                    privileges.rulesInstalled() -> "installed"
-                    else -> "not installed"
-                },
-                "State" to if (status.running) "listening" else "stopped",
-            )
-        },
         privileges = privileges,
         onEngineTakeover = { onEngineTakeover() },
         coreLibrary = coreLibrary,
@@ -154,6 +118,11 @@ class DesktopContainer(
                 // ones the user last applied, so the listeners and the
                 // redirect rules always name the same numbers.
                 localProxy = { repository.settings.value.localProxy },
+                // Filtering the machine's own traffic is what the shield turns
+                // on, so the shield is what asks the system for the privilege —
+                // once, on a machine that has not been set up yet.
+                requestPrivileges = { platformHost.requestPrivilegedEngine() },
+                report = { platformHost.toast(it) },
             ),
             threatAnalyzer = threatAnalyzer,
             coreEngine = coreEngine,

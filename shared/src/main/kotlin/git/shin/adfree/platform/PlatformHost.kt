@@ -67,15 +67,6 @@ interface PlatformHost {
     /** The OS exposes an installed-app catalogue (apps, firewall by app). */
     fun supportsAppCatalogue(): Boolean = true
 
-    /**
-     * How traffic reaches the filter when this platform has no system tunnel.
-     * Android answers nothing — its VpnService captures the device without
-     * the user configuring anything. A desktop names the local listeners and
-     * the redirect that puts traffic onto them, so the screen can show the
-     * address a browser can be pointed at instead of a switch that promises
-     * capture which never happens.
-     */
-    fun localProxyStatus(): List<Pair<String, String>> = emptyList()
 
     /**
      * The platform raises its own local listeners, so their ports are the
@@ -86,18 +77,13 @@ interface PlatformHost {
     fun supportsLocalProxyPorts(): Boolean = false
 
     /**
-     * The host can ask the system for the privilege that putting the machine's
-     * own traffic onto the filter needs. Android gets it from the VPN consent
-     * dialog it already raises, so it leaves this off; a desktop has no tunnel
-     * to consent to and would otherwise have to send the user to a terminal.
-     */
-    fun supportsPrivilegedEngine(): Boolean = false
-
-    /**
-     * Restarts the app where it can hold that privilege, then closes this
-     * window — the listeners are handed over, not duplicated. Null when the
-     * request went through; otherwise what the system said, in its own words,
-     * because it is a technical answer rather than a screen message.
+     * Restarts the app where it can hold the privilege that putting the
+     * machine's own traffic onto the filter needs, then closes this window —
+     * the listeners are handed over, not duplicated. Android gets that privilege
+     * from the VPN consent dialog it already raises and leaves this alone; a
+     * desktop has no tunnel to consent to. Null when the request went through;
+     * otherwise what the system said, in its own words, because it is a
+     * technical answer rather than a screen message.
      */
     fun requestPrivilegedEngine(): String? = null
 

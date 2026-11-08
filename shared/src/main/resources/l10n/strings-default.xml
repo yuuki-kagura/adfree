@@ -338,9 +338,6 @@
     <string name="home_private_dns_title">Private DNS is on</string>
     <string name="home_private_dns_body">DNS queries go straight to your chosen server and bypass AdFree\'s filters. DoT blocking is paused so the network keeps working; turn off Private DNS for full filtering.</string>
     <string name="home_private_dns_open">Open Private DNS settings</string>
-    <string name="home_proxy_title">Local proxy</string>
-    <string name="home_proxy_body">This platform has no system tunnel: traffic reaches AdFree through these listeners. Putting the machine\'s own traffic on the filter needs the redirect rules, which ask for system privileges — the button below requests them. A browser can also be pointed at the proxy address with no privileges at all.</string>
-    <string name="home_ask_privileges">Filter the whole machine — installed once, asked once</string>
     <string name="home_shield_toggle">Turn filtering on or off</string>
     <string name="home_shield_protected">Protected</string>
     <string name="home_shield_off">Filtering is off</string>

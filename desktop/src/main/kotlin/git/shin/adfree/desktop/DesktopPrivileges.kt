@@ -38,6 +38,18 @@ class DesktopPrivileges(
     private val pkexec: String = "pkexec",
     private val systemctl: String = "systemctl",
     private val log: (String) -> Unit = { System.err.println("[desktop] $it") },
+    /** Where the one-time install left the unit; a fixed path on a real machine. */
+    private val servicePath: String = SERVICE_PATH,
+    /**
+     * The app's own record of the install. The rule's own directory belongs to
+     * root and polkitd, so "is it there" cannot be asked — but "did this version
+     * of the app write it" can, and that is the question that matters after an
+     * install format changes.
+     */
+    private val stamp: java.io.File = File(
+        System.getenv("XDG_DATA_HOME") ?: File(System.getProperty("user.home"), ".local/share").absolutePath,
+        "adfree/privileged-setup.version",
+    ),
 ) {
 
     /** True when this process may mark its own sockets, i.e. holds `CAP_NET_ADMIN`. */
@@ -69,7 +81,25 @@ class DesktopPrivileges(
      * The unit is root-owned but world-readable, so asking is a plain read: a
      * question about whether a file exists must not cost a password.
      */
-    fun privilegedServiceInstalled(): Boolean = File(SERVICE_PATH).isFile
+    fun privilegedServiceInstalled(): Boolean =
+        File(servicePath).isFile && installStamp() == SETUP_VERSION
+
+    /** What the last successful install wrote, or 0 when nothing did. */
+    private fun installStamp(): Int =
+        runCatching { stamp.readText().trim().toInt() }.getOrDefault(0)
+
+    /**
+     * Bumped when the install's format changes — a rule that polkitd could not
+     * read is the reason this exists. An older stamp is not "installed": the
+     * next ask rewrites both files instead of leaving a machine that prompts on
+     * every start.
+     */
+    private fun writeInstallStamp() {
+        runCatching {
+            stamp.parentFile?.mkdirs()
+            stamp.writeText(SETUP_VERSION.toString())
+        }.onFailure { log("could not record the install: ${it.message}") }
+    }
 
     /**
      * The protection unit, as a file the system starts rather than a transient
@@ -180,12 +210,14 @@ class DesktopPrivileges(
             rule = staging.second.absolutePath,
             enable = startAtBoot,
         )
-        return try {
+        val outcome = try {
             run(*argv.toTypedArray(), deniedExit = PKEXEC_DENIED)
         } finally {
             staging.first.delete()
             staging.second.delete()
         }
+        if (outcome is PrivilegeOutcome.Ok) writeInstallStamp()
+        return outcome
     }
 
     /** Takes the unit and the rule back out. Also one dialog, once. */
@@ -228,7 +260,7 @@ class DesktopPrivileges(
         add(SETUP_MAIN)
         add("install")
         add(unit)
-        add(SERVICE_PATH)
+        add(servicePath)
         add(rule)
         add(POLKIT_PATH)
         if (enable) add("enable")
@@ -242,7 +274,7 @@ class DesktopPrivileges(
         classpath,
         SETUP_MAIN,
         "remove",
-        SERVICE_PATH,
+        servicePath,
         POLKIT_PATH,
     )
 
@@ -546,7 +578,7 @@ class DesktopPrivileges(
         PrivilegeOutcome.Failed(failure.message ?: failure.javaClass.simpleName)
     }
 
-    private companion object {
+    internal companion object {
         // Linux numbers, and the mark `rust/src/proxy` puts on its sockets.
         const val AF_INET = 2
         const val SOCK_DGRAM = 2
@@ -560,6 +592,8 @@ class DesktopPrivileges(
         const val SERVICE_PATH = "/etc/systemd/system/adfree-desktop.service"
         const val POLKIT_PATH = "/etc/polkit-1/rules.d/50-adfree-desktop.rules"
         const val SETUP_MAIN = "git.shin.adfree.desktop.PrivilegedSetupKt"
+        /** Written into [stamp]; an older stamp means the install is redone. */
+        const val SETUP_VERSION = 2
         const val PKEXEC_DENIED = 126
         // A unit that fails does it within a few hundred milliseconds; ten
         // reads at 100 ms is long enough to see it and short enough that a

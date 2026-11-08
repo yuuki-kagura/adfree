@@ -74,14 +74,12 @@ class FullAppUiTest {
             // No notification/battery health chips on a desktop OS.
             onNodeWithText(L10n.get(Strings.home_health_notifications)).assertDoesNotExist()
             onNodeWithText(L10n.get(Strings.home_health_battery)).assertDoesNotExist()
-            // What a desktop does have: the local proxy the traffic is
-            // redirected onto, in place of the Android tunnel status.
-            onNodeWithText(L10n.get(Strings.home_proxy_title)).assertExists()
-            onNodeWithText("127.0.0.1:${CoreEngine.PROXY_TCP_PORT}").assertExists()
-            // The redirect that captures the machine's own traffic needs a
-            // privilege a phone gets from VPN consent, so the card carries the
-            // request rather than a command line to type out.
-            onNodeWithTag("home_ask_privileges").assertExists()
+            // The Home tab is the shield, the numbers and the modules: the
+            // local-proxy card that listed ports and rule state answered a
+            // question nobody asked twice, and the privilege is requested by
+            // switching filtering on rather than by a button underneath it.
+            onNodeWithTag("home_local_proxy").assertDoesNotExist()
+            onNodeWithTag("home_ask_privileges").assertDoesNotExist()
 
             // Tab switch through the shared intent pipeline.
             onNodeWithText(L10n.get(Strings.nav_settings)).performClick()

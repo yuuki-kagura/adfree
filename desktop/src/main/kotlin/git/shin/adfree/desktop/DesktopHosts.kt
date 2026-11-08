@@ -37,8 +37,6 @@ import git.shin.adfree.core.CoreEngine
 class DesktopPlatformHost(
     /** Where [DesktopCaExporter] writes the PEM, so the toast can name it. */
     private val caFile: File? = null,
-    /** The listener rows, read live: the container supplies it from the core. */
-    private val proxyStatus: () -> List<Pair<String, String>> = { emptyList() },
     /** The system's privilege answers; null where the host has none to ask. */
     private val privileges: DesktopPrivileges? = null,
     /** Runs when the privileged engine has taken over: this window must go. */
@@ -107,20 +105,17 @@ class DesktopPlatformHost(
     // where in the app you are, and there is no system back gesture here.
     override fun supportsWindowHeader(): Boolean = true
 
-    override fun localProxyStatus(): List<Pair<String, String>> = proxyStatus()
-
     // The listeners are this platform's own, so their ports are the user's to
     // move; Settings shows them where the Android host shows nothing at all.
     override fun supportsLocalProxyPorts(): Boolean = true
 
-    // The redirect that captures the machine's own traffic is a kernel
-    // request, so the app asks the system for it through polkit — the desktop
-    // answer to the VPN consent a phone shows. The first ask writes a unit and
-    // a rule; every later one starts that unit without a dialog. Once the mark
-    // works the offer is gone: a second start would only try to take ports this
-    // instance is holding.
-    override fun supportsPrivilegedEngine(): Boolean = privileges != null && !privileges.canSetFirewallMark()
-
+    /**
+     * The redirect that captures the machine's own traffic is a kernel request,
+     * so the app asks the system for it through polkit — the desktop answer to
+     * the VPN consent a phone shows. Filtering is switched on with the shield,
+     * so the shield asks: the first ask writes a unit and a rule, every later
+     * one starts that unit without a dialog.
+     */
     override fun requestPrivilegedEngine(): String? {
         val helper = privileges ?: return null
         val env = buildMap {
@@ -151,6 +146,7 @@ class DesktopPlatformHost(
         val outcome = helper.requestPrivilegedEngine(env)
         return when (outcome) {
             is PrivilegeOutcome.Ok -> {
+                System.err.println("[desktop] the privileged instance is up; this window is leaving")
                 onEngineTakeover()
                 null
             }
@@ -323,9 +319,20 @@ class DesktopTunnelControl(
     private val privileges: DesktopPrivileges? = null,
     /** Where the listeners are configured to bind; read at every start. */
     private val localProxy: () -> LocalProxySettings = { LocalProxySettings() },
+    /**
+     * Asks the system for the capability the redirect needs, and hands the
+     * window over to the instance that has it. Null means that instance is on
+     * its way; anything else is the system's own words about why it is not.
+     */
+    private val requestPrivileges: () -> String? = { null },
+    /** Told when the ask was refused or broke, so the window can say so. */
+    private val report: (String) -> Unit = {},
 ) : TunnelControl {
 
     override val isVpnActive: StateFlow<Boolean> = protectionWanted
+
+    /** Set once the person has said no, so one refusal is one dialog. */
+    private val privilegeAskRefused = java.util.concurrent.atomic.AtomicBoolean(false)
 
     override fun isTunnelUp(): Boolean = coreEngine.isProxyRunning()
 
@@ -335,6 +342,38 @@ class DesktopTunnelControl(
         // A start means filtering: the transient pause the tray set must not
         // outlive the protection it was pausing.
         coreEngine.setProtectionPaused(false)
+        // Full protection is what the shield asks for, so the shield is where
+        // the privilege is requested: an instance without the mark takes the
+        // machine's traffic only if it can mark its own sockets, and one that
+        // hands over must do it *before* binding the ports the privileged
+        // instance is about to take.
+        //
+        // The ask is a dialog — it waits for a person to read it and type a
+        // password — so it cannot run on the thread that paints the window. A
+        // machine that has been set up once answers it without a dialog, and a
+        // refusal leaves this process filtering only what is pointed at it,
+        // which is still a filter.
+        if (privileges != null && !privileges.canSetFirewallMark() && !privilegeAskRefused.get()) {
+            System.err.println("[desktop] protection needs CAP_NET_ADMIN; asking the system")
+            Thread({
+                val reason = requestPrivileges()
+                if (reason == null) return@Thread
+                // Refused once is refused for this run: protection that comes
+                // back on after a port change must not raise the same dialog
+                // again, and a machine that said no is a machine filtering only
+                // what is pointed at it until the next launch.
+                privilegeAskRefused.set(true)
+                System.err.println("[desktop] privilege ask refused: $reason")
+                report(reason)
+                startListeners()
+            }, "adfree-privilege-ask").apply { isDaemon = true }.start()
+            return
+        }
+        startListeners()
+    }
+
+    /** Raises the listeners and the redirect that feeds them. */
+    private fun startListeners() {
         val ports = localProxy()
         val status = coreEngine.startProxy(ports.tcpPort, ports.dnsPort, ports.filterLocalhost)
         if (!status.running) {

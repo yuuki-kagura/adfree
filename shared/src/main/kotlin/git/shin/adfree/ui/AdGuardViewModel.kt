@@ -758,6 +758,23 @@ class AdGuardViewModel(
     }
 
     /**
+     * Brings protection back from the status area's "resume".
+     *
+     * Not the same as the shield's tap, which reads the tunnel and decides: a
+     * resume knows the answer is "on", so it writes that first — the window and
+     * the tray icon both read the record — and then runs the start path. That
+     * path is where a desktop asks the system for the privilege the redirect
+     * needs, so a resume that skipped it would leave a machine filtered only
+     * where it had been pointed. A listener that is somehow still holding its
+     * ports is brought down first: the start has to be a start.
+     */
+    fun resumeProtection() {
+        repository.toggleProtection(true)
+        if (tunnel.isTunnelUp()) tunnel.stopVpnService()
+        tunnel.startVpnService()
+    }
+
+    /**
      * Quick Settings entry point. A tile cannot raise the system VPN consent
      * dialog itself, so it opens this Activity and the prompt flag does it.
      */

@@ -37,8 +37,14 @@ private fun install(args: Array<String>) {
     for (source in listOf(unitSource, polkitSource)) {
         if (!source.isFile) fail("adfree-setup: no file at ${source.path}")
     }
-    copy(unitSource, File(unitPath))
-    copy(polkitSource, File(polkitPath))
+    // Readable by everyone: the unit holds no secret, and a unit the user cannot
+    // read is a unit they have to take root's word for.
+    copy(unitSource, File(unitPath), readableByAll = true)
+    // polkitd is not root: the rules directory is `root:polkitd 0750`, and a
+    // rule it cannot open is a rule polkitd reports as "Error loading script"
+    // and then ignores — a password prompt that comes back for no visible
+    // reason.
+    copy(polkitSource, File(polkitPath), readableByAll = true)
     step("systemctl", "daemon-reload")
     if (enable) step("systemctl", "enable", File(unitPath).name)
     println("adfree-setup: installed ${File(unitPath).name}")
@@ -64,13 +70,17 @@ private fun remove(args: Array<String>) {
  * the unit this writes is what the polkit rule lets them start, so a writable
  * unit would be a writable root command line.
  */
-private fun copy(source: File, target: File) {
+private fun copy(source: File, target: File, readableByAll: Boolean) {
     target.parentFile?.mkdirs()
     target.delete()
     source.copyTo(target, overwrite = true)
     target.setReadable(false, false)
     target.setReadable(true, true)
+    if (readableByAll && !target.setReadable(true, false)) {
+        fail("adfree-setup: could not make ${target.path} readable by polkitd")
+    }
     target.setWritable(true, true)
+    target.setWritable(false, false)
     target.setExecutable(false, false)
 }
 
