@@ -409,12 +409,15 @@ pub(crate) fn write_all_nb(fd: RawFd, bytes: &[u8], stop: &AtomicBool) -> std::i
         match err.raw_os_error() {
             Some(libc::EINTR) => continue,
             Some(libc::EAGAIN) => {
-                if !poll_writable(fd, POLL_SLICE_MS) {
-                    return Err(std::io::Error::new(
-                        std::io::ErrorKind::WouldBlock,
-                        "socket not writable",
-                    ));
-                }
+                // One poll slice passing without writability is not a failure:
+                // a peer that stops reading for a moment is normal — a slow
+                // uplink draining a 100 KB request body, a server busy with
+                // another response. Treating a single 200 ms slice as fatal
+                // tore down exactly those flows, which is why a large request
+                // died in half a second while small ones went through. The
+                // deadline at the top of the loop bounds the write instead.
+                // (`EWOULDBLOCK` is the same value on Linux.)
+                poll_writable(fd, POLL_SLICE_MS);
             }
             _ => return Err(err),
         }
