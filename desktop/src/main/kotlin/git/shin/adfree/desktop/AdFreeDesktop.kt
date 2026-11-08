@@ -15,6 +15,7 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -59,7 +60,9 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
+import androidx.compose.runtime.produceState
 
 /**
  * The full AdFree UI on Linux: the shared screens, scaffold and ViewModel
@@ -162,6 +165,20 @@ fun main() {
         var showFilteringLog by remember { mutableStateOf(false) }
         val filteringLogWindowState = rememberWindowState(width = 900.dp, height = 700.dp)
 
+        // Whether filtering is on, as the shield reads it. The tray icon is the
+        // same answer in a place the user can see while the window is hidden:
+        // a tray that stays green after protection is switched off in the app
+        // is a tray that lies. `produceState` so only a change of this boolean
+        // rebuilds anything.
+        val filteringOn by produceState(initialValue = true) {
+            container.repository.settings.map { it.isProtectionActive }.collect { value = it }
+        }
+        // Read through `rememberUpdatedState`: the D-Bus pump below is started
+        // once and lives in its own coroutine, so a lambda that closed over this
+        // value would keep answering with the state it was started in — a menu
+        // that offered "pause" over an app that had already stopped filtering.
+        val notFilteringState = rememberUpdatedState(trayIconPaused(paused, filteringOn))
+
         // Bumped by every "show me" request, because a window that is already
         // visible (only minimised or covered) does not change `visible` and so
         // would never be raised again.
@@ -214,8 +231,12 @@ fun main() {
             pauseJob?.cancel()
             pauseJob = null
             container.coreEngine.setProtectionPaused(false)
-            container.repository.toggleProtection(true)
             paused = false
+            // Through the ViewModel, because starting filtering is where this
+            // platform asks the system for the privilege the redirect needs.
+            // Writing the record here and leaving the listeners alone made the
+            // tray's resume a second, poorer start path.
+            container.viewModel.resumeProtection()
         }
         val pauseFiltering: (Long) -> Unit = { millis ->
             pauseJob?.cancel()
@@ -252,7 +273,11 @@ fun main() {
                 for (request in sni.requests) {
                     when (request) {
                         is TrayRequest.Command -> handleCommand(request.command)
-                        is TrayRequest.Menu -> showTrayMenu(request.x, request.y, paused) { chosen ->
+                        is TrayRequest.Menu -> showTrayMenu(
+                            request.x,
+                            request.y,
+                            notFilteringState.value,
+                        ) { chosen ->
                             sni.requests.trySend(TrayRequest.Command(chosen))
                         }
                     }
@@ -260,7 +285,7 @@ fun main() {
             }
             // The icon says whether filtering is running; the menu greys out
             // whichever of the pause/resume entries cannot be used.
-            LaunchedEffect(paused) { sni.setPaused(paused) }
+            LaunchedEffect(notFilteringState.value) { sni.setPaused(notFilteringState.value) }
             DisposableEffect(sni) { onDispose { sni.close() } }
         }
 
@@ -271,7 +296,7 @@ fun main() {
                 tooltip = "AdFree",
                 onAction = { if (visible) Unit else showWindow() },
                 menu = {
-                    for (entry in trayMenuEntries(paused)) {
+                    for (entry in trayMenuEntries(notFilteringState.value)) {
                         val command = entry.command
                         if (command == null) {
                             Separator()

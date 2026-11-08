@@ -198,4 +198,18 @@ class TraySniTest {
         )
         return props.Get<List<String>>("org.kde.StatusNotifierWatcher", "RegisteredStatusNotifierItems")
     }
+
+    /**
+     * The mark follows filtering, not the pause button: switching protection off
+     * in the window takes filtering away exactly as a pause does, and a tray that
+     * stayed green through it was reporting the wrong thing about the only state
+     * it shows.
+     */
+    @Test
+    fun theMarkIsYellowWheneverNothingIsFiltered() {
+        assertTrue("paused", trayIconPaused(paused = true, protectionOn = true))
+        assertTrue("protection off", trayIconPaused(paused = false, protectionOn = false))
+        assertTrue("both", trayIconPaused(paused = true, protectionOn = false))
+        assertFalse("filtering", trayIconPaused(paused = false, protectionOn = true))
+    }
 }

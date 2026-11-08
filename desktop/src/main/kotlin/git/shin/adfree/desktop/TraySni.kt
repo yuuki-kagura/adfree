@@ -384,6 +384,16 @@ sealed interface TrayRequest {
 enum class TrayCommand { OPEN, LOG, PAUSE_30S, PAUSE_1H, RESUME, EXIT }
 
 /** The labels and enabled state of the tray menu, shared by both trays. */
+/**
+ * Whether the mark shows the paused colour.
+ *
+ * Paused and switched off look the same from the status field: nothing is being
+ * filtered either way. A tray that stayed green while protection was off was a
+ * tray that lied about the one thing it exists to report, so both cases turn the
+ * mark yellow and both offer "resume" in the menu.
+ */
+internal fun trayIconPaused(paused: Boolean, protectionOn: Boolean): Boolean = paused || !protectionOn
+
 internal fun trayMenuEntries(paused: Boolean): List<TrayEntry> = listOf(
     TrayEntry(TrayCommand.OPEN, L10n.get(Strings.tray_open)),
     TrayEntry(TrayCommand.LOG, "Filtering log"),
