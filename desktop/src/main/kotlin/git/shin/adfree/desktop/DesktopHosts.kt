@@ -366,12 +366,14 @@ class DesktopTunnelControl(
     }
 
     override fun stopVpnService() {
+        System.err.println("[desktop] protection stopping: removing rules and listeners")
         privileges?.removeRules()
         coreEngine.stopProxy()
     }
 
     override fun restartVpnService() {
         if (!isVpnActive.value) return
+        System.err.println("[desktop] protection restarting on new ports")
         // The listeners hold the ports they were raised on and the redirect
         // rules name those same numbers, so a restart has to take both down
         // and put them back — a port the settings just moved would otherwise
