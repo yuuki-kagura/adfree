@@ -103,16 +103,18 @@ class DesktopPrivilegesTest {
      */
     @Test
     fun theElevatedUnitSweepsItsRedirectRulesWhenItEnds() {
-        val argv = DesktopPrivileges(nftBinary = "/usr/bin/nft").engineUnitArgv(
+        val unit = DesktopPrivileges(nftBinary = "/usr/bin/nft").unitFile(
             command = "/usr/lib/jvm/java/bin/java",
             arguments = listOf("git.shin.adfree.desktop.AdFreeDesktopKt"),
             environment = emptyMap(),
+            workingDirectory = "/home/shin/adfree",
+            user = "shin",
         )
-        val sweep = argv.filter { it.startsWith("--property=ExecStopPost=") }
+        val sweep = unit.lines().filter { it.startsWith("ExecStopPost=") }
         assertEquals("exactly one sweep", 1, sweep.size)
         assertEquals(
             "the sweep runs nft by absolute path, and its failure is not the unit's",
-            "--property=ExecStopPost=-/usr/bin/nft delete table inet adfree",
+            "ExecStopPost=-/usr/bin/nft delete table inet adfree",
             sweep.single(),
         )
     }
@@ -193,26 +195,136 @@ class DesktopPrivilegesTest {
     }
 
     /**
-     * systemd-run rejects `-p=Key=Value` as an assignment with an empty key,
-     * and it does so before polkit is asked — so a mistyped flag looks exactly
-     * like a machine that refuses to grant anything.
+     * The unit is the whole command line, written down once: the same user, the
+     * one capability, the environment the window needs to find its display, and
+     * the app's own argv. Nothing here is optional — a unit that lost the
+     * capability would filter nothing, and one that lost `User=` would run root
+     * code that then writes the user's database.
      */
     @Test
-    fun theEngineUnitCommandUsesFlagsSystemdAccepts() {
-        val argv = DesktopPrivileges().engineUnitArgv(
+    fun theUnitPinsTheCapabilityTheUserAndTheCommandLine() {
+        val unit = DesktopPrivileges().unitFile(
             command = "/usr/lib/jvm/java/bin/java",
             arguments = listOf("-cp", "/tmp/lib/*", "git.shin.adfree.desktop.AdFreeDesktopKt"),
             environment = mapOf("DISPLAY" to ":0", "ADFREE_CORE_LIB" to "/tmp/libadfree_core.so"),
+            workingDirectory = "/home/shin/adfree",
+            user = "shin",
         )
-        assertEquals("systemd-run", argv.first())
-        assertTrue(argv.contains("--property=AmbientCapabilities=CAP_NET_ADMIN"))
-        assertTrue(argv.contains("--property=CapabilityBoundingSet=CAP_NET_ADMIN"))
-        assertTrue(argv.contains("--property=Environment=DISPLAY=:0"))
-        assertTrue("no short -p= form", argv.none { it.startsWith("-p=") })
-        assertTrue("the unit keeps this user's uid", argv.any { it.startsWith("--uid=") })
-        assertEquals(
-            listOf("/usr/lib/jvm/java/bin/java", "-cp", "/tmp/lib/*", "git.shin.adfree.desktop.AdFreeDesktopKt"),
-            argv.takeLast(4),
+        assertTrue("the unit keeps this user's uid", "User=shin" in unit)
+        assertTrue("the mark needs this", "AmbientCapabilities=CAP_NET_ADMIN" in unit)
+        assertTrue("nothing else is granted", "CapabilityBoundingSet=CAP_NET_ADMIN" in unit)
+        assertTrue(
+            "the window needs a display",
+            unit.lines().any { it.trim() == "Environment=DISPLAY=:0" },
+        )
+        assertTrue(
+            "the child must find the core this process found",
+            unit.lines().any { it.trim() == "Environment=ADFREE_CORE_LIB=/tmp/libadfree_core.so" },
+        )
+        assertTrue(
+            "the argv is the whole of ExecStart",
+            "ExecStart=/usr/lib/jvm/java/bin/java -cp /tmp/lib/* git.shin.adfree.desktop.AdFreeDesktopKt" in unit,
+        )
+        assertTrue("the unit is a file, so systemd needs it enabled explicitly", "[Install]" in unit)
+    }
+
+    /**
+     * systemd is the reader of this file. A unit it refuses is a protection
+     * switch that fails with "the privileged instance started and exited at
+     * once" and no hint about why, so the text is handed to systemd's own
+     * parser here — in a scratch directory, because a unit written into `/etc`
+     * by a test would be a unit this machine then has.
+     */
+    @Test
+    fun systemdItselfAcceptsTheUnit() {
+        val analyze = listOf("/usr/bin/systemd-analyze", "/bin/systemd-analyze")
+            .firstOrNull { File(it).canExecute() } ?: return
+        val directory = java.nio.file.Files.createTempDirectory("adfree-unit-check").toFile()
+        val unit = File(directory, "adfree-desktop.service")
+        unit.writeText(
+            DesktopPrivileges().unitFile(
+                command = File(System.getProperty("java.home"), "bin/java").absolutePath,
+                arguments = listOf(
+                    "-cp",
+                    "/home/shin/adfree/rust/target/release/libadfree_core.so",
+                    "git.shin.adfree.desktop.AdFreeDesktopKt",
+                ),
+                environment = mapOf("DISPLAY" to ":0", "WAYLAND_DISPLAY" to "wayland-0"),
+                workingDirectory = System.getProperty("user.dir"),
+                user = System.getProperty("user.name"),
+            ),
+        )
+        val process = ProcessBuilder(analyze, "verify", "--man=no", unit.absolutePath)
+            .directory(directory)
+            .redirectErrorStream(true)
+            .start()
+        val output = process.inputStream.bufferedReader().readText().trim()
+        assertEquals("systemd rejected the unit:\n$output", 0, process.waitFor())
+        directory.deleteRecursively()
+    }
+
+    /**
+     * An argument with a space in it is one argument. systemd splits `ExecStart=`
+     * on whitespace unless the word is quoted, and `%` is a specifier even
+     * inside quotes — a classpath with a space in it would otherwise start
+     * `java` with two arguments and no main class.
+     */
+    @Test
+    fun anArgumentWithASpaceTravelsAsOneWord() {
+        val unit = DesktopPrivileges().unitFile(
+            command = "/usr/lib/jvm/java/bin/java",
+            arguments = listOf("-cp", "/tmp/the lib/*", "--percent=100%"),
+            environment = emptyMap(),
+            workingDirectory = "/home/shin/adfree",
+            user = "shin",
+        )
+        assertTrue(
+            "the space is quoted: $unit",
+            "ExecStart=/usr/lib/jvm/java/bin/java -cp \"/tmp/the lib/*\" \"--percent=100%%\"" in unit,
+        )
+    }
+
+    /**
+     * The rule is what makes protection a switch instead of a password prompt,
+     * and it is narrow on three axes because `manage-units` is otherwise the
+     * whole system manager: this user, this one unit, these verbs. A rule on a
+     * *transient* unit would be a root shell — the caller writes the command
+     * line — which is exactly why the unit is a file.
+     */
+    @Test
+    fun thePolkitRuleAnswersOnlyForThisUsersProtectionUnit() {
+        val rule = DesktopPrivileges().polkitRule("shin")
+        assertTrue("this user only", "subject.user != \"shin\"" in rule)
+        assertTrue("this unit only", "!= \"adfree-desktop.service\"" in rule)
+        assertTrue("start, stop and restart", "verb == \"restart\"" in rule)
+        assertTrue("anything else is left to polkit", "polkit.Result.NOT_HANDLED" in rule)
+        assertTrue("and only for manage-units", "org.freedesktop.systemd1.manage-units" in rule)
+    }
+
+    /**
+     * The install is one `pkexec` call whose every path is an argument, because
+     * the elevated process is handed a sanitized environment and a helper that
+     * guessed at a path would write root-owned files somewhere unexpected.
+     */
+    @Test
+    fun theOneTimeInstallCarriesEverythingRootNeeds() {
+        val argv = DesktopPrivileges().setupArgv(
+            java = "/usr/lib/jvm/java/bin/java",
+            classpath = "/tmp/lib/*",
+            unit = "/tmp/unit.service",
+            rule = "/tmp/rule.rules",
+            enable = false,
+        )
+        assertEquals("pkexec", argv.first())
+        assertEquals("git.shin.adfree.desktop.PrivilegedSetupKt", argv[argv.size - 6])
+        assertEquals("install", argv[argv.size - 5])
+        assertEquals("/tmp/unit.service", argv[argv.size - 4])
+        assertEquals("/etc/systemd/system/adfree-desktop.service", argv[argv.size - 3])
+        assertEquals("/tmp/rule.rules", argv[argv.size - 2])
+        assertEquals("/etc/polkit-1/rules.d/50-adfree-desktop.rules", argv[argv.size - 1])
+        assertTrue(
+            "no boot enable unless asked",
+            DesktopPrivileges().setupArgv("/j", "/c", "/u", "/r", enable = true).last() == "enable",
         )
     }
 
@@ -280,52 +392,57 @@ class DesktopPrivilegesTest {
     }
 
     /**
-     * `systemd-run` returns zero when the unit is *started*, not when it stays
-     * up, so a successful ask has to be confirmed against the unit itself.
+     * `systemctl` returns zero when the unit is *started*, not when it stays up,
+     * so a start has to be confirmed against the unit itself: a JVM that died on
+     * its first line leaves nothing behind but an exit status.
      */
     @Test
     fun aStartedUnitIsNotMistakenForARunningOne() {
-        val argv = DesktopPrivileges().engineUnitArgv(
+        val unit = DesktopPrivileges().unitFile(
             command = "/usr/lib/jvm/java/bin/java",
-            arguments = listOf("-cp", "/tmp/lib/*", "git.shin.adfree.desktop.AdFreeDesktopKt"),
+            arguments = listOf("git.shin.adfree.desktop.AdFreeDesktopKt"),
             environment = emptyMap(),
+            workingDirectory = "/home/shin/adfree",
+            user = "shin",
         )
-        assertTrue("the unit is named so it can be polled", argv.contains("--unit=adfree-desktop"))
+        assertTrue("one unit, named so it can be polled", "WantedBy=graphical.target" in unit)
     }
 
     /**
-     * A transient unit starts in `/`, so the working directory has to travel
-     * with the ask. `findCoreLibrary` resolves the core relative to it, and an
-     * elevated instance that inherits `/` reports `libadfree_core.so not
-     * found` while the window that asked had just found it.
+     * A unit starts in `/` unless told otherwise. `findCoreLibrary` resolves the
+     * core relative to the working directory, and an instance that inherits `/`
+     * reports `libadfree_core.so not found` while the window that asked had just
+     * found it.
      */
     @Test
     fun theUnitCarriesTheWorkingDirectoryTheCoreIsFoundFrom() {
-        val argv = DesktopPrivileges().engineUnitArgv(
+        val unit = DesktopPrivileges().unitFile(
             command = "/usr/lib/jvm/java/bin/java",
-            arguments = listOf("-cp", "/tmp/lib/*", "git.shin.adfree.desktop.AdFreeDesktopKt"),
+            arguments = listOf("git.shin.adfree.desktop.AdFreeDesktopKt"),
             environment = emptyMap(),
             workingDirectory = "/home/shin/adfree",
+            user = "shin",
         )
         assertTrue(
-            "the unit must not start in /: $argv",
-            argv.contains("--property=WorkingDirectory=/home/shin/adfree"),
+            "the unit must not start in /: $unit",
+            "WorkingDirectory=/home/shin/adfree" in unit,
         )
     }
 
     /**
      * An unknown working directory is left out rather than sent as an empty
-     * property, which systemd rejects before polkit is ever asked.
+     * assignment, which systemd rejects before polkit is ever asked.
      */
     @Test
     fun anUnknownWorkingDirectoryIsOmittedRatherThanSentEmpty() {
-        val argv = DesktopPrivileges().engineUnitArgv(
+        val unit = DesktopPrivileges().unitFile(
             command = "/usr/lib/jvm/java/bin/java",
             arguments = listOf("git.shin.adfree.desktop.AdFreeDesktopKt"),
             environment = emptyMap(),
             workingDirectory = "  ",
+            user = "shin",
         )
-        assertTrue("no blank property", argv.none { it.startsWith("--property=WorkingDirectory=") })
+        assertTrue("no blank assignment", unit.lines().none { it.trim() == "WorkingDirectory=" })
     }
 
     /** Comment and blank lines carry no meaning to nft, so they are not compared. */

@@ -16,6 +16,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 
@@ -64,6 +65,9 @@ class DesktopContainer(
 
     /** The system's privilege answers: the mark, the rules, the service. */
     val privileges = DesktopPrivileges()
+
+    /** "Start with the system": an XDG entry, written when the switch moves. */
+    val autostart = DesktopAutostart()
 
     /** Set by the shell so the app can hand its window over to a privileged instance. */
     var onEngineTakeover: () -> Unit = {}
@@ -177,6 +181,20 @@ class DesktopContainer(
         }
         scope.launch {
             repository.settings.map { it.appLanguage }.collect { L10n.language = it }
+        }
+        scope.launch(Dispatchers.IO) {
+            repository.settings.map { it.autoStart }.distinctUntilChanged().collect { enabled ->
+                // Read on every change rather than once: the setting can be
+                // turned on before or after the protection unit exists, and
+                // what the entry starts depends on that answer.
+                val argv = privileges.selfArgv() ?: return@collect
+                autostart.sync(
+                    enabled = enabled,
+                    unitInstalled = privileges.privilegedServiceInstalled(),
+                    appArgv = argv,
+                    workingDirectory = System.getProperty("user.dir"),
+                ).onFailure { System.err.println("[desktop] autostart: ${it.message}") }
+            }
         }
         L10n.systemLanguage = platformHost.deviceLanguage()
         applyConfig()

@@ -26,14 +26,15 @@ internal const val CA_REMOVE_MODE = "remove"
  * it is and offers the one command that changes it, rather than telling the
  * user to open a terminal. Trusting the certificate is the same conversation
  * with a different capability, answered by the system's own dialog because a
- * desktop has no `su` and no OS screen that could import a PEM. A long-lived
- * privileged process needs systemd to hand out `CAP_NET_ADMIN`; a one-shot
- * helper only needs root for as long as it writes, so it asks through `pkexec`,
- * which waits for the answer rather than for twenty-five seconds.
+ * desktop has no `su` and no OS screen that could import a PEM. The protection
+ * itself is a root-owned unit that the app installs once — a unit file plus one
+ * polkit rule that answers for this exact command line — so later starts ask
+ * the system for nothing; a one-shot helper only needs root for as long as it
+ * writes, so it asks through `pkexec`, which waits for the answer rather than
+ * for twenty-five seconds.
  */
 class DesktopPrivileges(
     private val nftBinary: String = "nft",
-    private val systemdRun: String = "systemd-run",
     private val pkexec: String = "pkexec",
     private val systemctl: String = "systemctl",
     private val log: (String) -> Unit = { System.err.println("[desktop] $it") },
@@ -61,6 +62,189 @@ class DesktopPrivileges(
                 "unix:uid",
             ) as Number).toInt()
         }.getOrElse { 1000 }
+
+    /**
+     * Whether the one-time install has happened on this machine.
+     *
+     * The unit is root-owned but world-readable, so asking is a plain read: a
+     * question about whether a file exists must not cost a password.
+     */
+    fun privilegedServiceInstalled(): Boolean = File(SERVICE_PATH).isFile
+
+    /**
+     * The protection unit, as a file the system starts rather than a transient
+     * unit the app asks for.
+     *
+     * The command line is fixed here on purpose: a polkit rule that lets the
+     * user start a *transient* unit is a rule that lets them start any command
+     * as root, because a transient unit carries its own `ExecStart`. A unit
+     * file is root-owned, so the same rule grants exactly one command line —
+     * this app, with the capability it needs.
+     */
+    internal fun unitFile(
+        command: String,
+        arguments: List<String>,
+        environment: Map<String, String>,
+        workingDirectory: String?,
+        user: String,
+    ): String {
+        val exec = (listOf(command) + arguments).joinToString(" ") { systemdQuote(it) }
+        return buildString {
+            appendLine("[Unit]")
+            appendLine("Description=AdFree filtering with CAP_NET_ADMIN")
+            appendLine("Documentation=https://adfree.local")
+            appendLine()
+            appendLine("[Service]")
+            appendLine("Type=simple")
+            appendLine("User=$user")
+            appendLine("AmbientCapabilities=CAP_NET_ADMIN")
+            appendLine("CapabilityBoundingSet=CAP_NET_ADMIN")
+            workingDirectory?.takeIf { it.isNotBlank() }?.let { appendLine("WorkingDirectory=${systemdQuote(it)}") }
+            environment.forEach { (key, value) ->
+                appendLine("Environment=${systemdQuote("$key=$value")}")
+            }
+            appendLine("ExecStart=$exec")
+            // The same sweep the transient unit carried: a stop that outlives
+            // TimeoutStopSec, an OOM kill or a crash leaves `table inet adfree`
+            // behind, and rules aimed at a listener nobody holds are a machine
+            // with no DNS and no web.
+            appendLine("ExecStopPost=-${systemdQuote(nftForUnitCommand())} delete table inet adfree")
+            appendLine()
+            appendLine("[Install]")
+            appendLine("WantedBy=graphical.target")
+        }
+    }
+
+    /**
+     * The rule that lets this user start that one unit — and nothing else.
+     *
+     * `manage-units` covers the whole system manager, so the rule narrows it on
+     * three axes: this user, this unit, these verbs. A unit name is enough to
+     * be safe precisely because [unitFile] pins the command line; were the unit
+     * transient, this rule would be a root shell.
+     */
+    internal fun polkitRule(user: String): String = """
+        // Written by AdFree's one-time setup. It removes the authentication
+        // dialog from starting the app's own protection unit — the unit file
+        // is root-owned and pins one command line, so this grants that command
+        // line, not arbitrary root. Delete this file to ask for a password
+        // again on every start.
+        polkit.addRule(function(action, subject) {
+            if (action.id != "org.freedesktop.systemd1.manage-units") {
+                return polkit.Result.NOT_HANDLED;
+            }
+            if (subject.user != "$user") {
+                return polkit.Result.NOT_HANDLED;
+            }
+            if ((action.lookup("unit") || "") != "$UNIT_NAME.service") {
+                return polkit.Result.NOT_HANDLED;
+            }
+            var verb = action.lookup("verb") || "";
+            if (verb == "start" || verb == "stop" || verb == "restart") {
+                return polkit.Result.YES;
+            }
+            return polkit.Result.NOT_HANDLED;
+        });
+    """.trimIndent()
+
+    /**
+     * The one-time install: write the unit and the polkit rule, reload systemd,
+     * optionally enable the unit at boot. One dialog, once per machine; every
+     * start afterwards goes through [startInstalledService] and asks nothing.
+     *
+     * It is deliberately blind to what the app is doing right now. The caller
+     * releases its listeners before starting the unit, as it already does for
+     * the transient path.
+     */
+    fun installPrivilegedService(
+        environment: Map<String, String>,
+        startAtBoot: Boolean = false,
+    ): PrivilegeOutcome {
+        val self = selfArgv()
+            ?: return PrivilegeOutcome.Failed("cannot read this process's own command line")
+        val user = System.getProperty("user.name")
+            ?: return PrivilegeOutcome.Failed("cannot tell which user this is")
+        val staging = runCatching {
+            val unit = File.createTempFile("adfree-unit-", ".service")
+            unit.writeText(
+                unitFile(self.first(), self.drop(1), environment, System.getProperty("user.dir"), user),
+            )
+            val rule = File.createTempFile("adfree-polkit-", ".rules")
+            rule.writeText(polkitRule(user))
+            unit to rule
+        }.getOrElse { return PrivilegeOutcome.Failed(it.message ?: "cannot stage the unit") }
+        val argv = setupArgv(
+            java = self.first(),
+            classpath = System.getProperty("java.class.path"),
+            unit = staging.first.absolutePath,
+            rule = staging.second.absolutePath,
+            enable = startAtBoot,
+        )
+        return try {
+            run(*argv.toTypedArray(), deniedExit = PKEXEC_DENIED)
+        } finally {
+            staging.first.delete()
+            staging.second.delete()
+        }
+    }
+
+    /** Takes the unit and the rule back out. Also one dialog, once. */
+    fun removePrivilegedService(): PrivilegeOutcome {
+        val command = selfArgv()?.first()
+            ?: return PrivilegeOutcome.Failed("cannot read this process's own command line")
+        val argv = removeSetupArgv(command, System.getProperty("java.class.path"))
+        return run(*argv.toTypedArray(), deniedExit = PKEXEC_DENIED)
+    }
+
+    /**
+     * Starts the installed unit — no dialog, because the rule written at
+     * install time answers for this user on this unit.
+     *
+     * `restart` rather than `start`: a unit left active by an instance that
+     * has since lost its window would make `start` a no-op, and the caller has
+     * already given up its listeners by the time this runs, so "nothing to do"
+     * here would hand the machine to an instance nobody is watching. systemd
+     * starts an inactive unit for `restart` exactly as for `start`.
+     */
+    fun startInstalledService(): PrivilegeOutcome {
+        val outcome = run(systemctl, "restart", UNIT_NAME)
+        if (outcome !is PrivilegeOutcome.Ok) return outcome
+        return awaitUnitRunning()
+    }
+
+    /** The `pkexec` call for the setup helper, as data rather than a shell line. */
+    internal fun setupArgv(
+        java: String,
+        classpath: String,
+        unit: String,
+        rule: String,
+        enable: Boolean,
+    ): List<String> = buildList {
+        add(pkexec)
+        add(java)
+        add("--enable-native-access=ALL-UNNAMED")
+        add("-cp")
+        add(classpath)
+        add(SETUP_MAIN)
+        add("install")
+        add(unit)
+        add(SERVICE_PATH)
+        add(rule)
+        add(POLKIT_PATH)
+        if (enable) add("enable")
+    }
+
+    internal fun removeSetupArgv(java: String, classpath: String): List<String> = listOf(
+        pkexec,
+        java,
+        "--enable-native-access=ALL-UNNAMED",
+        "-cp",
+        classpath,
+        SETUP_MAIN,
+        "remove",
+        SERVICE_PATH,
+        POLKIT_PATH,
+    )
 
     /**
      * The redirect ruleset for these ports. The mark is what keeps the proxy's
@@ -163,37 +347,24 @@ class DesktopPrivileges(
         }.getOrDefault(false)
 
     /**
-     * Starts the same app as a transient systemd unit that keeps the user's uid
-     * — so the data files stay theirs — and holds `CAP_NET_ADMIN`, which is what
-     * makes the mark and the rules possible. `systemd-run` asks polkit, so the
-     * user sees the desktop's own authentication dialog instead of a terminal.
+     * Protection with the capability it needs: install the fixed unit once,
+     * then start it.
+     *
+     * The transient `systemd-run --system` this replaces asked polkit on every
+     * start — that is what made the protection switch a password prompt. A unit
+     * file plus one rule answers for this user and this unit forever, so the
+     * switch is a switch again. The first call still asks, because writing into
+     * `/etc/systemd/system` is a write; every later call does not.
      *
      * The caller must have released the listeners first: the unit it starts
      * binds the same ports.
      */
     fun requestPrivilegedEngine(environment: Map<String, String>): PrivilegeOutcome {
-        val self = selfArgv()
-            ?: return PrivilegeOutcome.Failed("cannot read this process's own command line")
-        val argv = engineUnitArgv(
-            command = self.first(),
-            arguments = self.drop(1),
-            environment = environment,
-            workingDirectory = System.getProperty("user.dir"),
-        )
-        // The unit name is fixed, and `systemd-run` refuses to start a unit
-        // that already exists. A transient unit left active by an earlier
-        // instance — a crash, a second window, or a hand-run `systemd-run` —
-        // would otherwise make every later privileged start fail with
-        // "Unit … was already loaded". Clear it, then start ours.
-        stopStaleUnit()
-        val outcome = run(*argv.toTypedArray())
-        if (outcome !is PrivilegeOutcome.Ok) return outcome
-        // `systemd-run` reports success once the unit has been *started*, not
-        // once it has stayed up. A command line it could not exec — or a JVM
-        // that died on its first line — leaves a unit that is already gone by
-        // the time the caller reads this, and handing the window over to it
-        // would close the only instance the user has.
-        return awaitUnitRunning()
+        if (!privilegedServiceInstalled()) {
+            val installed = installPrivilegedService(environment)
+            if (installed !is PrivilegeOutcome.Ok) return installed
+        }
+        return startInstalledService()
     }
 
     /**
@@ -232,34 +403,6 @@ class DesktopPrivileges(
         )
     }
 
-    /**
-     * Stops a transient unit left over from an earlier run and waits for it to
-     * read as inactive, so the following `systemd-run` can take the name.
-     *
-     * Best-effort on purpose: most of the time there is no unit to stop and
-     * `systemctl` says so on its own, and a stop that needs an authorization
-     * the user has not given is not worth failing the start over — the start
-     * itself will ask, and fail with its own message if the name is still held.
-     */
-    private fun stopStaleUnit() {
-        val stopped = runCatching {
-            val process = ProcessBuilder(systemctl, "stop", UNIT_NAME)
-                .redirectErrorStream(true)
-                .start()
-            process.inputStream.bufferedReader().readText()
-            process.waitFor()
-        }.getOrDefault(-1)
-        // Only wait when something was actually there: `is-active` on a unit
-        // that is not loaded is cheap but a needless fork on every start.
-        if (stopped == 0 || unitActive()) {
-            var attempts = 0
-            while (attempts < UNIT_START_CHECKS && unitActive()) {
-                Thread.sleep(UNIT_START_POLL_MS)
-                attempts++
-            }
-        }
-    }
-
     /** Read-only, so it needs no privilege of its own. */
     private fun unitActive(): Boolean = runCatching {
         ProcessBuilder(systemctl, "is-active", UNIT_NAME)
@@ -288,52 +431,6 @@ class DesktopPrivileges(
             .map { File(it, nftBinary) }
             .firstOrNull { it.isFile && it.canExecute() }
         return found?.absolutePath ?: nftBinary
-    }
-
-    /**
-     * The `systemd-run` call that starts this same command as a transient unit.
-     * Split out because a mistyped property flag fails before polkit is ever
-     * asked, which looks exactly like a machine that has no privilege to give.
-     */
-    internal fun engineUnitArgv(
-        command: String,
-        arguments: List<String>,
-        environment: Map<String, String>,
-        workingDirectory: String? = null,
-    ): List<String> {
-        val argv = mutableListOf(
-            systemdRun,
-            "--system",
-            "--unit=$UNIT_NAME",
-            "--service-type=simple",
-            "--collect",
-            "--uid=${System.getProperty("user.name")}",
-            // `-p=Key=Value` is read as an assignment with an empty key and
-            // fails outright, so each property is its own long option.
-            "--property=AmbientCapabilities=CAP_NET_ADMIN",
-            "--property=CapabilityBoundingSet=CAP_NET_ADMIN",
-        )
-        // The mark and the redirect rules live and die together, but the JVM
-        // shutdown hook that removes them only runs on a clean exit. A unit
-        // that is SIGKILLed — a stop that outlives `TimeoutStopSec`, an OOM
-        // kill, a crash — leaves `table inet adfree` behind, and rules aimed at
-        // a listener nobody holds are a machine with no DNS and no web: every
-        // query the redirect captures is dropped, including the proxy's own.
-        // `ExecStopPost` is run by systemd itself on every way the unit can
-        // end, with the unit's capability set, so the table is swept even when
-        // no Java code gets to say goodbye.
-        argv += "--property=ExecStopPost=-${nftForUnitCommand()} delete table inet adfree"
-        // A transient unit starts in `/`, not in the directory the app was
-        // launched from. `findCoreLibrary` resolves the core relative to the
-        // working directory, so without this the elevated instance looks for
-        // `rust/target/release/libadfree_core.so` under `/` and reports the
-        // core missing — while the window that asked for the privilege had
-        // found it a moment earlier.
-        workingDirectory?.takeIf { it.isNotBlank() }?.let { argv += "--property=WorkingDirectory=$it" }
-        environment.forEach { (key, value) -> argv += "--property=Environment=$key=$value" }
-        argv += command
-        argv += arguments
-        return argv
     }
 
     /**
@@ -457,6 +554,12 @@ class DesktopPrivileges(
         const val SO_MARK = 36
         const val FIREWALL_MARK = 0xad45
         const val UNIT_NAME = "adfree-desktop"
+        // Fixed destinations: the elevated helper takes paths as arguments only
+        // because they are staged in a temp directory, never because the caller
+        // chooses where root writes.
+        const val SERVICE_PATH = "/etc/systemd/system/adfree-desktop.service"
+        const val POLKIT_PATH = "/etc/polkit-1/rules.d/50-adfree-desktop.rules"
+        const val SETUP_MAIN = "git.shin.adfree.desktop.PrivilegedSetupKt"
         const val PKEXEC_DENIED = 126
         // A unit that fails does it within a few hundred milliseconds; ten
         // reads at 100 ms is long enough to see it and short enough that a
@@ -465,6 +568,20 @@ class DesktopPrivileges(
         const val UNIT_START_POLL_MS = 100L
         const val CA_INSTALL_MAIN = "git.shin.adfree.desktop.CaInstallKt"
     }
+}
+
+/**
+ * One argument as systemd reads it. Left bare when nothing in it is syntax — an
+ * ExecStart full of quotes is unreadable in a bug report — and quoted when it
+ * has a space, with the three characters systemd still reads inside quotes
+ * escaped: `%` is a specifier even there, and a backslash or quote would end
+ * the word early.
+ */
+internal fun systemdQuote(value: String): String {
+    if (value.isNotEmpty() && value.none { it.isWhitespace() || it == '"' || it == '\\' || it == '%' }) {
+        return value
+    }
+    return "\"" + value.replace("\\", "\\\\").replace("\"", "\\\"").replace("%", "%%") + "\""
 }
 
 /** The three answers a privilege request can give. */
