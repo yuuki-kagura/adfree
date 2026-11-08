@@ -284,6 +284,12 @@ fn last_error() -> std::io::Error {
     std::io::Error::last_os_error()
 }
 
+/// Queries answered at the same time. A page load asks for a dozen hosts at
+/// once and a stub resolver batches as many again; the listener is one socket
+/// for the whole machine, so a single query held for the 5 s forward timeout
+/// would otherwise stall every lookup on the box.
+const IN_FLIGHT: usize = 64;
+
 pub(crate) fn serve_loop(listeners: Vec<Listener>, stop: Arc<AtomicBool>) {
     // The redirect layout only loop-proofs itself through the fwmark; if the
     // mark cannot be set (no `CAP_NET_ADMIN`) say so once, loudly, instead of
@@ -295,11 +301,17 @@ pub(crate) fn serve_loop(listeners: Vec<Listener>, stop: Arc<AtomicBool>) {
              explicit-proxy mode",
         );
     }
+    // One listener socket is shared by every answering thread: `sendto` on a
+    // UDP socket is atomic per datagram, and the fd stays open for as long as
+    // the loop runs, so the threads need no ownership of it beyond the `Arc`.
+    let listeners: Vec<std::sync::Arc<Listener>> =
+        listeners.into_iter().map(std::sync::Arc::new).collect();
     let mut fds: Vec<libc::pollfd> = listeners
         .iter()
         .map(|l| libc::pollfd { fd: l.fd(), events: libc::POLLIN, revents: 0 })
         .collect();
     let mut buf = vec![0u8; 4096];
+    let in_flight = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
     while !stop.load(Ordering::Relaxed) {
         let rc = unsafe { libc::poll(fds.as_mut_ptr(), fds.len() as libc::nfds_t, POLL_SLICE_MS) };
         if rc <= 0 {
@@ -312,8 +324,39 @@ pub(crate) fn serve_loop(listeners: Vec<Listener>, stop: Arc<AtomicBool>) {
             let Some(query) = listeners[index].recv(&mut buf) else {
                 continue;
             };
-            serve_one(&listeners[index], &query, &stop);
+            // Answering waits on the upstream resolver, so it happens off this
+            // loop: a query the upstream leaves unanswered must cost its own
+            // client a wait, not every other lookup on the machine.
+            let in_flight = std::sync::Arc::clone(&in_flight);
+            if in_flight.fetch_add(1, Ordering::Relaxed) >= IN_FLIGHT {
+                in_flight.fetch_sub(1, Ordering::Relaxed);
+                // Past the cap: silence, and the client's own retry comes back
+                // when a worker has retired. Dropping a query is cheaper for
+                // the machine than answering it late.
+                continue;
+            }
+            let listener = std::sync::Arc::clone(&listeners[index]);
+            let stop = Arc::clone(&stop);
+            let spawned = std::thread::Builder::new()
+                .name("adfree-dns-query".into())
+                .stack_size(512 * 1024)
+                .spawn(move || {
+                    let _guard = InFlight(in_flight);
+                    serve_one(&listener, &query, &stop);
+                });
+            if spawned.is_err() {
+                crate::logbuf::push("proxy: could not spawn a DNS answer thread");
+            }
         }
+    }
+}
+
+/// Returns the in-flight slot when the answering thread ends, however it ends.
+struct InFlight(std::sync::Arc<std::sync::atomic::AtomicUsize>);
+
+impl Drop for InFlight {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, Ordering::Relaxed);
     }
 }
 

@@ -53,6 +53,9 @@ class DesktopPrivilegesTest {
             3,
             Regex("ip daddr 127\\.0\\.0\\.1 accept").findAll(bypassed).count(),
         )
+        // Four, not three: the DNS chain excludes its local resolver whether
+        // the switch is on or off (see the loop test below), so it always
+        // carries one accept of its own on top of the three switch-driven ones.
         assertEquals(
             "IPv6 loopback is localhost too: $bypassed",
             3,
@@ -61,6 +64,34 @@ class DesktopPrivilegesTest {
         assertTrue("the redirect still follows", "redirect to :3130" in bypassed)
         assertTrue("the QUIC refusal still follows", "udp dport 443 reject" in bypassed)
         assertTrue("the mark still comes first", "meta mark 0xad45 accept" in bypassed)
+    }
+
+    /**
+     * The DNS chain captures every account, unlike the web and QUIC chains:
+     * DNS filtering only works if the machine's stub is intercepted too, and
+     * the loop that looks possible is ruled out in the core, which forwards a
+     * query to the real server instead of back into the stub. A second account
+     * on this machine keeps its own web and QUIC paths but still gets filtered
+     * DNS, which is the half that does not need a certificate.
+     */
+    @Test
+    fun theDnsChainCapturesEveryAccount() {
+        val rules = DesktopPrivileges().ruleset(CoreEngine.PROXY_TCP_PORT, CoreEngine.PROXY_DNS_PORT)
+        val dnsChain = rules.substringAfter("chain dns {").substringBefore("chain quic {")
+        assertTrue(
+            "the DNS chain must not be narrowed to one account: $dnsChain",
+            "skuid" !in dnsChain,
+        )
+        assertTrue("it still redirects: $dnsChain", "udp dport 53 redirect" in dnsChain)
+        assertTrue(
+            "and never TCP/53, where nothing listens: $dnsChain",
+            "tcp dport 53" !in dnsChain,
+        )
+        val httpChain = rules.substringAfter("chain http {").substringBefore("chain dns {")
+        assertTrue(
+            "the web chain stays scoped to this account: $httpChain",
+            "meta skuid" in httpChain,
+        )
     }
 
     /**

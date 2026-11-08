@@ -29,6 +29,12 @@ table inet adfree {
         # The proxy's own connections travel on.
         meta mark 0xad45 accept
 
+        # Only this account's traffic is captured. Daemons — above all
+        # `systemd-resolved`, which answers the lookups the listener forwards —
+        # keep their own path, so one account's proxy can never take the
+        # machine's DNS down or catch another user's session.
+        meta skuid != 1000 accept
+
         # Locally generated packets reach the nat table at the output hook,
         # not prerouting, and there `redirect` — not `dnat to 127.0.0.1` — is
         # the expression that works: it keeps the destination address and only
@@ -48,9 +54,16 @@ table inet adfree {
 
         meta mark 0xad45 accept
 
-        # Both transports: some resolvers fall back to TCP/53 on truncation.
+        # Every account and every resolver is captured here: this is where DNS
+        # filtering happens, and both the app asking the machine's stub and the
+        # stub asking upstream have to reach the listener. The loop that looks
+        # possible is not one — the listener forwards a query to the real server
+        # (`proxy::dns::resolver_addr`), never back into the stub it came from.
+        #
+        # UDP only: the listener answers on a datagram socket, so a redirected
+        # TCP/53 would land on a port with no TCP listener — a black hole for
+        # every query that fell back to TCP after a truncated answer.
         meta l4proto udp udp dport 53 redirect to :5300
-        meta l4proto tcp tcp dport 53 redirect to :5300
     }
 
     # ------------------------------------------------------------ QUIC gate
@@ -58,6 +71,7 @@ table inet adfree {
         type filter hook output priority 0; policy accept;
 
         meta mark 0xad45 accept
+        meta skuid != 1000 accept
 
         # HTTP/3 rides UDP/443 past any TCP proxy. Refusing it — rather than
         # silently dropping it — is what makes Chrome and curl give up the

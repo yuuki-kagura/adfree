@@ -35,6 +35,13 @@ use std::sync::{Arc, Mutex};
 /// cannot grow the map without end.
 const MAX_HOSTS: usize = 256;
 
+/// Distinct hosts a client has to refuse before it counts as a client whose
+/// trust store does not hold the CA. One refusal can be a single bad
+/// connection; two hosts is a store. A Node CLI meets a new API host far more
+/// often than it meets a new trust store, and making the user watch a failed
+/// connection per host for that is pointless.
+const HOSTS_TO_GENERALISE: usize = 2;
+
 /// The `state` row the learned pairs survive a restart in.
 const STATE_KEY: &str = "mitm.untrusted_clients";
 
@@ -43,6 +50,9 @@ const STATE_KEY: &str = "mitm.untrusted_clients";
 pub struct UntrustedClients {
     /// One entry per host, holding the fingerprints seen refusing it.
     entries: Mutex<HashMap<String, HashSet<String>>>,
+    /// The hosts each fingerprint has refused, which is what tells one bad
+    /// connection apart from a client whose trust store does not hold the CA.
+    hosts_by_fingerprint: Mutex<HashMap<String, HashSet<String>>>,
     /// The database the set is written back to, once the platform has handed
     /// the data root down. Without it the set lives as long as the engine,
     /// which is what a platform that never calls `set_store` gets.
@@ -71,11 +81,38 @@ impl UntrustedClients {
             .entry(host.to_string())
             .or_default()
             .insert(fingerprint.to_string());
+        drop(entries);
         if learned {
-            drop(entries);
+            self.remember_host(fingerprint, host);
             self.save();
         }
         learned
+    }
+
+    /// Records that this fingerprint refused `host`, whatever the host was.
+    fn remember_host(&self, fingerprint: &str, host: &str) {
+        if fingerprint.is_empty() {
+            return;
+        }
+        self.hosts_by_fingerprint
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .entry(fingerprint.to_string())
+            .or_default()
+            .insert(host.to_string());
+    }
+
+    /// True when this client has refused the CA on enough hosts that it is the
+    /// client's trust store refusing, not one host's connection.
+    pub(crate) fn refuses_anywhere(&self, fingerprint: &str) -> bool {
+        if fingerprint.is_empty() {
+            return false;
+        }
+        self.hosts_by_fingerprint
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .get(fingerprint)
+            .is_some_and(|hosts| hosts.len() >= HOSTS_TO_GENERALISE)
     }
 
     /// Whether this client has already refused the certificate for `host`.
@@ -87,11 +124,13 @@ impl UntrustedClients {
         if fingerprint.is_empty() {
             return false;
         }
-        self.entries
+        let exact = self
+            .entries
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .get(host)
-            .is_some_and(|fingerprints| fingerprints.contains(fingerprint))
+            .is_some_and(|fingerprints| fingerprints.contains(fingerprint));
+        exact || self.refuses_anywhere(fingerprint)
     }
 
     /// Every host learned so far, with the number of clients that refused it.
@@ -135,6 +174,10 @@ impl UntrustedClients {
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .clear();
+        self.hosts_by_fingerprint
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clear();
         self.save();
     }
 
@@ -155,6 +198,9 @@ impl UntrustedClients {
                 Ok(learned) => {
                     let mut entries = self.entries.lock().unwrap_or_else(|e| e.into_inner());
                     for (host, fingerprints) in learned.into_iter().take(MAX_HOSTS) {
+                        for fingerprint in &fingerprints {
+                            self.remember_host(fingerprint, &host);
+                        }
                         entries.entry(host).or_default().extend(fingerprints);
                     }
                 }
@@ -277,6 +323,34 @@ mod tests {
 
         drop(store);
         std::fs::remove_dir_all(&root).ok();
+    }
+
+    /// A Node CLI meets a new API host far more often than it meets a new
+    /// trust store: after it has refused on two hosts, the refusal is its
+    /// store's, not that host's, and every later host is spliced without
+    /// making the user watch another failed connection.
+    #[test]
+    fn a_client_that_refuses_two_hosts_refuses_everywhere() {
+        let set = UntrustedClients::new();
+        set.note("one.example", "node-fp");
+        assert!(
+            !set.refuses("other.example", "node-fp"),
+            "one refusal is not a verdict on the trust store"
+        );
+        set.note("two.example", "node-fp");
+        assert!(
+            set.refuses("brand-new.example", "node-fp"),
+            "a client that refused twice is spliced everywhere"
+        );
+        assert!(
+            !set.refuses("brand-new.example", "browser-fp"),
+            "another client keeps being filtered"
+        );
+        // Two hosts, not two connections to one host.
+        let single = UntrustedClients::new();
+        single.note("same.example", "other-fp");
+        single.note("same.example", "other-fp");
+        assert!(!single.refuses("elsewhere.example", "other-fp"));
     }
 
     #[test]

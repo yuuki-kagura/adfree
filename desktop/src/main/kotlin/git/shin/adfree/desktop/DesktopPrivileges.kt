@@ -51,6 +51,18 @@ class DesktopPrivileges(
     }
 
     /**
+     * The uid of this process, or 1000 when `/proc` cannot say: the rules only
+     * capture the account that runs the app.
+     */
+    private fun currentUid(): Int =
+        runCatching {
+            (java.nio.file.Files.getAttribute(
+                java.nio.file.Path.of("/proc/self"),
+                "unix:uid",
+            ) as Number).toInt()
+        }.getOrElse { 1000 }
+
+    /**
      * The redirect ruleset for these ports. The mark is what keeps the proxy's
      * own traffic out of the loop, so the rules only make sense alongside it —
      * [installRules] refuses without it rather than taking the machine's DNS
@@ -64,8 +76,20 @@ class DesktopPrivileges(
      * the LAN is still the filter's business, and the mark stays first so the
      * proxy's own dials never loop either way.
      */
-    fun ruleset(tcpPort: Int, dnsPort: Int, filterLocalhost: Boolean = true): String {
+    fun ruleset(
+        tcpPort: Int,
+        dnsPort: Int,
+        filterLocalhost: Boolean = true,
+        uid: Int = currentUid(),
+    ): String {
         val mark = FIREWALL_MARK.toString(16)
+        // Only this user's own traffic is captured. Every daemon on the machine
+        // — `systemd-resolved` above all, whose upstream queries would otherwise
+        // be handed back to the listener that asks it — keeps its own path, and
+        // so does a second user's session: a proxy owned by one account must not
+        // be able to take the others offline.
+        val mine = "\n                    meta skuid != $uid accept"
+
         val bypass = if (filterLocalhost) {
             ""
         } else {
@@ -76,18 +100,30 @@ class DesktopPrivileges(
             table inet adfree {
                 chain http {
                     type nat hook output priority -100; policy accept;
-                    meta mark 0x$mark accept$bypass
+                    meta mark 0x$mark accept$mine$bypass
                     meta l4proto tcp tcp dport { 80, 443 } redirect to :$tcpPort
                 }
                 chain dns {
                     type nat hook output priority -100; policy accept;
                     meta mark 0x$mark accept$bypass
+                    # Every account and every resolver is captured here, because
+                    # this is where DNS filtering happens: an app asks the
+                    # machine's stub, the stub asks upstream, and both halves
+                    # have to reach the listener or the answer arrives unfiltered.
+                    # The loop that looks possible — listener forwards, stub asks
+                    # upstream, redirect catches it again — does not happen:
+                    # `proxy::dns::resolver_addr` forwards a query to the real
+                    # server, never into the stub it came from.
+                    #
+                    # UDP only: the listener answers on a datagram socket, so a
+                    # redirected TCP/53 would land on a port nothing speaks TCP
+                    # on — a black hole for every query that fell back to TCP
+                    # after a truncated answer.
                     meta l4proto udp udp dport 53 redirect to :$dnsPort
-                    meta l4proto tcp tcp dport 53 redirect to :$dnsPort
                 }
                 chain quic {
                     type filter hook output priority 0; policy accept;
-                    meta mark 0x$mark accept$bypass
+                    meta mark 0x$mark accept$mine$bypass
                     udp dport 443 reject with icmpx type admin-prohibited
                 }
             }
