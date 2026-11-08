@@ -208,6 +208,24 @@ class DesktopContainer(
         }
     }
 
+    /**
+     * Log allowed requests by default, once.
+     *
+     * The phone default is off — a mobile log that records everything it lets
+     * through is battery spent to answer a question a phone user rarely asks —
+     * but this is the machine whose window exists to be looked at, and a log
+     * that only holds refusals cannot answer "what did this page ask for".
+     * Once, and only once: a user who turns it off keeps it off.
+     */
+    fun applyLogAllowedDefault() {
+        if (!engineAvailable) return
+        if (store.getBoolean(KEY_LOG_ALLOWED_DEFAULT_APPLIED, false)) return
+        store.putBoolean(KEY_LOG_ALLOWED_DEFAULT_APPLIED, true)
+        if (!repository.settings.value.logAllowedRequests) {
+            repository.toggleLogAllowed(true)
+        }
+    }
+
     fun applyConfig(): ConfigOutcome {
         coreEngine.setSystemDns(systemDnsServers())
         val outcome = coreEngine.applyConfig(privateDnsStrict = false)
@@ -226,5 +244,7 @@ class DesktopContainer(
     private companion object {
         /** Set the first time the HTTPS default is applied, so it is never re-asked. */
         const val KEY_HTTPS_DEFAULT_APPLIED = "https_default_applied"
+        /** Set the first time the log's "record allowed" default is applied. */
+        const val KEY_LOG_ALLOWED_DEFAULT_APPLIED = "log_allowed_default_applied"
     }
 }
