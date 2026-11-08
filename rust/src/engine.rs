@@ -59,17 +59,6 @@ const TUN_BUF_BYTES: usize = 64 * 1024;
 /// The `state` row holding the app names that refused the CA.
 const CA_REJECTIONS_KEY: &str = "mitm.ca_rejecting_apps";
 
-/// Hosts whose TLS is spliced verbatim, come what may.
-///
-/// These are the AI backend a terminal agent or editor streams its answers
-/// from. Decrypting them gains nothing an ad rule could act on — the responses
-/// are the model's own tokens — while terminating and re-originating a
-/// long-lived server-sent-event stream is exactly the kind of connection that
-/// breaks when the TLS layer is taken apart and put back together. A user's own
-/// HTTPS exclusion list still applies on top; this is the floor beneath it, so a
-/// client that talks to the model keeps working whether or not its fingerprint
-/// has been seen before.
-const ALWAYS_SPLICE_HOSTS: &[&str] = &["api.freepi.ai", "api.trygravity.ai"];
 
 /// How long the tun loop waits before re-checking the shutdown flag. Short
 /// because nothing wakes it but a packet or the timeout.
@@ -1288,10 +1277,7 @@ impl Core {
         crate::logbuf::set_level(cfg.log_level);
         *self.https_hosts.write().unwrap() = HttpsHosts {
             skip: Arc::new(crate::mitm::hosts::HostPatterns::new(
-                ALWAYS_SPLICE_HOSTS
-                    .iter()
-                    .map(|host| (*host).to_string())
-                    .chain(cfg.https_skip_hosts.iter().cloned()),
+                cfg.https_skip_hosts.iter().cloned(),
             )),
             only: Arc::new(crate::mitm::hosts::HostPatterns::new(
                 cfg.https_only_hosts.clone(),

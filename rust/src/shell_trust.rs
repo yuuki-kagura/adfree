@@ -9,12 +9,15 @@
 //! new host fails the handshake, and only a fresh process — one whose first
 //! connection the proxy has already learned — gets through.
 //!
-//! The one knob Node honours for this is `NODE_EXTRA_CA_CERTS`. A packaged
-//! application cannot set a user's environment, but it can write the file that
-//! user's shell already reads on every start. This module does exactly that,
-//! for the shells actually present on the machine and for the login shell named
-//! by `$SHELL`, between markers so a re-run replaces the block instead of
-//! appending a second copy and an uninstall can take it cleanly back out.
+//! The knobs Node honours for this are `NODE_EXTRA_CA_CERTS`, which names our
+//! certificate, and `NODE_USE_SYSTEM_CA`, which makes Node read the distro's
+//! OpenSSL bundle — a store the anchor install already put the CA into. A
+//! packaged application cannot set a user's environment, but it can write the
+//! file that user's shell already reads on every start. This module does
+//! exactly that, for the shells actually present on the machine and for the
+//! login shell named by `$SHELL`, between markers so a re-run replaces the
+//! block instead of appending a second copy and an uninstall can take it
+//! cleanly back out.
 //!
 //! It runs in the app's own process, never as root: these are the signed-in
 //! user's rc files, and a root-owned `.bashrc` is one the user's editor can no
@@ -186,11 +189,21 @@ fn without_block(text: &str) -> String {
 }
 
 /// fish spells an exported variable differently from a POSIX shell.
+///
+/// Two knobs, because Node can be taught trust in two ways and a given process
+/// may honour either: `NODE_EXTRA_CA_CERTS` names our certificate directly, and
+/// `NODE_USE_SYSTEM_CA` makes Node load the distro's OpenSSL bundle at
+/// `/etc/ssl/certs`, which the anchor install already wrote the CA into. With
+/// both set, an app that reads one still trusts the CA even if it ignores the
+/// other, so its first connection to a new host succeeds instead of failing the
+/// handshake and only being rescued by the proxy's learned-splice afterwards.
 fn line_for(file: &Path, pem_path: &str) -> String {
     if file.to_string_lossy().ends_with("config.fish") {
-        format!("set -gx NODE_EXTRA_CA_CERTS \"{pem_path}\"")
+        format!(
+            "set -gx NODE_EXTRA_CA_CERTS \"{pem_path}\"\nset -gx NODE_USE_SYSTEM_CA 1"
+        )
     } else {
-        format!("export NODE_EXTRA_CA_CERTS=\"{pem_path}\"")
+        format!("export NODE_EXTRA_CA_CERTS=\"{pem_path}\"\nexport NODE_USE_SYSTEM_CA=1")
     }
 }
 
@@ -225,10 +238,12 @@ mod tests {
         let bash = std::fs::read_to_string(home.join(".bashrc")).unwrap();
         assert!(bash.contains("alias ll"), "kept the user's lines: {bash}");
         assert!(bash.contains(&format!("export NODE_EXTRA_CA_CERTS=\"{pem}\"")), "bash gets an export: {bash}");
+        assert!(bash.contains("export NODE_USE_SYSTEM_CA=1"), "bash gets the system-CA knob: {bash}");
 
         let fish = std::fs::read_to_string(home.join(".config/fish/config.fish")).unwrap();
         assert!(fish.contains("EDITOR vim"), "kept the user's lines: {fish}");
         assert!(fish.contains(&format!("set -gx NODE_EXTRA_CA_CERTS \"{pem}\"")), "fish gets set -gx: {fish}");
+        assert!(fish.contains("set -gx NODE_USE_SYSTEM_CA 1"), "fish gets the system-CA knob: {fish}");
     }
 
     #[test]

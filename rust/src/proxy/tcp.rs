@@ -126,6 +126,7 @@ fn handle(client: TcpStream, stop: &AtomicBool) {
     let client_fd = client.as_raw_fd();
 
     let Some(target) = resolve_target(client_fd, stop) else {
+        crate::logbuf::push("proxy: could not resolve a redirected connection's target; reset");
         reset_on_close(client_fd);
         return;
     };
@@ -206,6 +207,7 @@ fn handle(client: TcpStream, stop: &AtomicBool) {
             arm_session(core, &cfg, &apps)
         };
         let Some(session) = session else {
+            crate::logbuf::push(&format!("proxy: no TLS session armed for {addr}; reset"));
             reset_on_close(client_fd);
             return;
         };
