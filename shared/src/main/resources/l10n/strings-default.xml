@@ -873,6 +873,7 @@
     <string name="log_filter_allowed">Allowed (%1$d)</string>
     <string name="log_filter_by_app">Filtering by app: %1$s</string>
     <string name="log_filter_by_app_clear">Clear app filter</string>
+    <string name="log_filter_type_label">Content type</string>
     <string name="log_tab_all">All requests</string>
     <string name="log_tab_html">HTML</string>
     <string name="log_tab_css">CSS</string>

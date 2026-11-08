@@ -827,7 +827,8 @@ object Strings {
     const val log_filter_by_app = "log_filter_by_app"
     const val log_filter_by_app_clear = "log_filter_by_app_clear"
 
-    /** The request-type tabs, in AdGuard's own order. */
+    /** The request-type controls: the drop-down's label, then AdGuard's own order. */
+    const val log_filter_type_label = "log_filter_type_label"
     const val log_tab_all = "log_tab_all"
     const val log_tab_html = "log_tab_html"
     const val log_tab_css = "log_tab_css"

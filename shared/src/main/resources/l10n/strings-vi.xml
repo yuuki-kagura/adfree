@@ -873,6 +873,7 @@
     <string name="log_filter_allowed">Cho phép (%1$d)</string>
     <string name="log_filter_by_app">Đang lọc theo ứng dụng: %1$s</string>
     <string name="log_filter_by_app_clear">Bỏ lọc theo ứng dụng</string>
+    <string name="log_filter_type_label">Loại nội dung</string>
     <string name="log_tab_all">Tất cả yêu cầu</string>
     <string name="log_tab_html">HTML</string>
     <string name="log_tab_css">CSS</string>

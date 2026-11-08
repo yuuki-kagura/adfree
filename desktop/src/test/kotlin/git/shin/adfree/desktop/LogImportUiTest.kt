@@ -5,6 +5,7 @@ import androidx.compose.ui.graphics.toAwtImage
 import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.captureToImage
+import androidx.compose.ui.test.hasTestTag
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
@@ -88,11 +89,10 @@ class LogImportUiTest {
             }
 
             onNodeWithText(L10n.get(Strings.nav_activity)).performClick()
-            waitUntilAtLeastOneExists(hasText(L10n.get(Strings.log_subtitle)), 30_000)
+            waitUntilAtLeastOneExists(hasTestTag("log_search_input"), 30_000)
             onNodeWithTag("import_logs_button").assertIsDisplayed()
             onNodeWithTag("export_logs_button").assertIsDisplayed()
             onNodeWithTag("clear_logs_button").assertIsDisplayed()
-            onNodeWithTag("log_retention_note").assertIsDisplayed()
 
             onNodeWithTag("import_logs_button").performClick()
 
@@ -101,9 +101,8 @@ class LogImportUiTest {
             onNodeWithTag("log_imported_banner").assertIsDisplayed()
             waitUntilAtLeastOneExists(hasText("imported.example.com", substring = true), 30_000)
             // What the file says replaces what the store says, everywhere at
-            // once: the note about retention is this machine's history, and so
-            // are the actions that would write or wipe it.
-            onNodeWithTag("log_retention_note").assertDoesNotExist()
+            // once: the actions that would write or wipe this machine's own
+            // history have nothing to act on, so they are gone.
             onNodeWithTag("export_logs_button").assertDoesNotExist()
             onNodeWithTag("clear_logs_button").assertDoesNotExist()
             onNodeWithTag("close_imported_logs_button").assertIsDisplayed()
@@ -112,16 +111,7 @@ class LogImportUiTest {
             onNodeWithTag("close_imported_logs_button").performClick()
 
             onNodeWithTag("log_imported_banner").assertDoesNotExist()
-            waitUntilAtLeastOneExists(
-                hasText(
-                    L10n.format(
-                        Strings.log_retention_note,
-                        AdGuardRepository.LOG_DB_MAX_ROWS,
-                        AdGuardRepository.LOG_DB_KEEP_DAYS,
-                    ),
-                ),
-                30_000,
-            )
+            waitUntilAtLeastOneExists(hasTestTag("import_logs_button"), 30_000)
             onNodeWithTag("import_logs_button").assertIsDisplayed()
             onNodeWithTag("export_logs_button").assertIsDisplayed()
         }

@@ -28,9 +28,9 @@ import org.junit.Test
  *
  * The Activity tab is the app's own screen and keeps the card list it has
  * always had. The desktop's separate Filtering log window is the
- * AdGuard-for-Windows log — request-type tabs and a column table — and it is a
- * popup beside the tabbed UI, not a replacement for that tab. This test pins
- * the switch that keeps the two apart, because the failure mode is silent: the
+ * AdGuard-for-Windows log — one toolbar and a column table — and it is a popup
+ * beside the tabbed UI, not a replacement for that tab. This test pins the
+ * switch that keeps the two apart, because the failure mode is silent: the
  * window looks right while the tab has quietly become the same thing.
  */
 @OptIn(ExperimentalTestApi::class)
@@ -45,7 +45,7 @@ class FilteringLogLayoutTest {
     }
 
     /**
-     * The tab's shape: no request-type strip, no table header. A window wide
+     * The tab's shape: no toolbar switches, no table header. A window wide
      * enough for the table still gets cards, because the tab is not the
      * AdGuard-shaped surface.
      */
@@ -70,13 +70,17 @@ class FilteringLogLayoutTest {
                     }
                 }
             }
-            onNodeWithTag("log_type_tabs").assertDoesNotExist()
             onNodeWithTag("log_table_header").assertDoesNotExist()
+            onNodeWithTag("log_type_selector").assertDoesNotExist()
+            for (tag in listOf("all", "blocked", "allowed")) {
+                onNodeWithTag("log_filter_switch_$tag").assertDoesNotExist()
+            }
         }
     }
 
     /**
-     * The popup's shape: the request-type strip is there, because that window
+     * The popup's shape: the toolbar carries the search field, the row's own
+     * actions and the three status switches floated right, because that window
      * exists to be AdGuard's log.
      */
     @Test
@@ -101,7 +105,17 @@ class FilteringLogLayoutTest {
                     }
                 }
             }
-            onNodeWithTag("log_type_tabs").assertExists()
+            onNodeWithTag("log_search_input").assertExists()
+            onNodeWithTag("clear_logs_button").assertExists()
+            // The request type (HTML, CSS, JS, image, …) is still a choice the
+            // window has to offer — as one drop-down in the toolbar rather
+            // than the eleven-tab strip it used to be.
+            onNodeWithTag("log_type_selector").assertExists()
+            // Three switches, one per status: the chip rows they replaced were
+            // two full-width bands above the table.
+            for (tag in listOf("all", "blocked", "allowed")) {
+                onNodeWithTag("log_filter_switch_$tag").assertExists()
+            }
         }
     }
 }

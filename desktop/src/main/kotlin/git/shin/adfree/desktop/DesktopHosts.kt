@@ -279,7 +279,14 @@ class DesktopFileHost : FileHost {
 /** No app catalogue on a desktop: the Apps tab lists what the engine knows. */
 class DesktopAppInventory : AppInventory {
     override fun installedApps(): List<InstalledApp> = emptyList()
-    override fun icon(packageName: String): androidx.compose.ui.graphics.ImageBitmap? = null
+
+    /**
+     * A desktop application is not an installed package with a launcher icon
+     * to read: the log names the process, and the picture comes from the
+     * `.desktop` entry that describes it (see [DesktopAppIcons]).
+     */
+    override fun icon(packageName: String): androidx.compose.ui.graphics.ImageBitmap? =
+        DesktopAppIcons.shared.icon(packageName)
 }
 
 /** Properties file under the data root; the automation token survives restarts. */

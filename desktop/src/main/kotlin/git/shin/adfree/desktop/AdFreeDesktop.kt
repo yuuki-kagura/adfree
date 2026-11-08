@@ -163,7 +163,12 @@ fun main() {
         var paused by remember { mutableStateOf(false) }
         var pauseJob by remember { mutableStateOf<Job?>(null) }
         var showFilteringLog by remember { mutableStateOf(false) }
-        val filteringLogWindowState = rememberWindowState(width = 900.dp, height = 700.dp)
+        // The log is the AdGuard-for-Windows window: the request table and,
+        // beside it, the details of the row that was clicked. Both halves need
+        // room, and the pane only docks where the table beside it still has its
+        // columns, so the window opens at that width rather than at the size
+        // that suited a list alone.
+        val filteringLogWindowState = rememberWindowState(width = 1120.dp, height = 720.dp)
 
         // Whether filtering is on, as the shield reads it. The tray icon is the
         // same answer in a place the user can see while the window is hidden:
