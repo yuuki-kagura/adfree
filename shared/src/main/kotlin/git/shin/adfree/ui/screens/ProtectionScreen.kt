@@ -19,7 +19,9 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
@@ -75,7 +77,9 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.draw.scale
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -98,6 +102,8 @@ import git.shin.adfree.ui.theme.AdGuardRedBlocked
 import git.shin.adfree.ui.theme.AdGuardTextMuted
 import git.shin.adfree.ui.theme.AdGuardTextPrimary
 import git.shin.adfree.ui.theme.AdGuardTextSecondary
+import git.shin.adfree.ui.theme.UiSize
+import git.shin.adfree.ui.theme.isDesktopLayout
 import git.shin.adfree.ui.theme.AdGuardOnAccent
 
 /**
@@ -305,26 +311,23 @@ private fun ProtectionLanding(
             .fillMaxSize()
             .background(AdGuardDarkBg),
     ) {
-        Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp)) {
-            Text(
-                text = L10n.get(Strings.nav_protection),
-                fontSize = 19.sp,
-                fontWeight = FontWeight.Bold,
-                color = AdGuardTextPrimary,
-            )
-            Text(
-                text = L10n.get(Strings.protection_subtitle),
-                fontSize = 12.sp,
-                color = AdGuardTextMuted,
-            )
-        }
+        PageHeader(
+            title = L10n.get(Strings.nav_protection),
+            subtitle = L10n.get(Strings.protection_subtitle),
+            modifier = Modifier.padding(
+                horizontal = UiSize.gutter.dp,
+                vertical = if (isDesktopLayout) 4.dp else 12.dp,
+            ),
+        )
 
         Column(
             modifier = Modifier
                 .fillMaxWidth()
                 .verticalScroll(rememberScrollState())
-                .padding(horizontal = 16.dp),
-            verticalArrangement = Arrangement.spacedBy(10.dp),
+                .padding(horizontal = UiSize.gutter.dp),
+            verticalArrangement = Arrangement.spacedBy(
+                if (isDesktopLayout) 0.dp else 10.dp
+            ),
         ) {
             Spacer(modifier = Modifier.height(2.dp))
 
@@ -419,7 +422,7 @@ private fun ProtectionLanding(
                 onClick = { onOpen(ProtectionRoute.ECO) },
             )
 
-            Spacer(modifier = Modifier.height(64.dp))
+            Spacer(modifier = Modifier.height(if (isDesktopLayout) 24.dp else 64.dp))
         }
     }
 }
@@ -621,11 +624,7 @@ private fun TrackingDetail(
         )
 
         val preset = StealthPreset.of(settings)
-        Card(
-            modifier = Modifier.fillMaxWidth(),
-            shape = RoundedCornerShape(12.dp),
-            colors = CardDefaults.cardColors(containerColor = AdGuardDarkSurface),
-        ) {
+        SurfaceCard {
             Column(modifier = Modifier.padding(14.dp)) {
                 StealthPreset.entries
                     .filter { it != StealthPreset.CUSTOM }
@@ -675,11 +674,7 @@ private fun TrackingDetail(
 
         Spacer(modifier = Modifier.height(16.dp))
 
-        Card(
-            modifier = Modifier.fillMaxWidth(),
-            shape = RoundedCornerShape(12.dp),
-            colors = CardDefaults.cardColors(containerColor = AdGuardDarkSurface),
-        ) {
+        SurfaceCard {
             Column(modifier = Modifier.padding(14.dp)) {
                 StealthToggleRow(
                     title = L10n.get(Strings.settings_stealth_utm_title),
@@ -738,11 +733,7 @@ private fun TrackingDetail(
             modifier = Modifier.padding(top = 2.dp, bottom = 8.dp),
         )
 
-        Card(
-            modifier = Modifier.fillMaxWidth(),
-            shape = RoundedCornerShape(12.dp),
-            colors = CardDefaults.cardColors(containerColor = AdGuardDarkSurface),
-        ) {
+        SurfaceCard {
             Column(modifier = Modifier.padding(14.dp)) {
                 StealthToggleRow(
                     title = L10n.get(Strings.settings_stealth_all_cookies_title),
@@ -1024,11 +1015,7 @@ private fun AnnoyancesDetail(
                 color = AdGuardTextMuted,
             )
         } else {
-            Card(
-                modifier = Modifier.fillMaxWidth(),
-                shape = RoundedCornerShape(12.dp),
-                colors = CardDefaults.cardColors(containerColor = AdGuardDarkSurface),
-            ) {
+            SurfaceCard {
                 Column(modifier = Modifier.padding(14.dp)) {
                     lists.forEachIndexed { index, list ->
                         if (index > 0) Spacer(modifier = Modifier.height(12.dp))
@@ -1273,13 +1260,7 @@ private fun FirewallToggleRow(
     onClick: () -> Unit,
     preview: (@Composable () -> Unit)? = null,
 ) {
-    Card(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clickable(onClick = onClick),
-        shape = RoundedCornerShape(12.dp),
-        colors = CardDefaults.cardColors(containerColor = AdGuardDarkSurface),
-    ) {
+    SurfaceCard(modifier = Modifier.clickable(onClick = onClick)) {
         Row(
             modifier = Modifier
                 .fillMaxWidth()
@@ -1352,11 +1333,7 @@ private fun BrowsingSecurityDetail(
 
         Spacer(modifier = Modifier.height(12.dp))
 
-        Card(
-            modifier = Modifier.fillMaxWidth(),
-            shape = RoundedCornerShape(12.dp),
-            colors = CardDefaults.cardColors(containerColor = AdGuardDarkSurface),
-        ) {
+        SurfaceCard {
             Text(
                 text = L10n.get(Strings.protection_browsing_security_body),
                 fontSize = 12.sp,
@@ -1445,6 +1422,11 @@ internal fun ModuleDetailHero(
     title: String,
     subtitle: String,
 ) {
+    // The phone hero is a big centred icon over the module name. On a
+    // desktop the page title belongs to the module's own switch row right
+    // below it, so drawing the hero twice only repeats the name.
+    if (isDesktopLayout) return
+
     Column(
         modifier = Modifier
             .fillMaxWidth()
@@ -1487,46 +1469,64 @@ private fun ModuleRow(
     onCheckedChange: (Boolean) -> Unit,
     onClick: () -> Unit,
 ) {
-    Card(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clickable(onClick = onClick),
-        shape = RoundedCornerShape(14.dp),
-        colors = CardDefaults.cardColors(containerColor = AdGuardDarkSurface),
-        border = BorderStroke(1.dp, AdGuardDarkOutline),
-    ) {
+    // Desktop: a line in a list, separated from its neighbours by a hairline.
+    // Phone: a tile you can hit with a thumb.
+    val desktop = isDesktopLayout
+    Column(modifier = Modifier.fillMaxWidth()) {
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 14.dp, vertical = 12.dp),
+                .then(
+                    if (desktop) Modifier
+                    else Modifier
+                        .clip(RoundedCornerShape(14.dp))
+                        .background(AdGuardDarkSurface)
+                        .border(1.dp, AdGuardDarkOutline, RoundedCornerShape(14.dp))
+                )
+                .clickable(onClick = onClick)
+                .heightIn(min = if (desktop) UiSize.rowMinHeight.dp else 0.dp)
+                .padding(
+                    horizontal = if (desktop) 10.dp else 14.dp,
+                    vertical = if (desktop) 4.dp else 12.dp,
+                ),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Box(
                 contentAlignment = Alignment.Center,
                 modifier = Modifier
-                    .size(36.dp)
-                    .clip(RoundedCornerShape(10.dp))
+                    .size(if (desktop) 26.dp else 36.dp)
+                    .clip(RoundedCornerShape(if (desktop) 7.dp else 10.dp))
                     .background(accent.copy(alpha = 0.12f)),
             ) {
-                Icon(icon, contentDescription = null, tint = accent, modifier = Modifier.size(18.dp))
+                Icon(
+                    icon,
+                    contentDescription = null,
+                    tint = accent,
+                    modifier = Modifier.size(if (desktop) 15.dp else 18.dp),
+                )
             }
             Spacer(modifier = Modifier.width(12.dp))
             Column(modifier = Modifier.weight(1f)) {
                 Text(
                     text = title,
-                    fontSize = 14.sp,
+                    fontSize = if (desktop) UiSize.rowTitleSp.sp else 14.sp,
                     fontWeight = FontWeight.SemiBold,
                     color = AdGuardTextPrimary,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
                 )
                 Text(
                     text = subtitle,
-                    fontSize = 11.sp,
-                    color = AdGuardTextSecondary,
+                    fontSize = if (desktop) UiSize.rowSubtitleSp.sp else 11.sp,
+                    color = if (desktop) AdGuardTextMuted else AdGuardTextSecondary,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
                 )
             }
             Switch(
                 checked = checked,
                 onCheckedChange = onCheckedChange,
+                modifier = Modifier.scale(if (desktop) 0.82f else 1f),
                 colors = SwitchDefaults.colors(
                     checkedThumbColor = Color.White,
                     checkedTrackColor = AdGuardGreenPrimary,
@@ -1535,6 +1535,7 @@ private fun ModuleRow(
                 ),
             )
         }
+        if (desktop) RowDivider()
     }
 }
 
@@ -1546,49 +1547,59 @@ internal fun NavigationRow(
     subtitle: String,
     onClick: () -> Unit,
 ) {
-    Card(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clickable(onClick = onClick),
-        shape = RoundedCornerShape(12.dp),
-        colors = CardDefaults.cardColors(containerColor = AdGuardDarkSurface),
-    ) {
+    val desktop = isDesktopLayout
+    SurfaceCard {
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 14.dp, vertical = 12.dp),
+                .clickable(onClick = onClick)
+                .heightIn(min = if (desktop) UiSize.rowMinHeight.dp else 0.dp)
+                .padding(
+                    horizontal = if (desktop) 10.dp else 14.dp,
+                    vertical = if (desktop) 4.dp else 12.dp,
+                ),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Box(
                 contentAlignment = Alignment.Center,
                 modifier = Modifier
-                    .size(36.dp)
-                    .clip(RoundedCornerShape(10.dp))
+                    .size(if (desktop) 26.dp else 36.dp)
+                    .clip(RoundedCornerShape(if (desktop) 7.dp else 10.dp))
                     .background(accent.copy(alpha = 0.12f)),
             ) {
-                Icon(icon, contentDescription = null, tint = accent, modifier = Modifier.size(18.dp))
+                Icon(
+                    icon,
+                    contentDescription = null,
+                    tint = accent,
+                    modifier = Modifier.size(if (desktop) 15.dp else 18.dp),
+                )
             }
             Spacer(modifier = Modifier.width(12.dp))
             Column(modifier = Modifier.weight(1f)) {
                 Text(
                     text = title,
-                    fontSize = 13.sp,
+                    fontSize = if (desktop) UiSize.rowTitleSp.sp else 13.sp,
                     fontWeight = FontWeight.SemiBold,
                     color = AdGuardTextPrimary,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
                 )
                 Text(
                     text = subtitle,
-                    fontSize = 11.sp,
-                    color = AdGuardTextSecondary,
+                    fontSize = if (desktop) UiSize.rowSubtitleSp.sp else 11.sp,
+                    color = if (desktop) AdGuardTextMuted else AdGuardTextSecondary,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
                 )
             }
             Icon(
                 imageVector = Icons.Default.ChevronRight,
                 contentDescription = null,
                 tint = AdGuardTextMuted,
-                modifier = Modifier.size(20.dp),
+                modifier = Modifier.size(if (desktop) 16.dp else 20.dp),
             )
         }
+        if (desktop) RowDivider()
     }
 }
 

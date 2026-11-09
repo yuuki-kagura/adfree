@@ -340,6 +340,8 @@
     <string name="home_shield_toggle">Bật hoặc tắt lọc</string>
     <string name="home_shield_protected">Đang được bảo vệ</string>
     <string name="home_shield_off">Lọc đang tắt</string>
+    <string name="home_state_subtitle_on">Quảng cáo và trình theo dõi bị chặn trong mọi ứng dụng và trình duyệt trên máy này.</string>
+    <string name="home_state_subtitle_off">Hiện không lọc gì cả. Bật bảo vệ để bắt đầu chặn.</string>
     <string name="home_stat_ads">Quảng cáo</string>
     <string name="home_stat_trackers">Theo dõi</string>
     <string name="home_stat_data">Dữ liệu</string>

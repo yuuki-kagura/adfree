@@ -109,6 +109,7 @@ import git.shin.adfree.ui.theme.AdGuardOrangeWarning
 import git.shin.adfree.ui.theme.AdGuardRedBlocked
 import git.shin.adfree.ui.theme.AdGuardTextMuted
 import git.shin.adfree.ui.theme.AdGuardTextPrimary
+import git.shin.adfree.ui.theme.isDesktopLayout
 import git.shin.adfree.ui.theme.AdGuardOnAccent
 import git.shin.adfree.ui.theme.AdGuardTextSecondary
 import git.shin.adfree.update.UpdateInfo
@@ -581,11 +582,7 @@ private fun BackupSection(
     onExport: () -> Unit,
     onImport: () -> Unit,
 ) {
-    Card(
-        modifier = Modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(12.dp),
-        colors = CardDefaults.cardColors(containerColor = AdGuardDarkSurface),
-    ) {
+    SurfaceCard {
         Column(modifier = Modifier.padding(14.dp)) {
             Text(
                 text = L10n.get(Strings.settings_backup_title),
@@ -1106,11 +1103,7 @@ internal fun HttpsFilterSection(
 
         Spacer(modifier = Modifier.height(10.dp))
 
-        Card(
-            modifier = Modifier.fillMaxWidth(),
-            shape = RoundedCornerShape(12.dp),
-            colors = CardDefaults.cardColors(containerColor = AdGuardDarkSurface),
-        ) {
+        SurfaceCard {
             Column(modifier = Modifier.padding(14.dp)) {
                 Row(
                     modifier = Modifier.fillMaxWidth(),
@@ -1734,11 +1727,7 @@ internal fun DnsRewriteSection(
             }
         }
         Spacer(modifier = Modifier.height(6.dp))
-        Card(
-            modifier = Modifier.fillMaxWidth(),
-            shape = RoundedCornerShape(12.dp),
-            colors = CardDefaults.cardColors(containerColor = AdGuardDarkSurface),
-        ) {
+        SurfaceCard {
             Column(modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp)) {
                 if (rewrites.isEmpty()) {
                     Text(
@@ -1878,11 +1867,7 @@ private fun DnsRewriteDialog(
 /** Engine build time, i.e. how long compiling the filter lists took. */
 @Composable
 private fun EngineInfoSection(buildMs: Long) {
-    Card(
-        modifier = Modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(12.dp),
-        colors = CardDefaults.cardColors(containerColor = AdGuardDarkSurface),
-    ) {
+    SurfaceCard {
         Column(modifier = Modifier.padding(14.dp)) {
             Text(
                 text = L10n.get(Strings.settings_engine_title),
@@ -1911,11 +1896,7 @@ private fun AppUpdateSection(
     onCheck: () -> Unit,
     onInstall: (UpdateInfo) -> Unit,
 ) {
-    Card(
-        modifier = Modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(12.dp),
-        colors = CardDefaults.cardColors(containerColor = AdGuardDarkSurface),
-    ) {
+    SurfaceCard {
         Row(
             modifier = Modifier
                 .fillMaxWidth()
@@ -1992,15 +1973,14 @@ fun SettingsSwitch(
     onCheckedChange: (Boolean) -> Unit,
     enabled: Boolean = true,
 ) {
-    Card(
-        modifier = Modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(12.dp),
-        colors = CardDefaults.cardColors(containerColor = AdGuardDarkSurface),
-    ) {
+    SurfaceCard {
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 14.dp, vertical = 10.dp),
+                .padding(
+                    horizontal = if (isDesktopLayout) 10.dp else 14.dp,
+                    vertical = if (isDesktopLayout) 6.dp else 10.dp,
+                ),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.SpaceBetween,
         ) {
@@ -2010,8 +1990,8 @@ fun SettingsSwitch(
             ) {
                 Box(
                     modifier = Modifier
-                        .size(36.dp)
-                        .clip(RoundedCornerShape(10.dp))
+                        .size(if (isDesktopLayout) 28.dp else 36.dp)
+                        .clip(RoundedCornerShape(if (isDesktopLayout) 8.dp else 10.dp))
                         .background(AdGuardBlueDns.copy(alpha = 0.12f)),
                     contentAlignment = Alignment.Center,
                 ) {
@@ -2019,20 +1999,20 @@ fun SettingsSwitch(
                         imageVector = icon,
                         contentDescription = null,
                         tint = AdGuardBlueDns,
-                        modifier = Modifier.size(18.dp),
+                        modifier = Modifier.size(if (isDesktopLayout) 16.dp else 18.dp),
                     )
                 }
                 Spacer(modifier = Modifier.size(12.dp))
                 Column(modifier = Modifier.weight(1f)) {
                     Text(
                         text = title,
-                        fontSize = 13.sp,
+                        fontSize = if (isDesktopLayout) 15.sp else 13.sp,
                         fontWeight = FontWeight.Bold,
                         color = AdGuardTextPrimary,
                     )
                     Text(
                         text = subtitle,
-                        fontSize = 11.sp,
+                        fontSize = if (isDesktopLayout) 11.5.sp else 11.sp,
                         color = AdGuardTextMuted,
                     )
                 }

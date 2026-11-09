@@ -39,6 +39,10 @@ class L10nTest {
         assertEquals("b then a", L10n.fill("%2\$s then %1\$s", arrayOf("a", "b")))
         assertEquals("100%", L10n.fill("100%%", emptyArray()))
         assertEquals("5x", L10n.fill("%1\$dx", arrayOf(5L)))
+        // A precision spec is a format, not literal text: it used to render as
+        // "+%1$.1f%" on the home screen.
+        assertEquals("+12.3%", L10n.fill("+%1\$.1f%%", arrayOf(12.34)))
+        assertEquals("0.0 MB", L10n.fill("%1\$.1f MB", arrayOf(0.0)))
     }
 
     @Test

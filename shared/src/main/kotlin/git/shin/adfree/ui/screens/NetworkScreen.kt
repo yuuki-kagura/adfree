@@ -508,11 +508,7 @@ private fun ProxySection(
 
         Spacer(modifier = Modifier.height(10.dp))
 
-        Card(
-            modifier = Modifier.fillMaxWidth(),
-            shape = RoundedCornerShape(12.dp),
-            colors = CardDefaults.cardColors(containerColor = AdGuardDarkSurface),
-        ) {
+        SurfaceCard {
             Column(modifier = Modifier.padding(14.dp)) {
                 OutlinedTextField(
                     value = draft.host,

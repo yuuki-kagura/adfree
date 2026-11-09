@@ -48,9 +48,22 @@ object L10n {
     fun format(key: String, locale: String, args: Array<out Any>): String =
         fill(get(key, locale), args)
 
-    /** Resolves `%N$s`/`%N$d`/`%%` positionally, like Android's getString. */
+    /**
+     * Resolves `%N$s`/`%N$d`/`%N$.1f`/`%%` positionally, like Android's
+     * getString. `%1$.1f` is a real format, not literal text: the template
+     * scan below only understands the conversion letter, so a precision spec
+     * used to leak into the UI as "+%1$.1f%".
+     */
     internal fun fill(template: String, args: Array<out Any>): String {
         if (args.isEmpty() && !template.contains("%%")) return template
+        if (args.isNotEmpty()) {
+            try {
+                return java.lang.String.format(java.util.Locale.ROOT, template, *args)
+            } catch (_: java.util.IllegalFormatException) {
+                // Fall through: a hand-written template may mix a stray '%'
+                // with valid positions; the scanner below is forgiving.
+            }
+        }
         val out = StringBuilder(template.length)
         var i = 0
         while (i < template.length) {

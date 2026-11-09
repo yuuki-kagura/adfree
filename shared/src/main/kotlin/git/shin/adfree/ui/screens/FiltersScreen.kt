@@ -85,6 +85,7 @@ import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.draw.scale
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -108,6 +109,8 @@ import git.shin.adfree.ui.theme.AdGuardGreenLight
 import git.shin.adfree.ui.theme.AdGuardGreenPrimary
 import git.shin.adfree.ui.theme.AdGuardRedBlocked
 import git.shin.adfree.ui.theme.AdGuardTextMuted
+import git.shin.adfree.ui.theme.UiSize
+import git.shin.adfree.ui.theme.isDesktopLayout
 import git.shin.adfree.ui.theme.AdGuardTextPrimary
 import git.shin.adfree.ui.theme.AdGuardOnAccent
 import git.shin.adfree.ui.theme.AdGuardTextSecondary
@@ -194,7 +197,10 @@ fun FiltersScreen(
         Column(
             modifier = Modifier
                 .fillMaxSize()
-                .padding(horizontal = 16.dp, vertical = 12.dp),
+                .padding(
+                    horizontal = UiSize.gutter.dp,
+                    vertical = if (isDesktopLayout) 8.dp else 12.dp,
+                ),
         ) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 onBack?.let {
@@ -409,7 +415,9 @@ fun FiltersScreen(
 
             LazyColumn(
                 modifier = Modifier.fillMaxSize(),
-                verticalArrangement = Arrangement.spacedBy(10.dp),
+                verticalArrangement = Arrangement.spacedBy(
+                    if (isDesktopLayout) 6.dp else 10.dp
+                ),
             ) {
                 for (group in FilterGroup.entries) {
                     val items = visibleCatalog.filter { it.groupId == group.id }
@@ -733,30 +741,31 @@ private fun FilterGroupCard(
     val gate = group.moduleGate
     val inactive = gate != null && enabled > 0 && lists.any { it.isEnabled } && !moduleEnabled
 
-    Card(
-        modifier = Modifier
-            .fillMaxWidth()
-            .testTag("filter_group_${group.id}"),
-        shape = RoundedCornerShape(14.dp),
-        colors = CardDefaults.cardColors(containerColor = AdGuardDarkSurface),
-        border = BorderStroke(1.dp, AdGuardDarkOutline),
-    ) {
+    SurfaceCard(tag = "filter_group_${group.id}") {
         Column {
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
                     .clickable { onToggleExpand() }
-                    .padding(14.dp),
+                    .padding(
+                        horizontal = if (isDesktopLayout) 10.dp else 14.dp,
+                        vertical = if (isDesktopLayout) 6.dp else 14.dp,
+                    ),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 Box(
                     modifier = Modifier
-                        .size(38.dp)
-                        .clip(RoundedCornerShape(10.dp))
+                        .size(if (isDesktopLayout) 26.dp else 38.dp)
+                        .clip(RoundedCornerShape(if (isDesktopLayout) 7.dp else 10.dp))
                         .background(AdGuardGreenPrimary.copy(alpha = 0.12f)),
                     contentAlignment = Alignment.Center,
                 ) {
-                    Icon(groupIcon(group), contentDescription = null, tint = AdGuardGreenPrimary, modifier = Modifier.size(20.dp))
+                    Icon(
+                        groupIcon(group),
+                        contentDescription = null,
+                        tint = AdGuardGreenPrimary,
+                        modifier = Modifier.size(if (isDesktopLayout) 15.dp else 20.dp),
+                    )
                 }
                 Spacer(modifier = Modifier.width(12.dp))
                 Column(modifier = Modifier.weight(1f)) {
@@ -826,8 +835,9 @@ private fun FilterGroupCard(
                         onToggle = { onToggleList(list) },
                         onClick = { onOpenList(list) },
                     )
+                    if (isDesktopLayout) RowDivider()
                 }
-                Spacer(modifier = Modifier.height(4.dp))
+                if (!isDesktopLayout) Spacer(modifier = Modifier.height(4.dp))
             }
         }
     }
@@ -852,13 +862,18 @@ private fun FilterRow(
         modifier = Modifier
             .fillMaxWidth()
             .clickable { onClick() }
-            .padding(start = 14.dp, end = 8.dp, top = 6.dp, bottom = 6.dp),
+            .padding(
+                start = if (isDesktopLayout) 10.dp else 14.dp,
+                end = 8.dp,
+                top = if (isDesktopLayout) 3.dp else 6.dp,
+                bottom = if (isDesktopLayout) 3.dp else 6.dp,
+            ),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Column(modifier = Modifier.weight(1f)) {
             Text(
                 text = filterDisplayName(list),
-                fontSize = 13.sp,
+                fontSize = if (isDesktopLayout) UiSize.rowTitleSp.sp else 13.sp,
                 fontWeight = FontWeight.SemiBold,
                 color = AdGuardTextPrimary,
                 maxLines = 1,
@@ -900,6 +915,7 @@ private fun FilterRow(
         Switch(
             checked = list.isEnabled,
             onCheckedChange = { onToggle() },
+            modifier = Modifier.scale(if (isDesktopLayout) 0.82f else 1f),
             colors = SwitchDefaults.colors(checkedTrackColor = AdGuardGreenPrimary),
         )
     }
@@ -913,14 +929,7 @@ private fun SearchEmptyCard(
     query: String,
     onClear: () -> Unit,
 ) {
-    Card(
-        modifier = Modifier
-            .fillMaxWidth()
-            .testTag("filter_search_empty"),
-        shape = RoundedCornerShape(14.dp),
-        colors = CardDefaults.cardColors(containerColor = AdGuardDarkSurface),
-        border = BorderStroke(1.dp, AdGuardDarkOutline),
-    ) {
+    SurfaceCard(tag = "filter_search_empty") {
         Column(modifier = Modifier.padding(16.dp)) {
             Text(
                 text = L10n.get(Strings.filters_search_empty_title),
@@ -961,14 +970,7 @@ private fun CustomFiltersCard(
     icon: ImageVector = Icons.Default.Public,
     tag: String = "custom_filters_section",
 ) {
-    Card(
-        modifier = Modifier
-            .fillMaxWidth()
-            .testTag(tag),
-        shape = RoundedCornerShape(14.dp),
-        colors = CardDefaults.cardColors(containerColor = AdGuardDarkSurface),
-        border = BorderStroke(1.dp, AdGuardDarkOutline),
-    ) {
+    SurfaceCard(tag = tag) {
         Column {
             Row(
                 modifier = Modifier
@@ -1041,14 +1043,9 @@ private fun UserRulesCard(
     allowCount: Int,
     onOpen: () -> Unit,
 ) {
-    Card(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clickable { onOpen() }
-            .testTag("open_custom_rules_editor_fab"),
-        shape = RoundedCornerShape(14.dp),
-        colors = CardDefaults.cardColors(containerColor = AdGuardDarkSurface),
-        border = BorderStroke(1.dp, AdGuardDarkOutline),
+    SurfaceCard(
+        modifier = Modifier.clickable { onOpen() },
+        tag = "open_custom_rules_editor_fab",
     ) {
         Row(
             modifier = Modifier
@@ -1110,14 +1107,7 @@ private fun ServicesTableCard(
     val importScope = rememberCoroutineScope()
     val files = currentFileHost()
 
-    Card(
-        modifier = Modifier
-            .fillMaxWidth()
-            .testTag("services_table_card"),
-        shape = RoundedCornerShape(14.dp),
-        colors = CardDefaults.cardColors(containerColor = AdGuardDarkSurface),
-        border = BorderStroke(1.dp, AdGuardDarkOutline),
-    ) {
+    SurfaceCard(tag = "services_table_card") {
         Column(modifier = Modifier.padding(14.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Box(

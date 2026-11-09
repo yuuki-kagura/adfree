@@ -427,11 +427,7 @@ private fun FilterChipsRow(content: @Composable () -> Unit) {
 
 @Composable
 private fun SectionCard(content: @Composable () -> Unit) {
-    Card(
-        modifier = Modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(12.dp),
-        colors = CardDefaults.cardColors(containerColor = AdGuardDarkSurface),
-    ) {
+    SurfaceCard {
         Column(modifier = Modifier.padding(14.dp)) { content() }
     }
 }

@@ -58,6 +58,7 @@ import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.SnackbarResult
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -94,6 +95,9 @@ import git.shin.adfree.ui.theme.AdGuardOrangeWarning
 import git.shin.adfree.ui.theme.AdGuardTextMuted
 import git.shin.adfree.ui.theme.AdGuardTextPrimary
 import git.shin.adfree.ui.theme.AdGuardTextSecondary
+import git.shin.adfree.ui.theme.LocalUiLayout
+import git.shin.adfree.ui.theme.UiLayout
+import git.shin.adfree.ui.theme.UiSize
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.emptyFlow
 import kotlinx.coroutines.launch
@@ -456,7 +460,16 @@ fun AdGuardApp(
         // at or above it switch to a side rail, and cap the content
         // width so tablets never stretch one column edge to edge.
         val isWide = maxWidth >= 600.dp
-        Scaffold(
+        // A desktop window is not a phone with room to spare: past 840dp the
+        // screens draw their desktop body (flat rows, hairlines, two columns)
+        // instead of the stacked phone one, the way AdGuard for Windows does.
+        val uiLayout = if (platform.supportsWindowHeader() && maxWidth >= 840.dp) {
+            UiLayout.Desktop
+        } else {
+            UiLayout.Compact
+        }
+        CompositionLocalProvider(LocalUiLayout provides uiLayout) {
+            Scaffold(
             modifier = Modifier.fillMaxSize(),
             containerColor = AdGuardDarkBg,
             topBar = {
@@ -526,7 +539,13 @@ fun AdGuardApp(
                         targetState = state.currentTab,
                         modifier = Modifier
                             .fillMaxSize()
-                            .widthIn(max = 1000.dp),
+                            .widthIn(
+                                max = if (uiLayout == UiLayout.Desktop) {
+                                    UiSize.CONTENT_MAX_WIDTH.dp
+                                } else {
+                                    1000.dp
+                                },
+                            ),
                         transitionSpec = {
                             val direction =
                                 if (targetState.ordinal > initialState.ordinal) 1 else -1
@@ -555,6 +574,7 @@ fun AdGuardApp(
                     }
                 }
             }
+        }
         }
     }
 }

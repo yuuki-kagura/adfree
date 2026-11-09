@@ -620,11 +620,7 @@ internal fun FirewallAppRuleDetail(
                 color = AdGuardTextMuted,
             )
         } else {
-            Card(
-                modifier = Modifier.fillMaxWidth(),
-                shape = RoundedCornerShape(12.dp),
-                colors = CardDefaults.cardColors(containerColor = AdGuardDarkSurface),
-            ) {
+            SurfaceCard {
                 Column(modifier = Modifier.padding(14.dp)) {
                     applied.forEachIndexed { index, dimension ->
                         if (index > 0) Spacer(modifier = Modifier.height(14.dp))
@@ -663,11 +659,7 @@ internal fun FirewallAppRuleDetail(
                 color = AdGuardTextMuted,
             )
         } else {
-            Card(
-                modifier = Modifier.fillMaxWidth(),
-                shape = RoundedCornerShape(12.dp),
-                colors = CardDefaults.cardColors(containerColor = AdGuardDarkSurface),
-            ) {
+            SurfaceCard {
                 Column {
                     available.forEach { dimension ->
                         AvailableRuleRow(
@@ -1248,11 +1240,7 @@ private fun NotificationAppRow(
     enabled: Boolean,
     onToggle: (Boolean) -> Unit,
 ) {
-    Card(
-        modifier = Modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(12.dp),
-        colors = CardDefaults.cardColors(containerColor = AdGuardDarkSurface),
-    ) {
+    SurfaceCard {
         Row(
             modifier = Modifier
                 .fillMaxWidth()

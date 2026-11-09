@@ -320,6 +320,8 @@ object Strings {
     const val home_shield_toggle = "home_shield_toggle"
     const val home_shield_protected = "home_shield_protected"
     const val home_shield_off = "home_shield_off"
+    const val home_state_subtitle_on = "home_state_subtitle_on"
+    const val home_state_subtitle_off = "home_state_subtitle_off"
     const val home_stat_ads = "home_stat_ads"
     const val home_stat_trackers = "home_stat_trackers"
     const val home_stat_data = "home_stat_data"

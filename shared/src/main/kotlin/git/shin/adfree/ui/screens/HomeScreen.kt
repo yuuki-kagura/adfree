@@ -5,6 +5,7 @@ import git.shin.adfree.l10n.L10n
 import git.shin.adfree.platform.OnResumeTick
 import git.shin.adfree.platform.currentPlatformHost
 import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -17,6 +18,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -65,6 +67,7 @@ import kotlinx.coroutines.launch
 import git.shin.adfree.model.ProtectionStats
 import git.shin.adfree.ui.AdGuardIntent
 import git.shin.adfree.ui.AdGuardTab
+import git.shin.adfree.ui.AdGuardUiState
 import git.shin.adfree.ui.AdGuardViewModel
 import git.shin.adfree.ui.theme.AdGuardBlueDns
 import git.shin.adfree.ui.theme.AdGuardDarkBg
@@ -77,6 +80,8 @@ import git.shin.adfree.ui.theme.AdGuardRedBlocked
 import git.shin.adfree.ui.theme.AdGuardTextMuted
 import git.shin.adfree.ui.theme.AdGuardTextPrimary
 import git.shin.adfree.ui.theme.AdGuardTextSecondary
+import git.shin.adfree.ui.theme.UiSize
+import git.shin.adfree.ui.theme.isDesktopLayout
 
 /**
  * The home tab: the power switch, a compact row of module switches, and the
@@ -99,6 +104,36 @@ fun HomeScreen(
     // The switch lives in the system settings, so re-read it on every return;
     // the same call re-pushes the effective DoT policy to the core.
     OnResumeTick { viewModel.refreshPrivateDnsState() }
+
+    if (isDesktopLayout) {
+        DesktopHome(
+            state = state,
+            privateDnsOn = privateDnsOn,
+            modifier = modifier,
+            onToggle = { viewModel.onIntent(AdGuardIntent.ToggleProtection) },
+            onOpenStatistics = {
+                viewModel.onIntent(AdGuardIntent.SelectTab(AdGuardTab.STATISTICS))
+            },
+            onOpenPrivateDns = { platform.openPrivateDnsSettings() },
+            quickModuleRow = {
+                QuickModuleRow(
+                    adBlocking = state.settings.isAdBlockingEnabled,
+                    tracking = state.settings.isTrackingProtectionEnabled,
+                    dns = state.settings.isDnsProtectionEnabled,
+                    https = state.settings.isHttpsFilteringEnabled,
+                    firewall = state.settings.isFirewallEnabled,
+                    eco = state.settings.isEcoBatteryModeEnabled,
+                    onAdBlocking = { viewModel.onIntent(AdGuardIntent.ToggleAdBlocking) },
+                    onTracking = { viewModel.onIntent(AdGuardIntent.ToggleTracking) },
+                    onDns = { viewModel.onIntent(AdGuardIntent.ToggleDns) },
+                    onHttps = { viewModel.onIntent(AdGuardIntent.ToggleHttps) },
+                    onFirewall = { viewModel.onIntent(AdGuardIntent.ToggleFirewall) },
+                    onEco = { viewModel.onIntent(AdGuardIntent.ToggleEcoMode) },
+                )
+            },
+        )
+        return
+    }
 
     Column(
         modifier = modifier
@@ -696,3 +731,161 @@ private fun StatCard(
     }
 }
 
+
+/**
+ * The desktop home, drawn the way AdGuard for Windows draws its own: one
+ * centred state, said once in a big line, with the switch right under it.
+ *
+ * The phone body stacks four stat cards under the power button because a
+ * 400dp screen has nowhere else to put them. On a window this wide that grid
+ * stretches into four wide, mostly-empty tiles, which is exactly what made
+ * the app read as a phone screenshot blown up: here the counters become one
+ * strip of numbers on the bare surface, separated by hairlines.
+ */
+@Composable
+private fun DesktopHome(
+    state: AdGuardUiState,
+    privateDnsOn: Boolean,
+    modifier: Modifier = Modifier,
+    onToggle: () -> Unit,
+    onOpenStatistics: () -> Unit,
+    onOpenPrivateDns: () -> Unit,
+    quickModuleRow: @Composable () -> Unit,
+) {
+    Column(
+        modifier = modifier
+            .fillMaxSize()
+            .background(AdGuardDarkBg)
+            .verticalScroll(rememberScrollState())
+            .padding(horizontal = UiSize.gutter.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        Spacer(modifier = Modifier.height(18.dp))
+
+        quickModuleRow()
+
+        Spacer(modifier = Modifier.height(26.dp))
+
+        Text(
+            text = if (state.isVpnActive) L10n.get(Strings.home_shield_protected)
+            else L10n.get(Strings.home_shield_off),
+            fontSize = 26.sp,
+            fontWeight = FontWeight.Bold,
+            color = if (state.isVpnActive) AdGuardTextPrimary else AdGuardTextMuted,
+        )
+        Spacer(modifier = Modifier.height(4.dp))
+        Text(
+            text = L10n.get(
+                if (state.isVpnActive) Strings.home_state_subtitle_on
+                else Strings.home_state_subtitle_off
+            ),
+            fontSize = 12.5.sp,
+            color = AdGuardTextMuted,
+        )
+
+        Spacer(modifier = Modifier.height(18.dp))
+
+        ProtectionSwitch(isActive = state.isVpnActive, onToggle = onToggle)
+
+        Spacer(modifier = Modifier.height(30.dp))
+
+        DesktopStatStrip(stats = state.stats, onClick = onOpenStatistics)
+
+        if (privateDnsOn) {
+            Spacer(modifier = Modifier.height(UiSize.sectionGap.dp))
+            PrivateDnsWarningCard(onOpenSettings = onOpenPrivateDns)
+        }
+
+        Spacer(modifier = Modifier.height(24.dp))
+    }
+}
+
+/** The pill switch AdGuard for Windows puts under the state line. */
+@Composable
+private fun ProtectionSwitch(isActive: Boolean, onToggle: () -> Unit) {
+    val track by animateColorAsState(
+        targetValue = if (isActive) AdGuardGreenPrimary else Color(0xFF2C3A46),
+        label = "switchTrack",
+    )
+    val knobX by animateFloatAsState(
+        targetValue = if (isActive) 1f else 0f,
+        label = "switchKnob",
+    )
+    Box(
+        modifier = Modifier
+            .width(62.dp)
+            .height(32.dp)
+            .clip(RoundedCornerShape(16.dp))
+            .background(track)
+            .border(
+                1.dp,
+                if (isActive) Color(0x55FFFFFF) else AdGuardDarkOutline,
+                RoundedCornerShape(16.dp),
+            )
+            .clickable(onClick = onToggle)
+            .testTag("shield_power_toggle"),
+        contentAlignment = Alignment.CenterStart,
+    ) {
+        Box(
+            modifier = Modifier
+                .padding(start = 3.dp)
+                .offset(x = 30.dp * knobX)
+                .size(26.dp)
+                .clip(CircleShape)
+                .background(Color.White),
+        )
+    }
+}
+
+/** Four counters on one line, the way the reference client lists numbers. */
+@Composable
+private fun DesktopStatStrip(stats: ProtectionStats, onClick: () -> Unit) {
+    val dataMb = stats.dataSavedBytes / (1024 * 1024)
+    val cells = listOf(
+        stats.adsBlocked.toString() to L10n.get(Strings.home_stat_ads),
+        stats.trackersBlocked.toString() to L10n.get(Strings.home_stat_trackers),
+        L10n.format(Strings.home_stat_data_value, dataMb) to
+            L10n.get(Strings.home_stat_data),
+        L10n.format(Strings.home_stat_battery_value, stats.estimatedBatterySavedPercent) to
+            L10n.get(Strings.home_stat_battery),
+    )
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(10.dp))
+            .background(AdGuardDarkSurface)
+            .clickable(onClick = onClick)
+            .testTag("home_stat_strip")
+            .padding(vertical = 14.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        cells.forEachIndexed { index, (value, label) ->
+            if (index > 0) {
+                Box(
+                    modifier = Modifier
+                        .width(1.dp)
+                        .height(28.dp)
+                        .background(AdGuardTextMuted.copy(alpha = 0.16f)),
+                )
+            }
+            Column(
+                modifier = Modifier.weight(1f),
+                horizontalAlignment = Alignment.CenterHorizontally,
+            ) {
+                Text(
+                    text = value,
+                    fontSize = 17.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = AdGuardTextPrimary,
+                    maxLines = 1,
+                )
+                Text(
+                    text = label,
+                    fontSize = 11.sp,
+                    color = AdGuardTextMuted,
+                    maxLines = 1,
+                )
+            }
+        }
+    }
+}
