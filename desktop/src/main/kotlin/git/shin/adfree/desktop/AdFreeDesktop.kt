@@ -231,6 +231,12 @@ fun main() {
             container.onEngineTakeover = quit
             onDispose { container.onEngineTakeover = {} }
         }
+        // The browser extension can ask for a screen by name; showing it means
+        // un-hiding the window as well as switching the tab.
+        DisposableEffect(showWindow) {
+            container.onShowWindow = showWindow
+            onDispose { container.onShowWindow = {} }
+        }
 
         // Pausing stops the filtering but not the listeners, and the flag the
         // window reads is the persisted protection record: without writing it

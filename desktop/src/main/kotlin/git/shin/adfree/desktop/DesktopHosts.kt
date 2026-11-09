@@ -55,6 +55,8 @@ class DesktopPlatformHost(
      * connections through it belong to other programs.
      */
     private val privilegedPort: () -> Int = { DesktopPrivileges.DEFAULT_PROXY_PORT },
+    /** Shows the window again; set by the shell once it exists. */
+    private val onRaiseWindow: () -> Unit = {},
 ) : PlatformHost {
 
     /** Toasts the window pipes into the scaffold's snackbar host. */
@@ -120,6 +122,8 @@ class DesktopPlatformHost(
 
     override fun browserExtensionBridgeInstalled(): Boolean =
         NativeMessagingHosts.installedAndUsable()
+
+    override fun raiseWindow() = onRaiseWindow()
 
     override fun installBrowserExtensionBridge(): String? {
         val host = NativeMessagingHosts.findHostBinary()

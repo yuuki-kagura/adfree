@@ -147,6 +147,16 @@ interface PlatformHost {
      * what happened in the user's language. Null means it is in place.
      */
     fun installBrowserExtensionBridge(): String? = null
+
+    /**
+     * Brings the app's own window to the front.
+     *
+     * A browser extension asks the app to *show* things — the filtering log,
+     * the settings — and a tab switch in a window that stays hidden behind the
+     * browser is indistinguishable from a button that does nothing. Android
+     * has one foreground activity and needs no such verb.
+     */
+    fun raiseWindow() = Unit
 }
 
 /** Kept separate from [PlatformHost] so a desktop host can reuse the parts it can honour. */

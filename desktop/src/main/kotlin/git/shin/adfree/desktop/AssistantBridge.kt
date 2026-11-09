@@ -15,8 +15,6 @@ import java.nio.channels.SocketChannel
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
-import kotlinx.coroutines.flow.distinctUntilChanged
-import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -59,6 +57,12 @@ class AssistantBridge(
     private val tunnel: TunnelControl,
     private val appVersion: String,
     private val locale: () -> String,
+    /**
+     * Brings the window to the front. The extension's "Mở nhật ký lọc" and
+     * "Cài đặt" are requests to *see* a screen: switching the tab in a window
+     * that stays behind the browser is a button that does nothing.
+     */
+    private val raiseWindow: () -> Unit = {},
     private val log: (String) -> Unit = {},
 ) {
 
@@ -103,13 +107,44 @@ class AssistantBridge(
             return
         }
         scope.launch(Dispatchers.IO) { acceptLoop() }
-        scope.launch(Dispatchers.IO) {
-            repository.settings
-                .map { it.isProtectionActive to it.isHttpsFilteringEnabled }
-                .distinctUntilChanged()
-                .collect { push() }
-        }
+        scope.launch(Dispatchers.IO) { stateTicker() }
         log("assistant bridge: listening on $path")
+    }
+
+    /**
+     * Pushes whenever the answer to "is this machine being filtered?" changes.
+     *
+     * Polling rather than listening: the three facts the extension shows come
+     * from three different places — the persisted protection record, the core's
+     * listener state, the HTTPS switch — and the interesting transitions happen
+     * a moment *after* the intent that caused them (the redirect is installed,
+     * the listeners bind, the engine is rebuilt). A push on the setting alone
+     * fired too early and told the popup "off" right after the user switched it
+     * on, and nothing corrected it afterwards.
+     */
+    private suspend fun stateTicker() {
+        var last: String? = null
+        while (running) {
+            val current = appState().toString()
+            if (current != last) {
+                last = current
+                push()
+            }
+            delay(STATE_TICK_MS)
+        }
+    }
+
+    /**
+     * Waits for an intent's effect to reach the state the extension reads.
+     *
+     * The popup keeps what the *answer* said, so answering before the listeners
+     * come up would leave it showing the opposite of the truth until reopened.
+     * The wait is bounded: an answer that takes longer than [STATE_SETTLE_MS]
+     * is answered as it is, and the ticker corrects it when it lands.
+     */
+    private suspend fun settle(until: () -> Boolean) {
+        val deadline = System.currentTimeMillis() + STATE_SETTLE_MS
+        while (!until() && System.currentTimeMillis() < deadline) delay(50)
     }
 
     /**
@@ -164,7 +199,14 @@ class AssistantBridge(
                 }
             }
         } catch (error: Exception) {
-            log("assistant bridge: connection ended: ${error.message}")
+            // A popup that closes mid-answer is normal and not a fault: Chrome
+            // drops the connection when the panel is dismissed.
+            val message = error.message.orEmpty()
+            val wentAway = message.contains("Ống dẫn bị hỏng") ||
+                message.contains("Broken pipe") ||
+                message.contains("Connection reset") ||
+                error is java.io.IOException && message.isBlank()
+            if (!wentAway) log("assistant bridge: connection ended: $message")
         } finally {
             clientsLock.withLock { clients.remove(client) }
             runCatching { client.channel.close() }
@@ -173,7 +215,14 @@ class AssistantBridge(
 
     /** Writes the extension's own state shape to every connected popup. */
     private suspend fun push() {
-        val message = buildJsonObject { put("appState", appState()) }.toString().toByteArray()
+        // The extension only hands an unsolicited message to its own listeners
+        // when `requestId` carries this prefix (`background/api` drops the rest
+        // as a reply nothing asked for); without it a push is silently thrown
+        // away and an open popup keeps showing the state it opened with.
+        val message = buildJsonObject {
+            put("requestId", PUSH_REQUEST_ID)
+            put("appState", appState())
+        }.toString().toByteArray()
         clientsLock.withLock { clients.toList() }.forEach { client ->
             runCatching { client.writeLock.withLock { writeFrame(client.channel, message) } }
         }
@@ -196,15 +245,24 @@ class AssistantBridge(
                 "getCurrentAppState" -> ok(id)
                 "getCurrentFilteringState" -> ok(id, parameters = filteringState(parameters))
                 "setProtectionStatus" -> {
-                    setProtection(parameters["isEnabled"]?.jsonPrimitive?.booleanOrNull ?: false)
+                    val on = parameters["isEnabled"]?.jsonPrimitive?.booleanOrNull ?: false
+                    setProtection(on)
+                    settle { protectionOn() == on }
                     ok(id)
                 }
                 "setFilteringStatus" -> {
+                    val url = parameters["url"]?.jsonPrimitive?.contentOrNull
+                    val filtering = parameters["isEnabled"]?.jsonPrimitive?.booleanOrNull ?: false
                     setFiltering(
-                        url = parameters["url"]?.jsonPrimitive?.contentOrNull,
-                        filtering = parameters["isEnabled"]?.jsonPrimitive?.booleanOrNull ?: false,
+                        url = url,
+                        filtering = filtering,
                         https = parameters["isHttpsEnabled"]?.jsonPrimitive?.booleanOrNull,
                     )
+                    val host = hostOf(url)
+                    settle {
+                        val excepted = host != null && isExcepted(host)
+                        if (filtering) !excepted else excepted
+                    }
                     ok(id)
                 }
                 "addRule" -> {
@@ -230,10 +288,12 @@ class AssistantBridge(
                 }
                 "openFilteringLog" -> {
                     viewModel.onIntent(AdGuardIntent.SelectTab(AdGuardTab.ACTIVITY))
+                    raiseWindow()
                     ok(id)
                 }
                 "openSettings" -> {
                     viewModel.onIntent(AdGuardIntent.SelectTab(AdGuardTab.SETTINGS))
+                    raiseWindow()
                     ok(id)
                 }
                 "updateApp" -> {
@@ -241,10 +301,14 @@ class AssistantBridge(
                     ok(id)
                 }
                 "pauseFiltering" -> {
+                    val url = parameters["url"]?.jsonPrimitive?.contentOrNull
                     pauseFiltering(
-                        url = parameters["url"]?.jsonPrimitive?.contentOrNull,
+                        url = url,
                         seconds = parameters["timeout"]?.jsonPrimitive?.intOrNull ?: 30,
                     )
+                    // The popup shows "paused" from the answer, and the rule is
+                    // the only evidence the page really is out of filtering.
+                    hostOf(url)?.let { host -> settle { isExcepted(host) } }
                     ok(id)
                 }
                 else -> error(id, "unknown request type")
@@ -264,12 +328,15 @@ class AssistantBridge(
     private fun hostVersion(): String =
         appVersion.trim().substringBefore(' ').ifBlank { "1.0.0" }
 
+    /** Whether the machine is being filtered right now. */
+    private fun protectionOn(): Boolean =
+        engine.isProxyRunning() && repository.settings.value.isProtectionActive
+
     /** Required flags first: the extension throws when one of them is missing. */
     private fun appState(): JsonObject = buildJsonObject {
-        val up = engine.isProxyRunning()
         put("isInstalled", true)
-        put("isRunning", up)
-        put("isProtectionEnabled", up && repository.settings.value.isProtectionActive)
+        put("isRunning", engine.isProxyRunning())
+        put("isProtectionEnabled", protectionOn())
         put("isLicenseExpired", false)
         put("isAuthorized", true)
         put("locale", locale())
@@ -288,14 +355,16 @@ class AssistantBridge(
      */
     private fun filteringState(parameters: JsonObject): JsonObject {
         val host = hostOf(parameters["url"]?.jsonPrimitive?.contentOrNull)
-        val excepted = host != null &&
-            customRules().any { it.startsWith("@@") && ruleTargets(it, host) }
+        val excepted = host != null && isExcepted(host)
         return filteringPayload(host, excepted, repository.settings.value.isHttpsFilteringEnabled)
     }
 
+    /** True when the rules say this host was taken out of filtering. */
+    private fun isExcepted(host: String): Boolean =
+        customRules().any { it.startsWith("@@") && ruleTargets(it, host) }
+
     private fun setProtection(on: Boolean) {
-        val up = engine.isProxyRunning() && repository.settings.value.isProtectionActive
-        if (up == on) return
+        if (protectionOn() == on) return
         viewModel.onIntent(AdGuardIntent.ToggleProtection)
     }
 
@@ -372,6 +441,23 @@ class AssistantBridge(
 
     companion object {
         const val SOCKET_NAME: String = "adfree-assistant.sock"
+
+        /**
+         * What an unsolicited push is labelled with.
+         *
+         * `background/api`'s message pump accepts an unsolicited message only
+         * when its `requestId` starts with `ADG` and is not one of the
+         * single-request `ADG_CUSTOM_*` ids; anything else is treated as a
+         * reply to a request that no longer exists and dropped. This id names
+         * no request — it exists to pass that gate.
+         */
+        const val PUSH_REQUEST_ID: String = "ADG_STATE"
+
+        /** How often the pushed state is recomputed; cheap enough to poll. */
+        const val STATE_TICK_MS: Long = 500
+
+        /** The longest an action may wait for its effect before answering. */
+        const val STATE_SETTLE_MS: Long = 4_000
 
         /**
          * The init answer, with the field choices that keep the popup alive.

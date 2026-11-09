@@ -73,6 +73,12 @@ class DesktopContainer(
     /** Set by the shell so the app can hand its window over to a privileged instance. */
     var onEngineTakeover: () -> Unit = {}
 
+    /**
+     * Set by the shell so a request from outside — the browser extension's
+     * "open the filtering log" — can show the window it is asking about.
+     */
+    var onShowWindow: () -> Unit = {}
+
     val platformHost = DesktopPlatformHost(
         File(dataRoot, "adfree-ca.pem"),
         privileges = privileges,
@@ -82,6 +88,7 @@ class DesktopContainer(
         // Read at the ask, not captured: the ports are the user's to move, and
         // the probe has to look at the one the unit was told to take.
         privilegedPort = { repository.settings.value.localProxy.tcpPort },
+        onRaiseWindow = { onShowWindow() },
     )
     val fileHost = DesktopFileHost()
     val inventory = DesktopAppInventory()
@@ -161,6 +168,7 @@ class DesktopContainer(
             tunnel = tunnelControl,
             appVersion = coreEngine.version,
             locale = { L10n.locale() },
+            raiseWindow = { platformHost.raiseWindow() },
             log = { System.err.println("[bridge] $it") },
         )
     }

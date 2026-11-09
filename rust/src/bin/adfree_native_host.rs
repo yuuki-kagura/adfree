@@ -21,6 +21,7 @@
 use std::io::{self, Read, Write};
 use std::os::unix::net::UnixStream;
 use std::path::PathBuf;
+use std::time::Duration;
 
 /// Where the app listens. `$XDG_RUNTIME_DIR` is per-user and private, which is
 /// what makes the socket safe to trust; the fallback is for a login without
@@ -76,11 +77,20 @@ fn write_frame(output: &mut impl Write, message: &[u8]) -> io::Result<()> {
     output.flush()
 }
 
+/// How long the app may take before the extension is told it did not answer.
+///
+/// Chrome's own timeout for a native request is five minutes, and until it
+/// fires the popup shows a loading state — which is what "it just sits there
+/// saying AdGuard is starting" looks like from the outside. A window that is
+/// restarting (protection asked the system for the privilege and is handing
+/// over) will not answer on *this* socket at all, so the wait has to end here.
+const ANSWER_TIMEOUT: Duration = Duration::from_secs(10);
+
 /// The error a Chrome extension can read when the app is not running.
 ///
 /// The extension looks for `result === "error"` and shows `data`; a bare
 /// disconnect would only say "native host has exited" and no reason.
-fn unavailable(request: &[u8]) -> Vec<u8> {
+fn unavailable_with(request: &[u8], reason: &str) -> Vec<u8> {
     let request_id = serde_json::from_slice::<serde_json::Value>(request)
         .ok()
         .and_then(|value| value.get("id").and_then(|id| id.as_str()).map(str::to_string))
@@ -88,9 +98,13 @@ fn unavailable(request: &[u8]) -> Vec<u8> {
     let body = serde_json::json!({
         "requestId": request_id,
         "result": "error",
-        "data": "AdFree is not running",
+        "data": reason,
     });
     body.to_string().into_bytes()
+}
+
+fn unavailable(request: &[u8]) -> Vec<u8> {
+    unavailable_with(request, "AdFree is not running")
 }
 
 fn main() {
@@ -108,16 +122,35 @@ fn main() {
             connection = socket_candidates()
                 .into_iter()
                 .find_map(|path| UnixStream::connect(path).ok());
+            // A socket whose peer is alive but busy — rebuilding a filter
+            // engine, starting listeners — must not hold this message for
+            // minutes. The timeout turns a stall into an answer the popup can
+            // show and the user can retry.
+            if let Some(stream) = connection.as_ref() {
+                let _ = stream.set_read_timeout(Some(ANSWER_TIMEOUT));
+            }
         }
         let reply = match connection.as_mut() {
             Some(stream) => match write_frame(stream, &message) {
                 Ok(()) => match read_frame(stream) {
                     Ok(Some(reply)) => reply,
-                    // The app closed the socket: drop it and let the next
-                    // message try a fresh one.
-                    Ok(None) | Err(_) => {
+                    // The app closed the socket, or did not answer in time:
+                    // drop it and let the next message try a fresh one.
+                    Ok(None) => {
                         connection = None;
                         unavailable(&message)
+                    }
+                    Err(error) => {
+                        connection = None;
+                        let timed_out = matches!(
+                            error.kind(),
+                            io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut
+                        );
+                        if timed_out {
+                            unavailable_with(&message, "AdFree did not answer in time")
+                        } else {
+                            unavailable(&message)
+                        }
                     }
                 },
                 Err(_) => {
@@ -148,6 +181,16 @@ mod tests {
         let read = read_frame(&mut cursor).expect("read").expect("one message");
         assert_eq!(read, payload);
         assert!(read_frame(&mut cursor).expect("end").is_none());
+    }
+
+    /// A stall is answered too, with a reason a person can act on.
+    #[test]
+    fn a_stalled_app_answers_with_a_timeout_reason() {
+        let reply = unavailable_with(br#"{"id":"ADG_CUSTOM_9"}"#, "AdFree did not answer in time");
+        let parsed: serde_json::Value = serde_json::from_slice(&reply).expect("json");
+        assert_eq!(parsed["requestId"], "ADG_CUSTOM_9");
+        assert_eq!(parsed["result"], "error");
+        assert!(parsed["data"].as_str().unwrap_or_default().contains("in time"));
     }
 
     /// An unanswerable request still has to answer in the shape the extension
