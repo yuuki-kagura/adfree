@@ -7,12 +7,14 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.AutoFixHigh
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -33,6 +35,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
@@ -49,6 +52,7 @@ import git.shin.adfree.model.userWhitelistRule
 import git.shin.adfree.ui.theme.AdGuardDarkOutline
 import git.shin.adfree.ui.theme.AdGuardDarkSurface
 import git.shin.adfree.ui.theme.AdGuardDarkSurfaceVariant
+import git.shin.adfree.ui.theme.AdGuardGreenLight
 import git.shin.adfree.ui.theme.AdGuardGreenPrimary
 import git.shin.adfree.ui.theme.AdGuardOnAccent
 import git.shin.adfree.ui.theme.AdGuardRedBlocked
@@ -79,6 +83,22 @@ fun RuleFromLogSheetContent(
     var important by remember { mutableStateOf(false) }
     var handEdited by remember { mutableStateOf(false) }
     var notice by remember { mutableStateOf<String?>(null) }
+    // The full builder, for a rule that needs more than the candidates above.
+    var builderOpen by remember { mutableStateOf(false) }
+
+    if (builderOpen) {
+        RuleBuilderSheet(
+            title = L10n.get(
+                if (isBlock) Strings.rule_from_log_block_title else Strings.rule_from_log_allow_title,
+            ),
+            initialRule = ruleText,
+            existingRules = existingRules,
+            previewHost = draft.host,
+            onSave = onSubmit,
+            onCancel = { builderOpen = false },
+        )
+        return
+    }
 
     fun applyToggles(base: String) =
         composeRuleText(draft.kind, base, draft.appPackage, appScoped, important)
@@ -155,6 +175,30 @@ fun RuleFromLogSheetContent(
                 unfocusedTextColor = AdGuardTextPrimary,
             ),
         )
+
+        Spacer(modifier = Modifier.height(10.dp))
+
+        // The candidates above cover the common case in one click; everything
+        // AdGuard for Windows can express (types, third party, case, scope)
+        // lives behind this.
+        TextButton(
+            onClick = { builderOpen = true },
+            modifier = Modifier.testTag("rule_from_log_open_builder"),
+        ) {
+            Icon(
+                Icons.Default.AutoFixHigh,
+                contentDescription = null,
+                tint = AdGuardGreenLight,
+                modifier = Modifier.size(16.dp),
+            )
+            Spacer(modifier = Modifier.width(6.dp))
+            Text(
+                L10n.get(Strings.rules_add_open),
+                fontSize = 12.sp,
+                fontWeight = FontWeight.Bold,
+                color = AdGuardGreenLight,
+            )
+        }
 
         Spacer(modifier = Modifier.height(20.dp))
 

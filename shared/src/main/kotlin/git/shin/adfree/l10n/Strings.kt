@@ -667,6 +667,104 @@ object Strings {
     const val rules_input_hint = "rules_input_hint"
     const val rules_blank_rule = "rules_blank_rule"
     const val rules_invalid_rule = "rules_invalid_rule"
+    /** Add a rule */
+    const val rule_builder_add_title = "rule_builder_add_title"
+    /** Edit rule */
+    const val rule_builder_edit_title = "rule_builder_edit_title"
+    /** What it does */
+    const val rule_builder_decision = "rule_builder_decision"
+    /** Block */
+    const val rule_builder_decision_block = "rule_builder_decision_block"
+    /** Allow */
+    const val rule_builder_decision_allow = "rule_builder_decision_allow"
+    /** What it matches */
+    const val rule_builder_pattern = "rule_builder_pattern"
+    /** A domain, a URL wildcard pattern or a full ||host^ rule */
+    const val rule_builder_pattern_hint = "rule_builder_pattern_hint"
+    /** Conditions */
+    const val rule_builder_flags = "rule_builder_flags"
+    /** Only these request types */
+    const val rule_builder_types = "rule_builder_types"
+    /** Narrow it further */
+    const val rule_builder_scope = "rule_builder_scope"
+    /** Only this process */
+    const val rule_builder_app_label = "rule_builder_app_label"
+    /** chrome, firefox, … */
+    const val rule_builder_app_hint = "rule_builder_app_hint"
+    /** Only on these sites */
+    const val rule_builder_domain_label = "rule_builder_domain_label"
+    /** example.com|news.example */
+    const val rule_builder_domain_hint = "rule_builder_domain_hint"
+    /** The rule */
+    const val rule_builder_preview = "rule_builder_preview"
+    /** Start from an example */
+    const val rule_builder_templates = "rule_builder_templates"
+    /** Block a domain */
+    const val rule_builder_template_domain = "rule_builder_template_domain"
+    /** Block a URL pattern */
+    const val rule_builder_template_path = "rule_builder_template_path"
+    /** Allow a domain */
+    const val rule_builder_template_allow = "rule_builder_template_allow"
+    /** Block third-party only */
+    const val rule_builder_template_third_party = "rule_builder_template_third_party"
+    /** Save rule */
+    const val rule_builder_save = "rule_builder_save"
+    /** %1$s only */
+    const val rule_builder_summary_types = "rule_builder_summary_types"
+    /** in %1$s */
+    const val rule_builder_summary_app = "rule_builder_summary_app"
+    /** on %1$s */
+    const val rule_builder_summary_sites = "rule_builder_summary_sites"
+    /** This rule matches the request open in the log */
+    const val rule_builder_matches = "rule_builder_matches"
+    /** This rule does not match the request open in the log */
+    const val rule_builder_no_match = "rule_builder_no_match"
+    /** Changes are kept only when you save */
+    const val rule_builder_dirty_hint = "rule_builder_dirty_hint"
+    /** Type a domain, a URL or a pattern */
+    const val rule_error_empty = "rule_error_empty"
+    /** This is not a domain, URL or pattern */
+    const val rule_error_pattern = "rule_error_pattern"
+    /** A regex rule needs a body and a closing slash */
+    const val rule_error_regex = "rule_error_regex"
+    /** Unknown modifier: $%1$s */
+    const val rule_error_unknown_modifier = "rule_error_unknown_modifier"
+    /** $%1$s needs a value */
+    const val rule_error_missing_value = "rule_error_missing_value"
+    /** Cosmetic rules belong to the raw editor */
+    const val rule_error_cosmetic = "rule_error_cosmetic"
+    /** Third party only */
+    const val rule_flag_third_party = "rule_flag_third_party"
+    /** Important */
+    const val rule_flag_important = "rule_flag_important"
+    /** Match case */
+    const val rule_flag_match_case = "rule_flag_match_case"
+    /** Document */
+    const val rule_type_document = "rule_type_document"
+    /** Frame */
+    const val rule_type_subdocument = "rule_type_subdocument"
+    /** Script */
+    const val rule_type_script = "rule_type_script"
+    /** Stylesheet */
+    const val rule_type_stylesheet = "rule_type_stylesheet"
+    /** Image */
+    const val rule_type_image = "rule_type_image"
+    /** XHR */
+    const val rule_type_xhr = "rule_type_xhr"
+    /** Media */
+    const val rule_type_media = "rule_type_media"
+    /** Font */
+    const val rule_type_font = "rule_type_font"
+    /** WebSocket */
+    const val rule_type_websocket = "rule_type_websocket"
+    /** Other */
+    const val rule_type_other = "rule_type_other"
+    /** Edit */
+    const val rules_edit = "rules_edit"
+    /** Rule %1$s was updated */
+    const val rules_edited = "rules_edited"
+    /** Build a rule… */
+    const val rules_add_open = "rules_add_open"
     const val rules_exists = "rules_exists"
     const val rules_added = "rules_added"
     const val rules_search_hint = "rules_search_hint"

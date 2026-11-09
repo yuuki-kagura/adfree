@@ -26,6 +26,7 @@ import androidx.compose.material.icons.filled.AutoFixHigh
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -52,6 +53,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
@@ -99,6 +101,9 @@ fun FriendlyCustomRuleEditorSheet(
     var notice by remember { mutableStateOf<String?>(null) }
     var noticeIsError by remember { mutableStateOf(false) }
     var exportText by remember { mutableStateOf("") }
+    // The rule builder: null while closed, "" for a new rule, or the text of
+    // the rule being edited.
+    var builderFor by remember { mutableStateOf<String?>(null) }
 
     // Files come from anywhere: AdGuard's export, a hosts file, or a plain
     // editor. Parse on import so comments and duplicates never reach the core.
@@ -149,6 +154,34 @@ fun FriendlyCustomRuleEditorSheet(
     }
 
     val whitelistCount = rulesList.count { it.startsWith("@@") }
+
+    val editing = builderFor
+    if (editing != null) {
+        RuleBuilderSheet(
+            title = L10n.get(
+                if (editing.isEmpty()) Strings.rule_builder_add_title else Strings.rule_builder_edit_title,
+            ),
+            initialRule = editing,
+            existingRules = rulesList,
+            onSave = { rule ->
+                rulesList = if (editing.isEmpty()) {
+                    listOf(rule) + rulesList
+                } else {
+                    rulesList.map { if (it == editing) rule else it }
+                }
+                rawText = rulesList.joinToString("\n")
+                onSaveAll(rulesList)
+                builderFor = null
+                notice = L10n.format(
+                    if (editing.isEmpty()) Strings.rules_added else Strings.rules_edited,
+                    rule,
+                )
+                noticeIsError = false
+            },
+            onCancel = { builderFor = null },
+        )
+        return
+    }
 
     Column(
         modifier = Modifier
@@ -373,6 +406,28 @@ fun FriendlyCustomRuleEditorSheet(
                 }
             }
 
+            TextButton(
+                onClick = {
+                    builderFor = ""
+                    notice = null
+                },
+                modifier = Modifier.testTag("open_rule_builder"),
+            ) {
+                Icon(
+                    Icons.Default.AutoFixHigh,
+                    contentDescription = null,
+                    tint = AdGuardGreenLight,
+                    modifier = Modifier.size(16.dp),
+                )
+                Spacer(modifier = Modifier.width(6.dp))
+                Text(
+                    L10n.get(Strings.rules_add_open),
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = AdGuardGreenLight,
+                )
+            }
+
             Spacer(modifier = Modifier.height(12.dp))
 
             OutlinedTextField(
@@ -451,6 +506,21 @@ fun FriendlyCustomRuleEditorSheet(
                                     fontSize = 13.sp,
                                     fontFamily = FontFamily.Monospace,
                                     color = AdGuardTextPrimary,
+                                )
+                            }
+
+                            IconButton(
+                                onClick = {
+                                    builderFor = rule
+                                    notice = null
+                                },
+                                modifier = Modifier.size(28.dp),
+                            ) {
+                                Icon(
+                                    Icons.Default.Edit,
+                                    contentDescription = L10n.get(Strings.rules_edit),
+                                    tint = AdGuardTextMuted,
+                                    modifier = Modifier.size(16.dp),
                                 )
                             }
 
