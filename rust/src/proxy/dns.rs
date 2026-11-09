@@ -420,6 +420,9 @@ fn serve_one(listener: &Listener, query: &Inquiry, stop: &AtomicBool) {
             verdict = core.filter_engine().check_host_detailed(&host);
         }
         if verdict.blocked {
+            // The badge on the page counts this: most ads never get past the
+            // resolver, so a count that skipped the DNS half would read zero.
+            crate::page_stats::block(&host);
             Served::Blocked {
                 message: dns::block_message(&parsed, cfg.block_mode).unwrap_or_default(),
                 rule: verdict.rule_text.unwrap_or_default(),

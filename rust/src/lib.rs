@@ -33,6 +33,7 @@ pub mod htmlfilter;
 pub mod jsonprune;
 pub mod logbuf;
 pub mod packet;
+pub mod page_stats;
 pub mod pathmask;
 pub mod proxy;
 pub mod safesearch;

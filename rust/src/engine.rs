@@ -3996,6 +3996,10 @@ impl Core {
                 .note_blocked(host, self.uid_for_udp(pkt));
         if verdict.blocked && !deferred && !smart_allowed {
             self.stats.inc(&self.stats.dns_blocked);
+            // The badge on the page counts this: the DNS half is where most
+            // ads stop, so a count that skipped it would read zero almost
+            // everywhere.
+            crate::page_stats::block(host);
             let saved = BYTES_PER_BLOCKED_REQUEST;
             self.stats.add(&self.stats.bytes_saved, saved);
             if let Some(reply) = dns::synthesize_reply(pkt, &query, cfg.block_mode) {
