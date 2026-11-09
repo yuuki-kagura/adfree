@@ -610,6 +610,10 @@
     <string name="ext_run_at_body">Khi trang có &lt;body&gt;</string>
     <string name="ext_screen_subtitle">Userscript chạy trong trang HTTPS đã lọc</string>
     <string name="ext_screen_intro">Mỗi script tự khai báo trang áp dụng bằng @match / @include. Khi tắt toàn bộ tiện ích thì không script nào chạy, kể cả script đang bật.</string>
+    <string name="ext_assistant_title">Trợ lý AdGuard</string>
+    <string name="ext_assistant_subtitle">Chặn một phần tử, cho phép trang hoặc báo cáo trang — ngay trên một bảng nổi trong trang. Quy tắc tạo ra được thêm thẳng vào quy tắc của bạn.</string>
+    <string name="ext_assistant_install">Cài</string>
+    <string name="ext_assistant_installed">Đã cài — bảng điều khiển hiện trên trang đã lọc</string>
     <string name="ext_create_title">Tạo tiện ích mới</string>
     <string name="ext_create_template">// ==UserScript==\n// @name         Tiện ích của tôi\n// @match        *://*/*\n// @grant        none\n// ==/UserScript==\n\n</string>
     <string name="ext_create_confirm">Tạo</string>

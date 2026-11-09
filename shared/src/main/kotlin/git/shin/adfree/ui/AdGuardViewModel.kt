@@ -44,6 +44,7 @@ import git.shin.adfree.update.UpdateOutcome
 import git.shin.adfree.update.UpdateUiState
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.flow.MutableSharedFlow
@@ -85,6 +86,9 @@ class AdGuardViewModel(
     private val appUpdate: AppUpdate,
 ) {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+
+    /** How often the assistant's queue is read (see the loop in `init`). */
+    private val ASSISTANT_POLL_MS = 1_000L
 
     // ---------------------------------------------------------------- local UI
 
@@ -388,6 +392,23 @@ class AdGuardViewModel(
                 _showVpnPermissionPrompt.value = true
             } else {
                 tunnel.startVpnService()
+            }
+        }
+        // The AdGuard Assistant runs *inside the page* and can only reach the
+        // core; the two things it asks for that the core cannot do alone are
+        // keeping the rule and starting or stopping the tunnel. Polling is the
+        // handover: a page has no way to call into the platform, and the cost
+        // is two drains of an empty vector once a second.
+        scope.launch {
+            while (true) {
+                val rules = coreEngine.takeAssistantRules()
+                if (rules.isNotEmpty()) repository.addAssistantRules(rules)
+                val removed = coreEngine.takeAssistantRemovals()
+                if (removed.isNotEmpty()) repository.removeAssistantRules(removed)
+                for (on in coreEngine.takeAssistantSwitches()) {
+                    if (tunnel.isTunnelUp() != on) toggleProtection()
+                }
+                delay(ASSISTANT_POLL_MS)
             }
         }
     }

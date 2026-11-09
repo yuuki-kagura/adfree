@@ -239,6 +239,33 @@ class CoreEngine(
     }
 
     /**
+     * Rules the in-page AdGuard Assistant built while the user was browsing.
+     *
+     * The assistant writes a rule (e.g. `example.com##.banner`) that the core
+     * has already applied; this handover exists so the platform can persist it
+     * beside the user's own rules and show it in the editor. Draining is the
+     * only read: a rule is reported once.
+     */
+    fun takeAssistantRules(): List<String> =
+        runCatching { git.shin.adfree.core.coreTakeAssistantRules() }.getOrDefault(emptyList())
+
+    /**
+     * Rules the assistant took back since the last drain (its temporary
+     * "don't block this page" window closed). Like [takeAssistantRules], the
+     * core has already dropped them; this is the stored copy being synced.
+     */
+    fun takeAssistantRemovals(): List<String> =
+        runCatching { git.shin.adfree.core.coreTakeAssistantRemovals() }.getOrDefault(emptyList())
+
+    /**
+     * Protection switches the assistant's panel asked for, in order; `true`
+     * means "turn protection on". The tunnel belongs to the platform, so the
+     * request is queued in the core and performed here.
+     */
+    fun takeAssistantSwitches(): List<Boolean> =
+        runCatching { git.shin.adfree.core.coreTakeAssistantSwitches() }.getOrDefault(emptyList())
+
+    /**
      * Lists whose body the most recent filter build could not read, keyed by
      * the `FilterListBinding.id` the app pushed. Empty when every enabled
      * list compiled.

@@ -39,7 +39,22 @@ import git.shin.adfree.ui.theme.AdGuardDarkSurface
 import git.shin.adfree.ui.theme.AdGuardRedBlocked
 import git.shin.adfree.ui.theme.AdGuardTextMuted
 import git.shin.adfree.ui.theme.AdGuardTextPrimary
+import git.shin.adfree.ui.theme.AdGuardGreenPrimary
+import androidx.compose.foundation.layout.PaddingValues
+
 import git.shin.adfree.ui.theme.AdGuardTextSecondary
+
+/**
+ * The AdGuard Assistant is not ours and is not vendored: it is a userscript of
+ * AdGuard's, GPL-3, served by their CDN. Installing it here downloads that
+ * bundle into this machine's script store exactly like any other userscript —
+ * the licence stays AdGuard's and updates stay theirs.
+ */
+private const val AdGuardAssistantUrl =
+    "https://cdn.jsdelivr.net/npm/@adguard/assistant@4.4.16/dist/self.assistant.js"
+
+/** Prefix, so a version bump or a mirror still counts as installed. */
+private const val ASSISTANT_URL_PREFIX = "https://cdn.jsdelivr.net/npm/@adguard/assistant"
 
 /**
  * Full-screen home for userscripts. The store, import and editor actions used
@@ -92,6 +107,16 @@ fun ExtensionsScreen(
                 text = L10n.get(Strings.ext_screen_intro),
                 fontSize = 11.sp,
                 color = AdGuardTextMuted,
+            )
+            Spacer(modifier = Modifier.height(10.dp))
+
+            AssistantInstallRow(
+                installed = state.userscripts.any { it.url.startsWith(ASSISTANT_URL_PREFIX) },
+                onInstall = {
+                    viewModel.onIntent(
+                        AdGuardIntent.AddScript("AdGuard Assistant", AdGuardAssistantUrl),
+                    )
+                },
             )
             Spacer(modifier = Modifier.height(10.dp))
 
@@ -266,6 +291,54 @@ fun ExtensionsScreen(
                         viewModel.onIntent(AdGuardIntent.InspectScript(null))
                     },
                 )
+            }
+        }
+    }
+}
+
+/**
+ * One row that offers the AdGuard Assistant, or says it is already there.
+ *
+ * It is a row and not a card stack because the assistant is one extension
+ * among many: the list below is where every other script lives, and a user
+ * who installed it should see it there, not here.
+ */
+@Composable
+private fun AssistantInstallRow(installed: Boolean, onInstall: () -> Unit) {
+    SurfaceCard(modifier = Modifier.fillMaxWidth()) {
+        Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp)) {
+            Text(
+                text = L10n.get(Strings.ext_assistant_title),
+                fontSize = 15.sp,
+                fontWeight = FontWeight.SemiBold,
+                color = AdGuardTextPrimary,
+            )
+            Spacer(modifier = Modifier.height(4.dp))
+            Text(
+                text = if (installed) {
+                    L10n.get(Strings.ext_assistant_installed)
+                } else {
+                    L10n.get(Strings.ext_assistant_subtitle)
+                },
+                fontSize = 11.5.sp,
+                lineHeight = 16.sp,
+                color = AdGuardTextMuted,
+            )
+            if (!installed) {
+                Spacer(modifier = Modifier.height(8.dp))
+                // Text-only, like every other action in the app: the row is
+                // the control, a filled button here would out-shout the list.
+                TextButton(
+                    onClick = onInstall,
+                    contentPadding = PaddingValues(horizontal = 0.dp, vertical = 2.dp),
+                ) {
+                    Text(
+                        text = L10n.get(Strings.ext_assistant_install),
+                        fontSize = 13.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        color = AdGuardGreenPrimary,
+                    )
+                }
             }
         }
     }

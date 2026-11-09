@@ -1685,6 +1685,55 @@ class AdGuardRepository(
         }
     }
 
+    /**
+     * Rules the in-page AdGuard Assistant built while the user was browsing.
+     *
+     * The core applies a rule the moment the assistant asks for it, so filtering
+     * is already right; this is the half the platform owns: the rule has to be
+     * stored beside the user's own, shown in "Quy tắc của bạn", and survive a
+     * restart. Duplicates are dropped, so clicking the same element twice adds
+     * nothing.
+     */
+    fun addAssistantRules(rules: List<String>) {
+        if (rules.isEmpty()) return
+        scope.launch {
+            val stored = parseUserRulesText(rules.joinToString("\n"))
+            if (stored.isEmpty()) return@launch
+            _filterLists.update { lists ->
+                lists.map {
+                    if (!it.isCustom) return@map it
+                    val updated = (it.customRules + stored).distinct()
+                    if (updated.size == it.customRules.size) it
+                    else it.copy(ruleCount = updated.size, customRules = updated, isEnabled = true)
+                }
+            }
+            saveFilterChoices()
+            pushListsToEngine()
+        }
+    }
+
+    /**
+     * Drops rules the assistant took back — the same store-side half as
+     * [addAssistantRules]. An empty update is skipped: rewriting the state file
+     * for nothing is a write on every poll.
+     */
+    fun removeAssistantRules(rules: List<String>) {
+        if (rules.isEmpty()) return
+        val gone = rules.toSet()
+        scope.launch {
+            _filterLists.update { lists ->
+                lists.map {
+                    if (!it.isCustom) return@map it
+                    val updated = it.customRules.filterNot(gone::contains)
+                    if (updated.size == it.customRules.size) it
+                    else it.copy(ruleCount = updated.size, customRules = updated)
+                }
+            }
+            saveFilterChoices()
+            pushListsToEngine()
+        }
+    }
+
     fun removeCustomRule(ruleStr: String) {
         scope.launch {
             _filterLists.update { lists ->

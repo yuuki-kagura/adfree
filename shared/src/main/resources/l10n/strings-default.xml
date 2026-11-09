@@ -610,6 +610,10 @@
     <string name="ext_run_at_body">When the page has a &lt;body&gt;</string>
     <string name="ext_screen_subtitle">Userscripts run on filtered HTTPS pages</string>
     <string name="ext_screen_intro">Each script declares the pages it applies to with @match / @include. When all extensions are turned off, no script runs — even enabled ones.</string>
+    <string name="ext_assistant_title">AdGuard Assistant</string>
+    <string name="ext_assistant_subtitle">Block an element, whitelist the page or report it — from a panel drawn over the page. The rules it builds go straight into your own rules.</string>
+    <string name="ext_assistant_install">Install</string>
+    <string name="ext_assistant_installed">Installed — the panel appears on filtered pages</string>
     <string name="ext_create_title">New extension</string>
     <string name="ext_create_template">// ==UserScript==\n// @name         My extension\n// @match        *://*/*\n// @grant        none\n// ==/UserScript==\n\n</string>
     <string name="ext_create_confirm">Create</string>
