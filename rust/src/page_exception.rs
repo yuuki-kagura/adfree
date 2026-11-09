@@ -24,14 +24,15 @@ use std::time::{Duration, Instant};
 /// being read, short enough that a closed tab cannot keep filtering off.
 pub const FRESH: Duration = Duration::from_secs(180);
 
-/// When the last request from an excepted page was seen.
+/// When the last request from an excepted page was seen, and which rule
+/// snapshot granted it.
 #[derive(Default)]
 pub struct Exemption {
-    since: Mutex<Option<Instant>>,
+    since: Mutex<Option<(Instant, u64)>>,
 }
 
 impl Exemption {
-    fn with<R>(&self, f: impl FnOnce(&mut Option<Instant>) -> R) -> R {
+    fn with<R>(&self, f: impl FnOnce(&mut Option<(Instant, u64)>) -> R) -> R {
         let mut guard = self
             .since
             .lock()
@@ -41,14 +42,14 @@ impl Exemption {
 
     /// A request from an excepted page just came through: the browser is still
     /// there, and the page is still the one the user excepted.
-    pub fn note(&self) {
+    pub fn note(&self, generation: u64) {
         self.with(|since| {
             if since.is_none() {
                 crate::logbuf::push(
                     "page_exception: a page is excepted, early stages stand down",
                 );
             }
-            *since = Some(Instant::now());
+            *since = Some((Instant::now(), generation));
         });
     }
 
@@ -64,8 +65,15 @@ impl Exemption {
     }
 
     /// Whether the resolver and the pre-handshake refusal should stand down.
-    pub fn active(&self) -> bool {
-        self.with(|since| since.is_some_and(|at| at.elapsed() <= FRESH))
+    ///
+    /// `generation` is the rule snapshot asking. A newer one means the rules
+    /// were rebuilt since the page was excepted — the exception may be gone,
+    /// and a request still in flight from the old snapshot must not keep the
+    /// resolver standing down on its behalf.
+    pub fn active(&self, generation: u64) -> bool {
+        self.with(|since| {
+            since.is_some_and(|(at, granted)| at.elapsed() <= FRESH && granted == generation)
+        })
     }
 }
 
@@ -76,26 +84,27 @@ mod tests {
     #[test]
     fn an_excepted_page_stands_the_early_stages_down_until_it_is_left() {
         let exemption = Exemption::default();
-        assert!(!exemption.active(), "nothing is exempted before a page asks");
+        assert!(!exemption.active(1), "nothing is exempted before a page asks");
 
-        exemption.note();
+        exemption.note(1);
         assert!(
-            exemption.active(),
+            exemption.active(1),
             "a request from an excepted page keeps it open"
         );
 
         exemption.end();
-        assert!(!exemption.active(), "a page that is not excepted ends it");
+        assert!(!exemption.active(1), "a page that is not excepted ends it");
     }
 
     #[test]
     fn the_exemption_belongs_to_the_engine_that_granted_it() {
         let one = Exemption::default();
         let other = Exemption::default();
-        one.note();
-        assert!(one.active());
+        one.note(7);
+        assert!(one.active(7));
+        assert!(!one.active(8), "a rebuild is not the rules that granted it");
         assert!(
-            !other.active(),
+            !other.active(7),
             "another engine's rules never excepted that page"
         );
     }

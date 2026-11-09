@@ -1880,7 +1880,8 @@ impl FilterEngine {
     /// Remembers that a request just came from a page the rules excepted: the
     /// resolver and the pre-handshake refusal stand down while it holds.
     pub fn note_excepted_page(&self) {
-        self.exemption.note();
+        self.exemption
+            .note(self.generation.load(std::sync::atomic::Ordering::Relaxed));
     }
 
     /// The browser moved to a page that is not excepted.
@@ -1891,7 +1892,8 @@ impl FilterEngine {
     /// Whether the early stages should stand down (see
     /// [`crate::page_exception`]).
     pub fn excepted_page_open(&self) -> bool {
-        self.exemption.active()
+        self.exemption
+            .active(self.generation.load(std::sync::atomic::Ordering::Relaxed))
     }
 
     /// Cosmetic rules that apply to `url`: element hiding, style actions,
