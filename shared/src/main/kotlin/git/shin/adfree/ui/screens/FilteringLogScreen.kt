@@ -5,6 +5,7 @@ import git.shin.adfree.l10n.L10n
 import git.shin.adfree.platform.currentFileHost
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -34,7 +35,6 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Block
 import androidx.compose.material.icons.filled.Check
-import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material.icons.filled.Clear
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.DeleteSweep
@@ -51,11 +51,7 @@ import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.DropdownMenu
-import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
-import androidx.compose.material3.DropdownMenu
-import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Switch
@@ -406,11 +402,6 @@ fun FilteringLogScreen(
             }
 
             if (adGuardLayout) {
-                LogTypeSelector(
-                    selected = state.logTypeFilter,
-                    onSelect = { viewModel.onIntent(AdGuardIntent.FilterLogTypeChanged(it)) },
-                )
-
                 // The status filter, floated right as three switches rather
                 // than a chip row: the same three answers in the space of one
                 // line, which is what AdGuard's own log does with its toolbar.
@@ -446,6 +437,13 @@ fun FilteringLogScreen(
                     },
                 )
             }
+        }
+
+        if (adGuardLayout) {
+            LogTypeRow(
+                selected = state.logTypeFilter,
+                onSelect = { viewModel.onIntent(AdGuardIntent.FilterLogTypeChanged(it)) },
+            )
         }
 
         if (importedName != null) {
@@ -776,62 +774,39 @@ private fun requestCategoryLabel(category: RequestCategory): String = when (cate
  */
 /**
  * Which kind of request the table holds — HTML, CSS, JS, image, … — as one
- * drop-down in the toolbar.
+ * row of buttons.
  *
- * The tabs this replaces were a strip: eleven labels across the width of the
- * window, on their own row, above a row of chips. The choice they offer is
- * still the same and still has to be here; what changed is that it now costs
- * one control in a row that already exists.
+ * A drop-down here would hide the list behind a click and, worse, hide the
+ * fact that the list exists at all: the row is the log's own vocabulary and
+ * it should be readable at a glance. It scrolls sideways when the window is
+ * too narrow to hold the eleven of them.
  */
 @Composable
-private fun LogTypeSelector(selected: LogTypeTab, onSelect: (LogTypeTab) -> Unit) {
-    var expanded by remember { mutableStateOf(false) }
-    Box {
-        Row(
-            verticalAlignment = Alignment.CenterVertically,
-            modifier = Modifier
-                .clip(RoundedCornerShape(8.dp))
-                .background(AdGuardDarkSurface)
-                .border(1.dp, AdGuardDarkOutline, RoundedCornerShape(8.dp))
-                .clickable { expanded = true }
-                .padding(start = 8.dp, end = 2.dp, top = 6.dp, bottom = 6.dp)
-                .testTag("log_type_selector"),
-        ) {
+private fun LogTypeRow(selected: LogTypeTab, onSelect: (LogTypeTab) -> Unit) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .horizontalScroll(rememberScrollState())
+            .padding(bottom = 6.dp)
+            .testTag("log_type_row"),
+        horizontalArrangement = Arrangement.spacedBy(4.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        for (tab in LogTypeTab.ordered) {
+            val active = tab == selected
             Text(
-                text = L10n.get(selected.labelKey),
+                text = L10n.get(tab.labelKey),
                 fontSize = 11.sp,
-                fontWeight = if (selected == LogTypeTab.ALL) FontWeight.Medium else FontWeight.Bold,
-                color = if (selected == LogTypeTab.ALL) AdGuardTextSecondary else AdGuardGreenLight,
+                fontWeight = if (active) FontWeight.Bold else FontWeight.Medium,
+                color = if (active) AdGuardOnAccent else AdGuardTextSecondary,
                 maxLines = 1,
+                modifier = Modifier
+                    .clip(RoundedCornerShape(6.dp))
+                    .background(if (active) AdGuardGreenPrimary else AdGuardDarkSurface)
+                    .clickable { onSelect(tab) }
+                    .padding(horizontal = 9.dp, vertical = 4.dp)
+                    .testTag("log_type_tab_${tab.key}"),
             )
-            Icon(
-                imageVector = Icons.Default.ArrowDropDown,
-                contentDescription = L10n.get(Strings.log_filter_type_label),
-                tint = AdGuardTextMuted,
-                modifier = Modifier.size(18.dp),
-            )
-        }
-        DropdownMenu(
-            expanded = expanded,
-            onDismissRequest = { expanded = false },
-            modifier = Modifier.background(AdGuardDarkSurface),
-        ) {
-            for (tab in LogTypeTab.ordered) {
-                DropdownMenuItem(
-                    text = {
-                        Text(
-                            text = L10n.get(tab.labelKey),
-                            fontSize = 12.sp,
-                            color = if (tab == selected) AdGuardGreenLight else AdGuardTextPrimary,
-                        )
-                    },
-                    onClick = {
-                        onSelect(tab)
-                        expanded = false
-                    },
-                    modifier = Modifier.testTag("log_type_item_${tab.key}"),
-                )
-            }
         }
     }
 }

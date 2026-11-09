@@ -71,7 +71,7 @@ class FilteringLogLayoutTest {
                 }
             }
             onNodeWithTag("log_table_header").assertDoesNotExist()
-            onNodeWithTag("log_type_selector").assertDoesNotExist()
+            onNodeWithTag("log_type_row").assertDoesNotExist()
             for (tag in listOf("all", "blocked", "allowed")) {
                 onNodeWithTag("log_filter_switch_$tag").assertDoesNotExist()
             }
@@ -108,9 +108,10 @@ class FilteringLogLayoutTest {
             onNodeWithTag("log_search_input").assertExists()
             onNodeWithTag("clear_logs_button").assertExists()
             // The request type (HTML, CSS, JS, image, …) is still a choice the
-            // window has to offer — as one drop-down in the toolbar rather
-            // than the eleven-tab strip it used to be.
-            onNodeWithTag("log_type_selector").assertExists()
+            // window has to offer, and still a row of its own: hiding the list
+            // behind a drop-down hides that it exists.
+            onNodeWithTag("log_type_row").assertExists()
+            onNodeWithTag("log_type_tab_html").assertExists()
             // Three switches, one per status: the chip rows they replaced were
             // two full-width bands above the table.
             for (tag in listOf("all", "blocked", "allowed")) {
