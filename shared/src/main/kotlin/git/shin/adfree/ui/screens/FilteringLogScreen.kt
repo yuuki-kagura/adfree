@@ -1265,14 +1265,24 @@ private fun LogDetailBody(
                     lineHeight = 16.sp,
                 )
                 Spacer(modifier = Modifier.height(4.dp))
-                Text(
-                    text = L10n.format(Strings.log_ip_protocol,
-                        log.ipAddress,
-                        protocolLabel(log.protocol),
-                    ),
-                    fontSize = 12.sp,
-                    color = AdGuardTextSecondary
-                )
+                // Two pieces side by side rather than one sentence: joined
+                // into a line of prose they wrap in the middle of a word and
+                // leave "Giao / thức:" hanging under the address.
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    if (log.ipAddress.isNotBlank()) {
+                        Text(
+                            text = log.ipAddress,
+                            fontSize = 11.sp,
+                            color = AdGuardTextSecondary,
+                            fontFamily = FontFamily.Monospace,
+                        )
+                    }
+                    Text(
+                        text = protocolLabel(log.protocol),
+                        fontSize = 11.sp,
+                        color = AdGuardTextMuted,
+                    )
+                }
             }
         }
 
@@ -1649,17 +1659,54 @@ private fun LogRuleSwitchRow(
 
 @Composable
 fun DetailRow(label: String, value: String) {
-    Row(
-        modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.SpaceBetween
-    ) {
-        Text(text = label, fontSize = 12.sp, color = AdGuardTextSecondary)
-        Text(
-            text = value,
-            fontSize = 12.sp,
-            fontWeight = FontWeight.SemiBold,
-            color = AdGuardTextPrimary,
-            fontFamily = FontFamily.Monospace
-        )
+    // Two columns hold a status or a cipher; they cannot hold a URL, a DNS
+    // answer or a certificate subject. Those get the pane's whole width and
+    // their label above them — the alternative is what this row used to do,
+    // which was to print the label and the value on top of each other and
+    // break the words wherever the edge happened to fall.
+    if (value.length > 22) {
+        Column(
+            modifier = Modifier.fillMaxWidth(),
+            verticalArrangement = Arrangement.spacedBy(1.dp),
+        ) {
+            Text(text = label, fontSize = 11.sp, color = AdGuardTextMuted)
+            Text(
+                text = value,
+                fontSize = 11.5.sp,
+                fontWeight = FontWeight.SemiBold,
+                color = AdGuardTextPrimary,
+                fontFamily = FontFamily.Monospace,
+                lineHeight = 15.sp,
+            )
+        }
+    } else {
+        Row(modifier = Modifier.fillMaxWidth()) {
+            Text(
+                text = label,
+                fontSize = 11.5.sp,
+                color = AdGuardTextSecondary,
+                // Wide enough for the longest label this pane has ("Mã trạng
+                // thái HTTP", "Chủ thể chứng chỉ") in one line, and allowed
+                // to wrap rather than lose its tail when a translation is
+                // longer than the one it was measured against.
+                maxLines = 2,
+                lineHeight = 14.sp,
+            )
+            Spacer(modifier = Modifier.width(6.dp))
+            Text(
+                text = value,
+                fontSize = 11.5.sp,
+                fontWeight = FontWeight.SemiBold,
+                color = AdGuardTextPrimary,
+                fontFamily = FontFamily.Monospace,
+                textAlign = TextAlign.End,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                // Whatever the label does not need: a fixed share of the row
+                // was a guess that held for one label and clipped the next
+                // one's value ("2026-11-09 12:05:…").
+                modifier = Modifier.weight(1f, fill = false),
+            )
+        }
     }
 }
