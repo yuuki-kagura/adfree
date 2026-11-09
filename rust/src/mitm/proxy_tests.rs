@@ -278,11 +278,18 @@ fn undecodable_bodies_pass_through() {
     let ca = CertificateAuthority::generate().expect("ca");
     let mut proxy = build_proxy(&ca, "/adfree-user.js");
 
-    // Not gzip at all, despite the header: nothing about it is ours to touch.
+    // Not gzip at all, despite the header: the body is not ours to touch. The
+    // head still learns not to be cached — this document could not be injected
+    // into, so the browser must ask again rather than keep a copy no rule can
+    // ever reach.
     let response = b"HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Encoding: gzip\r\nContent-Length: 12\r\n\r\n\x1f\x8b\x08\x00\x00\x00\x00\x00\x00\x03\x00\x00";
     let (out, injected) = proxy.rewrite_response(response);
     assert_eq!(injected, 0, "an undecodable body must not be rewritten");
-    assert_eq!(out, response);
+    let split = http::head_end(&out).expect("head");
+    let sent = http::head_end(response).expect("head");
+    assert_eq!(&out[split..], &response[sent..], "the bytes travel as they came");
+    let head = String::from_utf8(out[..split].to_vec()).expect("utf8");
+    assert!(head.contains("Cache-Control: no-cache"), "{head}");
 
     // brotli/zstd are readable by the client but not by us.
     let br = b"HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Encoding: br\r\nContent-Length: 3\r\n\r\nabc";

@@ -506,7 +506,8 @@ impl StreamState {
         };
         let mut head = std::mem::take(&mut self.head);
         head = if injecting {
-            http::csp_with_nonce(&head, &self.nonce, LOCAL_ORIGIN)
+            let head = http::csp_with_nonce(&head, &self.nonce, LOCAL_ORIGIN);
+            http::require_revalidation(&head)
         } else {
             http::csp_with_host_source(&head, LOCAL_ORIGIN)
         };
@@ -1472,6 +1473,15 @@ impl ProxySession {
         // answered locally has no head left to edit, and one the rules
         // rewrote keeps its new target as the base for the tracking strip.
         Self::apply_stealth(buffer, &mut plan, session_host, stealth);
+        // A page is only filtered if the copy the browser has is one we wrote,
+        // and a page fetched before the app saw it is kept for hours on end
+        // (RFC 9111 heuristic freshness) without a single question being
+        // asked. So while the app injects, a document is always asked for
+        // whole: one full fetch per reload, and never a stale page.
+        Self::ask_for_the_whole_document(
+            buffer,
+            !serve_path.is_empty() || filter.is_some() || stealth.injects_guards(),
+        );
         // A buffer that starts with a method is a request head, not the tail of
         // a body; only those are safe to edit. Remember what the response will
         // look like (a HEAD has no body, an HTTP/1.0 client cannot take a
@@ -1525,6 +1535,34 @@ impl ProxySession {
     /// Every edit below is a no-op when the head does not carry the header or
     /// the parameter in question: a request nothing applies to leaves byte for
     /// byte as it arrived.
+    /// Drops the conditional headers of a document request while the app
+    /// injects (see [`http::require_revalidation`] for why the answer cannot
+    /// be a `304`).
+    pub(super) fn ask_for_the_whole_document(buffer: &mut Vec<u8>, injecting: bool) {
+        if !injecting {
+            return;
+        }
+        let Some(mut head_end) = header_end(buffer) else {
+            return;
+        };
+        let (dest, authority) = {
+            let Some(facts) = request_facts(&buffer[..head_end]) else {
+                return;
+            };
+            (
+                facts.dest.unwrap_or("").to_string(),
+                facts.authority.unwrap_or("?").to_string(),
+            )
+        };
+        if !matches!(dest.as_str(), "document" | "iframe" | "frame") {
+            return;
+        }
+        let names = ["if-none-match".to_string(), "if-modified-since".to_string()];
+        if drop_request_headers(buffer, &mut head_end, &names) {
+            crate::logbuf::push_debug(&format!("mitm {authority}: document asked for whole"));
+        }
+    }
+
     pub(super) fn apply_stealth(
         buffer: &mut Vec<u8>,
         plan: &mut RequestPlan,
@@ -2303,6 +2341,11 @@ impl ProxySession {
                     // must not hold bodies back.
                     let can_inject = self.injector().active();
                     let html_edit = can_inject && info.html && renderable && editable;
+                    if html_edit {
+                        // What the browser keeps has to be what we wrote: see
+                        // `http::require_revalidation`.
+                        head = http::require_revalidation(&head);
+                    }
                     // `$replace`, `$jsonprune` and `$hls` only ever look at
                     // text bodies: media, images and downloads travel
                     // untouched.

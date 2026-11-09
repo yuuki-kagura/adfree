@@ -938,6 +938,25 @@ pub fn set_header_value(head: &[u8], name: &str, value: &str) -> Option<Vec<u8>>
     }
 }
 
+/// Makes a page the app injected into re-fetchable instead of reusable.
+///
+/// A browser decides on its own how long a response stays fresh when the
+/// origin said nothing: RFC 9111 takes 10 % of the age at `Last-Modified`, so
+/// a day-old page is good for hours without asking anyone. During those hours
+/// a copy the app never touched stays in the cache — it carries no runtime, so
+/// no rule added since can reach it, and the element the user just hid comes
+/// back on every reload.
+///
+/// Dropping the validators takes that judgement away and `no-cache` asks the
+/// origin each time. The validators go because a `304` would hand back the
+/// copy the browser already has: the headers would be fresh and the body would
+/// still be the one without our script in it.
+pub fn require_revalidation(head: &[u8]) -> Vec<u8> {
+    let names = ["etag".to_string(), "last-modified".to_string()];
+    let head = drop_headers(head, &names).unwrap_or_else(|| head.to_vec());
+    set_header_value(&head, "Cache-Control", "no-cache").unwrap_or(head)
+}
+
 /// Takes the named headers out of a message head (`CRLFCRLF` included).
 ///
 /// The name of a header is its part before the first `:`, compared
