@@ -542,7 +542,10 @@ fun AdGuardApp(
                             when (tab) {
                                 AdGuardTab.HOME -> HomeScreen(viewModel = viewModel)
                                 AdGuardTab.PROTECTION -> ProtectionScreen(viewModel = viewModel)
-                                AdGuardTab.ACTIVITY -> FilteringLogScreen(viewModel = viewModel)
+                                AdGuardTab.ACTIVITY -> FilteringLogScreen(
+                                    viewModel = viewModel,
+                                    adGuardLayout = uiLayout == UiLayout.Desktop,
+                                )
                                 AdGuardTab.APPS -> AppsManagementScreen(viewModel = viewModel)
                                 AdGuardTab.STATISTICS -> StatisticsScreen(viewModel = viewModel)
                                 AdGuardTab.SETTINGS -> SettingsScreen(viewModel = viewModel)
