@@ -9,6 +9,13 @@ license = "Apache-2.0"
 name = "adfree_core"
 crate-type = ["cdylib", "rlib"]
 
+# The native-messaging host AdGuard's browser extension talks to. Chrome
+# starts it directly, so it is a binary of its own; see
+# `src/bin/adfree_native_host.rs`.
+[[bin]]
+name = "adfree-native-host"
+path = "src/bin/adfree_native_host.rs"
+
 [dependencies]
 # The real AdGuard / Brave filtering engine: every AdGuard, EasyList, uBO and
 # hosts-list rule is parsed and matched by the code these projects use.
