@@ -625,6 +625,14 @@ fn resolve_authority(text: &str, default_port: u16) -> Option<SocketAddr> {
     if let Ok(ip) = host.parse::<std::net::IpAddr>() {
         return Some(SocketAddr::new(ip, port));
     }
+    // An excepted page is resolved the way its own queries are: the stub's
+    // cache holds the filtered answer, and dialling the sinkhole would defeat
+    // the exception before the request is ever seen.
+    if core().filter_engine().excepted_page_open() {
+        if let Some(address) = super::dns::resolve_plainly(host) {
+            return Some(SocketAddr::new(address, port));
+        }
+    }
     let mut addrs = (host, port).to_socket_addrs().ok()?;
     addrs.find(SocketAddr::is_ipv4).or_else(|| addrs.next())
 }

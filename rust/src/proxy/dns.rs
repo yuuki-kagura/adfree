@@ -381,6 +381,11 @@ fn serve_one(listener: &Listener, query: &Inquiry, stop: &AtomicBool) {
     let cfg = core.config();
     let host = parsed.qname.as_str().to_string();
     let server_text = core.dns_server_text();
+    // A page the user took out of filtering: a query names no page, so the
+    // exemption is remembered rather than looked up (see
+    // [`crate::page_exception`]). Every query while it holds is resolved by
+    // the machine's own resolver, not the filtering provider.
+    let plain = core.filter_engine().excepted_page_open();
 
     // The reply this listener sends, if any, and the log row describing it.
     enum Served {
@@ -403,7 +408,7 @@ fn serve_one(listener: &Listener, query: &Inquiry, stop: &AtomicBool) {
             category: crate::filter::CAT_AD,
         }
     } else if !cfg.dns_protection || core.is_paused() {
-        Served::Forwarded(forward_query(&query.body, stop))
+        Served::Forwarded(forward_query(&query.body, stop, plain))
     } else if matches!(parsed.qtype, dns::TYPE_A | dns::TYPE_AAAA)
         && core.dns_rewrite_for(&host).is_some()
     {
@@ -412,7 +417,7 @@ fn serve_one(listener: &Listener, query: &Inquiry, stop: &AtomicBool) {
         let address = core.dns_rewrite_for(&host).expect("checked");
         match dns::answer_message(&parsed, &[address], 60) {
             Some(message) => Served::Rewritten { message, answer: address.to_string() },
-            None => Served::Forwarded(forward_query(&query.body, stop)),
+            None => Served::Forwarded(forward_query(&query.body, stop, plain)),
         }
     } else {
         let mut verdict = core.filter_engine().check_host(&host);
@@ -437,7 +442,7 @@ fn serve_one(listener: &Listener, query: &Inquiry, stop: &AtomicBool) {
             // and the proxy cannot finish — see [`super::egress`].
             Served::Nodata(dns::nodata_message(&parsed).unwrap_or_default())
         } else {
-            Served::Forwarded(forward_query(&query.body, stop))
+            Served::Forwarded(forward_query(&query.body, stop, plain))
         }
     };
 
@@ -552,8 +557,17 @@ fn answer_text(message: &[u8]) -> String {
 /// Sends the query to the engine's resolver (or `/etc/resolv.conf` when no
 /// provider was configured) and waits for the answer on the same marked
 /// socket. `None` means the upstream did not answer in time.
-fn forward_query(body: &[u8], stop: &AtomicBool) -> Option<Vec<u8>> {
-    let resolver = resolver_addr()?;
+///
+/// `plain` asks the machine's own resolver instead. A page the user took out
+/// of filtering is answered by it: the provider this app was pointed at is
+/// usually a filtering one, and its blocklist would answer 0.0.0.0 for
+/// exactly the hosts the exception exists to let through.
+fn forward_query(body: &[u8], stop: &AtomicBool, plain: bool) -> Option<Vec<u8>> {
+    let resolver = if plain {
+        system_resolver().or_else(resolver_addr)?
+    } else {
+        resolver_addr()?
+    };
     let local: SocketAddr = if resolver.is_ipv4() {
         (Ipv4Addr::UNSPECIFIED, 0).into()
     } else {
@@ -588,6 +602,23 @@ fn forward_query(body: &[u8], stop: &AtomicBool) -> Option<Vec<u8>> {
     }
 }
 
+/// Resolves one name the way an excepted page is resolved: over the marked
+/// socket to the machine's own resolver, never through the local stub.
+///
+/// The proxy has to turn a `CONNECT host:port` into an address itself, and the
+/// obvious way — `getaddrinfo` — asks `systemd-resolved`, whose answer is
+/// whatever it cached, including a filtering upstream's `0.0.0.0` from before
+/// the page was excepted. A page the user took out of filtering must not be
+/// dialled at a sinkhole the exception exists to lift.
+pub(crate) fn resolve_plainly(host: &str) -> Option<std::net::IpAddr> {
+    let query = dns::build_query(host, dns::TYPE_A, 0x7a7a)?;
+    let reply = forward_query(&query, &AtomicBool::new(false), true)?;
+    dns::answer_addresses(&reply)
+        .into_iter()
+        .map(|(address, _)| address)
+        .find(|address| address.is_ipv4())
+}
+
 /// The upstream resolver: the engine's configured one, else the system's.
 fn resolver_addr() -> Option<SocketAddr> {
     let configured = core().resolver_addr();
@@ -614,7 +645,7 @@ fn resolver_addr() -> Option<SocketAddr> {
 /// them. `/etc/resolv.conf` on a `systemd-resolved` or NetworkManager host
 /// names only the stub (127.0.0.53), and the stub answers from the real
 /// servers it lists in its own file — which is the one hop that cannot loop.
-fn system_resolver() -> Option<SocketAddr> {
+pub(crate) fn system_resolver() -> Option<SocketAddr> {
     [
         "/etc/resolv.conf",
         "/run/systemd/resolve/resolv.conf",
@@ -705,6 +736,39 @@ mod tests {
         let a = dns::parse_query(&msg).unwrap();
         assert!(!a.is_query());
         assert_eq!(a.qname.as_str(), "ads.example.com");
+    }
+
+    /// "Turn filtering off for this page" has to reach a resolver the client
+    /// will actually ask again. A refusal cached for a minute keeps the page
+    /// failing on the browser's own memory of it, with the exception in place
+    /// and no query left to answer correctly. So nothing a refusal says may
+    /// outlive the moment it was said.
+    #[test]
+    fn a_refusal_is_not_worth_caching() {
+        let body = query_bytes("ads.example.com", dns::TYPE_A);
+        let q = dns::parse_query(&body).unwrap();
+        let ttl_at = q.q_end + 6;
+
+        let zero = dns::block_message(&q, dns::BlockMode::ZeroIp).unwrap();
+        assert_eq!(
+            u32::from_be_bytes([zero[ttl_at], zero[ttl_at + 1], zero[ttl_at + 2], zero[ttl_at + 3]]),
+            0,
+            "the 0.0.0.0 record must not be cached"
+        );
+
+        let nx = dns::block_message(&q, dns::BlockMode::NxDomain).unwrap();
+        assert_eq!(&nx[8..10], &1u16.to_be_bytes(), "an SOA is offered");
+        assert_eq!(
+            u32::from_be_bytes([nx[ttl_at], nx[ttl_at + 1], nx[ttl_at + 2], nx[ttl_at + 3]]),
+            0,
+            "the SOA must not be cached"
+        );
+        let minimum = nx.len() - 4;
+        assert_eq!(
+            u32::from_be_bytes([nx[minimum], nx[minimum + 1], nx[minimum + 2], nx[minimum + 3]]),
+            0,
+            "and its minimum is the negative TTL"
+        );
     }
 
     #[test]

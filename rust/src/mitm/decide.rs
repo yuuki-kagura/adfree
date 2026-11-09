@@ -127,10 +127,7 @@ pub(crate) fn decide_request(
         // The page is excepted, and this request proves the browser is still
         // on it: the resolver and the pre-handshake refusal stand down while
         // that holds (see [`crate::page_exception`]).
-        if !filter.excepted_page_open() {
-            crate::logbuf::push(&format!("page_exception: noting excepted page {page_host}"));
-        }
-        filter.note_excepted_page();
+        filter.note_excepted_page(&page_host);
         // The network decision is skipped, but the page's cosmetics still
         // run: `$urlblock` alone unblocks requests, it does not switch
         // element hiding off.

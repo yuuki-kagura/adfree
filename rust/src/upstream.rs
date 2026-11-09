@@ -172,6 +172,11 @@ impl Upstream {
     /// descriptor the first usable one is taken instead, so a partially
     /// populated pool still works. Returns the key used to match the reply, or
     /// `None` when no socket is usable.
+    /// `plain` names a resolver to ask instead of the configured one. A page
+    /// the user took out of filtering is answered by the machine's own
+    /// resolver rather than the filtering one this app was pointed at: an
+    /// exception that still got the provider's blocklist applied would be no
+    /// exception at all.
     pub fn send(
         &mut self,
         socket: usize,
@@ -179,6 +184,7 @@ impl Upstream {
         client_txid: u16,
         txid: u16,
         now_ms: u64,
+        plain: Option<SocketAddr>,
     ) -> Option<u32> {
         // `packet` is the client's IP packet; only its DNS payload goes on the
         // wire, so strip the IP and UDP headers.
@@ -193,6 +199,7 @@ impl Upstream {
             now_ms,
             Purpose::Client,
             "",
+            plain,
         )
     }
 
@@ -208,6 +215,7 @@ impl Upstream {
         txid: u16,
         now_ms: u64,
         safe_host: &str,
+        plain: Option<SocketAddr>,
     ) -> Option<u32> {
         let slot = self.slot(socket)?;
         self.send_payload(
@@ -219,6 +227,7 @@ impl Upstream {
             now_ms,
             Purpose::SafeSearch,
             safe_host,
+            plain,
         )
     }
 
@@ -242,15 +251,17 @@ impl Upstream {
         now_ms: u64,
         purpose: Purpose,
         safe_host: &str,
+        plain: Option<SocketAddr>,
     ) -> Option<u32> {
         let fd = *self.fds.get(slot)?;
         if payload.len() > MAX_MESSAGE {
             return None;
         }
-        if !send_query(fd, payload, self.resolver) {
+        let resolver = plain.unwrap_or(self.resolver);
+        if !send_query(fd, payload, resolver) {
             crate::logbuf::push(&format!(
                 "dns forward: sendto {} on fd {} (slot {slot}) failed: {}",
-                self.resolver,
+                resolver,
                 fd,
                 std::io::Error::last_os_error()
             ));
@@ -555,7 +566,7 @@ mod tests {
     #[test]
     fn send_fails_without_sockets() {
         let mut u = upstream();
-        assert!(u.send(0, &[0u8; 32], 1, 2, 0).is_none());
+        assert!(u.send(0, &[0u8; 32], 1, 2, 0, None).is_none());
         assert_eq!(u.pending_len(), 0);
     }
 

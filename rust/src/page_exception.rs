@@ -24,15 +24,14 @@ use std::time::{Duration, Instant};
 /// being read, short enough that a closed tab cannot keep filtering off.
 pub const FRESH: Duration = Duration::from_secs(180);
 
-/// When the last request from an excepted page was seen, and which rule
-/// snapshot granted it.
+/// The page whose requests were last let through as excepted, and when.
 #[derive(Default)]
 pub struct Exemption {
-    since: Mutex<Option<(Instant, u64)>>,
+    since: Mutex<Option<(Instant, String)>>,
 }
 
 impl Exemption {
-    fn with<R>(&self, f: impl FnOnce(&mut Option<(Instant, u64)>) -> R) -> R {
+    fn with<R>(&self, f: impl FnOnce(&mut Option<(Instant, String)>) -> R) -> R {
         let mut guard = self
             .since
             .lock()
@@ -42,14 +41,17 @@ impl Exemption {
 
     /// A request from an excepted page just came through: the browser is still
     /// there, and the page is still the one the user excepted.
-    pub fn note(&self, generation: u64) {
+    pub fn note(&self, host: &str) {
         self.with(|since| {
-            if since.is_none() {
-                crate::logbuf::push(
-                    "page_exception: a page is excepted, early stages stand down",
-                );
+            let same = since
+                .as_ref()
+                .is_some_and(|(at, named)| named == host && at.elapsed() <= FRESH);
+            if !same {
+                crate::logbuf::push(&format!(
+                    "page_exception: {host} is out of filtering, early stages stand down"
+                ));
             }
-            *since = Some((Instant::now(), generation));
+            *since = Some((Instant::now(), host.to_string()));
         });
     }
 
@@ -64,15 +66,18 @@ impl Exemption {
         });
     }
 
-    /// Whether the resolver and the pre-handshake refusal should stand down.
+    /// The excepted page, while the record of it is still fresh.
     ///
-    /// `generation` is the rule snapshot asking. A newer one means the rules
-    /// were rebuilt since the page was excepted — the exception may be gone,
-    /// and a request still in flight from the old snapshot must not keep the
-    /// resolver standing down on its behalf.
-    pub fn active(&self, generation: u64) -> bool {
+    /// The caller asks the rules whether that page is still excepted: a
+    /// rebuild may have taken the exception away, and a rebuild happens for
+    /// reasons that have nothing to do with it — the window alone is not
+    /// evidence that the exception still stands.
+    pub fn page(&self) -> Option<String> {
         self.with(|since| {
-            since.is_some_and(|(at, granted)| at.elapsed() <= FRESH && granted == generation)
+            since
+                .as_ref()
+                .filter(|(at, _)| at.elapsed() <= FRESH)
+                .map(|(_, host)| host.clone())
         })
     }
 }
@@ -84,27 +89,27 @@ mod tests {
     #[test]
     fn an_excepted_page_stands_the_early_stages_down_until_it_is_left() {
         let exemption = Exemption::default();
-        assert!(!exemption.active(1), "nothing is exempted before a page asks");
+        assert!(exemption.page().is_none(), "nothing is exempted before a page asks");
 
-        exemption.note(1);
-        assert!(
-            exemption.active(1),
+        exemption.note("ads.example");
+        assert_eq!(
+            exemption.page().as_deref(),
+            Some("ads.example"),
             "a request from an excepted page keeps it open"
         );
 
         exemption.end();
-        assert!(!exemption.active(1), "a page that is not excepted ends it");
+        assert!(exemption.page().is_none(), "a page that is not excepted ends it");
     }
 
     #[test]
     fn the_exemption_belongs_to_the_engine_that_granted_it() {
         let one = Exemption::default();
         let other = Exemption::default();
-        one.note(7);
-        assert!(one.active(7));
-        assert!(!one.active(8), "a rebuild is not the rules that granted it");
+        one.note("ads.example");
+        assert_eq!(one.page().as_deref(), Some("ads.example"));
         assert!(
-            !other.active(7),
+            other.page().is_none(),
             "another engine's rules never excepted that page"
         );
     }

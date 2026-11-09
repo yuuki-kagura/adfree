@@ -4071,7 +4071,13 @@ impl Core {
                     }
                 }
             }
-            if !forwarded {
+            // The cache holds what the configured resolver said, and that can
+            // be the provider's own sinkhole answer (0.0.0.0) for a host its
+            // blocklist refuses. An excepted page must not be served it: the
+            // whole point of the exception is the answer this machine would
+            // have given without the filtering resolver.
+            let excepted = self.filter.excepted_page_open();
+            if !forwarded && !excepted {
                 served = self.serve_cached_answer(pkt, &query);
                 forwarded = served.is_some();
             }
@@ -4201,6 +4207,15 @@ impl Core {
         }
         let txid = upstream.alloc_txid();
         self.stats.inc(&self.stats.dns_queries);
+        // A page the user took out of filtering is resolved by the machine's
+        // own resolver, not the filtering one this app was pointed at: the
+        // provider's blocklist would otherwise answer 0.0.0.0 for exactly the
+        // hosts the exception exists to let through.
+        let plain = if self.filter.excepted_page_open() {
+            crate::proxy::dns::system_resolver()
+        } else {
+            None
+        };
         let sent = match safe_host {
             Some(safe_host) => dns::build_query(safe_host, query.qtype, txid).and_then(|message| {
                 upstream.send_message(
@@ -4211,6 +4226,7 @@ impl Core {
                     txid,
                     now_ms(),
                     safe_host,
+                    plain,
                 )
             }),
             None => {
@@ -4218,7 +4234,7 @@ impl Core {
                 let off = pkt.l4_payload_offset();
                 packet[off] = (txid >> 8) as u8;
                 packet[off + 1] = (txid & 0xff) as u8;
-                upstream.send(socket, &packet, query.id, txid, now_ms())
+                upstream.send(socket, &packet, query.id, txid, now_ms(), plain)
             }
         };
         drop(upstream);

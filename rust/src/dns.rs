@@ -250,7 +250,16 @@ pub fn block_message(q: &Query<'_>, mode: BlockMode) -> Option<Vec<u8>> {
     body.extend_from_slice(&1u16.to_be_bytes()); // qdcount
     let ancount: u16 = if mode == BlockMode::ZeroIp { 1 } else { 0 };
     body.extend_from_slice(&ancount.to_be_bytes());
-    body.extend_from_slice(&0u16.to_be_bytes()); // nscount
+    // A refusal is not a fact about the name; it is this machine's answer for
+    // now. It must not be remembered by the client, or turning filtering off
+    // for the page that asked would keep failing on the browser's own cache
+    // until the entry aged out — the resolver would never be asked again and
+    // the answer it would give is the right one. Zero-second TTLs throughout,
+    // and an SOA with a zero minimum so the negative answer is not cached
+    // either (RFC 2308: the negative TTL is the smaller of the SOA TTL and its
+    // minimum).
+    let nscount: u16 = if ancount == 1 { 0 } else { 1 };
+    body.extend_from_slice(&nscount.to_be_bytes()); // nscount
     body.extend_from_slice(&0u16.to_be_bytes()); // arcount
     body.extend_from_slice(question);
 
@@ -259,12 +268,26 @@ pub fn block_message(q: &Query<'_>, mode: BlockMode) -> Option<Vec<u8>> {
         body.extend_from_slice(&[0xc0, 0x0c]); // name: pointer to the question
         body.extend_from_slice(&q.qtype.to_be_bytes());
         body.extend_from_slice(&1u16.to_be_bytes()); // class IN
-        body.extend_from_slice(&60u32.to_be_bytes()); // TTL
+        body.extend_from_slice(&0u32.to_be_bytes()); // TTL
         body.extend_from_slice(&rdlen.to_be_bytes());
         if q.qtype == TYPE_AAAA {
             body.extend_from_slice(&[0u8; 16]);
         } else {
             body.extend_from_slice(&[0, 0, 0, 0]); // 0.0.0.0
+        }
+    } else {
+        // SOA for a name nobody owns: `ns. hostmaster.` and five zeroes.
+        body.extend_from_slice(&[0xc0, 0x0c]);
+        body.extend_from_slice(&TYPE_SOA.to_be_bytes());
+        body.extend_from_slice(&1u16.to_be_bytes()); // class IN
+        body.extend_from_slice(&0u32.to_be_bytes()); // TTL
+        body.extend_from_slice(&36u16.to_be_bytes()); // rdlength
+        body.extend_from_slice(&[2, b'n', b's', 0]); // mname: ns.
+        body.extend_from_slice(&[10]);
+        body.extend_from_slice(b"hostmaster");
+        body.push(0); // rname: hostmaster.
+        for _ in 0..5 {
+            body.extend_from_slice(&0u32.to_be_bytes()); // serial..minimum
         }
     }
 
