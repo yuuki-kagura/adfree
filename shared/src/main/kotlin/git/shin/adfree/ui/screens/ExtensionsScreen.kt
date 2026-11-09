@@ -118,7 +118,14 @@ fun ExtensionsScreen(
                 installed = state.userscripts.any { it.url.startsWith(ASSISTANT_URL_PREFIX) },
                 onInstall = {
                     viewModel.onIntent(
-                        AdGuardIntent.AddScript("AdGuard Assistant", AdGuardAssistantUrl),
+                        AdGuardIntent.AddScript(
+                            "AdGuard Assistant",
+                            AdGuardAssistantUrl,
+                            // Installed, not running: the panel puts a button
+                            // on every page, and the user turns that on
+                            // themselves in the list below.
+                            enableOnInstall = false,
+                        ),
                     )
                 },
             )

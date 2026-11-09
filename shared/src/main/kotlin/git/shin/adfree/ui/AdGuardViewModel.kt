@@ -695,7 +695,11 @@ class AdGuardViewModel(
 
             is AdGuardIntent.ShowAddScriptDialog -> _showAddScriptDialog.value = intent.show
             is AdGuardIntent.AddScript -> {
-                repository.addScript(intent.name, intent.url)
+                repository.addScript(
+                    intent.name,
+                    intent.url,
+                    enableOnInstall = intent.enableOnInstall,
+                )
                 _showAddScriptDialog.value = false
             }
             is AdGuardIntent.ImportLocalScript -> {

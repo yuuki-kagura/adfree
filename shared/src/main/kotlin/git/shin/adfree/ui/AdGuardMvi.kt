@@ -250,7 +250,16 @@ sealed interface AdGuardIntent {
     data object RestoreDefaultFilters : AdGuardIntent
     data class ShowAddScriptDialog(val show: Boolean) : AdGuardIntent
     /** Add a userscript from a URL. */
-    data class AddScript(val name: String, val url: String) : AdGuardIntent
+    /**
+     * Adds a userscript by URL. `enableOnInstall` is false for the AdGuard
+     * Assistant: its panel is injected into every page the user visits, and
+     * that is a decision the user makes after installing it, not before.
+     */
+    data class AddScript(
+        val name: String,
+        val url: String,
+        val enableOnInstall: Boolean = true,
+    ) : AdGuardIntent
     /** Import a userscript body from a file (SAF URI). */
     data class ImportLocalScript(val uri: String) : AdGuardIntent
     /** Create a new userscript from text (editor). */

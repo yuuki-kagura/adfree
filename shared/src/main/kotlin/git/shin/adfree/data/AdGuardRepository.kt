@@ -2558,6 +2558,7 @@ class AdGuardRepository(
         name: String,
         url: String,
         description: String = L10n.get(Strings.script_custom_description),
+        enableOnInstall: Boolean = true,
     ) {
         scope.launch {
             val trimmed = url.trim()
@@ -2566,8 +2567,9 @@ class AdGuardRepository(
             if (existing != null) {
                 // A second tap on a store row must not create a duplicate; it
                 // only needs to make the script active again (or retry a body
-                // that never downloaded).
-                if (!existing.isEnabled || existing.sizeBytes == 0L) {
+                // that never downloaded). A script that installs switched off
+                // leaves the user's own choice alone.
+                if (enableOnInstall && (!existing.isEnabled || existing.sizeBytes == 0L)) {
                     toggleScript(existing.id, true)
                 } else {
                     showTransientStatus(
@@ -2596,7 +2598,9 @@ class AdGuardRepository(
             }
             if (updated.none { it.id == id }) {
                 val winner = updated.firstOrNull { it.url == trimmed }
-                if (winner != null && (!winner.isEnabled || winner.sizeBytes == 0L)) {
+                if (winner != null && enableOnInstall &&
+                    (!winner.isEnabled || winner.sizeBytes == 0L)
+                ) {
                     toggleScript(winner.id, true)
                 } else {
                     showTransientStatus(
@@ -2608,7 +2612,10 @@ class AdGuardRepository(
             _loadingMessage.value = UiText.Formatted(Strings.script_loading, script.name)
             val result = downloadScriptBody(script)
             showTransientStatus(result.message)
-            if (result.ok) {
+            // A body that landed is a script that can run, not a script the
+            // user asked for: the Assistant is installed off and switched on
+            // from the list.
+            if (result.ok && enableOnInstall) {
                 _userscripts.update { list ->
                     list.map { if (it.id == script.id) it.copy(isEnabled = true) else it }
                 }
