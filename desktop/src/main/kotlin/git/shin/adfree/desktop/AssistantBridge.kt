@@ -188,8 +188,10 @@ class AssistantBridge(
         val parameters = request["parameters"]?.let {
             runCatching { it.jsonObject }.getOrNull()
         } ?: JsonObject(emptyMap())
+        val type = request["type"]?.jsonPrimitive?.contentOrNull.orEmpty()
+        log("assistant bridge: $id -> $type")
         return runCatching {
-            when (request["type"]?.jsonPrimitive?.contentOrNull) {
+            when (type) {
                 "init" -> ok(id, parameters = initParameters())
                 "getCurrentAppState" -> ok(id)
                 "getCurrentFilteringState" -> ok(id, parameters = filteringState(parameters))
@@ -250,15 +252,17 @@ class AssistantBridge(
         }.getOrElse { error(id, it.message ?: "failed") }
     }
 
-    private fun initParameters(): JsonObject = buildJsonObject {
-        // The extension compares its own API version with this one and shows
-        // "the app is out of date" when ours is lower. Version 1 is what its
-        // published build speaks.
-        put("apiVersion", API_VERSION)
-        put("version", appVersion)
-        put("platform", "Linux")
-        put("isValidatedOnHost", true)
-    }
+    private fun initParameters(): JsonObject = initPayload(hostVersion())
+
+    /**
+     * A version the extension can compare, not our build label.
+     *
+     * `coreEngine.version` reads like `1.0.0 + adblock 0.13.3`; the extension
+     * splits on dots and numbers the parts, so the suffix has to go before it
+     * is compared (`Number("0 + adblock 0.13.3")` is NaN).
+     */
+    private fun hostVersion(): String =
+        appVersion.trim().substringBefore(' ').ifBlank { "1.0.0" }
 
     /** Required flags first: the extension throws when one of them is missing. */
     private fun appState(): JsonObject = buildJsonObject {
@@ -286,11 +290,7 @@ class AssistantBridge(
         val host = hostOf(parameters["url"]?.jsonPrimitive?.contentOrNull)
         val excepted = host != null &&
             customRules().any { it.startsWith("@@") && ruleTargets(it, host) }
-        return buildJsonObject {
-            put("isFilteringEnabled", host != null && !excepted)
-            put("isHttpsFilteringEnabled", repository.settings.value.isHttpsFilteringEnabled)
-            put("canChangeFilteringStatus", true)
-        }
+        return filteringPayload(host, excepted, repository.settings.value.isHttpsFilteringEnabled)
     }
 
     private fun setProtection(on: Boolean) {
@@ -372,6 +372,55 @@ class AssistantBridge(
 
     companion object {
         const val SOCKET_NAME: String = "adfree-assistant.sock"
+
+        /**
+         * The init answer, with the field choices that keep the popup alive.
+         *
+         * The extension compares its own API version with this one and shows
+         * "the app is out of date" when ours is lower; version 1 is what its
+         * published build speaks.
+         *
+         * **No platform, deliberately.** The extension knows exactly two —
+         * `windows` and `mac` — and gates its pause button on
+         * `FILTERING_PAUSE_VERSION_SUPPORT_SINCE[platform.toUpperCase()]`. A
+         * third name ("Linux") is not a harmless unknown: the lookup is
+         * undefined, that undefined reaches the semver compare, and the popup
+         * throws while composing its first data bundle. The panel then sits on
+         * "AdGuard is starting…" forever. An empty platform is the answer the
+         * extension's own code handles — no platform, no pause button.
+         */
+        internal fun initPayload(version: String): JsonObject = buildJsonObject {
+            put("apiVersion", API_VERSION)
+            put("version", version)
+            put("platform", "")
+            put("isValidatedOnHost", true)
+        }
+
+        /**
+         * The per-tab answer. Every field here is one the popup reads without a
+         * guard:
+         *
+         * - `originalCertStatus` is passed straight to `.toUpperCase()`, so a
+         *   missing value throws and the popup never leaves its loading state.
+         *   VALID is the extension's own starting value and the truthful one:
+         *   a page the browser accepted reached it through a chain the browser
+         *   still had to approve.
+         * - `isFilteringEnabled` is derived from the user's rules rather than
+         *   remembered — a page the user excepted has an `@@||host^$document`
+         *   rule, and that rule is what the engine itself reads.
+         */
+        internal fun filteringPayload(
+            host: String?,
+            excepted: Boolean,
+            httpsFiltering: Boolean,
+        ): JsonObject = buildJsonObject {
+            put("isFilteringEnabled", host != null && !excepted)
+            put("isHttpsFilteringEnabled", httpsFiltering)
+            put("canChangeFilteringStatus", true)
+            put("originalCertStatus", "VALID")
+            put("originalCertIssuer", null as String?)
+            put("isPageFilteredByUserFilter", false)
+        }
 
         /** The API version the published extension speaks. */
         const val API_VERSION: String = "1"
