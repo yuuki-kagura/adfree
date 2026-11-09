@@ -8,6 +8,7 @@ import git.shin.adfree.data.AdGuardRepository
 import git.shin.adfree.l10n.L10n
 import git.shin.adfree.platform.LogSink
 import git.shin.adfree.platform.NoopReminders
+import git.shin.adfree.platform.TunnelControl
 import git.shin.adfree.security.ThreatAnalyzer
 import git.shin.adfree.ui.AdGuardViewModel
 import java.io.File
@@ -110,23 +111,33 @@ class DesktopContainer(
     /** Desktop protection has no OS tunnel to report, so the switch follows the persisted intent. */
     private val protectionWanted = MutableStateFlow(false)
 
+    /**
+     * The protection switch itself. Shared with the ViewModel and with the
+     * browser bridge: AdGuard's extension asks the same question the shield
+     * answers ("is the machine being filtered?"), and it has to hear the same
+     * answer.
+     */
+    val tunnelControl: TunnelControl by lazy {
+        DesktopTunnelControl(
+            coreEngine,
+            protectionWanted,
+            privileges,
+            // Read at every start rather than captured: the ports are the
+            // ones the user last applied, so the listeners and the redirect
+            // rules always name the same numbers.
+            localProxy = { repository.settings.value.localProxy },
+            // Filtering the machine's own traffic is what the shield turns on,
+            // so the shield is what asks the system for the privilege — once,
+            // on a machine that has not been set up yet.
+            requestPrivileges = { platformHost.requestPrivilegedEngine() },
+            report = { platformHost.toast(it) },
+        )
+    }
+
     val viewModel: AdGuardViewModel by lazy {
         AdGuardViewModel(
             repository = repository,
-            tunnel = DesktopTunnelControl(
-                coreEngine,
-                protectionWanted,
-                privileges,
-                // Read at every start rather than captured: the ports are the
-                // ones the user last applied, so the listeners and the
-                // redirect rules always name the same numbers.
-                localProxy = { repository.settings.value.localProxy },
-                // Filtering the machine's own traffic is what the shield turns
-                // on, so the shield is what asks the system for the privilege —
-                // once, on a machine that has not been set up yet.
-                requestPrivileges = { platformHost.requestPrivilegedEngine() },
-                report = { platformHost.toast(it) },
-            ),
+            tunnel = tunnelControl,
             threatAnalyzer = threatAnalyzer,
             coreEngine = coreEngine,
             platform = platformHost,
@@ -135,6 +146,22 @@ class DesktopContainer(
             isPrivateDnsStrict = { false },
             configWarning = configWarning,
             appUpdate = appUpdate,
+        )
+    }
+
+    /**
+     * The socket AdGuard's browser extension reaches through
+     * `adfree-native-host` (see [AssistantBridge]).
+     */
+    val assistantBridge: AssistantBridge by lazy {
+        AssistantBridge(
+            engine = coreEngine,
+            repository = repository,
+            viewModel = viewModel,
+            tunnel = tunnelControl,
+            appVersion = coreEngine.version,
+            locale = { L10n.locale() },
+            log = { System.err.println("[bridge] $it") },
         )
     }
 
@@ -169,6 +196,10 @@ class DesktopContainer(
             }
         }
         L10n.systemLanguage = platformHost.deviceLanguage()
+        // The browser extension is a client of this window, not of a second
+        // copy of the app: it listens on the runtime directory and answers
+        // from the same state the screens read.
+        assistantBridge.start(scope)
         applyConfig()
     }
 

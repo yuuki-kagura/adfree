@@ -614,6 +614,13 @@
     <string name="ext_assistant_subtitle">Chặn một phần tử, cho phép trang hoặc báo cáo trang — ngay trên một bảng nổi trong trang. Quy tắc tạo ra được thêm thẳng vào quy tắc của bạn.</string>
     <string name="ext_assistant_install">Cài</string>
     <string name="ext_assistant_installed">Đã cài — bảng điều khiển hiện trên trang đã lọc</string>
+    <string name="ext_browser_bridge_title">Tiện ích AdGuard cho trình duyệt</string>
+    <string name="ext_browser_bridge_subtitle">Bảng trên thanh công cụ của tiện ích AdGuard, do ứng dụng này điều khiển: bật/tắt bảo vệ, lọc cho trang đang mở, chặn một thành phần, mở nhật ký lọc. Cài tiện ích từ Chrome Web Store rồi kết nối ở đây.</string>
+    <string name="ext_browser_bridge_enable">Kết nối</string>
+    <string name="ext_browser_bridge_installed">Đã kết nối — tiện ích đang nói chuyện với ứng dụng này</string>
+    <string name="ext_browser_bridge_done">Đã kết nối. Khởi động lại trình duyệt để nó nhận tiện ích</string>
+    <string name="ext_browser_bridge_missing_host">Thiếu tệp host — hãy build bằng cargo build --release --bin adfree-native-host</string>
+    <string name="ext_browser_bridge_no_browser">Không tìm thấy trình duyệt nào hỗ trợ tiện ích</string>
     <string name="ext_create_title">Tạo tiện ích mới</string>
     <string name="ext_create_template">// ==UserScript==\n// @name         Tiện ích của tôi\n// @match        *://*/*\n// @grant        none\n// ==/UserScript==\n\n</string>
     <string name="ext_create_confirm">Tạo</string>

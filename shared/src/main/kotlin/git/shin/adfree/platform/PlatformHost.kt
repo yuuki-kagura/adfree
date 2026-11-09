@@ -126,6 +126,27 @@ interface PlatformHost {
      * has an OS title bar that says nothing about where you are in the app.
      */
     fun supportsWindowHeader(): Boolean = false
+
+    /**
+     * The host can hand a browser extension the app's own state.
+     *
+     * AdGuard's Browser Assistant (a Chrome extension) is a shell: the panel,
+     * the toggle and the "block this element" picker are its, but everything
+     * it shows comes from the app over Chrome's native-messaging channel. A
+     * desktop installs the manifest that channel needs, so the extension works
+     * the way it does next to AdGuard's own Windows build. Android leaves this
+     * off: there is no browser to speak the protocol to.
+     */
+    fun supportsBrowserExtensionBridge(): Boolean = false
+
+    /** Whether the bridge is already installed for at least one browser. */
+    fun browserExtensionBridgeInstalled(): Boolean = false
+
+    /**
+     * Installs the bridge for every browser found on the machine and returns
+     * what happened in the user's language. Null means it is in place.
+     */
+    fun installBrowserExtensionBridge(): String? = null
 }
 
 /** Kept separate from [PlatformHost] so a desktop host can reuse the parts it can honour. */

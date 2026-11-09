@@ -72,6 +72,10 @@ fun ExtensionsScreen(
     val files = currentFileHost()
     val platform = currentPlatformHost()
     val pickerScope = rememberCoroutineScope()
+    // Read once: installing the bridge writes manifests for browsers that are
+    // installed now; a browser added later is picked up on the next visit.
+    var bridgeInstalled by remember { mutableStateOf(platform.browserExtensionBridgeInstalled()) }
+    var bridgeMessage by remember { mutableStateOf<String?>(null) }
     var showCreateScript by remember { mutableStateOf(false) }
     var editScriptTarget by remember { mutableStateOf<UserScriptInfo?>(null) }
     var deleteScriptTarget by remember { mutableStateOf<UserScriptInfo?>(null) }
@@ -118,6 +122,18 @@ fun ExtensionsScreen(
                     )
                 },
             )
+            if (platform.supportsBrowserExtensionBridge()) {
+                Spacer(modifier = Modifier.height(10.dp))
+                BrowserBridgeRow(
+                    installed = bridgeInstalled,
+                    message = bridgeMessage,
+                    onInstall = {
+                        bridgeMessage = platform.installBrowserExtensionBridge()
+                            ?: L10n.get(Strings.ext_browser_bridge_done)
+                        bridgeInstalled = platform.browserExtensionBridgeInstalled()
+                    },
+                )
+            }
             Spacer(modifier = Modifier.height(10.dp))
 
             ExtensionsSection(
@@ -339,6 +355,67 @@ private fun AssistantInstallRow(installed: Boolean, onInstall: () -> Unit) {
                         color = AdGuardGreenPrimary,
                     )
                 }
+            }
+        }
+    }
+}
+
+/**
+ * The row that connects AdGuard's browser extension to this app.
+ *
+ * The extension is a shell — its panel, toggle and element picker are its own,
+ * but every answer comes from the app over Chrome's native-messaging channel.
+ * What this row installs is the missing half of that channel: a manifest in
+ * each browser's profile that names the host binary. The extension keeps
+ * being AdGuard's, installed from the Chrome Web Store.
+ */
+@Composable
+private fun BrowserBridgeRow(
+    installed: Boolean,
+    message: String?,
+    onInstall: () -> Unit,
+) {
+    SurfaceCard(modifier = Modifier.fillMaxWidth()) {
+        Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp)) {
+            Text(
+                text = L10n.get(Strings.ext_browser_bridge_title),
+                fontSize = 15.sp,
+                fontWeight = FontWeight.SemiBold,
+                color = AdGuardTextPrimary,
+            )
+            Spacer(modifier = Modifier.height(4.dp))
+            Text(
+                text = if (installed) {
+                    L10n.get(Strings.ext_browser_bridge_installed)
+                } else {
+                    L10n.get(Strings.ext_browser_bridge_subtitle)
+                },
+                fontSize = 11.5.sp,
+                lineHeight = 16.sp,
+                color = AdGuardTextMuted,
+            )
+            if (!installed) {
+                Spacer(modifier = Modifier.height(8.dp))
+                TextButton(
+                    onClick = onInstall,
+                    contentPadding = PaddingValues(horizontal = 0.dp, vertical = 2.dp),
+                ) {
+                    Text(
+                        text = L10n.get(Strings.ext_browser_bridge_enable),
+                        fontSize = 13.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        color = AdGuardGreenPrimary,
+                    )
+                }
+            }
+            if (message != null) {
+                Spacer(modifier = Modifier.height(6.dp))
+                Text(
+                    text = message,
+                    fontSize = 11.5.sp,
+                    lineHeight = 16.sp,
+                    color = AdGuardTextSecondary,
+                )
             }
         }
     }

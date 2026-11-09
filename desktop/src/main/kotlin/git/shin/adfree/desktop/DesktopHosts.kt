@@ -1,5 +1,7 @@
 package git.shin.adfree.desktop
 
+import git.shin.adfree.l10n.L10n
+import git.shin.adfree.l10n.Strings
 import git.shin.adfree.platform.AppInventory
 import git.shin.adfree.core.coreExportNodeCa
 import git.shin.adfree.core.coreRemoveNodeCa
@@ -110,6 +112,23 @@ class DesktopPlatformHost(
     // The window draws its own header: an OS title bar carries no notion of
     // where in the app you are, and there is no system back gesture here.
     override fun supportsWindowHeader(): Boolean = true
+
+    // AdGuard's Browser Assistant speaks Chrome's native messaging protocol;
+    // the manifest that channel needs is written by `NativeMessagingHosts`.
+    override fun supportsBrowserExtensionBridge(): Boolean =
+        NativeMessagingHosts.findHostBinary() != null
+
+    override fun browserExtensionBridgeInstalled(): Boolean =
+        NativeMessagingHosts.installedAndUsable()
+
+    override fun installBrowserExtensionBridge(): String? {
+        val host = NativeMessagingHosts.findHostBinary()
+            ?: return L10n.get(Strings.ext_browser_bridge_missing_host)
+        val written = NativeMessagingHosts.install(host)
+        if (written.isEmpty()) return L10n.get(Strings.ext_browser_bridge_no_browser)
+        toast(L10n.get(Strings.ext_browser_bridge_installed))
+        return null
+    }
 
     // The listeners are this platform's own, so their ports are the user's to
     // move; Settings shows them where the Android host shows nothing at all.

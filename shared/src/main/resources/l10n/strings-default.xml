@@ -614,6 +614,13 @@
     <string name="ext_assistant_subtitle">Block an element, whitelist the page or report it — from a panel drawn over the page. The rules it builds go straight into your own rules.</string>
     <string name="ext_assistant_install">Install</string>
     <string name="ext_assistant_installed">Installed — the panel appears on filtered pages</string>
+    <string name="ext_browser_bridge_title">AdGuard extension for your browser</string>
+    <string name="ext_browser_bridge_subtitle">The toolbar panel of AdGuard\'s extension, driven by this app: protection on or off, filtering for the page, blocking an element, opening the filtering log. Install the extension from the Chrome Web Store, then connect it here.</string>
+    <string name="ext_browser_bridge_enable">Connect</string>
+    <string name="ext_browser_bridge_installed">Connected — the extension talks to this app</string>
+    <string name="ext_browser_bridge_done">Connected. Restart the browser so it picks up the extension</string>
+    <string name="ext_browser_bridge_missing_host">The native host binary is missing — build it with cargo build --release --bin adfree-native-host</string>
+    <string name="ext_browser_bridge_no_browser">No browser with extension support found</string>
     <string name="ext_create_title">New extension</string>
     <string name="ext_create_template">// ==UserScript==\n// @name         My extension\n// @match        *://*/*\n// @grant        none\n// ==/UserScript==\n\n</string>
     <string name="ext_create_confirm">Create</string>

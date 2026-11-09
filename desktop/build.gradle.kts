@@ -24,6 +24,10 @@ application {
 
 dependencies {
     implementation(project(":shared"))
+    // The native-messaging protocol AdGuard's browser extension speaks is
+    // JSON; the bridge parses and builds it with the same library the rest of
+    // the app uses.
+    implementation(libs.kotlinx.serialization.json)
     implementation(compose.desktop.currentOs)
     implementation(compose.material3)
     implementation(compose.materialIconsExtended)
