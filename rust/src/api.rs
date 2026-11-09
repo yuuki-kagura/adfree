@@ -426,6 +426,40 @@ pub fn core_set_lists_async(lists: Vec<FilterListBinding>, user_rules: Vec<Strin
     })
 }
 
+/// Rules the in-page AdGuard Assistant produced since the last call.
+///
+/// The assistant lets a user pick an element on a page and turn it into a rule
+/// (`example.com##.banner`). It reaches the engine through
+/// [`crate::mitm::proxy::ASSISTANT_PATH`], which applies the rule at once and
+/// leaves it here too: the platform owns the stored rule list, so it has to
+/// see what the page added in order to persist and show it.
+#[uniffi::export]
+pub fn core_take_assistant_rules() -> Vec<String> {
+    guard(Vec::new(), || {
+        crate::core().take_assistant_rules()
+    })
+}
+
+/// Rules the in-page assistant took back since the last call (its temporary
+/// "don't block this page" window closed). The platform has to drop the stored
+/// copy as well, or the next list push would put the rule back.
+#[uniffi::export]
+pub fn core_take_assistant_removals() -> Vec<String> {
+    guard(Vec::new(), || crate::core().take_assistant_removals())
+}
+
+/// Protection switches the assistant's panel asked for, in order.
+///
+/// The engine cannot start or stop the tunnel itself — the platform owns that
+/// — so it queues the request and answers the page truthfully that the switch
+/// was taken. `true` means "turn protection on".
+#[uniffi::export]
+pub fn core_take_assistant_switches() -> Vec<bool> {
+    guard(Vec::new(), || {
+        crate::core().take_assistant_switches()
+    })
+}
+
 /// One enabled list whose body the last filter build could not read.
 #[derive(uniffi::Record, Clone, Debug, Default)]
 pub struct FilterBuildError {

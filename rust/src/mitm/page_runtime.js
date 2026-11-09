@@ -484,6 +484,181 @@
     }
   };
 
+  // --- AdGuard Assistant bridge --------------------------------------------
+  //
+  // The assistant is a userscript (or the browser extension of the same name)
+  // that draws its own panel on the page and then asks the *host* to do the
+  // work through five globals. Nothing in a plain browser defines them, which
+  // is why the assistant only ever worked inside AdGuard's own builds: they
+  // inject the missing half. This is that half.
+  //
+  // The five names and their callback shapes are AdGuard's, not ours, so the
+  // assistant published by AdGuard runs unmodified against this engine.
+  const assistantUrl = (action, params) => {
+    const query = Object.entries(params || {})
+      .map(([key, value]) => `&${key}=${encodeURIComponent(value)}`)
+      .join('');
+    return `${base}/adfree-assistant.json?act=${action}${query}`;
+  };
+
+  const assistantCall = async (action, params) => {
+    try {
+      const response = await fetch(assistantUrl(action, params), {
+        credentials: 'omit',
+      });
+      return response.ok ? await response.json() : null;
+    } catch {
+      return null;
+    }
+  };
+
+  // `ADG_addRule(rule, callback)`: the element the user picked became a rule.
+  const addRule = (rule, callback) => {
+    if (typeof rule !== 'string' || !rule.trim()) {
+      if (callback) callback();
+      return;
+    }
+    const done = (ok) => {
+      if (callback) callback(ok);
+    };
+    // The engine applies the rule before it answers, so a page reload after
+    // this callback already hides what the user removed.
+    assistantCall('rule', { rule, dmn }).then((answer) => done(Boolean(answer && answer.ok)));
+  };
+
+  // `ADG_temporaryDontBlock(timeout, callback)`: suspend filtering for this
+  // page for `timeout` seconds. AdGuard implements it by disabling the matching
+  // rules for the window; here the page gets a document exception that is
+  // removed again when the window closes.
+  const temporaryDontBlock = (timeout, callback) => {
+    const seconds = Math.max(1, Math.min(600, Number(timeout) || 30));
+    const rule = `@@||${dmn}^$document`;
+    const finish = (ok) => {
+      if (callback) callback(ok);
+    };
+    assistantCall('rule', { rule, dmn }).then((answer) => {
+      const ok = Boolean(answer && answer.ok);
+      finish(ok);
+      // The exception is a document rule: it only takes effect on the next
+      // load, which is also what AdGuard's assistant does here. A harness
+      // driving this without a document to lose sets the flag to opt out.
+      if (ok && host.__adfreeNoAssistantReload !== true) {
+        try {
+          location.reload();
+        } catch {
+          /* nothing to reload */
+        }
+      }
+      setTimeout(() => {
+        assistantCall('unrule', { rule, dmn });
+      }, seconds * 1000);
+    });
+  };
+
+  // `ADG_isFiltered(callback)`: is this page filtered at all (the assistant
+  // shows "protection is off" instead of its usual panel).
+  const isFiltered = (callback) => {
+    assistantCall('filtered', { dmn }).then((answer) => {
+      const filtered = Boolean(answer && answer.filtered);
+      if (callback) callback(filtered);
+      return filtered;
+    });
+  };
+
+  // `ADG_changeFilteringState(state, callback)`: the panel's own switch.
+  const changeFilteringState = (state, callback) => {
+    assistantCall('switch', { on: state ? 1 : 0, dmn }).then((answer) => {
+      if (callback) callback(Boolean(answer && answer.ok));
+    });
+  };
+
+  // `ADG_sendAbuse(url, callback)`: "report this page". AdFree has nobody to
+  // report to and does not phone home; the call is acknowledged so the panel
+  // can close.
+  const sendAbuse = (url, callback) => {
+    assistantCall('abuse', { url: String(url || ''), dmn }).then(() => {
+      if (callback) callback();
+    });
+  };
+
+  const host = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
+
+  // The embedded build of the assistant (`@adguard/assistant`, the
+  // `self.assistant.js` bundle) is a userscript that has to be *started*: it
+  // draws its panel and hands the rule the user built to
+  // `start(null, callback)` instead of going through `ADG_*`. The app injects
+  // the bundle when the user installs it from Extensions; this runtime is what
+  // offers the way in, because a page has no toolbar to put a button on.
+  //
+  // The panel is opened on a tap, never on load: the assistant's selector menu
+  // covers a corner of the page, and a panel that appears on every page is a
+  // panel everybody learns to close.
+  const ASSISTANT_BUTTON_ID = '__adfree_assistant_button';
+
+  const openAssistant = () => {
+    if (typeof host.adguardAssistant !== 'function') return false;
+    try {
+      host.adguardAssistant().start(null, (rule) => addRule(rule));
+      return true;
+    } catch {
+      return false;
+    }
+  };
+
+  const drawAssistantButton = () => {
+    if (document.getElementById(ASSISTANT_BUTTON_ID)) return;
+    if (typeof host.adguardAssistant !== 'function') return;
+    const button = document.createElement('div');
+    button.id = ASSISTANT_BUTTON_ID;
+    button.setAttribute('role', 'button');
+    button.setAttribute('tabindex', '0');
+    button.title = 'AdGuard Assistant';
+    button.setAttribute('aria-label', 'AdGuard Assistant');
+    button.textContent = '\u25C6';
+    button.style.cssText = [
+      'position:fixed', 'right:16px', 'bottom:16px', 'width:40px', 'height:40px',
+      'border-radius:20px', 'display:flex', 'align-items:center',
+      'justify-content:center', 'font-size:18px', 'line-height:1',
+      'color:#fff', 'background:linear-gradient(140deg,#3fbf6f,#2b8a4b)',
+      'box-shadow:0 4px 12px rgba(0,0,0,.35)', 'cursor:pointer',
+      'z-index:2147483000', 'user-select:none', 'opacity:.92',
+    ].join(';');
+    const open = (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      openAssistant();
+    };
+    button.addEventListener('click', open);
+    button.addEventListener('keydown', (event) => {
+      if (event.key === 'Enter' || event.key === ' ') open(event);
+    });
+    try {
+      document.body.appendChild(button);
+    } catch {
+      /* no body yet: the retry below runs after it exists */
+    }
+  };
+
+  // The userscript is injected at document-end and may land after this
+  // runtime, so both steps repeat for a few seconds before giving up.
+  let assistantTries = 0;
+  const tryAssistant = () => {
+    drawAssistantButton();
+    if (document.getElementById(ASSISTANT_BUTTON_ID)) return;
+    if (++assistantTries < 40) setTimeout(tryAssistant, 250);
+  };
+  tryAssistant();
+
+  try {
+    host.ADG_addRule = addRule;
+    host.ADG_temporaryDontBlock = temporaryDontBlock;
+    host.ADG_isFiltered = isFiltered;
+    host.ADG_changeFilteringState = changeFilteringState;
+    host.ADG_sendAbuse = sendAbuse;
+  } catch {
+    /* a page that froze its globals simply gets no assistant */
+  }
+
   const note = (kind, token) => {
     if (!token || token.length > 64) {
       return;

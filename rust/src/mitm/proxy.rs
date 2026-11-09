@@ -45,6 +45,23 @@ pub const PAGE_SCRIPT_PATH: &str = "/adfree-page.js";
 /// proxy's initial HTML scan could not see.
 pub const GENERIC_PATH: &str = "/adfree-generic.js";
 
+/// Where the AdGuard Assistant on a page sends what the user did there.
+///
+/// The assistant is a userscript (or the browser extension of the same name)
+/// that renders its own panel in the page and calls the host through the
+/// globals `ADG_addRule`, `ADG_temporaryDontBlock`, `ADG_sendAbuse`,
+/// `ADG_isFiltered` and `ADG_changeFilteringState`. Those globals do not exist
+/// in a plain browser: AdGuard's own desktop builds are what defines them, and
+/// that definition is the only thing that connects the assistant to a local
+/// engine. This path is that connection: the page runtime (see
+/// `page_runtime.js`) answers the assistant's calls by GETting here, and the
+/// proxy answers without ever touching a peer.
+pub const ASSISTANT_PATH: &str = "/adfree-assistant.json";
+
+/// Longest rule the assistant bridge accepts. Element rules are short; a page
+/// that sends kilobytes is not the assistant.
+const MAX_ASSISTANT_RULE_LEN: usize = 4096;
+
 /// Path the page's element-hiding stylesheet is served from.
 ///
 /// Element hiding is the bulk of the cosmetic work (11 KB of all-site rules on
@@ -2797,6 +2814,20 @@ pub fn take_local_request(
             false,
         ));
     }
+    // The assistant's calls are answered even where no filter engine is
+    // passed in: the page may ask whether protection is on in a process that
+    // never built one, and "no" is a truthful answer.
+    if target == ASSISTANT_PATH {
+        buffer.drain(..head);
+        let assistant_host = query_value(&first_line, "dmn")
+            .filter(|h| is_plausible_host(h))
+            .or_else(|| session_host.map(str::to_string));
+        let body = assistant_answer(&first_line, assistant_host.as_deref(), filter);
+        return Some(http_response(
+            "application/json; charset=utf-8",
+            body.as_bytes(),
+        ));
+    }
     let filter = filter?;
     let host = query_value(&first_line, "dmn")
         .filter(|h| is_plausible_host(h))
@@ -2849,6 +2880,75 @@ pub fn take_local_request(
         ));
     }
     None
+}
+
+/// Answers one call the page-side AdGuard Assistant made.
+///
+/// The assistant is only ever as capable as the host behind it, so every verb
+/// it offers is answered here in terms of this engine:
+///
+/// - `act=rule&rule=<text>` — the element the user picked becomes a user rule
+///   (`##selector`, `@@||host^$elemhide`, …) in the filter engine.
+/// - `act=state` — is filtering on right now.
+/// - `act=filtered&dmn=<host>` — would this engine filter that host.
+/// - `act=switch&on=0|1` — turn the whole protection on or off.
+/// - `act=abuse` — reported abuse. AdFree has nobody to report to, and the
+///   assistant takes any answer: it is acknowledged without leaving the
+///   machine.
+///
+/// A request that reaches this path is answered even when the engine is not
+/// running (tests, or before `start`): the rule is then acknowledged as not
+/// stored instead of pretending a filter change happened.
+fn assistant_answer(first_line: &str, host: Option<&str>, filter: Option<&FilterEngine>) -> String {
+    let act = query_value(first_line, "act").unwrap_or_default();
+    match act.as_str() {
+        "rule" => {
+            let rule = query_value(first_line, "rule").unwrap_or_default();
+            let rule = rule.trim();
+            if rule.is_empty() || rule.len() > MAX_ASSISTANT_RULE_LEN {
+                return "{\"ok\":false,\"error\":\"bad-rule\"}".to_string();
+            }
+            let added = crate::engine::add_assistant_rule(rule);
+            format!("{{\"ok\":true,\"added\":{added}}}")
+        }
+        "unrule" => {
+            let rule = query_value(first_line, "rule").unwrap_or_default();
+            let removed = crate::engine::core_if_init()
+                .map(|core| core.remove_assistant_rule(&rule))
+                .unwrap_or(false);
+            format!("{{\"ok\":true,\"removed\":{removed}}}")
+        }
+        "state" => {
+            // "Filtering on" means requests are being decided, which is
+            // either the packet tunnel running or a compiled rule set the
+            // platform's own listeners consult. A desktop build has no packet
+            // tunnel at all, and answering "off" there would hide the
+            // assistant's panel on a machine that filters every request.
+            let on = crate::engine::core_if_init()
+                .map(|core| core.is_running() || core.filter_engine().active_rules() > 0)
+                .unwrap_or(false);
+            format!("{{\"ok\":true,\"enabled\":{on}}}")
+        }
+        "switch" => {
+            let on = query_value(first_line, "on").as_deref() == Some("1");
+            let queued = crate::engine::core_if_init().is_some();
+            if queued {
+                if let Some(core) = crate::engine::core_if_init() {
+                    core.request_protection(on);
+                }
+            }
+            format!("{{\"ok\":{queued},\"enabled\":{on}}}")
+        }
+        "filtered" => {
+            let filtered = match (filter, host) {
+                (Some(engine), Some(host)) => engine.check_host(host).blocked,
+                _ => false,
+            };
+            format!("{{\"ok\":true,\"filtered\":{filtered}}}")
+        }
+        "abuse" => "{\"ok\":true,\"reported\":false}".to_string(),
+        _ => "{\"ok\":false,\"error\":\"unknown-act\"}".to_string(),
+    }
 }
 
 /// One query parameter out of `GET /path?a=1 HTTP/1.1`.

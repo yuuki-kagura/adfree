@@ -63,6 +63,7 @@ const openPage = async (options = {}) => {
   page.on('pageerror', (error) => errors.push(String(error)));
   const lookups = [];
   const hides = [];
+  const assistantCalls = [];
 
   await page.route(`${ORIGIN}/**`, async (route) => {
     const url = new URL(route.request().url());
@@ -79,6 +80,18 @@ const openPage = async (options = {}) => {
         status: 200,
         contentType: 'text/css; charset=utf-8',
         body: options.hideCss ?? '',
+      });
+    }
+    if (url.pathname === '/adfree-assistant.json') {
+      assistantCalls.push(url);
+      const answer = typeof options.assistant === 'function'
+        ? options.assistant(url)
+        : (options.assistant ?? { ok: true });
+      return route.fulfill({
+        status: 200,
+        contentType: 'application/json; charset=utf-8',
+        headers: { 'access-control-allow-origin': '*' },
+        body: JSON.stringify(answer),
       });
     }
     if (url.pathname === '/adfree-generic.js') {
@@ -153,6 +166,7 @@ const openPage = async (options = {}) => {
     errors,
     lookups,
     hides,
+    assistantCalls,
     display: (selector) =>
       page.evaluate((sel) => {
         const el = document.querySelector(sel);
@@ -623,5 +637,91 @@ describe.skipIf(!process.env.ADFREE_CDP)('behind the running VPN', () => {
     expect(asked).toBe(true);
     await page.close().catch(() => {});
     await connected.close();
+  });
+});
+
+describe('the AdGuard Assistant bridge', () => {
+  /// The assistant published by AdGuard calls these five globals on the page.
+  /// Nothing in a plain browser defines them, so their presence *is* the
+  /// compatibility surface: with them installed the bundle runs unmodified.
+  test('the five globals the assistant calls are installed', async () => {
+    const page = await openPage({ payload: { generic: [] } });
+    const types = await page.page.evaluate(() =>
+      [
+        'ADG_addRule',
+        'ADG_temporaryDontBlock',
+        'ADG_isFiltered',
+        'ADG_changeFilteringState',
+        'ADG_sendAbuse',
+      ]
+        .map((name) => typeof window[name])
+        .join(','),
+    );
+    expect(types).toBe('function,function,function,function,function');
+    expect(page.errors).toEqual([]);
+  });
+
+  /// A rule the user built on the page is an app rule: it has to reach the
+  /// engine, and the assistant waits for the answer before it closes.
+  test('a rule the assistant builds goes to the app and is acknowledged', async () => {
+    const page = await openPage({
+      payload: { generic: [] },
+      assistant: { ok: true, added: true },
+    });
+    const answered = await page.page.evaluate(
+      () => new Promise((resolve) => window.ADG_addRule('shop.test##.banner', resolve)),
+    );
+    expect(answered).toBe(true);
+    await expect.poll(() => page.assistantCalls.length).toBe(1);
+    const url = page.assistantCalls[0];
+    expect(url.pathname).toBe('/adfree-assistant.json');
+    expect(url.searchParams.get('act')).toBe('rule');
+    expect(url.searchParams.get('rule')).toBe('shop.test##.banner');
+    expect(url.searchParams.get('dmn')).toBe('shop.test');
+    expect(page.errors).toEqual([]);
+  });
+
+  /// "Temporarily don't block this page" is an exception the app adds and
+  /// later takes back, so both halves of the round trip have to be there.
+  test('the temporary whitelist adds an exception and takes it back', async () => {
+    const page = await openPage({
+      payload: { generic: [] },
+      assistant: { ok: true },
+      // Granting a document exception only takes effect on the next load, so
+      // the glue reloads the page; losing the document would lose the timer
+      // under test.
+      initScript: 'window.__adfreeNoAssistantReload = true;',
+    });
+    // A one-second window (the shortest the glue honours): the exception is
+    // added, then taken back, so the poll waits past that second.
+    await page.page.evaluate(() => window.ADG_temporaryDontBlock(1, () => {}));
+    await expect
+      .poll(() => page.assistantCalls.length, { timeout: 5000, interval: 100 })
+      .toBe(2);
+    expect(page.assistantCalls[0].searchParams.get('act')).toBe('rule');
+    expect(page.assistantCalls[0].searchParams.get('rule')).toBe('@@||shop.test^$document');
+    expect(page.assistantCalls[1].searchParams.get('act')).toBe('unrule');
+    expect(page.assistantCalls[1].searchParams.get('rule')).toBe('@@||shop.test^$document');
+    expect(page.errors).toEqual([]);
+  });
+
+  /// The panel's own switch: the app owns the tunnel, so the request is handed
+  /// over rather than performed here.
+  test('the panel switch and the filtered question both reach the app', async () => {
+    const page = await openPage({
+      payload: { generic: [] },
+      assistant: (url) =>
+        url.searchParams.get('act') === 'filtered' ? { ok: true, filtered: true } : { ok: true },
+    });
+    const filtered = await page.page.evaluate(
+      () => new Promise((resolve) => window.ADG_isFiltered(resolve)),
+    );
+    expect(filtered).toBe(true);
+    await page.page.evaluate(() => new Promise((resolve) => window.ADG_changeFilteringState(false, resolve)));
+    await expect.poll(() => page.assistantCalls.length).toBe(2);
+    expect(page.assistantCalls[0].searchParams.get('act')).toBe('filtered');
+    expect(page.assistantCalls[1].searchParams.get('act')).toBe('switch');
+    expect(page.assistantCalls[1].searchParams.get('on')).toBe('0');
+    expect(page.errors).toEqual([]);
   });
 });

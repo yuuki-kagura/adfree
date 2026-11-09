@@ -145,6 +145,36 @@ fn script_request_serves_only_when_enabled() {
     assert!(!buffer.is_empty());
 }
 
+/// The assistant's bridge answers on this engine's own origin, never a peer.
+#[test]
+fn assistant_bridge_answers_with_json() {
+    let mut buffer =
+        b"GET /adfree-assistant.json?act=state&dmn=example.com HTTP/1.1\r\nHost: example.com\r\n\r\n"
+            .to_vec();
+    let response = take_local_request("/adfree-user.js", "let x = 1;", None, None, &mut buffer)
+        .expect("served");
+    assert!(buffer.is_empty(), "the request is consumed");
+    let text = String::from_utf8(response).expect("utf8");
+    assert!(text.starts_with("HTTP/1.1 200 OK\r\n"));
+    assert!(text.contains("Content-Type: application/json"));
+    assert!(text.contains("\"enabled\""), "{text}");
+}
+
+/// Every verb the assistant can send has an answer, including a broken one.
+#[test]
+fn assistant_bridge_answers_every_verb() {
+    for act in ["rule", "unrule", "filtered", "switch", "abuse", "nonsense"] {
+        let request = format!(
+            "GET /adfree-assistant.json?act={act}&rule=%23%23.banner&dmn=example.com&on=1 HTTP/1.1\r\n\r\n"
+        );
+        let mut buffer = request.into_bytes();
+        let response = take_local_request("/adfree-user.js", "let x = 1;", None, None, &mut buffer)
+            .unwrap_or_else(|| panic!("{act} answered"));
+        let text = String::from_utf8(response).expect("utf8");
+        assert!(text.contains("{\"ok\":"), "{act}: {text}");
+    }
+}
+
 /// A minimal HTML response whose declared length matches its real body.
 fn html_response(body: &str) -> Vec<u8> {
     let mut v = Vec::new();

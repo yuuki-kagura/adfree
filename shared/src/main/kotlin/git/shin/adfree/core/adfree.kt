@@ -879,6 +879,12 @@ internal object IntegrityCheckingUniffiLib {
     ): Int
     external fun uniffi_adfree_core_checksum_func_core_stop_proxy(
     ): Int
+    external fun uniffi_adfree_core_checksum_func_core_take_assistant_removals(
+    ): Int
+    external fun uniffi_adfree_core_checksum_func_core_take_assistant_rules(
+    ): Int
+    external fun uniffi_adfree_core_checksum_func_core_take_assistant_switches(
+    ): Int
     external fun uniffi_adfree_core_checksum_func_core_take_log_lines(
     ): Int
     external fun uniffi_adfree_core_checksum_func_core_uid_for_port(
@@ -1091,6 +1097,12 @@ internal object UniffiLib {
     ): Unit
     external fun uniffi_adfree_core_fn_func_core_stop_proxy(uniffi_out_err: UniffiRustCallStatus, 
     ): Unit
+    external fun uniffi_adfree_core_fn_func_core_take_assistant_removals(uniffi_out_err: UniffiRustCallStatus, 
+    ): RustBuffer.ByValue
+    external fun uniffi_adfree_core_fn_func_core_take_assistant_rules(uniffi_out_err: UniffiRustCallStatus, 
+    ): RustBuffer.ByValue
+    external fun uniffi_adfree_core_fn_func_core_take_assistant_switches(uniffi_out_err: UniffiRustCallStatus, 
+    ): RustBuffer.ByValue
     external fun uniffi_adfree_core_fn_func_core_take_log_lines(uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
     external fun uniffi_adfree_core_fn_func_core_uid_for_port(`port`: Short,uniffi_out_err: UniffiRustCallStatus, 
@@ -1458,6 +1470,15 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if ((lib.uniffi_adfree_core_checksum_func_core_stop_proxy() and 0xFFFF) != 32836) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if ((lib.uniffi_adfree_core_checksum_func_core_take_assistant_removals() and 0xFFFF) != 1266) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if ((lib.uniffi_adfree_core_checksum_func_core_take_assistant_rules() and 0xFFFF) != 28084) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if ((lib.uniffi_adfree_core_checksum_func_core_take_assistant_switches() and 0xFFFF) != 47313) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if ((lib.uniffi_adfree_core_checksum_func_core_take_log_lines() and 0xFFFF) != 63880) {
@@ -6161,6 +6182,34 @@ public object FfiConverterSequenceInt: FfiConverterRustBuffer<List<kotlin.Int>> 
 /**
  * @suppress
  */
+public object FfiConverterSequenceBoolean: FfiConverterRustBuffer<List<kotlin.Boolean>> {
+    override fun read(buf: ByteBuffer): List<kotlin.Boolean> {
+        val len = buf.getInt()
+        return List<kotlin.Boolean>(len) {
+            FfiConverterBoolean.read(buf)
+        }
+    }
+
+    override fun allocationSize(value: List<kotlin.Boolean>): ULong {
+        val sizeForLength = 4UL
+        val sizeForItems = value.map { FfiConverterBoolean.allocationSize(it) }.sum()
+        return sizeForLength + sizeForItems
+    }
+
+    override fun write(value: List<kotlin.Boolean>, buf: ByteBuffer) {
+        buf.putInt(value.size)
+        value.iterator().forEach {
+            FfiConverterBoolean.write(it, buf)
+        }
+    }
+}
+
+
+
+
+/**
+ * @suppress
+ */
 public object FfiConverterSequenceString: FfiConverterRustBuffer<List<kotlin.String>> {
     override fun read(buf: ByteBuffer): List<kotlin.String> {
         val len = buf.getInt()
@@ -7667,6 +7716,57 @@ public object FfiConverterSequenceTypeUidApps: FfiConverterRustBuffer<List<UidAp
         _status)
 }
     
+    
+
+        /**
+         * Rules the in-page assistant took back since the last call (its temporary
+         * "don't block this page" window closed). The platform has to drop the stored
+         * copy as well, or the next list push would put the rule back.
+         */ fun `coreTakeAssistantRemovals`(): List<kotlin.String> {
+            return FfiConverterSequenceString.lift(
+    uniffiRustCall() { _status ->
+    UniffiLib.uniffi_adfree_core_fn_func_core_take_assistant_removals(
+    
+        _status)
+}
+    )
+    }
+    
+
+        /**
+         * Rules the in-page AdGuard Assistant produced since the last call.
+         *
+         * The assistant lets a user pick an element on a page and turn it into a rule
+         * (`example.com##.banner`). It reaches the engine through
+         * [`crate::mitm::proxy::ASSISTANT_PATH`], which applies the rule at once and
+         * leaves it here too: the platform owns the stored rule list, so it has to
+         * see what the page added in order to persist and show it.
+         */ fun `coreTakeAssistantRules`(): List<kotlin.String> {
+            return FfiConverterSequenceString.lift(
+    uniffiRustCall() { _status ->
+    UniffiLib.uniffi_adfree_core_fn_func_core_take_assistant_rules(
+    
+        _status)
+}
+    )
+    }
+    
+
+        /**
+         * Protection switches the assistant's panel asked for, in order.
+         *
+         * The engine cannot start or stop the tunnel itself — the platform owns that
+         * — so it queues the request and answers the page truthfully that the switch
+         * was taken. `true` means "turn protection on".
+         */ fun `coreTakeAssistantSwitches`(): List<kotlin.Boolean> {
+            return FfiConverterSequenceBoolean.lift(
+    uniffiRustCall() { _status ->
+    UniffiLib.uniffi_adfree_core_fn_func_core_take_assistant_switches(
+    
+        _status)
+}
+    )
+    }
     
 
         /**

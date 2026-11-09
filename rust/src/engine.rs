@@ -754,6 +754,11 @@ pub struct Core {
     filter: Arc<FilterEngine>,
     lists: RwLock<Vec<FilterListInfo>>,
     user_rules: RwLock<Vec<String>>,
+    /// What the in-page AdGuard Assistant asked for while the user was
+    /// browsing. The engine applies a rule at once (see
+    /// [`Core::add_assistant_rule`]); the call is also left here for the
+    /// platform, which owns persistence and the protection switch.
+    assistant_calls: Mutex<Vec<AssistantCall>>,
     upstream: Mutex<Upstream>,
     /// Eventfd the forwarder sleeps on. Anything that changes what the loop
     /// must look at writes it — a queued DNS query, a new flow, bytes stuck
@@ -909,12 +914,42 @@ pub struct Core {
     pub outbox: Mutex<Vec<Vec<u8>>>,
 }
 
+/// One thing the in-page AdGuard Assistant asked of the app.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum AssistantCall {
+    /// A rule the user built on the page (`##selector`, `@@||host^$elemhide`).
+    AddRule(String),
+    /// A rule the assistant took back (its temporary "don't block this page"
+    /// window closed).
+    RemoveRule(String),
+    /// The protection switch from the assistant's panel.
+    SetProtection(bool),
+}
+
 static CORE: OnceLock<Core> = OnceLock::new();
 
 /// Global handle: the JNI layer runs in the app's single process and the engine
 /// must be reachable from any thread.
 pub fn core() -> &'static Core {
     CORE.get_or_init(Core::new)
+}
+
+/// The engine, if the process ever made one.
+///
+/// The proxy answers a page's assistant call on whichever thread owns the
+/// session, which may be a test or a process that never started filtering.
+/// Those must not construct an engine just to say "nothing to do".
+pub(crate) fn core_if_init() -> Option<&'static Core> {
+    CORE.get()
+}
+
+/// Applies one rule from the page-side assistant. False when no engine exists
+/// yet or the rule was already there.
+pub(crate) fn add_assistant_rule(rule: &str) -> bool {
+    match core_if_init() {
+        Some(core) => core.add_assistant_rule(rule),
+        None => false,
+    }
 }
 
 /// Reports one request the HTTPS path saw, which is what AdGuard's Filtering
@@ -1060,6 +1095,7 @@ impl Core {
             filter: Arc::new(FilterEngine::new()),
             lists: RwLock::new(Vec::new()),
             user_rules: RwLock::new(Vec::new()),
+            assistant_calls: Mutex::new(Vec::new()),
             upstream: Mutex::new(Upstream::new(resolver)),
             wake_fd: unsafe { libc::eventfd(0, libc::EFD_CLOEXEC | libc::EFD_NONBLOCK) },
             setup_fd: unsafe { libc::eventfd(0, libc::EFD_CLOEXEC | libc::EFD_NONBLOCK) },
@@ -1816,6 +1852,110 @@ impl Core {
 
     pub fn user_rules(&self) -> Vec<String> {
         self.user_rules.read().unwrap().clone()
+    }
+
+    /// Adds one rule the page-side assistant produced and rebuilds the engine
+    /// so it takes effect on the next request.
+    ///
+    /// Returns false when the text is already a rule: the assistant can ask
+    /// twice (a second click on the same element), and a duplicate would
+    /// rebuild the engine for nothing.
+    pub fn add_assistant_rule(&self, rule: &str) -> bool {
+        let rule = rule.trim();
+        if rule.is_empty() {
+            return false;
+        }
+        let rules = {
+            let mut guard = self.user_rules.write().unwrap();
+            if guard.iter().any(|existing| existing == rule) {
+                return false;
+            }
+            guard.push(rule.to_string());
+            guard.clone()
+        };
+        let lists = self.lists.read().unwrap().clone();
+        FilterEngine::rebuild_async(&self.filter, lists, rules);
+        self.assistant_calls
+            .lock()
+            .unwrap()
+            .push(AssistantCall::AddRule(rule.to_string()));
+        true
+    }
+
+    /// Removes one rule the assistant added (its temporary "don't block this
+    /// page" window closes by deleting the exception again). Returns false when
+    /// the rule is not there any more.
+    pub fn remove_assistant_rule(&self, rule: &str) -> bool {
+        let rule = rule.trim();
+        let rules = {
+            let mut guard = self.user_rules.write().unwrap();
+            let before = guard.len();
+            guard.retain(|existing| existing != rule);
+            if guard.len() == before {
+                return false;
+            }
+            guard.clone()
+        };
+        let lists = self.lists.read().unwrap().clone();
+        FilterEngine::rebuild_async(&self.filter, lists, rules);
+        self.assistant_calls
+            .lock()
+            .unwrap()
+            .push(AssistantCall::RemoveRule(rule.to_string()));
+        true
+    }
+
+    /// Records a protection switch the page asked for. The platform owns the
+    /// tunnel, so the engine only hands the request over.
+    pub fn request_protection(&self, on: bool) {
+        self.assistant_calls
+            .lock()
+            .unwrap()
+            .push(AssistantCall::SetProtection(on));
+    }
+
+    /// Rules the assistant added since the last call. Switches stay queued:
+    /// the platform asks for the two kinds separately, and a drain of one must
+    /// not swallow the other.
+    pub fn take_assistant_rules(&self) -> Vec<String> {
+        let mut guard = self.assistant_calls.lock().unwrap();
+        let mut rules = Vec::new();
+        guard.retain(|call| match call {
+            AssistantCall::AddRule(rule) => {
+                rules.push(rule.clone());
+                false
+            }
+            AssistantCall::RemoveRule(_) | AssistantCall::SetProtection(_) => true,
+        });
+        rules
+    }
+
+    /// Rules the assistant took back since the last call.
+    pub fn take_assistant_removals(&self) -> Vec<String> {
+        let mut guard = self.assistant_calls.lock().unwrap();
+        let mut rules = Vec::new();
+        guard.retain(|call| match call {
+            AssistantCall::RemoveRule(rule) => {
+                rules.push(rule.clone());
+                false
+            }
+            AssistantCall::AddRule(_) | AssistantCall::SetProtection(_) => true,
+        });
+        rules
+    }
+
+    /// Protection switches requested by the assistant since the last call.
+    pub fn take_assistant_switches(&self) -> Vec<bool> {
+        let mut guard = self.assistant_calls.lock().unwrap();
+        let mut switches = Vec::new();
+        guard.retain(|call| match call {
+            AssistantCall::SetProtection(on) => {
+                switches.push(*on);
+                false
+            }
+            AssistantCall::AddRule(_) | AssistantCall::RemoveRule(_) => true,
+        });
+        switches
     }
 
     /// UI helper: is this host blocked, and by what?
@@ -5900,6 +6040,38 @@ fn write_atomic(
 mod tests {
     use super::*;
     use crate::dnsrewrite::DnsRewriteRule;
+
+    /// The page-side assistant hands over a rule: it lands in the user rules,
+    /// is reported once to the platform, and a repeat click changes nothing.
+    #[test]
+    fn assistant_rules_travel_to_the_engine_and_the_platform() {
+        let core = Core::new();
+        assert!(core.add_assistant_rule("example.com##.banner"));
+        assert!(!core.add_assistant_rule("example.com##.banner"), "already there");
+        assert!(!core.add_assistant_rule("   "));
+        assert_eq!(core.user_rules(), vec!["example.com##.banner".to_string()]);
+        assert_eq!(core.take_assistant_rules(), vec!["example.com##.banner".to_string()]);
+        assert!(core.take_assistant_rules().is_empty(), "reported once");
+        assert!(core.remove_assistant_rule("example.com##.banner"));
+        assert!(!core.remove_assistant_rule("example.com##.banner"));
+        assert!(core.user_rules().is_empty());
+        assert_eq!(
+            core.take_assistant_removals(),
+            vec!["example.com##.banner".to_string()],
+            "the platform has to drop the stored copy too"
+        );
+    }
+
+    /// A switch is queued for the platform and does not consume pending rules.
+    #[test]
+    fn assistant_switches_and_rules_do_not_swallow_each_other() {
+        let core = Core::new();
+        assert!(core.add_assistant_rule("||ads.example^"));
+        core.request_protection(false);
+        assert_eq!(core.take_assistant_switches(), vec![false]);
+        assert_eq!(core.take_assistant_rules(), vec!["||ads.example^".to_string()]);
+        assert!(core.take_assistant_switches().is_empty());
+    }
 
     /// A policy with every global default allowed and only the given overrides.
     fn app_policy(rules: &[(&str, AppFirewallState)]) -> AppNetworkPolicy {
