@@ -243,7 +243,16 @@ class AssistantBridge(
             when (type) {
                 "init" -> ok(id, parameters = initParameters())
                 "getCurrentAppState" -> ok(id)
-                "getCurrentFilteringState" -> ok(id, parameters = filteringState(parameters))
+                "getCurrentFilteringState" -> {
+                    // The popup's "start AdGuard" button asks for this page's
+                    // state and says `forceStartApp`: the request *is* the
+                    // start. Answering without starting left the button dead.
+                    if (parameters["forceStartApp"]?.jsonPrimitive?.booleanOrNull == true) {
+                        setProtection(true)
+                        settle { protectionOn() }
+                    }
+                    ok(id, parameters = filteringState(parameters))
+                }
                 "setProtectionStatus" -> {
                     val on = parameters["isEnabled"]?.jsonPrimitive?.booleanOrNull ?: false
                     setProtection(on)

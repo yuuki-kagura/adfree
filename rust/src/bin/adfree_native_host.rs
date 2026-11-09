@@ -71,6 +71,59 @@ fn read_frame(input: &mut impl Read) -> io::Result<Option<Vec<u8>>> {
     Ok(Some(message))
 }
 
+/// The `id` a request carries, so its answer can be told apart from a push.
+fn request_id(message: &[u8]) -> String {
+    serde_json::from_slice::<serde_json::Value>(message)
+        .ok()
+        .and_then(|value| value.get("id").and_then(|id| id.as_str()).map(str::to_string))
+        .unwrap_or_default()
+}
+
+/// The `requestId` a reply or push carries.
+fn response_id(message: &[u8]) -> String {
+    serde_json::from_slice::<serde_json::Value>(message)
+        .ok()
+        .and_then(|value| {
+            value
+                .get("requestId")
+                .and_then(|id| id.as_str())
+                .map(str::to_string)
+        })
+        .unwrap_or_default()
+}
+
+/// Forwards frames from the app until the one answering `request` has gone by.
+///
+/// Pushes are forwarded too: the extension's popup is fed by them. Without the
+/// id check the *first* frame was taken as the answer, and a push arriving in
+/// that window made every following answer land one message late — which is
+/// exactly how a popup ends up waiting forever on a reply that had already
+/// been sent.
+fn forward_until_answer(
+    stream: &mut UnixStream,
+    output: &mut impl Write,
+    request: &[u8],
+) -> io::Result<()> {
+    let wanted = request_id(request);
+    for _ in 0..MAX_FRAMES_WHILE_WAITING {
+        let frame = match read_frame(stream)? {
+            Some(frame) => frame,
+            None => {
+                return Err(io::Error::new(
+                    io::ErrorKind::UnexpectedEof,
+                    "the app closed the socket",
+                ))
+            }
+        };
+        let answers = !wanted.is_empty() && response_id(&frame) == wanted;
+        write_frame(output, &frame)?;
+        if answers {
+            return Ok(());
+        }
+    }
+    Err(io::Error::other("the app did not answer"))
+}
+
 fn write_frame(output: &mut impl Write, message: &[u8]) -> io::Result<()> {
     output.write_all(&(message.len() as u32).to_le_bytes())?;
     output.write_all(message)?;
@@ -85,6 +138,15 @@ fn write_frame(output: &mut impl Write, message: &[u8]) -> io::Result<()> {
 /// restarting (protection asked the system for the privilege and is handing
 /// over) will not answer on *this* socket at all, so the wait has to end here.
 const ANSWER_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// How many frames the host will forward while waiting for one answer.
+///
+/// The app also *pushes* — an open popup is told whenever protection changes —
+/// so the frame that arrives first is not necessarily the answer. Each push is
+/// forwarded as it comes (that is how a popup stays current) and the wait ends
+/// at the frame carrying the id that was asked about. The bound is what keeps
+/// a misbehaving socket from spinning here forever.
+const MAX_FRAMES_WHILE_WAITING: usize = 64;
 
 /// The error a Chrome extension can read when the app is not running.
 ///
@@ -130,38 +192,30 @@ fn main() {
                 let _ = stream.set_read_timeout(Some(ANSWER_TIMEOUT));
             }
         }
-        let reply = match connection.as_mut() {
-            Some(stream) => match write_frame(stream, &message) {
-                Ok(()) => match read_frame(stream) {
-                    Ok(Some(reply)) => reply,
-                    // The app closed the socket, or did not answer in time:
-                    // drop it and let the next message try a fresh one.
-                    Ok(None) => {
-                        connection = None;
-                        unavailable(&message)
-                    }
-                    Err(error) => {
-                        connection = None;
-                        let timed_out = matches!(
-                            error.kind(),
-                            io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut
-                        );
-                        if timed_out {
-                            unavailable_with(&message, "AdFree did not answer in time")
-                        } else {
-                            unavailable(&message)
-                        }
-                    }
-                },
-                Err(_) => {
-                    connection = None;
-                    unavailable(&message)
-                }
-            },
-            None => unavailable(&message),
+        let outcome = match connection.as_mut() {
+            Some(stream) => write_frame(stream, &message)
+                .and_then(|()| forward_until_answer(stream, &mut output, &message)),
+            None => Err(io::Error::new(
+                io::ErrorKind::NotConnected,
+                "the app is not running",
+            )),
         };
-        if write_frame(&mut output, &reply).is_err() {
-            return;
+        if let Err(error) = outcome {
+            // The app closed the socket or did not answer in time: drop it and
+            // let the next message try a fresh one.
+            connection = None;
+            let timed_out = matches!(
+                error.kind(),
+                io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut
+            );
+            let reply = if timed_out {
+                unavailable_with(&message, "AdFree did not answer in time")
+            } else {
+                unavailable(&message)
+            };
+            if write_frame(&mut output, &reply).is_err() {
+                return;
+            }
         }
     }
 }
@@ -181,6 +235,27 @@ mod tests {
         let read = read_frame(&mut cursor).expect("read").expect("one message");
         assert_eq!(read, payload);
         assert!(read_frame(&mut cursor).expect("end").is_none());
+    }
+
+    /// A push that arrives while a request is in flight must not be taken for
+    /// the answer: the answer is the frame that carries the id asked about,
+    /// and everything before it is forwarded as it comes.
+    #[test]
+    fn a_push_is_forwarded_and_the_answer_is_matched_by_id() {
+        use std::os::unix::net::UnixStream;
+        let (mut app_side, mut host_side) = UnixStream::pair().expect("pair");
+        let worker = std::thread::spawn(move || {
+            write_frame(&mut app_side, br#"{"requestId":"ADG_STATE","appState":{}}"#).expect("push");
+            write_frame(&mut app_side, br#"{"requestId":"ADG_1","result":"ok"}"#).expect("answer");
+        });
+        let mut output = Vec::new();
+        forward_until_answer(&mut host_side, &mut output, br#"{"id":"ADG_1"}"#).expect("answered");
+        worker.join().expect("worker");
+        let mut cursor = &output[..];
+        let first = read_frame(&mut cursor).expect("read").expect("push");
+        let second = read_frame(&mut cursor).expect("read").expect("answer");
+        assert_eq!(response_id(&first), "ADG_STATE");
+        assert_eq!(response_id(&second), "ADG_1");
     }
 
     /// A stall is answered too, with a reason a person can act on.
