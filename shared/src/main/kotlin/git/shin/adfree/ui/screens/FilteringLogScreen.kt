@@ -14,6 +14,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.Spacer
@@ -21,6 +22,7 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -80,6 +82,7 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -794,17 +797,20 @@ private fun LogTypeRow(selected: LogTypeTab, onSelect: (LogTypeTab) -> Unit) {
     ) {
         for (tab in LogTypeTab.ordered) {
             val active = tab == selected
+            // Colour, not a filled button: eleven pills across one line read
+            // as a toolbar of its own, and this row is a filter, not a set of
+            // commands. The chosen type is green and bold; the rest are the
+            // same muted grey as the column headers above them.
             Text(
                 text = L10n.get(tab.labelKey),
                 fontSize = 11.sp,
                 fontWeight = if (active) FontWeight.Bold else FontWeight.Medium,
-                color = if (active) AdGuardOnAccent else AdGuardTextSecondary,
+                color = if (active) AdGuardGreenLight else AdGuardTextMuted,
                 maxLines = 1,
                 modifier = Modifier
                     .clip(RoundedCornerShape(6.dp))
-                    .background(if (active) AdGuardGreenPrimary else AdGuardDarkSurface)
                     .clickable { onSelect(tab) }
-                    .padding(horizontal = 9.dp, vertical = 4.dp)
+                    .padding(horizontal = 8.dp, vertical = 5.dp)
                     .testTag("log_type_tab_${tab.key}"),
             )
         }
@@ -1252,10 +1258,11 @@ private fun LogDetailBody(
                 )
                 Text(
                     text = log.displayName,
-                    fontSize = 16.sp,
-                    fontWeight = FontWeight.Bold,
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.SemiBold,
                     fontFamily = FontFamily.Monospace,
-                    color = AdGuardGreenLight
+                    color = AdGuardTextPrimary,
+                    lineHeight = 16.sp,
                 )
                 Spacer(modifier = Modifier.height(4.dp))
                 Text(
@@ -1446,8 +1453,9 @@ private fun LogDetailBody(
                     onClick = { platform.openUrl(url) },
                     modifier = Modifier
                         .weight(1f)
-                        .height(44.dp)
+                        .heightIn(min = 44.dp)
                         .testTag("log_detail_open_url"),
+                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 10.dp),
                     shape = RoundedCornerShape(10.dp),
                 ) {
                     Icon(
@@ -1470,8 +1478,9 @@ private fun LogDetailBody(
                 onClick = { clipboard.setText(AnnotatedString(log.displayName)) },
                 modifier = Modifier
                     .weight(1f)
-                    .height(44.dp)
+                    .heightIn(min = 44.dp)
                     .testTag("log_detail_copy"),
+                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 10.dp),
                 shape = RoundedCornerShape(10.dp),
             ) {
                 Text(
@@ -1503,11 +1512,19 @@ private fun LogDetailBody(
                 },
                 modifier = Modifier
                     .weight(1f)
-                    .height(48.dp),
+                    .heightIn(min = 48.dp),
                 shape = RoundedCornerShape(10.dp),
+                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 10.dp),
                 border = androidx.compose.foundation.BorderStroke(1.dp, AdGuardBlueDns)
             ) {
-                Text(L10n.get(Strings.log_allowlist), color = AdGuardBlueDns, fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                Text(
+                    text = L10n.get(Strings.log_allowlist),
+                    color = AdGuardBlueDns,
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 11.5.sp,
+                    maxLines = 2,
+                    textAlign = TextAlign.Center,
+                )
             }
 
             OutlinedButton(
@@ -1523,11 +1540,19 @@ private fun LogDetailBody(
                 },
                 modifier = Modifier
                     .weight(1f)
-                    .height(48.dp),
+                    .heightIn(min = 48.dp),
                 shape = RoundedCornerShape(10.dp),
+                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 10.dp),
                 border = androidx.compose.foundation.BorderStroke(1.dp, AdGuardRedBlocked)
             ) {
-                Text(L10n.get(Strings.log_block_domain), color = AdGuardRedBlocked, fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                Text(
+                    text = L10n.get(Strings.log_block_domain),
+                    color = AdGuardRedBlocked,
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 11.5.sp,
+                    maxLines = 2,
+                    textAlign = TextAlign.Center,
+                )
             }
         }
 
@@ -1537,8 +1562,9 @@ private fun LogDetailBody(
             onClick = { onAnalyzeWithAi(log.domain) },
             modifier = Modifier
                 .fillMaxWidth()
-                .height(48.dp),
+                .heightIn(min = 48.dp),
             shape = RoundedCornerShape(10.dp),
+            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 10.dp),
             colors = ButtonDefaults.buttonColors(containerColor = AdGuardPurpleAI)
         ) {
             Icon(Icons.Default.Search, contentDescription = null, tint = AdGuardOnAccent)
