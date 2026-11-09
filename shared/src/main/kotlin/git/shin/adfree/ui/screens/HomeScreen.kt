@@ -22,6 +22,7 @@ import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -762,7 +763,11 @@ private fun DesktopHome(
     ) {
         Spacer(modifier = Modifier.height(18.dp))
 
-        quickModuleRow()
+        // Six switches spread over 1090dp read as six islands. AdGuard keeps
+        // this row as one cluster under the status, so it gets a width.
+        Box(modifier = Modifier.widthIn(max = 560.dp)) {
+            quickModuleRow()
+        }
 
         Spacer(modifier = Modifier.height(26.dp))
 

@@ -286,6 +286,21 @@ fun ProtectionScreen(
     }
 }
 
+/**
+ * One line of the protection landing list. The landing used to spell every
+ * row out inline, which made the desktop two-column body impossible without
+ * writing all eight rows twice.
+ */
+private class LandingModule(
+    val icon: ImageVector,
+    val accent: Color,
+    val title: String,
+    val subtitle: String,
+    val checked: Boolean,
+    val onCheckedChange: (Boolean) -> Unit,
+    val onClick: () -> Unit,
+)
+
 @Composable
 private fun ProtectionLanding(
     viewModel: AdGuardViewModel,
@@ -331,96 +346,131 @@ private fun ProtectionLanding(
         ) {
             Spacer(modifier = Modifier.height(2.dp))
 
-            ModuleRow(
-                icon = Icons.Default.Block,
-                accent = AdGuardGreenPrimary,
-                title = L10n.get(Strings.home_module_adblock_title),
-                subtitle = if (enabledFilters == 0) {
-                    L10n.get(Strings.protection_filters_empty)
-                } else {
-                    L10n.format(Strings.protection_filters_summary,
-                        enabledFilters,
-                        "%,d".format(enabledRules),
+            val modules = listOf(
+                LandingModule(
+                    icon = Icons.Default.Block,
+                    accent = AdGuardGreenPrimary,
+                    title = L10n.get(Strings.home_module_adblock_title),
+                    subtitle = if (enabledFilters == 0) {
+                        L10n.get(Strings.protection_filters_empty)
+                    } else {
+                        L10n.format(Strings.protection_filters_summary,
+                            enabledFilters,
+                            "%,d".format(enabledRules),
+                        )
+                    },
+                    checked = settings.isAdBlockingEnabled,
+                    onCheckedChange = { viewModel.onIntent(AdGuardIntent.ToggleAdBlocking) },
+                    onClick = { onOpen(ProtectionRoute.AD_BLOCKING) },
+                ),
+                LandingModule(
+                    icon = Icons.Default.NotificationsOff,
+                    accent = AdGuardOrangeWarning,
+                    title = L10n.get(Strings.home_module_annoyances_title),
+                    subtitle = L10n.get(Strings.home_module_annoyances_subtitle),
+                    checked = settings.isAnnoyancesEnabled,
+                    onCheckedChange = { viewModel.onIntent(AdGuardIntent.ToggleAnnoyances) },
+                    onClick = { onOpen(ProtectionRoute.ANNOYANCES) },
+                ),
+                LandingModule(
+                    icon = Icons.Default.TrackChanges,
+                    accent = AdGuardOrangeWarning,
+                    title = L10n.get(Strings.home_module_tracking_title),
+                    subtitle = L10n.get(Strings.home_module_tracking_subtitle),
+                    checked = settings.isTrackingProtectionEnabled,
+                    onCheckedChange = { viewModel.onIntent(AdGuardIntent.ToggleTracking) },
+                    onClick = { onOpen(ProtectionRoute.TRACKING) },
+                ),
+                LandingModule(
+                    icon = Icons.Default.Dns,
+                    accent = AdGuardBlueDns,
+                    title = L10n.get(Strings.home_module_dns_title),
+                    subtitle = dnsName,
+                    checked = settings.isDnsProtectionEnabled,
+                    onCheckedChange = { viewModel.onIntent(AdGuardIntent.ToggleDns) },
+                    onClick = { onOpen(ProtectionRoute.DNS) },
+                ),
+                LandingModule(
+                    icon = Icons.Default.Lock,
+                    accent = AdGuardPurpleAI,
+                    title = L10n.get(Strings.settings_https_title),
+                    subtitle = L10n.get(Strings.settings_https_enable_subtitle),
+                    checked = settings.isHttpsFilteringEnabled,
+                    onCheckedChange = { viewModel.onIntent(AdGuardIntent.ToggleHttps) },
+                    onClick = { onOpen(ProtectionRoute.HTTPS) },
+                ),
+                LandingModule(
+                    icon = Icons.Default.Shield,
+                    accent = AdGuardGreenPrimary,
+                    title = L10n.get(Strings.home_module_firewall_title),
+                    subtitle = if (limitedApps == 0) {
+                        L10n.get(Strings.protection_firewall_apps_none)
+                    } else {
+                        L10n.format(Strings.protection_firewall_apps_summary, limitedApps)
+                    },
+                    checked = settings.isFirewallEnabled,
+                    onCheckedChange = { viewModel.onIntent(AdGuardIntent.ToggleFirewall) },
+                    onClick = { onOpen(ProtectionRoute.FIREWALL) },
+                ),
+                LandingModule(
+                    icon = Icons.Default.Security,
+                    accent = AdGuardBlueDns,
+                    title = L10n.get(Strings.home_module_browsing_security_title),
+                    subtitle = L10n.get(Strings.home_module_browsing_security_subtitle),
+                    checked = settings.isBrowsingSecurityEnabled,
+                    onCheckedChange = { viewModel.onIntent(AdGuardIntent.ToggleBrowsingSecurity) },
+                    onClick = { onOpen(ProtectionRoute.BROWSING_SECURITY) },
+                ),
+                LandingModule(
+                    icon = Icons.Default.BatteryChargingFull,
+                    accent = AdGuardGreenLight,
+                    title = L10n.get(Strings.home_module_eco_title),
+                    subtitle = L10n.get(Strings.home_module_eco_subtitle),
+                    checked = settings.isEcoBatteryModeEnabled,
+                    onCheckedChange = { viewModel.onIntent(AdGuardIntent.ToggleEcoMode) },
+                    onClick = { onOpen(ProtectionRoute.ECO) },
+                ),
+            )
+
+            // A phone meets these one thumb-reach at a time, so it stacks
+            // them. A desktop window is read: AdGuard for Windows splits the
+            // module list into two columns of four, which halves the height
+            // the user has to scan and stops each row from stretching the
+            // full width with its text bunched at the left edge.
+            if (isDesktopLayout) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(32.dp),
+                ) {
+                    for (column in modules.chunked((modules.size + 1) / 2)) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            for (module in column) {
+                                ModuleRow(
+                                    icon = module.icon,
+                                    accent = module.accent,
+                                    title = module.title,
+                                    subtitle = module.subtitle,
+                                    checked = module.checked,
+                                    onCheckedChange = module.onCheckedChange,
+                                    onClick = module.onClick,
+                                )
+                            }
+                        }
+                    }
+                }
+            } else {
+                modules.forEach { module ->
+                    ModuleRow(
+                        icon = module.icon,
+                        accent = module.accent,
+                        title = module.title,
+                        subtitle = module.subtitle,
+                        checked = module.checked,
+                        onCheckedChange = module.onCheckedChange,
+                        onClick = module.onClick,
                     )
-                },
-                checked = settings.isAdBlockingEnabled,
-                onCheckedChange = { viewModel.onIntent(AdGuardIntent.ToggleAdBlocking) },
-                onClick = { onOpen(ProtectionRoute.AD_BLOCKING) },
-            )
-
-            ModuleRow(
-                icon = Icons.Default.NotificationsOff,
-                accent = AdGuardOrangeWarning,
-                title = L10n.get(Strings.home_module_annoyances_title),
-                subtitle = L10n.get(Strings.home_module_annoyances_subtitle),
-                checked = settings.isAnnoyancesEnabled,
-                onCheckedChange = { viewModel.onIntent(AdGuardIntent.ToggleAnnoyances) },
-                onClick = { onOpen(ProtectionRoute.ANNOYANCES) },
-            )
-
-            ModuleRow(
-                icon = Icons.Default.TrackChanges,
-                accent = AdGuardOrangeWarning,
-                title = L10n.get(Strings.home_module_tracking_title),
-                subtitle = L10n.get(Strings.home_module_tracking_subtitle),
-                checked = settings.isTrackingProtectionEnabled,
-                onCheckedChange = { viewModel.onIntent(AdGuardIntent.ToggleTracking) },
-                onClick = { onOpen(ProtectionRoute.TRACKING) },
-            )
-
-            ModuleRow(
-                icon = Icons.Default.Dns,
-                accent = AdGuardBlueDns,
-                title = L10n.get(Strings.home_module_dns_title),
-                subtitle = dnsName,
-                checked = settings.isDnsProtectionEnabled,
-                onCheckedChange = { viewModel.onIntent(AdGuardIntent.ToggleDns) },
-                onClick = { onOpen(ProtectionRoute.DNS) },
-            )
-
-            ModuleRow(
-                icon = Icons.Default.Lock,
-                accent = AdGuardPurpleAI,
-                title = L10n.get(Strings.settings_https_title),
-                subtitle = L10n.get(Strings.settings_https_enable_subtitle),
-                checked = settings.isHttpsFilteringEnabled,
-                onCheckedChange = { viewModel.onIntent(AdGuardIntent.ToggleHttps) },
-                onClick = { onOpen(ProtectionRoute.HTTPS) },
-            )
-
-            ModuleRow(
-                icon = Icons.Default.Shield,
-                accent = AdGuardGreenPrimary,
-                title = L10n.get(Strings.home_module_firewall_title),
-                subtitle = if (limitedApps == 0) {
-                    L10n.get(Strings.protection_firewall_apps_none)
-                } else {
-                    L10n.format(Strings.protection_firewall_apps_summary, limitedApps)
-                },
-                checked = settings.isFirewallEnabled,
-                onCheckedChange = { viewModel.onIntent(AdGuardIntent.ToggleFirewall) },
-                onClick = { onOpen(ProtectionRoute.FIREWALL) },
-            )
-
-            ModuleRow(
-                icon = Icons.Default.Security,
-                accent = AdGuardBlueDns,
-                title = L10n.get(Strings.home_module_browsing_security_title),
-                subtitle = L10n.get(Strings.home_module_browsing_security_subtitle),
-                checked = settings.isBrowsingSecurityEnabled,
-                onCheckedChange = { viewModel.onIntent(AdGuardIntent.ToggleBrowsingSecurity) },
-                onClick = { onOpen(ProtectionRoute.BROWSING_SECURITY) },
-            )
-
-            ModuleRow(
-                icon = Icons.Default.BatteryChargingFull,
-                accent = AdGuardGreenLight,
-                title = L10n.get(Strings.home_module_eco_title),
-                subtitle = L10n.get(Strings.home_module_eco_subtitle),
-                checked = settings.isEcoBatteryModeEnabled,
-                onCheckedChange = { viewModel.onIntent(AdGuardIntent.ToggleEcoMode) },
-                onClick = { onOpen(ProtectionRoute.ECO) },
-            )
+                }
+            }
 
             Spacer(modifier = Modifier.height(if (isDesktopLayout) 24.dp else 64.dp))
         }
