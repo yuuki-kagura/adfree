@@ -1122,6 +1122,7 @@ impl ProxySession {
             if let Some(verdict) = self
                 .host_filter
                 .as_deref()
+                .filter(|filter| !filter.excepted_page_open())
                 .and_then(|filter| filter.connection_block(name))
             {
                 crate::logbuf::push(&format!(
@@ -1830,6 +1831,12 @@ impl ProxySession {
             _ => String::new(),
         };
         let closes = facts.closes;
+        // A document the lists did not except means the browser has moved off
+        // the page the user took out of filtering; the resolver starts
+        // refusing ads again (see [`crate::page_exception`]).
+        if request_type == "document" && !filter.cosmetic_switches_for(&host).urlblock {
+            filter.end_excepted_page();
+        }
         // What the request's body amounts to if the rules answer it here.
         let body = facts.body;
         let decision = decide::decide_request(

@@ -1308,6 +1308,13 @@ pub struct FilterEngine {
     /// Whether the last [`Self::rebuild`] reused a cached engine instead of
     /// compiling the lists (diagnostics).
     last_build_cached: AtomicBool,
+    /// The page the user took out of filtering, if one is open.
+    ///
+    /// It lives on the engine rather than in a process-wide static because a
+    /// rebuild replaces the page's rules wholesale: the exemption and the rules
+    /// that granted it belong to the same engine, and the tests run in one
+    /// process against engines of their own.
+    exemption: crate::page_exception::Exemption,
 }
 
 impl Default for FilterEngine {
@@ -1347,6 +1354,7 @@ impl FilterEngine {
             build_errors: Mutex::new(Vec::new()),
             cache_dir: OnceLock::new(),
             last_build_cached: AtomicBool::new(false),
+            exemption: crate::page_exception::Exemption::default(),
         }
     }
 
@@ -1867,6 +1875,23 @@ impl FilterEngine {
     /// flags (the injection snippet builds every tag itself).
     pub fn cosmetic_switches_for(&self, host: &str) -> CosmeticSwitches {
         switches_for(&self.compiled(), host)
+    }
+
+    /// Remembers that a request just came from a page the rules excepted: the
+    /// resolver and the pre-handshake refusal stand down while it holds.
+    pub fn note_excepted_page(&self) {
+        self.exemption.note();
+    }
+
+    /// The browser moved to a page that is not excepted.
+    pub fn end_excepted_page(&self) {
+        self.exemption.end();
+    }
+
+    /// Whether the early stages should stand down (see
+    /// [`crate::page_exception`]).
+    pub fn excepted_page_open(&self) -> bool {
+        self.exemption.active()
     }
 
     /// Cosmetic rules that apply to `url`: element hiding, style actions,

@@ -2277,6 +2277,13 @@ fn a_urlblock_exception_lets_the_pages_own_requests_through() {
         head.starts_with("HTTP/1.1 404"),
         "the exception must let the request through: {head}"
     );
+    // The exception is not only about requests: most ads die in the resolver,
+    // where no request names a page. The engine remembers which page was
+    // excepted so those stages can stand down.
+    assert!(
+        core.filter_engine().excepted_page_open(),
+        "an excepted page must be remembered for the resolver"
+    );
     // The same request with a third-party page behind it: no exception covers
     // *that* page, so the rule fires.
     let (head, _) = request_with(

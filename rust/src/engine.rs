@@ -3994,7 +3994,14 @@ impl Core {
                 .lock()
                 .unwrap()
                 .note_blocked(host, self.uid_for_udp(pkt));
-        if verdict.blocked && !deferred && !smart_allowed {
+        // A page the user took out of filtering is the one exception the
+        // resolver cannot see for itself: a query names no page. While such a
+        // page is open the answer is forwarded like any other.
+        if verdict.blocked
+            && !deferred
+            && !smart_allowed
+            && !self.filter.excepted_page_open()
+        {
             self.stats.inc(&self.stats.dns_blocked);
             let saved = BYTES_PER_BLOCKED_REQUEST;
             self.stats.add(&self.stats.bytes_saved, saved);

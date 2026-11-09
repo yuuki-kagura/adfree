@@ -124,6 +124,10 @@ pub(crate) fn decide_request(
         crate::filter::url_host(source)
     };
     if !page_host.is_empty() && filter.cosmetic_switches_for(page_host).urlblock {
+        // The page is excepted, and this request proves the browser is still
+        // on it: the resolver and the pre-handshake refusal stand down while
+        // that holds (see [`crate::page_exception`]).
+        filter.note_excepted_page();
         // The network decision is skipped, but the page's cosmetics still
         // run: `$urlblock` alone unblocks requests, it does not switch
         // element hiding off.

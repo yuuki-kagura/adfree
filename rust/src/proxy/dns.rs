@@ -419,7 +419,10 @@ fn serve_one(listener: &Listener, query: &Inquiry, stop: &AtomicBool) {
         if verdict.blocked && verdict.rule_text.is_none() {
             verdict = core.filter_engine().check_host_detailed(&host);
         }
-        if verdict.blocked {
+        // A page the user took out of filtering: a query names no page, so the
+        // exemption is remembered rather than looked up, and the resolver
+        // stands down while it holds (see [`crate::page_exception`]).
+        if verdict.blocked && !core.filter_engine().excepted_page_open() {
             Served::Blocked {
                 message: dns::block_message(&parsed, cfg.block_mode).unwrap_or_default(),
                 rule: verdict.rule_text.unwrap_or_default(),
