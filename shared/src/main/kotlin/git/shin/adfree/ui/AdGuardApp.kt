@@ -15,6 +15,7 @@ import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -76,7 +77,6 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import git.shin.adfree.l10n.L10n
 import git.shin.adfree.l10n.Strings
-import git.shin.adfree.platform.LocalBackRegistry
 import git.shin.adfree.platform.currentFileHost
 import git.shin.adfree.platform.currentPlatformHost
 import git.shin.adfree.ui.screens.AppsManagementScreen
@@ -167,14 +167,42 @@ fun AdGuardBottomBar(
     }
 }
 
-/** Side navigation for wide layouts (tablets, desktop windows, landscape). */
+/**
+ * Side navigation for wide layouts (tablets, desktop windows, landscape).
+ *
+ * A desktop window has no app bar of its own: the wordmark sits at the top of
+ * the rail and the app-wide menu at its bottom, the way AdGuard for Windows
+ * keeps both in the sidebar and leaves the page to the page.
+ */
 @Composable
 fun AdGuardNavigationRail(
     currentTab: AdGuardTab,
     onTabSelected: (AdGuardTab) -> Unit,
+    modifier: Modifier = Modifier,
+    footer: (@Composable () -> Unit)? = null,
 ) {
     NavigationRail(
+        modifier = modifier,
         containerColor = AdGuardDarkSurface,
+        header = {
+            Column(
+                horizontalAlignment = Alignment.CenterHorizontally,
+                modifier = Modifier.padding(top = 10.dp, bottom = 6.dp),
+            ) {
+                Icon(
+                    imageVector = Icons.Default.Shield,
+                    contentDescription = null,
+                    tint = AdGuardGreenPrimary,
+                    modifier = Modifier.size(20.dp),
+                )
+                Text(
+                    text = L10n.get(Strings.app_name),
+                    fontSize = 10.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = AdGuardTextPrimary,
+                )
+            }
+        },
     ) {
         defaultNavItems().forEach { item ->
             val isSelected = currentTab == item.tab
@@ -203,6 +231,14 @@ fun AdGuardNavigationRail(
                 ),
                 modifier = Modifier.testTag(item.tag),
             )
+        }
+        if (footer != null) {
+            Spacer(modifier = Modifier.height(10.dp))
+            HorizontalDivider(
+                modifier = Modifier.width(36.dp),
+                color = AdGuardDarkOutline,
+            )
+            footer()
         }
     }
 }
@@ -243,147 +279,92 @@ private fun HttpsOffBar(onEnable: () -> Unit) {
 }
 
 /**
- * The header a desktop draws for itself. An OS title bar names the window,
- * not the screen inside it, so this carries the section crumb, one step back
- * while a sub-route or dialog is open, and the app-wide menu AdGuard keeps in
- * its own title bar: check for updates, and settings/activity export-import.
+ * The app-wide menu: check for updates and the settings/activity
+ * export-import pair. It lives at the bottom of the rail on a desktop window,
+ * where AdGuard for Windows keeps the same commands.
  */
 @Composable
-private fun WindowHeader(
-    viewModel: AdGuardViewModel,
-    currentTab: AdGuardTab,
-) {
-    val back = LocalBackRegistry.current
+private fun AppMenuButton(viewModel: AdGuardViewModel) {
     val files = currentFileHost()
     val scope = rememberCoroutineScope()
     var menuOpen by remember { mutableStateOf(false) }
     var pendingRestoreUri by remember { mutableStateOf<String?>(null) }
 
-    val crumb = when (currentTab) {
-        // The lab sits behind Settings rather than in the destination list.
-        AdGuardTab.AI_LAB -> L10n.get(Strings.settings_lab_title)
-        else -> defaultNavItems().firstOrNull { it.tab == currentTab }?.label?.asString()
-            ?: L10n.get(Strings.app_name)
-    }
-
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .background(AdGuardDarkSurface)
-            .height(48.dp)
-            .padding(horizontal = 12.dp),
-        verticalAlignment = Alignment.CenterVertically,
+    IconButton(
+        onClick = { menuOpen = true },
+        modifier = Modifier.testTag("header_menu"),
     ) {
-        if (back.depth > 0) {
-            TextButton(
-                onClick = { back.onBack() },
-                modifier = Modifier.testTag("header_back"),
-            ) {
-                Icon(
-                    imageVector = Icons.AutoMirrored.Filled.ArrowBack,
-                    contentDescription = null,
-                    modifier = Modifier.size(16.dp),
-                )
-                Spacer(modifier = Modifier.width(4.dp))
-                Text(L10n.get(Strings.hub_back), fontSize = 13.sp)
-            }
-        }
         Icon(
-            imageVector = Icons.Default.Shield,
-            contentDescription = null,
-            tint = AdGuardGreenPrimary,
-            modifier = Modifier.size(18.dp),
+            imageVector = Icons.Default.MoreVert,
+            contentDescription = L10n.get(Strings.app_name),
+            tint = AdGuardTextSecondary,
         )
-        Spacer(modifier = Modifier.width(8.dp))
-        Text(
-            text = L10n.get(Strings.app_name),
-            fontSize = 14.sp,
-            fontWeight = FontWeight.Bold,
-            color = AdGuardTextPrimary,
+    }
+    DropdownMenu(
+        expanded = menuOpen,
+        onDismissRequest = { menuOpen = false },
+        containerColor = AdGuardDarkSurface,
+    ) {
+        DropdownMenuItem(
+            text = {
+                Text(L10n.get(Strings.header_check_updates), fontSize = 13.sp, color = AdGuardTextPrimary)
+            },
+            onClick = {
+                menuOpen = false
+                viewModel.checkAppUpdateManually()
+            },
         )
-        Text(
-            text = "· $crumb",
-            fontSize = 13.sp,
-            color = AdGuardTextMuted,
-            modifier = Modifier.padding(start = 8.dp),
+        HorizontalDivider(color = AdGuardDarkOutline)
+        DropdownMenuItem(
+            text = {
+                Text(L10n.get(Strings.header_export_settings), fontSize = 13.sp, color = AdGuardTextPrimary)
+            },
+            onClick = {
+                menuOpen = false
+                scope.launch {
+                    files.createDocument("adfree-backup.json", "application/json")?.let {
+                        viewModel.onIntent(AdGuardIntent.ExportBackup(it))
+                    }
+                }
+            },
         )
-        Spacer(modifier = Modifier.weight(1f))
-        IconButton(
-            onClick = { menuOpen = true },
-            modifier = Modifier.testTag("header_menu"),
-        ) {
-            Icon(
-                imageVector = Icons.Default.MoreVert,
-                contentDescription = L10n.get(Strings.app_name),
-                tint = AdGuardTextSecondary,
-            )
-        }
-        DropdownMenu(
-            expanded = menuOpen,
-            onDismissRequest = { menuOpen = false },
-            containerColor = AdGuardDarkSurface,
-        ) {
-            DropdownMenuItem(
-                text = {
-                    Text(L10n.get(Strings.header_check_updates), fontSize = 13.sp, color = AdGuardTextPrimary)
-                },
-                onClick = {
-                    menuOpen = false
-                    viewModel.checkAppUpdateManually()
-                },
-            )
-            HorizontalDivider(color = AdGuardDarkOutline)
-            DropdownMenuItem(
-                text = {
-                    Text(L10n.get(Strings.header_export_settings), fontSize = 13.sp, color = AdGuardTextPrimary)
-                },
-                onClick = {
-                    menuOpen = false
-                    scope.launch {
-                        files.createDocument("adfree-backup.json", "application/json")?.let {
-                            viewModel.onIntent(AdGuardIntent.ExportBackup(it))
-                        }
+        DropdownMenuItem(
+            text = {
+                Text(L10n.get(Strings.header_import_settings), fontSize = 13.sp, color = AdGuardTextPrimary)
+            },
+            onClick = {
+                menuOpen = false
+                scope.launch {
+                    files.openText()?.let { pendingRestoreUri = it }
+                }
+            },
+        )
+        DropdownMenuItem(
+            text = {
+                Text(L10n.get(Strings.log_export_action), fontSize = 13.sp, color = AdGuardTextPrimary)
+            },
+            onClick = {
+                menuOpen = false
+                scope.launch {
+                    files.createDocument("adfree-activity.csv", "text/csv")?.let {
+                        viewModel.onIntent(AdGuardIntent.ExportLogs(it))
                     }
-                },
-            )
-            DropdownMenuItem(
-                text = {
-                    Text(L10n.get(Strings.header_import_settings), fontSize = 13.sp, color = AdGuardTextPrimary)
-                },
-                onClick = {
-                    menuOpen = false
-                    scope.launch {
-                        files.openText()?.let { pendingRestoreUri = it }
-                    }
-                },
-            )
-            DropdownMenuItem(
-                text = {
-                    Text(L10n.get(Strings.log_export_action), fontSize = 13.sp, color = AdGuardTextPrimary)
-                },
-                onClick = {
-                    menuOpen = false
-                    scope.launch {
-                        files.createDocument("adfree-activity.csv", "text/csv")?.let {
-                            viewModel.onIntent(AdGuardIntent.ExportLogs(it))
-                        }
-                    }
-                },
-            )
-            // The desktop window has no toolbar of its own for the log, so the
-            // file the user wants to read is one menu item away.
-            DropdownMenuItem(
-                text = {
-                    Text(L10n.get(Strings.log_import_action), fontSize = 13.sp, color = AdGuardTextPrimary)
-                },
-                onClick = {
-                    menuOpen = false
-                    scope.launch {
-                        files.openText()?.let { viewModel.onIntent(AdGuardIntent.ImportLogs(it)) }
-                    }
-                },
-            )
-        }
+                }
+            },
+        )
+        // The desktop window has no toolbar of its own for the log, so the
+        // file the user wants to read is one menu item away.
+        DropdownMenuItem(
+            text = {
+                Text(L10n.get(Strings.log_import_action), fontSize = 13.sp, color = AdGuardTextPrimary)
+            },
+            onClick = {
+                menuOpen = false
+                scope.launch {
+                    files.openText()?.let { viewModel.onIntent(AdGuardIntent.ImportLogs(it)) }
+                }
+            },
+        )
     }
 
     pendingRestoreUri?.let { uri ->
@@ -473,15 +454,10 @@ fun AdGuardApp(
             modifier = Modifier.fillMaxSize(),
             containerColor = AdGuardDarkBg,
             topBar = {
-                // A desktop window's OS title bar names the app, not the
-                // screen: the crumb, the back step and the app-wide menu go
-                // here. A phone gets all three from the system instead.
-                if (isWide && platform.supportsWindowHeader()) {
-                    WindowHeader(
-                        viewModel = viewModel,
-                        currentTab = state.currentTab,
-                    )
-                }
+                // A desktop window gets its identity and its app-wide menu
+                // from the rail instead: a 48dp bar repeating "AdFree · Bảo vệ"
+                // above a page titled "Bảo vệ" is a row of chrome that buys
+                // nothing but a shorter page.
             },
             snackbarHost = {
                 SnackbarHost(snackbarHostState) { data ->
@@ -524,9 +500,13 @@ fun AdGuardApp(
                     .padding(innerPadding),
             ) {
                 if (isWide) {
+                    // The rail owns the whole column so the app menu can sit
+                    // at its foot, the way AdGuard for Windows parks the same
+                    // menu under the sidebar.
                     AdGuardNavigationRail(
                         currentTab = state.currentTab,
                         onTabSelected = { viewModel.onIntent(AdGuardIntent.SelectTab(it)) },
+                        footer = { AppMenuButton(viewModel) },
                     )
                 }
                 Box(

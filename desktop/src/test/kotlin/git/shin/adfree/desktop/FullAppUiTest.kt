@@ -100,9 +100,9 @@ class FullAppUiTest {
             // machine's own conversations reach the filter at all.
             onNodeWithText(L10n.get(Strings.settings_local_proxy_filter_localhost_title)).assertExists()
 
-            // The desktop shell draws its own window header: the OS title bar
-            // says nothing about where in the app you are, and there is no
-            // system menu for settings export/import either.
+            // The desktop shell keeps its app-wide menu at the bottom of the
+            // rail, where AdGuard for Windows keeps the same commands: the OS
+            // title bar carries no app menu of its own.
             onNodeWithTag("header_menu").assertExists()
             onNodeWithTag("header_menu").performClick()
             waitUntilAtLeastOneExists(hasText(L10n.get(Strings.header_export_settings)), 30_000)
