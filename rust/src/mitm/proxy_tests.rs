@@ -1651,6 +1651,46 @@ fn redirect_bodies_are_left_alone() {
     assert!(!out.windows(6).any(|w| w == b"adfree"));
 }
 
+/// A rule added after a page was cached must reach that page anyway: the
+/// runtime asks the app for the live rules instead of trusting the document it
+/// was injected into.
+#[test]
+fn the_live_rules_endpoint_answers_with_the_current_rules() {
+    let engine = engine_with(
+        "live-cosmetics",
+        "origin.example.com##.ad-slot\norigin.example.com#?#div:has(> .sponsor)\n",
+    );
+    let mut buffer = b"GET /adfree-cosmetics.json?dmn=origin.example.com HTTP/1.1\r\nHost: 192.0.2.1\r\n\r\n"
+        .to_vec();
+    let response = take_local_request(
+        "",
+        "",
+        Some(&engine),
+        Some("origin.example.com"),
+        &mut buffer,
+    )
+    .expect("the endpoint answers");
+    let text = String::from_utf8_lossy(&response).to_string();
+    assert!(text.contains("no-store"), "the answer must not be cached: {text}");
+    let body_start = text.find("\r\n\r\n").expect("headers") + 4;
+    let payload: serde_json::Value =
+        serde_json::from_str(&text[body_start..]).expect("json payload");
+    let hide = payload["hide"].as_array().expect("hide list");
+    assert!(hide.iter().any(|v| v == ".ad-slot"), "{payload}");
+    assert!(
+        hide.iter().any(|v| v.as_str().is_some_and(|s| s.contains(":has("))),
+        "a functional rule still has to reach the page: {payload}"
+    );
+
+    // A host nothing covers still answers, with an empty rule set.
+    let mut buffer = b"GET /adfree-cosmetics.json?dmn=quiet.test HTTP/1.1\r\nHost: 192.0.2.1\r\n\r\n"
+        .to_vec();
+    let response = take_local_request("", "", Some(&engine), Some("quiet.test"), &mut buffer)
+        .expect("answered");
+    let text = String::from_utf8_lossy(&response).to_string();
+    assert_eq!(&text[text.find("\r\n\r\n").expect("headers") + 4..], "{}");
+}
+
 /// The hiding selectors are the bulk of the per-page payload, and they repeat
 /// on every page of a site: they are served as a stylesheet whose URL carries
 /// their content hash, so the browser fetches them once and keeps them.

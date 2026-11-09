@@ -521,9 +521,16 @@
     const done = (ok) => {
       if (callback) callback(ok);
     };
-    // The engine applies the rule before it answers, so a page reload after
-    // this callback already hides what the user removed.
-    assistantCall('rule', { rule, dmn }).then((answer) => done(Boolean(answer && answer.ok)));
+    // The engine applies the rule before it answers, so one more ask of the
+    // live rules covers the element the user picked — the page itself never
+    // has to be reloaded for the rule to take effect.
+    assistantCall('rule', { rule, dmn }).then((answer) => {
+      const accepted = Boolean(answer && answer.ok);
+      if (accepted) {
+        refreshSoon();
+      }
+      done(accepted);
+    });
   };
 
   // `ADG_temporaryDontBlock(timeout, callback)`: suspend filtering for this
@@ -648,6 +655,81 @@
     if (++assistantTries < 40) setTimeout(tryAssistant, 250);
   };
   tryAssistant();
+
+  // --- live rules -----------------------------------------------------------
+  //
+  // Everything above came out of the document itself: `__adfree_page` and the
+  // `adfree-hide` stylesheet were written into the response when it was
+  // produced. A browser reuses that response for a later load — and a rule the
+  // user added since then (the assistant's picker, the browser extension) is
+  // in none of it. That is why a blocked element used to come back on reload:
+  // the page was the same bytes, so it hid the same things.
+  //
+  // The app knows the current rules; this asks it again on every load, and
+  // again after a rule is added, so what is hidden is what the engine holds
+  // rather than what it held when the page was cached.
+  let live = null;
+  const applyLive = (answer) => {
+    if (!answer || typeof answer !== 'object') {
+      return false;
+    }
+    let changed = false;
+    const swap = (target, next) => {
+      if (!Array.isArray(next)) {
+        return;
+      }
+      const before = JSON.stringify(target);
+      target.length = 0;
+      for (const item of next) {
+        target.push(item);
+      }
+      if (JSON.stringify(target) !== before) {
+        changed = true;
+      }
+    };
+    swap(hideSelectors, answer.hide);
+    swap(stylePairs, answer.style);
+    swap(procedural, answer.procedural);
+    if (changed) {
+      installStyles();
+      runProcedural();
+    }
+    return changed;
+  };
+  const refreshRules = async () => {
+    try {
+      const answer = await fetch(
+        `${base}/adfree-cosmetics.json?dmn=${encodeURIComponent(dmn)}`,
+        { credentials: 'omit', cache: 'no-store' },
+      );
+      if (!answer.ok) {
+        return false;
+      }
+      live = await answer.json();
+    } catch {
+      return false;
+    }
+    return applyLive(live);
+  };
+  // The engine rebuilds its rule set on a worker, so a rule the assistant just
+  // added is only in the answer a moment later: ask again a few times instead
+  // of trusting the first answer. Every ask is a local round trip.
+  const refreshSoon = () => {
+    // The rebuild of a large rule set is not instant, and the page must not be
+    // reloaded for the pick to show: keep asking for a few seconds.
+    for (const wait of [0, 700, 1500, 2500, 4000, 6000, 9000]) {
+      setTimeout(refreshRules, wait);
+    }
+  };
+  // Once the document is parsed: the first paint is already covered by the
+  // inline rules, and the fetch must not hold up parsing.
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', () => {
+      refreshRules();
+    });
+  } else {
+    refreshRules();
+  }
 
   try {
     host.ADG_addRule = addRule;

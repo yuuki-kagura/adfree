@@ -392,6 +392,23 @@ pub fn inject_script(body: &[u8], src: &str) -> (Vec<u8>, Decision) {
 /// `report-only` policies are diagnostics, not enforcement: they travel back
 /// exactly as they came.
 pub fn csp_with_nonce(headers: &[u8], nonce: &str, host_source: &str) -> Vec<u8> {
+    rewrite_policy(headers, Some(nonce), host_source)
+}
+
+/// The same allowance without a nonce: our origin, and nothing else.
+///
+/// A response whose body we did not write still needs it. A browser that
+/// revalidates a document gets a `304 Not Modified` from the site, and the
+/// site's own policy — its nonce, not ours — replaces the headers of the copy
+/// already in the browser's cache, while the cached body keeps the tags we
+/// put there. Their nonce no longer matches, so the tags would be blocked and
+/// the page would lose every cosmetic rule it was carrying. The origin is the
+/// one source expression that matches our assets however the policy arrived.
+pub fn csp_with_host_source(headers: &[u8], host_source: &str) -> Vec<u8> {
+    rewrite_policy(headers, None, host_source)
+}
+
+fn rewrite_policy(headers: &[u8], nonce: Option<&str>, host_source: &str) -> Vec<u8> {
     let mut out = Vec::with_capacity(headers.len() + 64);
     for line in headers.split_inclusive(|b| *b == b'\n') {
         let lower: Vec<u8> = line.iter().map(|b| b.to_ascii_lowercase()).collect();
@@ -416,7 +433,7 @@ pub fn csp_with_nonce(headers: &[u8], nonce: &str, host_source: &str) -> Vec<u8>
 }
 
 /// One policy with the nonce (or the origin) added where it would block us.
-fn add_nonce_to_policy(value: &str, nonce: &str, host_source: &str) -> String {
+fn add_nonce_to_policy(value: &str, nonce: Option<&str>, host_source: &str) -> String {
     let directives: Vec<&str> = value
         .split(';')
         .map(str::trim)
@@ -469,6 +486,10 @@ fn add_nonce_to_policy(value: &str, nonce: &str, host_source: &str) -> String {
             .any(|s| s.eq_ignore_ascii_case("'strict-dynamic'") || is_nonce_or_hash(s));
         // A lone `default-src` carries several of our carriers at once: one
         // addition each, and never the same value twice.
+        if sources.iter().any(|s| s.eq_ignore_ascii_case(host_source)) {
+            // Already allowed: nothing to add, nothing to duplicate.
+            continue;
+        }
         let mut additions: Vec<String> = Vec::new();
         for carrier in wanted {
             let addition = carrier.addition(inline && !native_inline, nonce, host_source);
@@ -509,11 +530,15 @@ impl Carrier {
     /// `Connect` has no element to hang a nonce on: `connect-src` has no
     /// nonce-source, so the origin is the only way in — and the runtime's
     /// lookup is a `fetch`, which nothing else reaches.
-    fn addition(self, inline_only: bool, nonce: &str, host_source: &str) -> String {
-        if inline_only || self == Carrier::Connect {
-            format!(" {host_source}")
-        } else {
-            format!(" 'nonce-{nonce}'")
+    fn addition(self, inline_only: bool, nonce: Option<&str>, host_source: &str) -> String {
+        match nonce {
+            // The origin always goes in, even beside a nonce: a document the
+            // browser already holds carries the nonce of the response that
+            // wrote it, and a later answer brings a different one.
+            Some(nonce) if !inline_only && self != Carrier::Connect => {
+                format!(" 'nonce-{nonce}' {host_source}")
+            }
+            _ => format!(" {host_source}"),
         }
     }
 }
@@ -2225,9 +2250,12 @@ mod tests {
     fn teaches_the_policy_our_nonce() {
         let head = b"HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Security-Policy: script-src 'self'; style-src 'self'\r\nContent-Security-Policy-Report-Only: default-src 'none'\r\nX-Kept: yes\r\n\r\n";
         let out = String::from_utf8(csp_with_nonce(head, "abc123", "https://192.0.2.1")).unwrap();
+        // The nonce answers the document we just wrote; the origin answers the
+        // one the browser already had (a `304` brings the site's own policy
+        // back, and its nonce is no longer ours).
         assert!(
             out.contains(
-                "Content-Security-Policy: script-src 'self' 'nonce-abc123'; style-src 'self' 'nonce-abc123'"
+                "Content-Security-Policy: script-src 'self' 'nonce-abc123' https://192.0.2.1; style-src 'self' 'nonce-abc123' https://192.0.2.1"
             ),
             "{out}"
         );
@@ -2238,6 +2266,30 @@ mod tests {
         );
         assert!(out.contains("X-Kept: yes"), "{out}");
         assert!(out.contains("Content-Type: text/html"), "{out}");
+    }
+
+    #[test]
+    fn a_response_we_did_not_write_still_allows_our_origin() {
+        // What a site answers to a revalidation, and what a browser then holds
+        // for a document whose body carries our tags.
+        let head = b"HTTP/1.1 304 Not Modified\r\nContent-Type: text/html\r\nContent-Security-Policy: script-src 'self' 'nonce-theirs'; default-src 'self'; connect-src 'self'\r\n\r\n";
+        let out = String::from_utf8(csp_with_host_source(head, "https://192.0.2.1")).unwrap();
+        assert!(
+            out.contains("script-src 'self' 'nonce-theirs' https://192.0.2.1"),
+            "{out}"
+        );
+        assert!(
+            out.contains("default-src 'self' https://192.0.2.1"),
+            "{out}"
+        );
+        assert!(
+            out.contains("connect-src 'self' https://192.0.2.1"),
+            "{out}"
+        );
+        // Said once, however often the head passes through.
+        let again =
+            String::from_utf8(csp_with_host_source(out.as_bytes(), "https://192.0.2.1")).unwrap();
+        assert_eq!(again.matches("https://192.0.2.1").count(), 3, "{again}");
     }
 
     #[test]

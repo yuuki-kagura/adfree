@@ -69,6 +69,16 @@ const MAX_ASSISTANT_RULE_LEN: usize = 4096;
 /// stylesheet the browser caches instead of inline script data.
 pub const HIDE_PATH: &str = "/adfree-hide.css";
 
+/// The engine's cosmetic rules for one host, as the page runtime asks for them.
+///
+/// The rules baked into a document are the ones the proxy knew when that
+/// response was written, and a browser may reuse the response for a later
+/// load. A rule the user added since — the assistant's picker, the browser
+/// extension — is therefore absent from a cached page, which is exactly how a
+/// blocked element comes back after a reload. This endpoint is the live answer
+/// the runtime re-reads on every load.
+pub const COSMETIC_PATH: &str = "/adfree-cosmetics.json";
+
 /// Cache policy for the local answers whose URL carries a content hash: the
 /// bytes behind a given URL can never change, so the browser need not ask
 /// again. (A filter update changes the hash, which changes the URL.)
@@ -495,9 +505,11 @@ impl StreamState {
             None
         };
         let mut head = std::mem::take(&mut self.head);
-        if injecting {
-            head = http::csp_with_nonce(&head, &self.nonce, LOCAL_ORIGIN);
-        }
+        head = if injecting {
+            http::csp_with_nonce(&head, &self.nonce, LOCAL_ORIGIN)
+        } else {
+            http::csp_with_host_source(&head, LOCAL_ORIGIN)
+        };
         out.extend_from_slice(&http::head_for_chunked_body(&head, encoding));
     }
 
@@ -558,13 +570,17 @@ fn emit_passthrough(
     framing: Framing,
     encoding: http::Encoding,
 ) {
+    // Even a body we did not write travels under a policy that allows our
+    // origin: a `304` from the site replaces the cached policy with its own,
+    // and the cached body — with our tags in it — would otherwise be blocked.
+    let head = http::csp_with_host_source(head, LOCAL_ORIGIN);
     match framing {
         Framing::Length(_) => {
-            out.extend_from_slice(head);
+            out.extend_from_slice(&head);
             out.extend_from_slice(body);
         }
         Framing::Chunked => {
-            out.extend_from_slice(&http::head_for_chunked_body(head, encoding.name()));
+            out.extend_from_slice(&http::head_for_chunked_body(&head, encoding.name()));
             http::emit_chunk(out, body);
             http::emit_last_chunk(out);
         }
@@ -576,6 +592,8 @@ fn emit_passthrough(
 /// The head goes out with the length of what follows it, compressed again when
 /// the origin's body was: a page that arrived compressed leaves compressed.
 fn emit_edited(out: &mut Vec<u8>, head: &[u8], body: &[u8], recompress: bool) {
+    let head = http::csp_with_host_source(head, LOCAL_ORIGIN);
+    let head = head.as_slice();
     match (recompress, http::gzip_encode(body)) {
         (true, Some(gzipped)) => {
             out.extend_from_slice(&http::head_for_new_body(head, gzipped.len(), Some("gzip")));
@@ -2253,8 +2271,14 @@ impl ProxySession {
                     }
                     // A response to HEAD advertises the length of the body it
                     // would have carried, and then carries no body at all.
+                    //
+                    // A `304` is the interesting one of those: it re-states the
+                    // site's own policy for a document the browser already
+                    // holds — the one we wrote, tags and all. Without the
+                    // origin in that policy the browser drops our script, and
+                    // the page quietly loses every cosmetic rule.
                     if info.bodyless() || req.info.head {
-                        out.extend_from_slice(&head);
+                        out.extend_from_slice(&http::csp_with_host_source(&head, LOCAL_ORIGIN));
                         continue;
                     }
                     let framing = if info.chunked {
@@ -2840,6 +2864,19 @@ pub fn take_local_request(
             PAGE_RUNTIME.as_bytes(),
             gzip,
             false,
+        ));
+    }
+    if target == COSMETIC_PATH {
+        buffer.drain(..head);
+        let body = host
+            .as_deref()
+            .map(|h| live_cosmetic_json(filter, h))
+            .unwrap_or_else(|| "{}".to_string());
+        // `no-store` inside `http_response`: this answer is the *current*
+        // rules, and a cached copy of it would be the bug it exists to fix.
+        return Some(http_response(
+            "application/json; charset=utf-8",
+            body.as_bytes(),
         ));
     }
     if target == HIDE_PATH {
@@ -3473,6 +3510,26 @@ pub(super) fn versioned_path(path: &str, hash: u64) -> String {
 /// writes the link and whoever answers it build the same string. The host
 /// travels in the URL (`dmn=`) because the answer comes from the app's own
 /// origin, where the session's SNI is not the page's hostname.
+/// The cosmetic rules `host` has right now, in the shape the page runtime
+/// already understands (`hide`, `style`, `procedural`, `dynamic`).
+pub(crate) fn live_cosmetic_json(filter: &FilterEngine, host: &str) -> String {
+    let rules = filter.cosmetic_resources_for_host(host);
+    let mut obj = serde_json::Map::new();
+    if !rules.hide_selectors.is_empty() {
+        obj.insert("hide".into(), serde_json::json!(rules.hide_selectors));
+    }
+    if !rules.style_rules.is_empty() {
+        obj.insert("style".into(), serde_json::json!(rules.style_rules));
+    }
+    if !rules.procedural.is_empty() {
+        obj.insert("procedural".into(), serde_json::json!(rules.procedural));
+    }
+    if rules.generichide {
+        obj.insert("dynamic".into(), serde_json::Value::Bool(false));
+    }
+    serde_json::Value::Object(obj).to_string()
+}
+
 pub(crate) fn hide_stylesheet(filter: &FilterEngine, host: &str) -> Option<(String, String)> {
     let selectors = filter.hide_selectors_for(host);
     if selectors.is_empty() {
