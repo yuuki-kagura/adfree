@@ -302,12 +302,6 @@ async fn handle_request(
     plan.block_cookies |= stealth_plan.block_cookies;
     plan.drop_etag |= stealth_plan.drop_etag;
     if let Some(answer) = decision.answer {
-        // The badge on the page counts what was blocked for it, whichever
-        // transport carried the request (see `crate::page_stats`).
-        let status = crate::mitm::http::parse_response_head(&answer.response).status;
-        if !(300..400).contains(&status) {
-            crate::page_stats::block(&config.server_name);
-        }
         if let Some(sink) = config.sink {
             sink(&MitmBlock {
                 host: &config.server_name,

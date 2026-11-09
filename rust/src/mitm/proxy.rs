@@ -79,13 +79,6 @@ pub const HIDE_PATH: &str = "/adfree-hide.css";
 /// the runtime re-reads on every load.
 pub const COSMETIC_PATH: &str = "/adfree-cosmetics.json";
 
-/// The page's own blocked count, as the badge on the assistant button reads it.
-///
-/// The engine blocks requests; the page draws the badge; nothing else can put
-/// the two together without the extension's help, which an extension cannot be
-/// asked for.
-pub const PAGE_STATS_PATH: &str = "/adfree-page-stats.json";
-
 /// Cache policy for the local answers whose URL carries a content hash: the
 /// bytes behind a given URL can never change, so the browser need not ask
 /// again. (A filter update changes the hash, which changes the URL.)
@@ -1134,7 +1127,6 @@ impl ProxySession {
                 crate::logbuf::push(&format!(
                     "mitm {name}: blocked by the DNS lists before the handshake"
                 ));
-                crate::page_stats::block(name);
                 if let Some(sink) = self.sink {
                     sink(&MitmBlock {
                         host: name,
@@ -1840,12 +1832,6 @@ impl ProxySession {
         let closes = facts.closes;
         // What the request's body amounts to if the rules answer it here.
         let body = facts.body;
-        // A document for a host is that host's page starting over: whatever it
-        // had blocked belongs to the page the user left, and the badge the
-        // page draws must not inherit it.
-        if request_type == "document" {
-            crate::page_stats::enter(&host);
-        }
         let decision = decide::decide_request(
             &RequestContext {
                 filter,
@@ -1863,13 +1849,6 @@ impl ProxySession {
             head_end,
         );
         if let Some(answer) = decision.answer {
-            // A blocked request is one the page asked for and never got; a
-            // redirect is the same request going somewhere else, and no page
-            // lost anything to it. The badge counts the first kind only.
-            let status = http::parse_response_head(&answer.response).status;
-            if !(300..400).contains(&status) {
-                crate::page_stats::block(&host);
-            }
             buffer.drain(..decision.head_end);
             *discard = swallow_body(None, body, buffer, Some(host.as_str()));
             let started = Instant::now();
@@ -2938,21 +2917,8 @@ pub fn take_local_request(
             .unwrap_or_else(|| "{}".to_string());
         // `no-store`: this answer is the *current* rules, and a cached copy of
         // it would be the bug it exists to fix. CORS because the page reads it
-        // with `fetch`, not with a tag.
-        return Some(local_response(
-            "application/json; charset=utf-8",
-            "no-store",
-            body.as_bytes(),
-            gzip,
-            true,
-        ));
-    }
-    if target == PAGE_STATS_PATH {
-        buffer.drain(..head);
-        let blocked = host.as_deref().map(crate::page_stats::read).unwrap_or(0);
-        let body = format!("{{\"blocked\":{blocked}}}");
-        // The badge polls this: a cached answer would be yesterday's count,
-        // and the page reads it with `fetch`, so it must be allowed to.
+        // with `fetch` rather than loading it as a tag; without the header the
+        // fetch fails and a rule added since the document is silently lost.
         return Some(local_response(
             "application/json; charset=utf-8",
             "no-store",

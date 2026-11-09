@@ -1698,32 +1698,6 @@ fn the_live_rules_endpoint_answers_with_the_current_rules() {
     assert_eq!(&text[text.find("\r\n\r\n").expect("headers") + 4..], "{}");
 }
 
-/// The badge on the page reads the count from here, and the count is whatever
-/// the app blocked for that page since its last document.
-#[test]
-fn the_page_count_is_answered_and_starts_again_with_a_document() {
-    let engine = engine_with("page-stats", "||ads.example^\n");
-    crate::page_stats::clear();
-    crate::page_stats::enter("origin.example.com");
-    crate::page_stats::block("ads.example");
-    crate::page_stats::block("tracker.example");
-
-    let mut buffer =
-        b"GET /adfree-page-stats.json?dmn=origin.example.com HTTP/1.1\r\nHost: 192.0.2.1\r\n\r\n"
-            .to_vec();
-    let response = take_local_request("", "", Some(&engine), None, &mut buffer).expect("answered");
-    let text = String::from_utf8_lossy(&response).to_string();
-    assert!(text.contains("no-store"), "the count must not be cached: {text}");
-    assert!(text.ends_with("{\"blocked\":2}"), "{text}");
-
-    // A host nobody blocked anything for answers with zero, not silence.
-    let mut buffer = b"GET /adfree-page-stats.json?dmn=quiet.test HTTP/1.1\r\nHost: 192.0.2.1\r\n\r\n"
-        .to_vec();
-    let response = take_local_request("", "", Some(&engine), None, &mut buffer).expect("answered");
-    let text = String::from_utf8_lossy(&response).to_string();
-    assert!(text.ends_with("{\"blocked\":0}"), "{text}");
-}
-
 /// The hiding selectors are the bulk of the per-page payload, and they repeat
 /// on every page of a site: they are served as a stylesheet whose URL carries
 /// their content hash, so the browser fetches them once and keeps them.
