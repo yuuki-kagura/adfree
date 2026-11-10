@@ -177,6 +177,17 @@ class DesktopPlatformHost(
             is PrivilegeOutcome.Ok -> {
                 System.err.println("[desktop] the privileged instance is up; this window is leaving")
                 onEngineTakeover()
+                // The shell wires `onEngineTakeover` from a composition effect,
+                // and the ask can answer before that effect has run: a window
+                // that only waits to be told then stays up beside the
+                // privileged one, with its tray icon and its own idea of the
+                // state. Leaving is this window's decision, so it is taken
+                // here as well.
+                Thread({
+                    Thread.sleep(3_000)
+                    System.err.println("[desktop] the privileged instance is filtering; this window closes")
+                    kotlin.system.exitProcess(0)
+                }, "adfree-leave").apply { isDaemon = true }.start()
                 null
             }
             is PrivilegeOutcome.Denied -> outcome.reason
@@ -363,6 +374,27 @@ class DesktopTunnelControl(
     private val requestPrivileges: () -> String? = { null },
     /** Told when the ask was refused or broke, so the window can say so. */
     private val report: (String) -> Unit = {},
+    /**
+     * Hands the engine lock to the unit before asking for it. The unit runs a
+     * second `main` that takes the same lock and waits ten seconds for it;
+     * asking while still holding it made the two wait for each other, the unit
+     * gave up, and the machine was left filtered by neither while the window
+     * went on saying protection was on.
+     */
+    private val releaseInstanceLock: () -> Unit = {},
+    /** Takes the lock back when nothing took over after all. */
+    private val reacquireInstanceLock: () -> Boolean = { true },
+    /**
+     * Closes the browser extension's socket before the unit starts.
+     *
+     * The unit answers the same path, and a socket is not something two
+     * processes can share: whichever starts second finds the first one's live
+     * socket and gives up. The window is the one leaving, so it gives the path
+     * up first — the same rule as the ports and the lock.
+     */
+    private val releaseAssistantBridge: () -> Unit = {},
+    /** Opens the bridge again when the hand-over did not happen. */
+    private val restoreAssistantBridge: () -> Unit = {},
 ) : TunnelControl {
 
     override val isVpnActive: StateFlow<Boolean> = protectionWanted
@@ -392,7 +424,19 @@ class DesktopTunnelControl(
         if (privileges != null && !privileges.canSetFirewallMark() && !privilegeAskRefused.get()) {
             System.err.println("[desktop] protection needs CAP_NET_ADMIN; asking the system")
             Thread({
+                // Before the ask, not after: the unit cannot start filtering
+                // until this window stops owning the engine. The listeners go
+                // down with it so the ports it needs are free. Rules are not
+                // removed — this process never had the capability to install
+                // any, and asking for it here would raise a password dialog in
+                // a thread nobody is watching.
+                coreEngine.stopProxy()
+                releaseAssistantBridge()
+                releaseInstanceLock()
                 val reason = requestPrivileges()
+                if (reason != null && !reacquireInstanceLock()) {
+                    System.err.println("[desktop] the lock stayed taken; not filtering from this window")
+                }
                 if (reason == null) return@Thread
                 // Refused once is refused for this run: protection that comes
                 // back on after a port change must not raise the same dialog
@@ -401,6 +445,7 @@ class DesktopTunnelControl(
                 privilegeAskRefused.set(true)
                 System.err.println("[desktop] privilege ask refused: $reason")
                 report(reason)
+                restoreAssistantBridge()
                 startListeners()
             }, "adfree-privilege-ask").apply { isDaemon = true }.start()
             return

@@ -174,9 +174,15 @@ class AssistantBridge(
 
     fun stop() {
         running = false
+        // Only a process that is bound owns the path. Deleting unconditionally
+        // would let a window that failed to bind remove the socket of the
+        // instance that did — during the hand-over the unit and the window
+        // share this path for as long as both are alive.
+        val owned = server != null
         runCatching { server?.close() }
         server = null
-        socketFile().delete()
+        if (owned) runCatching { socketFile().delete() }
+        log("assistant bridge: released (owned=$owned)")
     }
 
     private suspend fun acceptLoop() {

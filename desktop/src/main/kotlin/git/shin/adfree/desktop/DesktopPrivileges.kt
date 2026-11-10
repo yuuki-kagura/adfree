@@ -67,6 +67,9 @@ class DesktopPrivileges(
         }.getOrDefault(false)
     },
     private val listenerAnswers: (Int) -> Boolean = ::probeProxyListener,
+    /** How long a start waits for the unit to be both active and answering. */
+    private val unitStartChecks: Int = UNIT_START_CHECKS,
+    private val unitStartPollMs: Long = UNIT_START_POLL_MS,
 ) {
 
     /** True when this process may mark its own sockets, i.e. holds `CAP_NET_ADMIN`. */
@@ -261,10 +264,10 @@ class DesktopPrivileges(
      * here would hand the machine to an instance nobody is watching. systemd
      * starts an inactive unit for `restart` exactly as for `start`.
      */
-    fun startInstalledService(): PrivilegeOutcome {
+    fun startInstalledService(proxyPort: Int = DEFAULT_PROXY_PORT): PrivilegeOutcome {
         val outcome = run(systemctl, "restart", UNIT_NAME)
         if (outcome !is PrivilegeOutcome.Ok) return outcome
-        return awaitUnitRunning()
+        return awaitUnitRunning(proxyPort)
     }
 
     /** The `pkexec` call for the setup helper, as data rather than a shell line. */
@@ -433,7 +436,7 @@ class DesktopPrivileges(
             log("the privileged instance is already filtering; leaving it running")
             return PrivilegeOutcome.Ok
         }
-        return startInstalledService()
+        return startInstalledService(proxyPort)
     }
 
     /**
@@ -462,13 +465,25 @@ class DesktopPrivileges(
      * `systemd-run` returns, and a single immediate read can catch it in the
      * window where it still looks alive.
      */
-    private fun awaitUnitRunning(): PrivilegeOutcome {
-        repeat(UNIT_START_CHECKS) {
-            if (unitActive()) return PrivilegeOutcome.Ok
-            Thread.sleep(UNIT_START_POLL_MS)
+    private fun awaitUnitRunning(proxyPort: Int): PrivilegeOutcome {
+        var active = false
+        repeat(unitStartChecks) {
+            active = unitActive()
+            // "Active" is the unit's process, not its filter: the window this
+            // unit replaces has already let go of the engine and the ports, so
+            // a unit that is up but not answering is a machine with no web
+            // rather than a machine that is protected. Only a listener on the
+            // port the settings name is the answer the caller can hand over to.
+            if (active && listenerAnswers(proxyPort)) return PrivilegeOutcome.Ok
+            Thread.sleep(unitStartPollMs)
         }
         return PrivilegeOutcome.Failed(
-            "the privileged instance started and exited at once; see `journalctl -u $UNIT_NAME`",
+            if (active) {
+                "the privileged instance is up but nothing answers on :$proxyPort; " +
+                    "see `journalctl -u $UNIT_NAME`"
+            } else {
+                "the privileged instance started and exited at once; see `journalctl -u $UNIT_NAME`"
+            },
         )
     }
 
@@ -641,11 +656,13 @@ class DesktopPrivileges(
         /** Written into [stamp]; an older stamp means the install is redone. */
         const val SETUP_VERSION = 3
         const val PKEXEC_DENIED = 126
-        // A unit that fails does it within a few hundred milliseconds; ten
-        // reads at 100 ms is long enough to see it and short enough that a
-        // healthy start is not held up.
-        const val UNIT_START_CHECKS = 10
-        const val UNIT_START_POLL_MS = 100L
+        // A unit is "active" from the fork, not from the moment its listeners
+        // answer, and a JVM takes several seconds to load the core, hydrate
+        // the database and bind. Fifteen seconds covers a cold start with room
+        // for a slow disk, and is short enough that a broken hand-over stops
+        // holding the machine without a filter.
+        const val UNIT_START_CHECKS = 60
+        const val UNIT_START_POLL_MS = 250L
         /** The port the desktop proxy listens on when the settings say nothing. */
         const val DEFAULT_PROXY_PORT = 3129
         /** How long a probe waits for the local proxy to accept a connection. */

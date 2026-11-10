@@ -74,6 +74,17 @@ class DesktopContainer(
     var onEngineTakeover: () -> Unit = {}
 
     /**
+     * The lock this window holds over the machine's engine. The hand-over to
+     * the privileged unit is a hand-over of this object, not of the window:
+     * the unit runs a second `main` and cannot start filtering until the lock
+     * is free.
+     */
+    var instanceLock: InstanceLock? = null
+
+    /** The scope [start] gave the bridge, so a refused hand-over can reopen it. */
+    private var bridgeScope: CoroutineScope? = null
+
+    /**
      * Set by the shell so a request from outside — the browser extension's
      * "open the filtering log" — can show the window it is asking about.
      */
@@ -138,7 +149,27 @@ class DesktopContainer(
             // on a machine that has not been set up yet.
             requestPrivileges = { platformHost.requestPrivilegedEngine() },
             report = { platformHost.toast(it) },
+            releaseInstanceLock = { instanceLock?.release() },
+            reacquireInstanceLock = { instanceLock?.acquire() ?: true },
+            releaseAssistantBridge = { releaseAssistantBridge() },
+            restoreAssistantBridge = { restoreAssistantBridge() },
         )
+    }
+
+    /**
+     * Gives the browser extension's socket to the unit that is about to replace
+     * this window, and takes it back when the unit did not take over after all.
+     * The scope is the one [start] was given: a restored bridge lives exactly
+     * as long as the window that owns it.
+     */
+    fun releaseAssistantBridge() {
+        System.err.println("[desktop] handing the assistant bridge to the unit")
+        assistantBridge.stop()
+    }
+
+    fun restoreAssistantBridge() {
+        System.err.println("[desktop] the hand-over did not happen; reopening the assistant bridge")
+        bridgeScope?.let { assistantBridge.start(it) }
     }
 
     val viewModel: AdGuardViewModel by lazy {
@@ -176,6 +207,7 @@ class DesktopContainer(
     /** Loads persisted state once and keeps the language table in sync. */
     fun start(scope: CoroutineScope) {
         if (!engineAvailable) return
+        bridgeScope = scope
         // The certificate has to exist before anything asks whether it is
         // trusted: the core reads its own PEM to answer that, and a process
         // that has not minted one yet answers "no" about a certificate it has

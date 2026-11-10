@@ -134,6 +134,79 @@ class DesktopTunnelControlTest {
         assertEquals(ports.tcpPort, core.proxyStatus().tcpPort.toInt())
     }
 
+    /**
+     * The unit is a second `main` that takes the same engine lock. Asking while
+     * the window still holds it is two processes waiting for each other: the
+     * unit gives up after ten seconds, and the window is left saying
+     * "protected" over a proxy that was never raised.
+     */
+    @Test
+    fun `the engine lock is let go before the unit is asked for it`() {
+        val events = java.util.concurrent.CopyOnWriteArrayList<String>()
+        val control = DesktopTunnelControl(
+            coreEngine = core,
+            protectionWanted = MutableStateFlow(true),
+            privileges = DesktopPrivileges(nftBinary = "/nonexistent/nft"),
+            localProxy = { LocalProxySettings(tcpPort = freeTcpPort(), dnsPort = freeDnsPort()) },
+            requestPrivileges = {
+                events += "ask"
+                "the privilege dialog was dismissed"
+            },
+            releaseInstanceLock = { events += "release" },
+            reacquireInstanceLock = {
+                events += "reacquire"
+                true
+            },
+            releaseAssistantBridge = { events += "bridge" },
+            restoreAssistantBridge = { events += "bridge-back" },
+        )
+
+        control.startVpnService()
+
+        val deadline = System.currentTimeMillis() + 5_000
+        while (System.currentTimeMillis() < deadline && "reacquire" !in events) Thread.sleep(20)
+        assertEquals(
+            "the window must not ask while it still owns the ports and the lock",
+            listOf("bridge", "release", "ask", "reacquire", "bridge-back"),
+            events.toList(),
+        )
+        assertTrue("a refused ask keeps the window filtering", core.isProxyRunning())
+    }
+
+    /**
+     * The successful hand-over is a one-way door: once the unit is filtering,
+     * the window does not take its lock back.
+     */
+    @Test
+    fun `a successful handover does not take the lock back`() {
+        val events = java.util.concurrent.CopyOnWriteArrayList<String>()
+        val control = DesktopTunnelControl(
+            coreEngine = core,
+            protectionWanted = MutableStateFlow(true),
+            privileges = DesktopPrivileges(nftBinary = "/nonexistent/nft"),
+            localProxy = { LocalProxySettings() },
+            requestPrivileges = {
+                events += "ask"
+                null
+            },
+            releaseInstanceLock = { events += "release" },
+            reacquireInstanceLock = {
+                events += "reacquire"
+                true
+            },
+            releaseAssistantBridge = { events += "bridge" },
+            restoreAssistantBridge = { events += "bridge-back" },
+        )
+
+        control.startVpnService()
+
+        val deadline = System.currentTimeMillis() + 5_000
+        while (System.currentTimeMillis() < deadline && "ask" !in events) Thread.sleep(20)
+        Thread.sleep(200)
+        assertEquals(listOf("bridge", "release", "ask"), events.toList())
+        assertFalse("the unit, not this window, holds the listeners", core.isProxyRunning())
+    }
+
     /** A port the OS just proved is free, released before it is used. */
     private fun freeTcpPort(): Int = ServerSocket(0).use { it.localPort }
 

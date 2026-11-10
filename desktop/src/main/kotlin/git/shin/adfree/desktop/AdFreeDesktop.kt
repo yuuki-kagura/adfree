@@ -74,37 +74,12 @@ import androidx.compose.runtime.produceState
  * listeners and the redirect rules filtering, the way AdGuard for Windows
  * keeps filtering with its window shut.
  */
-/**
- * The single-instance lock, or null when another window already holds it.
- *
- * Held for the life of the process through the returned channel: closing it
- * releases the lock, which is exactly what a window that goes away should do.
- */
-private fun acquireInstanceLock(dataRoot: java.io.File): java.nio.channels.FileChannel? {
-    return try {
-        dataRoot.mkdirs()
-        val channel = java.io.RandomAccessFile(java.io.File(dataRoot, "adfree.lock"), "rw").channel
-        val deadline = System.currentTimeMillis() + 10_000
-        while (System.currentTimeMillis() < deadline) {
-            val lock = try {
-                channel.tryLock()
-            } catch (_: java.nio.channels.OverlappingFileLockException) {
-                null
-            }
-            if (lock != null) return channel
-            Thread.sleep(250)
-        }
-        channel.close()
-        null
-    } catch (e: Exception) {
-        // A directory that cannot hold a lock file is not a reason to lose the
-        // window; it is the same window that would have said so.
-        System.err.println("[desktop] no instance lock: ${e.message}")
-        null
-    }
-}
-
 fun main() {
+    // A unit installed in one login wakes up in the next one, where the X
+    // cookie it was written with is gone. Fix that before AWT is loaded: the
+    // first AWT call is what throws, and it throws hard enough to end the
+    // process — and with it the filtering the unit exists for.
+    DesktopSession.refreshDisplayEnvironment()
     val container = DesktopContainer()
     // One engine, one set of listeners, one set of redirect rules. A second
     // window is what takes the machine down rather than filtering it: the
@@ -114,13 +89,14 @@ fun main() {
     // a privileged unit re-launches this same main, so the wait covers the
     // hand-over: the instance being replaced has to let go before the new one
     // reads the lock.
-    val lock = acquireInstanceLock(container.dataRoot)
-    if (lock == null) {
+    val lock = InstanceLock(container.dataRoot)
+    if (!lock.acquire()) {
         System.err.println(
             "[desktop] AdFree is already running; this window will not start a second engine",
         )
         return
     }
+    container.instanceLock = lock
     val appScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     container.start(appScope)
     // The system bundle is not the only trust store: NSS applications read
@@ -144,11 +120,25 @@ fun main() {
     // sessions with no StatusNotifier host at all.
     // `main` is not a composable, so the icon's lifetime is the process's:
     // it is closed by `quit` below.
-    val sni = TraySni.start()
+    // `TraySni.start` paints its pixmaps through AWT, and AWT throws rather
+    // than answering when the display it was told about is not the one this
+    // session has. A tray is a convenience; it must not be the reason a
+    // filtering process dies.
+    val sni = runCatching { TraySni.start() }
+        .onFailure { System.err.println("[desktop] tray unavailable: ${it.message}") }
+        .getOrNull()
     // Hiding is only a detour when there is a status field to come back
     // through. Many Linux sessions have no tray owner at all, and a hidden
     // window there is an app the user cannot reach: close quits instead.
-    val hasTray = sni != null || java.awt.SystemTray.isSupported()
+    val hasTray = sni != null || runCatching { java.awt.SystemTray.isSupported() }.getOrDefault(false)
+    // A system unit can be started before the session has a display (or with a
+    // display it can no longer reach). Filtering does not need a window, so a
+    // missing one is answered with "keep filtering, say so in the journal"
+    // rather than an exception on the way to the engine.
+    val displayAvailable = runCatching {
+        !java.awt.GraphicsEnvironment.isHeadless() &&
+            java.awt.GraphicsEnvironment.getLocalGraphicsEnvironment() != null
+    }.getOrDefault(false)
     // Whatever ends the process — the tray, a signal, a crash of the UI thread
     // — the listeners go down with it. Left up, native threads keep the JVM
     // from finishing and the ports stay taken. The redirect goes first: rules
@@ -158,6 +148,11 @@ fun main() {
         if (container.privileges.canSetFirewallMark()) container.privileges.removeRules()
         container.coreEngine.stopProxy()
     })
+
+    if (!displayAvailable) {
+        System.err.println("[desktop] no display in this session; filtering without a window")
+        keepFilteringWithoutWindow()
+    }
 
     application {
         val windowState = rememberWindowState(width = 1200.dp, height = 800.dp)
@@ -401,6 +396,26 @@ fun main() {
                     }
                 }
             }
+        }
+    }
+}
+
+/**
+ * Keeps the process alive when this session has no display to draw on.
+ *
+ * A unit with `CAP_NET_ADMIN` is started by systemd, not by a person clicking
+ * an icon: it can come up before the session does, or with a display whose
+ * cookie was rotated. The engine and its listeners are already running at that
+ * point, and a `main` that returns would take them down with it. Nothing here
+ * is a window; it is the smallest thing that lets the filter outlive the
+ * absence of one.
+ */
+private fun keepFilteringWithoutWindow(): Nothing {
+    while (true) {
+        try {
+            Thread.sleep(60_000)
+        } catch (_: InterruptedException) {
+            // A signal is the way out; the shutdown hook has the rest.
         }
     }
 }

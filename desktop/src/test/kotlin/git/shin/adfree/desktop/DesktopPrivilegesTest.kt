@@ -478,9 +478,14 @@ class DesktopPrivilegesTest {
      * ports nobody answers on is the case a restart exists for. The rules are
      * still pointing at a closed socket, and a machine in that state sends its
      * traffic nowhere.
+     *
+     * The restart is only a success when the listener it was for is there
+     * afterwards: systemd calls a unit active from the fork, so a JVM that
+     * dies on its first line is "active" for exactly as long as it takes to
+     * exit.
      */
     @Test
-    fun anActiveUnitWithNoListenerIsRestarted() {
+    fun anActiveUnitWithNoListenerIsRestartedAndOnlySucceedsWhenTheListenerAnswers() {
         val calls = recordingSystemctl()
         val installed = installedOnThisMachine()
         val privileges = DesktopPrivileges(
@@ -488,10 +493,36 @@ class DesktopPrivilegesTest {
             servicePath = installed.first,
             stamp = installed.second,
             serviceActive = { true },
-            listenerAnswers = { false },
+            // Before the restart nothing answers; after it the port is taken.
+            listenerAnswers = { _ -> calls.second().isNotEmpty() },
         )
         val outcome = privileges.requestPrivilegedEngine(emptyMap(), 3129)
         assertEquals(PrivilegeOutcome.Ok, outcome)
+        assertEquals(listOf("restart adfree-desktop"), calls.second())
+    }
+
+    /**
+     * A unit that stays up without taking its port is worse than one that
+     * exits: the window that asked has already let go of the engine, and the
+     * redirect rules point at a socket nobody answers. The ask has to say so
+     * instead of reporting the hand-over as done.
+     */
+    @Test
+    fun anActiveUnitThatNeverAnswersIsNotAHandover() {
+        val calls = recordingSystemctl()
+        val installed = installedOnThisMachine()
+        val privileges = DesktopPrivileges(
+            systemctl = calls.first,
+            servicePath = installed.first,
+            stamp = installed.second,
+            serviceActive = { true },
+            listenerAnswers = { _ -> false },
+            unitStartChecks = 2,
+            unitStartPollMs = 10,
+        )
+        val outcome = privileges.requestPrivilegedEngine(emptyMap(), 3129)
+        assertTrue("a unit without a listener is not a hand-over: $outcome", outcome is PrivilegeOutcome.Failed)
+        assertTrue("and it says which port: $outcome", (outcome as PrivilegeOutcome.Failed).reason.contains(":3129"))
         assertEquals(listOf("restart adfree-desktop"), calls.second())
     }
 
