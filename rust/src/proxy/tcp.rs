@@ -248,6 +248,13 @@ fn handle(client: TcpStream, stop: &AtomicBool) {
         core.log_event(connection_row(&addr, apps.first().map(String::as_str).unwrap_or("")));
     }
 
+    // A flow opened while the page was excepted was let through on that
+    // strength alone: the request inside it is never re-judged, so the
+    // exception would outlive itself for as long as the browser keeps the
+    // connection — and browsers keep them for minutes. Once the exception is
+    // gone this flow is closed, and the reconnect that follows is decided by
+    // the lists like any other.
+    let begun_excepted = core.filter_engine().excepted_page_open();
     let mut buf = vec![0u8; 16 * 1024];
     let mut last_activity = std::time::Instant::now();
     let mut peer_open = peer_fd >= 0;
@@ -260,6 +267,13 @@ fn handle(client: TcpStream, stop: &AtomicBool) {
 
     while !stop.load(Ordering::Relaxed) {
         if last_activity.elapsed() > IDLE_TIMEOUT {
+            break;
+        }
+        if begun_excepted && !core.filter_engine().excepted_page_open() {
+            crate::logbuf::push(&format!(
+                "proxy: closing a flow opened while the page was excepted ({addr})"
+            ));
+            reset_on_close(client_fd);
             break;
         }
         let (client_ready, peer_ready) = if peer_open {
