@@ -4468,8 +4468,19 @@ impl Core {
         // Cached as the origin sent it, before the rewrites below: a hit
         // replays this same path, so whichever ECH policy is in force when it
         // is served still decides what the client sees.
-        self.cache_answer(&reply.message);
+        //
+        // An answer fetched while a page is excepted is the one exception:
+        // caching it would keep the ad host reachable by cache after the user
+        // turns filtering back on, and its TTL is clamped to zero for the same
+        // reason — the client must re-ask the moment the exception lifts, and
+        // then the resolver refuses it again.
+        let excepted = self.filter.excepted_page_open();
         let mut message = reply.message.clone();
+        if excepted {
+            dns::clamp_answer_ttl(&mut message, 0);
+        } else {
+            self.cache_answer(&reply.message);
+        }
         dns::patch_txid(&mut message, reply.pending.client_txid);
         // A client that is about to have its TLS terminated must not be told
         // an ECHConfig: the handshake cannot negotiate ECH through the

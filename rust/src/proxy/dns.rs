@@ -450,6 +450,17 @@ fn serve_one(listener: &Listener, query: &Inquiry, stop: &AtomicBool) {
     // re-derived in each arm.
     let app = packages.first().map(String::as_str).unwrap_or("");
 
+    // An answer fetched while the page is excepted carries no cache life: the
+    // browser must ask again as soon as the exception lifts, and the resolver
+    // then refuses the host it had been allowed to reach.
+    let decision = match decision {
+        Served::Forwarded(Some(mut message)) if plain => {
+            dns::clamp_answer_ttl(&mut message, 0);
+            Served::Forwarded(Some(message))
+        }
+        other => other,
+    };
+
     match decision {
         Served::Blocked { message, rule, list, category } => {
             if message.is_empty() {

@@ -1836,6 +1836,21 @@ impl FilterEngine {
             }
         }
         self.pending_builds.fetch_sub(1, Ordering::SeqCst);
+        // A `$document` exception is the user saying "leave this page alone",
+        // and it has to hold from the moment it exists. Waiting for a request
+        // to prove it is too late for the two stages that carry no page: the
+        // page's document is already open when the switch is flipped in the
+        // assistant, so no request ever arrives that could arm the exemption,
+        // and the resolver keeps refusing the page's ads. The rule names the
+        // page; the rules are the statement, so the exemption is taken from
+        // them — the newest one, which is the page the user just excepted.
+        if let Some(page) = user_rules
+            .iter()
+            .rev()
+            .find_map(|rule| exception_page_host(rule))
+        {
+            self.exemption.note(&page);
+        }
         generation
     }
 
@@ -3122,6 +3137,28 @@ fn scrub_untrusted(text: String) -> (String, u32) {
         out.push('\n');
     }
     (out, removed)
+}
+
+/// The page a `$document` exception names, if the rule is one.
+///
+/// `@@||host^$document` (and `$urlblock`, which implies it) is how both the
+/// popup and the in-page assistant say "do not filter this page": the host is
+/// the page itself, never a sub-resource, so it is the one thing an exception
+/// for a whole page can be read from without a request.
+fn exception_page_host(rule: &str) -> Option<String> {
+    let rest = rule.strip_prefix("@@||")?;
+    let (host, modifiers) = rest.split_once('$')?;
+    let host = host.trim_end_matches('^').trim_end_matches('|');
+    if host.is_empty() || host.contains('/') || host.contains('*') {
+        return None;
+    }
+    let names_page = modifiers.split(',').any(|modifier| {
+        modifier == "document" || modifier == "urlblock"
+    });
+    if !names_page {
+        return None;
+    }
+    Some(host.to_ascii_lowercase())
 }
 
 /// Rewrites dnsmasq rules into the network syntax the engine parses, line for
@@ -7136,6 +7173,34 @@ mod tests {
         assert!(v.blocked);
         assert_eq!(v.rule_text.as_deref(), Some("||my-block.test^"));
         assert_eq!(v.list_name.as_deref(), Some("User Custom Filter"));
+    }
+
+    #[test]
+    /// The page an exception names is the whole point of seeding the
+    /// exemption from the rules: a switch flipped on an already-open page
+    /// produces no request that could arm it, and the resolver would keep
+    /// refusing that page's ads until it is read from the rule instead.
+    #[test]
+    fn a_document_exception_names_its_page() {
+        assert_eq!(
+            exception_page_host("@@||adblock.turtlecute.org^$document").as_deref(),
+            Some("adblock.turtlecute.org")
+        );
+        assert_eq!(
+            exception_page_host("@@||Example.COM^$document,subdocument").as_deref(),
+            Some("example.com")
+        );
+        assert_eq!(
+            exception_page_host("@@||example.org^$urlblock").as_deref(),
+            Some("example.org"),
+            "`$urlblock` is the wider spelling of the same statement"
+        );
+        // A sub-resource exception is not a page: unblocking one path must not
+        // stand the resolver down for whatever the page asks next.
+        assert_eq!(exception_page_host("@@||example.com/recaptcha/$document"), None);
+        assert_eq!(exception_page_host("@@||example.com^$third-party"), None);
+        assert_eq!(exception_page_host("||example.com^"), None);
+        assert_eq!(exception_page_host(""), None);
     }
 
     #[test]
