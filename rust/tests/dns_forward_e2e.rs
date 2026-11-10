@@ -98,7 +98,9 @@ fn an_ip_packet_is_forwarded_as_a_dns_message_and_answered() {
     full[off + 1] = (our_txid & 0xff) as u8;
 
     let key = upstream
-        .send(0, &full, query.id, our_txid, 0)
+        // `plain` is the resolver an excepted page is sent to; this test asks
+        // the configured one, so nothing is overridden.
+        .send(0, &full, query.id, our_txid, 0, None)
         .expect("the query must be forwarded");
 
     let mut replies = Vec::new();

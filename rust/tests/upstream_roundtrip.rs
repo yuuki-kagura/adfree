@@ -77,7 +77,8 @@ fn sends_to_the_configured_resolver_and_matches_the_reply() {
     let patched = wrap_in_ip_packet(&query_named(our_txid));
 
     upstream
-        .send(0, &patched, 0x1234, our_txid, 0)
+        // The ordinary path: no resolver override for an excepted page.
+        .send(0, &patched, 0x1234, our_txid, 0, None)
         .expect("send must succeed: an error here means the sockaddr is wrong");
     assert_eq!(upstream.pending_len(), 1);
 
@@ -117,7 +118,9 @@ fn a_non_dns_packet_is_rejected() {
     // Any IP packet that does not carry UDP cannot be forwarded.
     let mut tcp_packet = wrap_in_ip_packet(&query_named(1));
     tcp_packet[9] = crate::PROTO_TCP_PLACEHOLDER;
-    assert!(upstream.send(0, &tcp_packet, 1, 1, 0).is_none());
+    // `plain` names a resolver to ask instead of the configured one; this test
+    // exercises the ordinary path, so nothing overrides it.
+    assert!(upstream.send(0, &tcp_packet, 1, 1, 0, None).is_none());
 }
 
 /// Protocol number used by the test above.
