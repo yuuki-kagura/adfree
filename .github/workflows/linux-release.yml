@@ -76,24 +76,38 @@ jobs:
           fetch-depth: 0
 
       # Arch and CachyOS install neither a deb nor an rpm, so the package has to
-      # be built where they come from. `makepkg` refuses to run as root, hence
-      # the throwaway builder user inside the container.
+      # be built where those come from — and it has to be built from the tree
+      # being released, not from a second download of it: a tarball of this
+      # checkout is what the PKGBUILD is pointed at below.
+      - name: Make the source tarball
+        run: |
+          VERSION="${TAG#v}"
+          git archive --prefix="adfree-$VERSION/" -o "$RUNNER_TEMP/adfree-$VERSION.tar.gz" HEAD
+          echo "VERSION=$VERSION" >> "$GITHUB_ENV"
+
       - name: Build the Arch package
         run: |
+          mkdir -p out
           docker run --rm \
-            -v "$PWD:/src:ro" \
-            -v "$PWD/out:/out" \
+            -e VERSION="$VERSION" \
+            -v "$GITHUB_WORKSPACE/packaging:/packaging:ro" \
+            -v "$RUNNER_TEMP:/tarball:ro" \
+            -v "$GITHUB_WORKSPACE/out:/out" \
             archlinux:base-devel \
-            bash -euo pipefail -c '
-              pacman -Sy --noconfirm --needed base-devel git jdk21-openjdk rust cargo unzip >/dev/null
-              useradd -m builder
-              mkdir -p /home/builder/pkg && cp -a /src/. /home/builder/pkg/
-              chown -R builder: /home/builder
-              cd /home/builder/pkg
-              sed -i "s/^pkgver=.*/pkgver=${TAG#v}/" packaging/arch/PKGBUILD
-              su builder -c "cd /home/builder/pkg && makepkg -f --noconfirm"
-              cp /home/builder/pkg/*.pkg.tar.zst /out/
-            '
+            bash -euo pipefail -s <<'SCRIPT'
+          pacman -Sy --noconfirm --needed base-devel git jdk21-openjdk rust cargo unzip >/dev/null
+          useradd -m builder
+          mkdir -p /home/builder/pkg
+          cp /packaging/arch/PKGBUILD "/tarball/adfree-$VERSION.tar.gz" /home/builder/pkg/
+          chown -R builder: /home/builder
+          cd /home/builder/pkg
+          # Point the formula at the tarball that is here rather than at a
+          # second download of the same tree.
+          sed -i "s/^pkgver=.*/pkgver=$VERSION/" PKGBUILD
+          sed -i "s|^source=.*|source=(\"adfree-\$pkgver.tar.gz\")|" PKGBUILD
+          su builder -c 'cd /home/builder/pkg && makepkg -f --noconfirm'
+          cp /home/builder/pkg/*.pkg.tar.zst /out/
+          SCRIPT
 
       - name: Attach the package to the release
         env:
