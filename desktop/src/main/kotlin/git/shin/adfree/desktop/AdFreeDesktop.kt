@@ -345,6 +345,12 @@ fun main() {
                 }
             },
         ) {
+            // A window that stops drawing also stops answering clicks, and
+            // from the outside that is indistinguishable from a hung app — while
+            // every JVM thread sits idle, as a thread dump showed when this last
+            // happened. The frame clock is the one signal that separates the two.
+            AdviseWhenFramesStop(visible)
+
             // A hidden-to-tray window comes back where it was left, which on
             // this desktop means behind whatever the user was working in and
             // without the keyboard: raising it is what makes "open AdFree"
@@ -528,6 +534,45 @@ private fun MissingCoreScreen(dataRoot: String) {
                     "ADFREE_CORE_LIB to the built library. Data root: $dataRoot",
                 style = MaterialTheme.typography.bodyMedium,
             )
+        }
+    }
+}
+
+/**
+ * Writes down a UI that stopped being pumped.
+ *
+ * Compose draws on the frame clock; if it stops ticking, the window keeps its
+ * last picture and accepts no input, and nothing anywhere reports a problem —
+ * the process is healthy by every other measure. Thirty seconds of silence is
+ * well past an idle desktop's worst frame time, and the alternative to this
+ * line is what happened once already: a frozen window, a clean thread dump, and
+ * no way to tell whether the hang was in the runtime, in the compositor, or in
+ * this app.
+ *
+ * An occluded or hidden window legitimately stops drawing, hence the `visible`
+ * guard and the wording: this line is evidence, not an alarm.
+ */
+@Composable
+private fun AdviseWhenFramesStop(visible: Boolean) {
+    val lastFrameAt = remember { longArrayOf(System.nanoTime()) }
+    LaunchedEffect(Unit) {
+        while (true) {
+            androidx.compose.runtime.withFrameNanos { lastFrameAt[0] = System.nanoTime() }
+        }
+    }
+    LaunchedEffect(visible) {
+        if (!visible) return@LaunchedEffect
+        var announced = 0L
+        while (true) {
+            delay(15_000)
+            val quiet = (System.nanoTime() - lastFrameAt[0]) / 1_000_000_000
+            if (quiet >= 30 && quiet != announced) {
+                announced = quiet
+                System.err.println(
+                    "[ui] no frame for ${quiet}s while the window is up: " +
+                        "it is not being pumped (an occluded window does this too)",
+                )
+            }
         }
     }
 }
