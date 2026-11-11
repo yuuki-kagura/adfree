@@ -27,7 +27,28 @@ prepare() {
 build() {
   cd "$srcdir/adfree-$pkgver"
   export GRADLE_USER_HOME="$srcdir/.gradle"
+
+  # makepkg exports its hardening `CFLAGS`, which on an LTO-enabled system
+  # includes `-flto`. The cc crate then compiles the bundled sqlite into
+  # bitcode, and rustc's final link — which ignores `LDFLAGS` and so never
+  # asks the linker to load the LTO plugin — simply leaves that bitcode out.
+  # The core still links, because a cdylib may have undefined symbols, and the
+  # only symptom is an app that cannot open it. The Rust build gets a clean
+  # environment instead.
+  unset CFLAGS CXXFLAGS LDFLAGS RUSTFLAGS
   (cd rust && cargo build --release --lib)
+
+  local core=rust/target/release/libadfree_core.so
+  nm "$core" | grep -q ' t sqlite3_open$' || {
+    echo "error: the core has no sqlite inside it" >&2
+    exit 1
+  }
+  if ldd -r "$core" 2>&1 | grep -q 'undefined symbol'; then
+    ldd -r "$core" 2>&1 | grep 'undefined symbol' | head -5 >&2
+    echo "error: the core was built against symbols nothing provides" >&2
+    exit 1
+  fi
+
   ./gradlew --no-daemon :desktop:createDistributable -x test
 }
 

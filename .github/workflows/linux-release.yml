@@ -60,13 +60,10 @@ jobs:
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@stable
 
-      # No Rust cache here, deliberately. A restored `target/` carries the
-      # fingerprints but not always the build-script output that holds the link
-      # flags, so cargo considers `libsqlite3-sys` fresh and skips it — and a
-      # cdylib links happily with the sqlite symbols undefined. v1.3.0 shipped
-      # exactly that: a 100 MB package whose core could not be opened at all,
-      # with the build green. Four minutes of compiling is the cheaper end of
-      # that trade.
+      - name: Cache Rust
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: rust
 
       # jpackage shells out to the distribution's own tooling: `dpkg-deb` for
       # the deb, `rpmbuild` for the rpm. A runner without them builds neither.
