@@ -1,3 +1,10 @@
+## [1.3.2](https://github.com/yuuki-kagura/adfree/compare/v1.3.1...v1.3.2) (2026-11-11)
+
+
+### Bug Fixes
+
+* **proxy:** a pause finishes what it interrupted ([510a64f](https://github.com/yuuki-kagura/adfree/commit/510a64f5d33768112c9bdbe6b7d71b09cd7251bb))
+
 ## [1.3.1](https://github.com/yuuki-kagura/adfree/compare/v1.3.0...v1.3.1) (2026-11-11)
 
 
