@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=AdFree
+GenericName=Ad blocker
+Comment=System-wide ad blocking: a transparent proxy, a DNS server and a TLS bridge
+Exec=/opt/adfree/bin/adfree
+Icon=adfree
+Terminal=false
+Categories=Network;Security;
+Keywords=adblock;dns;proxy;privacy;
+StartupWMClass=adfree

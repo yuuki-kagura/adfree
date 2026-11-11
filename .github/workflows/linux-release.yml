@@ -1,0 +1,101 @@
+name: Linux Release
+
+# The desktop app is a second product on the same tag: the Android release job
+# creates the release, and these jobs attach the packages a Linux user installs.
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag to attach packages to (e.g. v1.2.0)"
+        required: true
+
+permissions:
+  contents: write
+
+concurrency:
+  group: linux-release-${{ github.event.release.tag_name || inputs.tag }}
+  cancel-in-progress: false
+
+jobs:
+  deb-rpm:
+    runs-on: ubuntu-latest
+    env:
+      TAG: ${{ github.event.release.tag_name || inputs.tag }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          java-version: "21"
+          distribution: "temurin"
+          cache: gradle
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: rust
+
+      # jpackage shells out to the distribution's own tooling: `dpkg-deb` for
+      # the deb, `rpmbuild` for the rpm. A runner without them builds neither.
+      - name: Install packaging tools
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends fakeroot rpm
+
+      - name: Build the filtering core
+        run: cargo build --release --lib
+        working-directory: rust
+
+      - name: Build deb and rpm
+        run: ./gradlew --no-daemon :desktop:packageDeb :desktop:packageRpm
+
+      - name: Attach packages to the release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release upload "$TAG" \
+            desktop/build/compose/binaries/main/deb/*.deb \
+            desktop/build/compose/binaries/main/rpm/*.rpm \
+            --clobber
+
+  arch:
+    runs-on: ubuntu-latest
+    env:
+      TAG: ${{ github.event.release.tag_name || inputs.tag }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # Arch and CachyOS install neither a deb nor an rpm, so the package has to
+      # be built where they come from. `makepkg` refuses to run as root, hence
+      # the throwaway builder user inside the container.
+      - name: Build the Arch package
+        run: |
+          docker run --rm \
+            -v "$PWD:/src:ro" \
+            -v "$PWD/out:/out" \
+            archlinux:base-devel \
+            bash -euo pipefail -c '
+              pacman -Sy --noconfirm --needed base-devel git jdk21-openjdk rust cargo unzip >/dev/null
+              useradd -m builder
+              mkdir -p /home/builder/pkg && cp -a /src/. /home/builder/pkg/
+              chown -R builder: /home/builder
+              cd /home/builder/pkg
+              sed -i "s/^pkgver=.*/pkgver=${TAG#v}/" packaging/arch/PKGBUILD
+              su builder -c "cd /home/builder/pkg && makepkg -f --noconfirm"
+              cp /home/builder/pkg/*.pkg.tar.zst /out/
+            '
+
+      - name: Attach the package to the release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release upload "$TAG" out/*.pkg.tar.zst --clobber

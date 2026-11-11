@@ -1,0 +1,45 @@
+# Maintainer: Tachibana Shin <tachibana-shin@users.noreply.github.com>
+# Built from the release tag: the app image carries its own runtime, and the
+# filtering core is compiled here because it is a native library, not a script.
+pkgname=adfree
+pkgver=1.2.0
+pkgrel=1
+pkgdesc="System-wide ad blocking: a transparent proxy, a DNS server and a TLS bridge"
+arch=('x86_64')
+url="https://github.com/yuuki-kagura/adfree"
+license=('Apache')
+depends=('gcc-libs')
+makedepends=('jdk21-openjdk' 'rust' 'cargo' 'git' 'unzip')
+source=("$pkgname-$pkgver.tar.gz::https://github.com/yuuki-kagura/adfree/archive/refs/tags/v$pkgver.tar.gz")
+sha256sums=('SKIP')
+# CI replaces both lines with a tarball it made from the tag it is releasing, so
+# the package is built from the same tree the release was cut from rather than
+# from a second download of it.
+
+prepare() {
+  cd "$srcdir/adfree-$pkgver"
+  # Gradle wants a writable home and a cache it owns; makepkg runs as a normal
+  # user, so both stay inside the build directory rather than $HOME.
+  export GRADLE_USER_HOME="$srcdir/.gradle"
+  chmod +x gradlew
+}
+
+build() {
+  cd "$srcdir/adfree-$pkgver"
+  export GRADLE_USER_HOME="$srcdir/.gradle"
+  (cd rust && cargo build --release --lib)
+  ./gradlew --no-daemon :desktop:createDistributable -x test
+}
+
+package() {
+  cd "$srcdir/adfree-$pkgver"
+  install -d "$pkgdir/opt/$pkgname"
+  cp -a desktop/build/compose/binaries/main/app/adfree/. "$pkgdir/opt/$pkgname/"
+
+  install -d "$pkgdir/usr/bin" "$pkgdir/usr/share/applications" \
+    "$pkgdir/usr/share/icons/hicolor/512x512/apps"
+  ln -s "/opt/$pkgname/bin/$pkgname" "$pkgdir/usr/bin/$pkgname"
+  install -m 644 packaging/linux/adfree.desktop "$pkgdir/usr/share/applications/adfree.desktop"
+  install -m 644 desktop/src/main/resources/icon/adfree.png \
+    "$pkgdir/usr/share/icons/hicolor/512x512/apps/adfree.png"
+}
