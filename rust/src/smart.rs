@@ -39,18 +39,10 @@ struct Entry {
     allow_until_ms: u64,
 }
 
+#[derive(Default)]
 pub struct SmartFilter {
     enabled: bool,
     hosts: FxHashMap<(Box<str>, FlowOwner), Entry>,
-}
-
-impl Default for SmartFilter {
-    fn default() -> Self {
-        Self {
-            enabled: false,
-            hosts: FxHashMap::default(),
-        }
-    }
 }
 
 impl SmartFilter {

@@ -882,14 +882,9 @@ fn extension_types(extensions: &[u8]) -> Vec<u16> {
 pub fn client_certificate_alert(bytes: &[u8]) -> Option<u8> {
     let mut off = 0usize;
     loop {
-        let Some(header) = bytes.get(off..off + 5) else {
-            return None;
-        };
+        let header = bytes.get(off..off + 5)?;
         let len = u16::from_be_bytes([header[3], header[4]]) as usize;
-        let body = match bytes.get(off + 5..off + 5 + len) {
-            Some(body) => body,
-            None => return None,
-        };
+        let body = bytes.get(off + 5..off + 5 + len)?;
         // Alert records carry a level, then the description.
         if header[0] == 0x15 && body.len() >= 2 {
             let description = body[1];

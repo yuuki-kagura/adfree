@@ -979,9 +979,7 @@ impl ProxySession {
     /// — it costs that host one spliced flow per learned pair, not filtering
     /// anywhere else.
     pub fn on_client_eof(&mut self) -> Option<String> {
-        let Some(name) = self.captured.clone() else {
-            return None;
-        };
+        let name = self.captured.clone()?;
         // A client that sent a byte of its own after the handshake was talking
         // to the origin, whatever happened next. Zero bytes means it took one
         // look at the certificate and left.
@@ -1657,18 +1655,20 @@ impl ProxySession {
             plan.drop_etag = true;
         }
 
-        if stealth.strips_third_party_authorization() && cross_site {
-            if drop_request_headers(buffer, &mut head_end, &["authorization".to_string()]) {
-                crate::logbuf::push_debug(&format!(
-                    "mitm {host}: third-party authorization stripped"
-                ));
-            }
+        if stealth.strips_third_party_authorization()
+            && cross_site
+            && drop_request_headers(buffer, &mut head_end, &["authorization".to_string()])
+        {
+            crate::logbuf::push_debug(&format!(
+                "mitm {host}: third-party authorization stripped"
+            ));
         }
 
-        if stealth.hides_third_party_referer() && cross_site {
-            if drop_request_headers(buffer, &mut head_end, &["referer".to_string()]) {
-                crate::logbuf::push_debug(&format!("mitm {host}: third-party referer stripped"));
-            }
+        if stealth.hides_third_party_referer()
+            && cross_site
+            && drop_request_headers(buffer, &mut head_end, &["referer".to_string()])
+        {
+            crate::logbuf::push_debug(&format!("mitm {host}: third-party referer stripped"));
         }
 
         if stealth.injects_privacy_signals() {

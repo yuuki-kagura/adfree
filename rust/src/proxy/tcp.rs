@@ -82,7 +82,7 @@ pub(crate) fn accept_loop(listener: TcpListener, stop: Arc<AtomicBool>) {
         let local = client
             .peer_addr()
             .ok()
-            .is_some_and(|peer| super::is_local_peer(peer));
+            .is_some_and(super::is_local_peer);
         if !local {
             reset_on_close(client.as_raw_fd());
             continue;

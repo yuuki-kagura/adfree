@@ -133,10 +133,10 @@ impl UntrustedClients {
         exact || self.refuses_anywhere(fingerprint)
     }
 
-    /// Every host learned so far, with the number of clients that refused it.
-    /// The log writes these out; nothing decides on them.
     /// The fingerprints remembered for one host, sorted: what a test needs to
-    /// say that the pair was learned and nothing wider was.
+    /// say that the pair was learned and nothing wider was. Test-only, because
+    /// nothing decides on it — the log reads [`Self::snapshot`].
+    #[cfg(test)]
     pub(crate) fn fingerprints(&self, host: &str) -> Vec<String> {
         let entries = self.entries.lock().unwrap_or_else(|e| e.into_inner());
         let mut found: Vec<String> = entries

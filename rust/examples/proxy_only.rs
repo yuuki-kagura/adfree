@@ -23,7 +23,7 @@ fn main() {
     if !adfree_core::api::core_set_data_root(root.clone()) {
         eprintln!("data root refused: {root}");
     }
-    let _ = adfree_core::api::core_start(0);
+    adfree_core::api::core_start(0);
     let status = adfree_core::api::core_start_proxy(tcp, dns, false);
     println!(
         "running={} tcp={} dns={} tcp_error={:?} dns_error={:?} root={}",

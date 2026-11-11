@@ -46,6 +46,12 @@ pub struct DnsCache {
     hits: u64,
 }
 
+impl Default for DnsCache {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl DnsCache {
     pub fn new() -> Self {
         DnsCache {
@@ -126,6 +132,11 @@ impl DnsCache {
     #[cfg(test)]
     pub fn len(&self) -> usize {
         self.entries.len()
+    }
+
+    #[cfg(test)]
+    pub fn is_empty(&self) -> bool {
+        self.entries.is_empty()
     }
 
     #[cfg(test)]

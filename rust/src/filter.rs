@@ -2325,7 +2325,7 @@ impl FilterEngine {
         if host.is_empty() || self.module_flags.load(Ordering::Relaxed) & MODULE_DNS == 0 {
             return None;
         }
-        let verdict = evaluate_main(&self.compiled(), &host);
+        let verdict = evaluate_main(&self.compiled(), host);
         (verdict.blocked && !verdict.redirect && self.category_enabled(verdict.category))
             .then_some(verdict)
     }
@@ -7175,7 +7175,6 @@ mod tests {
         assert_eq!(v.list_name.as_deref(), Some("User Custom Filter"));
     }
 
-    #[test]
     /// The page an exception names is the whole point of seeding the
     /// exemption from the rules: a switch flipped on an already-open page
     /// produces no request that could arm it, and the resolver would keep

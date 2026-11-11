@@ -4137,9 +4137,7 @@ impl Core {
             query.qclass,
             now,
         );
-        let Some((mut message, age_secs)) = hit else {
-            return None;
-        };
+        let (mut message, age_secs) = hit?;
         if !dns::adopt_question(&mut message, query) {
             return None;
         }
@@ -6149,16 +6147,18 @@ mod tests {
 
     #[test]
     fn proxy_routing_prefers_the_strictest_per_app_answer() {
-        let mut policy = AppNetworkPolicy::default();
-        policy.proxy_rules = Arc::new(
-            [
-                ("com.example.direct".to_string(), ProxyAccess::Direct),
-                ("com.example.through".to_string(), ProxyAccess::Through),
-                ("com.example.inherit".to_string(), ProxyAccess::Inherit),
-            ]
-            .into_iter()
-            .collect(),
-        );
+        let policy = AppNetworkPolicy {
+            proxy_rules: Arc::new(
+                [
+                    ("com.example.direct".to_string(), ProxyAccess::Direct),
+                    ("com.example.through".to_string(), ProxyAccess::Through),
+                    ("com.example.inherit".to_string(), ProxyAccess::Inherit),
+                ]
+                .into_iter()
+                .collect(),
+            ),
+            ..AppNetworkPolicy::default()
+        };
         let names = |pkg: &str| vec![pkg.to_string()];
         // The global switch is the fallback for packages with no opinion.
         assert!(policy.proxy_through(&names("com.example.inherit"), true));
