@@ -130,7 +130,11 @@ jobs:
             -v "$GITHUB_WORKSPACE/out:/out" \
             archlinux:base-devel \
             bash -euo pipefail -s <<'SCRIPT'
-          pacman -Sy --noconfirm --needed base-devel git jdk21-openjdk rust cargo unzip >/dev/null
+          # A fresh image is behind the mirrors, and installing into a stale
+          # database is "could not satisfy dependencies" with no dependency
+          # named: upgrade first, then install.
+          pacman -Syu --noconfirm --needed >/dev/null
+          pacman -S --noconfirm --needed git jdk21-openjdk rust cargo unzip >/dev/null
           useradd -m builder
           mkdir -p /home/builder/pkg
           cp /packaging/arch/PKGBUILD "/tarball/adfree-$VERSION.tar.gz" /home/builder/pkg/
