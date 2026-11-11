@@ -1,3 +1,11 @@
+## [1.3.1](https://github.com/yuuki-kagura/adfree/compare/v1.3.0...v1.3.1) (2026-11-11)
+
+
+### Bug Fixes
+
+* **packaging:** build the Arch package with the hardening flags off ([8315c60](https://github.com/yuuki-kagura/adfree/commit/8315c60afe8e0c6a9d51938bd407fe5a9f84fe0c))
+* **packaging:** stop shipping a core that cannot be opened ([59769e6](https://github.com/yuuki-kagura/adfree/commit/59769e61cb650b98d16d27d5a5fb714a63a45f71))
+
 # [1.3.0](https://github.com/yuuki-kagura/adfree/compare/v1.2.0...v1.3.0) (2026-11-11)
 
 
