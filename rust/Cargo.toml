@@ -91,11 +91,13 @@ x509-parser = "0.18.1"
 # their count. The text is read back from the list file when a block is
 # logged, which keeps ~20 MB of stored rule text (one string per rule) out of
 # every loaded engine.
-# Published fork: https://github.com/tachibana-shin/adblock-rust (branch
+# Published fork: https://github.com/yuuki-kagura/adblock-rust (branch
 # `master`). Cargo.lock pins the exact revision, so builds stay reproducible
-# until the fork is updated deliberately.
+# until the fork is updated deliberately. The fork is public because CI has to
+# fetch it without a credential: the account it used to live under is gone, and
+# a private URL here is a build that only works on the machine that has it.
 [patch.crates-io]
-adblock = { git = "https://github.com/tachibana-shin/adblock-rust", branch = "master" }
+adblock = { git = "https://github.com/yuuki-kagura/adblock-rust", branch = "master" }
 
 [profile.release]
 opt-level = 3
