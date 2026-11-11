@@ -1,3 +1,15 @@
+# [1.4.0](https://github.com/yuuki-kagura/adfree/compare/v1.3.3...v1.4.0) (2026-11-11)
+
+
+### Bug Fixes
+
+* **home:** the counters outlive the process, and the trackers are counted ([c22213e](https://github.com/yuuki-kagura/adfree/commit/c22213e2ffb94d126458fe4acc086c279423f3b7))
+
+
+### Features
+
+* **log:** the tab's shape follows the platform, the popup keeps its own ([f06b348](https://github.com/yuuki-kagura/adfree/commit/f06b348af9ab19b64b88da4ae364fe7c3e5c831b))
+
 ## [1.3.3](https://github.com/yuuki-kagura/adfree/compare/v1.3.2...v1.3.3) (2026-11-11)
 
 
