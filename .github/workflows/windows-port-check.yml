@@ -1,0 +1,34 @@
+# The Windows port's red/green line.
+#
+# Deliberately manual: while the socket layer is still Unix-only this job fails
+# by design, and a job that is always red on `main` is noise, not a signal.
+# Run it from the Actions tab (or `gh workflow run windows-port-check.yml`) after
+# a porting session to see the count move.
+name: Windows port check
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - "rust/src/**"
+      - "scripts/windows-check.sh"
+      - "docs/plans/windows-support.md"
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install the Windows target and a C cross compiler
+        run: |
+          rustup target add x86_64-pc-windows-gnu
+          sudo apt-get update
+          sudo apt-get install -y gcc-mingw-w64-x86-64
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: rust
+
+      - name: Does the core compile for Windows yet?
+        run: scripts/windows-check.sh
