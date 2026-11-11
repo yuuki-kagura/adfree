@@ -1,14 +1,20 @@
 name: Linux Release
 
-# The desktop app is a second product on the same tag: the Android release job
+# The desktop app is a second product on the same tag: the Android workflow
 # creates the release, and these jobs attach the packages a Linux user installs.
+#
+# It is not triggered by the release event, because the release is created with
+# the workflow token and GitHub does not start workflows from the token's own
+# events — a `release: published` trigger here fires never. The run that made
+# the release is the signal instead.
 on:
-  release:
-    types: [published]
+  workflow_run:
+    workflows: ["Android Release"]
+    types: [completed]
   workflow_dispatch:
     inputs:
       tag:
-        description: "Release tag to attach packages to (e.g. v1.2.0)"
+        description: "Release tag to attach packages to (e.g. v1.3.0)"
         required: true
 
 permissions:
@@ -20,14 +26,29 @@ concurrency:
 
 jobs:
   deb-rpm:
+    # A failed Android release publishes nothing, so there is nothing to attach
+    # a package to.
+    if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
     runs-on: ubuntu-latest
     env:
-      TAG: ${{ github.event.release.tag_name || inputs.tag }}
+      # On the release run the tag is not in the event: it is whatever the
+      # release that run just published is called.
+      TAG: ${{ inputs.tag || '' }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
+
+      - name: Resolve the release tag
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          if [ -z "$TAG" ]; then
+            TAG=$(gh release view --repo "$GITHUB_REPOSITORY" --json tagName --jq .tagName)
+            echo "TAG=$TAG" >> "$GITHUB_ENV"
+          fi
+          echo "releasing into $TAG"
 
       - name: Set up JDK 21
         uses: actions/setup-java@v4
@@ -66,14 +87,25 @@ jobs:
             --clobber
 
   arch:
+    if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
     runs-on: ubuntu-latest
     env:
-      TAG: ${{ github.event.release.tag_name || inputs.tag }}
+      TAG: ${{ inputs.tag || '' }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
+
+      - name: Resolve the release tag
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          if [ -z "$TAG" ]; then
+            TAG=$(gh release view --repo "$GITHUB_REPOSITORY" --json tagName --jq .tagName)
+            echo "TAG=$TAG" >> "$GITHUB_ENV"
+          fi
+          echo "releasing into $TAG"
 
       # Arch and CachyOS install neither a deb nor an rpm, so the package has to
       # be built where those come from — and it has to be built from the tree
