@@ -18,6 +18,17 @@ use std::os::unix::io::{AsRawFd, RawFd};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
+/// How long a flow that is already open may keep going after the switch is
+/// turned off. A stop is a decision about new traffic, not a reason to cut the
+/// page the user is loading in half — and a page is written over a connection
+/// that was opened before the click, so closing at the click is what a reset in
+/// the middle of a load looks like from the outside.
+const DRAIN: std::time::Duration = std::time::Duration::from_secs(10);
+
+/// Said once per stop, by whichever flow notices first: a browser leaves dozens
+/// open, and one line each turns a deliberate pause into a wall of log.
+static DRAIN_ANNOUNCED: AtomicBool = AtomicBool::new(false);
+
 /// Binds the listener. Dual-stack `::` so a redirected flow arrives whatever
 /// family the app asked for: `redirect` in the output hook keeps the
 /// destination address and only moves the port, so the socket has to answer on
@@ -25,6 +36,7 @@ use std::sync::Arc;
 /// connection — [`super::is_local_peer`] — so the listener sits on the LAN
 /// interfaces without serving them.
 pub(crate) fn bind_listener(port: u16) -> std::io::Result<TcpListener> {
+    DRAIN_ANNOUNCED.store(false, Ordering::Relaxed);
     match bind_v6(port) {
         Ok(listener) => Ok(listener),
         // No IPv6 on this machine (or a container that hides it): the v4
@@ -126,7 +138,14 @@ fn handle(client: TcpStream, stop: &AtomicBool) {
     let client_fd = client.as_raw_fd();
 
     let Some(target) = resolve_target(client_fd, stop) else {
-        crate::logbuf::push("proxy: could not resolve a redirected connection's target; reset");
+        // Two very different things wear the same silence: a connection that
+        // said nothing we could use, and one that was still saying it when the
+        // switch went off. Only the second is the user's business.
+        crate::logbuf::push(if stop.load(Ordering::Relaxed) {
+            "proxy: protection stopped before this connection named a destination; reset"
+        } else {
+            "proxy: could not resolve a redirected connection's target; reset"
+        });
         reset_on_close(client_fd);
         return;
     };
@@ -191,7 +210,13 @@ fn handle(client: TcpStream, stop: &AtomicBool) {
     // already decided above whether this app may dial at all: that question
     // is about the app, not about what it is fetching.
     let filter_localhost = super::filters_loopback();
-    let mitm_armed = core.mitm_ready(&cfg)
+    // A flow that arrives as the switch goes off is relayed, never
+    // intercepted: there is no filtering decision left to make, and the user's
+    // request still has a destination. Without this the connection is armed,
+    // dialled, and then abandoned by the pump on its first look at the stop
+    // flag — a reset the client never asked for.
+    let mitm_armed = !stop.load(Ordering::Relaxed)
+        && core.mitm_ready(&cfg)
         && (filter_localhost || !addr.ip().is_loopback())
         && core.mitm_port.load(Ordering::Relaxed) == addr.port();
     if local && !mitm_armed {
@@ -259,15 +284,36 @@ fn handle(client: TcpStream, stop: &AtomicBool) {
     let mut last_activity = std::time::Instant::now();
     let mut peer_open = peer_fd >= 0;
 
+    // The pumps watch this one instead of the listener's flag, so a stop that
+    // lands while a response is half written finishes it rather than resetting
+    // the flow. It is raised when the grace period runs out, and a restart
+    // never waits for it: `stop()` joins the listener threads, not these.
+    let hard_stop = AtomicBool::new(false);
+    let mut drain_until: Option<std::time::Instant> = None;
+
     if let Target::PlainHttp { head, .. } = &target {
-        if write_all_nb(peer_fd, head, stop).is_err() {
+        if write_all_nb(peer_fd, head, &hard_stop).is_err() {
             return;
         }
     }
 
-    while !stop.load(Ordering::Relaxed) {
+    while !hard_stop.load(Ordering::Relaxed) {
         if last_activity.elapsed() > IDLE_TIMEOUT {
             break;
+        }
+        if stop.load(Ordering::Relaxed) {
+            let deadline = *drain_until.get_or_insert_with(|| {
+                if !DRAIN_ANNOUNCED.swap(true, Ordering::Relaxed) {
+                    crate::logbuf::push(
+                        "proxy: protection stopped; finishing the flows that were already open",
+                    );
+                }
+                std::time::Instant::now() + DRAIN
+            });
+            if std::time::Instant::now() >= deadline {
+                hard_stop.store(true, Ordering::Relaxed);
+                break;
+            }
         }
         if begun_excepted && !core.filter_engine().excepted_page_open() {
             crate::logbuf::push(&format!(
@@ -303,7 +349,7 @@ fn handle(client: TcpStream, stop: &AtomicBool) {
                         &mut peer,
                         &mut peer_fd,
                         &mut peer_open,
-                        stop,
+                        &hard_stop,
                         session.as_mut(),
                         &apps,
                         addr,
@@ -342,7 +388,7 @@ fn handle(client: TcpStream, stop: &AtomicBool) {
                         &mut peer,
                         &mut peer_fd,
                         &mut peer_open,
-                        stop,
+                        &hard_stop,
                         session.as_mut(),
                         &apps,
                         addr,
@@ -360,7 +406,7 @@ fn handle(client: TcpStream, stop: &AtomicBool) {
         if let Some(session) = session.as_mut() {
             if peer_open {
                 let extra = session.take_upstream_outbound();
-                if !extra.is_empty() && write_all_nb(peer_fd, &extra, stop).is_err() {
+                if !extra.is_empty() && write_all_nb(peer_fd, &extra, &hard_stop).is_err() {
                     break;
                 }
             }
