@@ -1,3 +1,10 @@
+## [1.3.3](https://github.com/yuuki-kagura/adfree/compare/v1.3.2...v1.3.3) (2026-11-11)
+
+
+### Bug Fixes
+
+* **proxy:** a stop must not take back the slots threads still hold ([bf5f63e](https://github.com/yuuki-kagura/adfree/commit/bf5f63e3b29dc1c64f0a7d8fec9c6d15bed0e03c))
+
 ## [1.3.2](https://github.com/yuuki-kagura/adfree/compare/v1.3.1...v1.3.2) (2026-11-11)
 
 
