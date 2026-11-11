@@ -88,7 +88,10 @@ jobs:
       - name: Build the Arch package
         run: |
           mkdir -p out
-          docker run --rm \
+          # `-i` is not optional here: the script arrives on stdin, and a
+          # container started without it reads the script as empty and exits
+          # zero, leaving a green step and no package.
+          docker run --rm -i \
             -e VERSION="$VERSION" \
             -v "$GITHUB_WORKSPACE/packaging:/packaging:ro" \
             -v "$RUNNER_TEMP:/tarball:ro" \
