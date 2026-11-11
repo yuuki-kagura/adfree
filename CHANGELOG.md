@@ -1,3 +1,10 @@
+# [1.3.0](https://github.com/yuuki-kagura/adfree/compare/v1.2.0...v1.3.0) (2026-11-11)
+
+
+### Features
+
+* **desktop:** hand a Linux user something to install ([1b85fe2](https://github.com/yuuki-kagura/adfree/commit/1b85fe209718a73030d88e89b438bbbe6ae498cd))
+
 # [1.2.0](https://github.com/yuuki-kagura/adfree/compare/v1.1.1...v1.2.0) (2026-11-11)
 
 
