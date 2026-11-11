@@ -451,9 +451,12 @@ class AdGuardVpnService : VpnService() {
         Log.i(TAG, "tunnel retry $attempt scheduled")
     }
 
-    /** Whether system Settings named this VPN always-on, so it is rebuilt there. */
+    /**
+     * Whether system Settings named this VPN always-on, so it is rebuilt there.
+     * `isAlwaysOn` arrived in Q, so a P device is asked nothing and answers no.
+     */
     private fun isSystemKeepingVpn(): Boolean =
-        Build.VERSION.SDK_INT >= Build.VERSION_CODES.P &&
+        Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q &&
             runCatching { isAlwaysOn() }.getOrDefault(false)
 
     /**
