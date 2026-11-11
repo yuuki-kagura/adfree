@@ -39,13 +39,58 @@ QUIC outbound with a firewall rule so browsers cannot bypass filtering.
   and games that ignore the system proxy.
 - No driver, no kernel component, installable as a plain MSI.
 
-**B. WinDivert/WFP.**
+**B. A kernel driver (WinDivert, WFP callout, or our own socket filter).**
 Full coverage, matching AdGuard for Windows, at the cost of shipping and signing
 a kernel driver, an install/uninstall service, and a much larger verification
 burden. This is a separate project, not a step in this one.
 
+What signing costs, from Microsoft's own policy page: since **Windows 10 1607**
+the OS "will not load any new kernel-mode drivers which are not signed by the Dev
+Portal", and an **EV code-signing certificate is required** to even create the
+dashboard account. Attestation signing (no HLK run) is enough for Windows 10
+client systems; production drivers should submit HLK/HCK logs. Every driver
+update is another submission, and a crash in it is a machine-wide BSOD rather
+than an app crash — which is exactly why AdGuard says it "regularly updates
+drivers to steadily reduce the number of BSODs".
+
+Source: <https://learn.microsoft.com/en-us/windows-hardware/drivers/install/kernel-mode-code-signing-policy--windows-vista-and-later->
+
 Recommendation: ship **A**, say plainly in the UI that Windows filtering is
 proxy-based, and keep `nft`/`SO_ORIGINAL_DST` as the Linux path unchanged.
+
+## What AdGuard for Windows actually ships (verified, not remembered)
+
+AdGuard's own knowledge base is explicit: "In AdGuard for Windows, this
+interception is implemented through **network drivers**", and the app lets the
+user pick which one (`Settings → App settings → Network`):
+
+- **WFP** — a Windows Filtering Platform callout, i.e. packet-level filtering
+  inside the NETIO pipeline. This is the one whose callout bugs turn into
+  NETIO-related BSODs.
+- **TDI** — the legacy transport driver interface; kept for old systems.
+- **SockFilter** (first appeared in 7.22.4, still called experimental) — a
+  "lightweight **kernel-mode** network driver that works at the socket level
+  (TCP/UDP)", intercepting `connect`/`send`/`receive`/`bind` instead of raw
+  packets. AdGuard lists its advantages as less complexity than WFP, no
+  filter-ordering conflicts with VPN/firewall/AV, and "greatly reduced risk of
+  NETIO-related BSODs" — and its cost as not seeing traffic that bypasses
+  Winsock (other kernel drivers).
+
+Their release notes agree and show the operational cost: "AdGuard uses a special
+network driver that handles the actual sending and receiving of data, allowing
+us to filter traffic from every app on your device" (v8.0.0), and "We regularly
+update drivers to steadily reduce the number of BSODs users experience" (v8.0.4).
+
+So: **every AdGuard Windows path is a kernel driver, and all three are signed.**
+An earlier draft of this plan said AdGuard uses WinDivert; that is wrong and is
+corrected here. WinDivert would still be a kernel driver (`WinDivert.sys`,
+"installed below the Windows network stack", LGPLv3/GPLv2) — bundled, but signed
+by us.
+
+Sources:
+- <https://adguard.com/kb/adguard-for-windows/features/network/>
+- <https://github.com/AdguardTeam/AdGuardForWindows/releases> (v8.0.0, v8.0.4, v8.0.0-beta-5)
+- <https://github.com/basil00/WinDivert> (driver, license)
 
 ## Decision 2 — where the portable socket layer lives
 
