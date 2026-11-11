@@ -346,7 +346,7 @@
     <string name="home_stat_ads">Ads</string>
     <string name="home_stat_trackers">Trackers</string>
     <string name="home_stat_data">Data</string>
-    <string name="home_stat_data_value">%1$d MB</string>
+    <string name="home_stat_data_value">%1$s</string>
     <string name="home_stat_battery">Battery saved</string>
     <string name="home_stat_battery_value">+%1$.1f%%</string>
     <string name="home_quick_ads">Ads</string>
@@ -930,9 +930,9 @@
     <string name="log_clear_body">All %1$d entries will be deleted. This cannot be undone.</string>
     <string name="log_clear_confirm">Delete</string>
     <string name="log_search_hint">Search. Prefix a term with url:, text:, or - to exclude</string>
-    <string name="log_filter_all">All (%1$d)</string>
-    <string name="log_filter_blocked">Blocked (%1$d)</string>
-    <string name="log_filter_allowed">Allowed (%1$d)</string>
+    <string name="log_filter_all">All (%1$s)</string>
+    <string name="log_filter_blocked">Blocked (%1$s)</string>
+    <string name="log_filter_allowed">Allowed (%1$s)</string>
     <string name="log_filter_by_app">Filtering by app: %1$s</string>
     <string name="log_filter_by_app_clear">Clear app filter</string>
     <string name="log_filter_type_label">Content type</string>

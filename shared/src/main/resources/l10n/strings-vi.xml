@@ -345,7 +345,7 @@
     <string name="home_stat_ads">Quảng cáo</string>
     <string name="home_stat_trackers">Theo dõi</string>
     <string name="home_stat_data">Dữ liệu</string>
-    <string name="home_stat_data_value">%1$d MB</string>
+    <string name="home_stat_data_value">%1$s</string>
     <string name="home_stat_battery">Tiết kiệm pin</string>
     <string name="home_stat_battery_value">+%1$.1f%%</string>
     <string name="home_quick_ads">Quảng cáo</string>
@@ -930,9 +930,9 @@
     <string name="log_clear_body">Toàn bộ %1$d bản ghi sẽ bị xoá và không thể hoàn tác.</string>
     <string name="log_clear_confirm">Xoá</string>
     <string name="log_search_hint">Tìm kiếm. Thêm tiền tố url:, text: hoặc - để loại trừ</string>
-    <string name="log_filter_all">Tất cả (%1$d)</string>
-    <string name="log_filter_blocked">Đã chặn (%1$d)</string>
-    <string name="log_filter_allowed">Cho phép (%1$d)</string>
+    <string name="log_filter_all">Tất cả (%1$s)</string>
+    <string name="log_filter_blocked">Đã chặn (%1$s)</string>
+    <string name="log_filter_allowed">Cho phép (%1$s)</string>
     <string name="log_filter_by_app">Đang lọc theo ứng dụng: %1$s</string>
     <string name="log_filter_by_app_clear">Bỏ lọc theo ứng dụng</string>
     <string name="log_filter_type_label">Loại nội dung</string>

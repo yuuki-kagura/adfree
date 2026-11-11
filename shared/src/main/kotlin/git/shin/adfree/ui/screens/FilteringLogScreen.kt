@@ -92,6 +92,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import git.shin.adfree.data.AdGuardRepository
+import git.shin.adfree.model.CountFormat
 import git.shin.adfree.model.FilterList
 import git.shin.adfree.model.FilterStatus
 import git.shin.adfree.model.LogRuleSwitch
@@ -415,7 +416,7 @@ fun FilteringLogScreen(
                     // line, which is what AdGuard's own log does with its toolbar.
                     LogFilterSwitch(
                         tag = "log_filter_switch_all",
-                        label = L10n.format(Strings.log_filter_all, state.logTotal),
+                        label = L10n.format(Strings.log_filter_all, CountFormat.compact(state.logTotal)),
                         checked = state.statusFilter == null,
                         tint = AdGuardGreenPrimary,
                         onCheckedChange = {
@@ -424,7 +425,7 @@ fun FilteringLogScreen(
                     )
                     LogFilterSwitch(
                         tag = "log_filter_switch_blocked",
-                        label = L10n.format(Strings.log_filter_blocked, state.logBlockedTotal),
+                        label = L10n.format(Strings.log_filter_blocked, CountFormat.compact(state.logBlockedTotal)),
                         checked = state.statusFilter == FilterStatus.BLOCKED,
                         tint = AdGuardRedBlocked,
                         onCheckedChange = { checked ->
@@ -435,7 +436,7 @@ fun FilteringLogScreen(
                     )
                     LogFilterSwitch(
                         tag = "log_filter_switch_allowed",
-                        label = L10n.format(Strings.log_filter_allowed, state.logAllowedTotal),
+                        label = L10n.format(Strings.log_filter_allowed, CountFormat.compact(state.logAllowedTotal)),
                         checked = state.statusFilter == FilterStatus.ALLOWED,
                         tint = AdGuardGreenLight,
                         onCheckedChange = { checked ->
@@ -613,7 +614,7 @@ fun FilteringLogScreen(
                     selected = state.statusFilter == null,
                     onClick = { viewModel.onIntent(AdGuardIntent.FilterStatusChanged(null)) },
                     label = {
-                        Text(L10n.format(Strings.log_filter_all, state.logTotal), fontSize = 12.sp)
+                        Text(L10n.format(Strings.log_filter_all, CountFormat.compact(state.logTotal)), fontSize = 12.sp)
                     },
                     modifier = Modifier.testTag("log_filter_chip_all"),
                     colors = FilterChipDefaults.filterChipColors(
@@ -631,7 +632,7 @@ fun FilteringLogScreen(
                     },
                     label = {
                         Text(
-                            L10n.format(Strings.log_filter_blocked, state.logBlockedTotal),
+                            L10n.format(Strings.log_filter_blocked, CountFormat.compact(state.logBlockedTotal)),
                             fontSize = 12.sp
                         )
                     },
@@ -651,7 +652,7 @@ fun FilteringLogScreen(
                     },
                     label = {
                         Text(
-                            L10n.format(Strings.log_filter_allowed, state.logAllowedTotal),
+                            L10n.format(Strings.log_filter_allowed, CountFormat.compact(state.logAllowedTotal)),
                             fontSize = 12.sp
                         )
                     },

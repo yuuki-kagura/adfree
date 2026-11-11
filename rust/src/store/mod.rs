@@ -219,6 +219,17 @@ impl Store {
     }
 
     /// Whole-window totals, including rows the core could not attribute.
+    /// Everything this store has ever counted, not just what still has rows.
+    pub fn log_totals(&self) -> (u64, u64, u64, u64) {
+        match log::totals(&self.db) {
+            Ok(t) => t,
+            Err(e) => {
+                crate::logbuf::push_error(&format!("store: read totals: {e}"));
+                (0, 0, 0, 0)
+            }
+        }
+    }
+
     pub fn log_window_totals(&self, since_ms: i64, transport: i64) -> WindowTotalsRow {
         match log::window_totals(&self.db, since_ms, transport) {
             Ok(row) => row,
@@ -577,6 +588,42 @@ fn migrate(conn: &Connection) -> Result<(), String> {
         )
         .map_err(|e| format!("migrate schema to v11: {e}"))?;
     }
+    if version < 12 {
+        // v12: totals that outlive the rows that produced them.
+        //
+        // The counters behind them live in memory, so every restart opened the
+        // app on zeros while the log still held yesterday's traffic — and the
+        // tracker count was read off counters that only an Android VPN can
+        // move (QUIC drops, TCP resets), which on this machine are always zero.
+        // The rows are bounded by the retention window, so they cannot answer
+        // "how much has this machine blocked": a running total can, and it
+        // costs one upsert per batch instead of a scan per repaint.
+        //
+        // Seeded from the rows still on disk, so a machine that has been
+        // filtering for a week does not open on zero either.
+        conn.execute_batch(
+            "BEGIN;
+             CREATE TABLE totals (
+                 key   TEXT PRIMARY KEY,
+                 value INTEGER NOT NULL DEFAULT 0
+             );
+             INSERT OR IGNORE INTO totals(key, value)
+                 SELECT 'ads', COALESCE(SUM(CASE WHEN action != 0 AND category = 0
+                                                 THEN 1 ELSE 0 END), 0)
+                 FROM log_events;
+             INSERT OR IGNORE INTO totals(key, value)
+                 SELECT 'trackers', COALESCE(SUM(CASE WHEN action != 0 AND category IN (1, 2, 3)
+                                                      THEN 1 ELSE 0 END), 0)
+                 FROM log_events;
+             INSERT OR IGNORE INTO totals(key, value)
+                 SELECT 'requests', COUNT(*) FROM log_events;
+             INSERT OR IGNORE INTO totals(key, value)
+                 SELECT 'bytes_saved', COALESCE(SUM(bytes_saved), 0) FROM log_events;
+             PRAGMA user_version = 12;
+             COMMIT;",
+        )
+        .map_err(|e| format!("migrate schema to v12: {e}"))?;
+    }
     Ok(())
 }
 
@@ -863,7 +910,8 @@ mod tests {
             let version: i64 = conn
                 .query_row("PRAGMA user_version", [], |r| r.get(0))
                 .expect("version read");
-            assert_eq!(version, 11);
+            // Every step lands, so a v7 file opens at the current schema.
+            assert_eq!(version, 12);
         }
         assert_eq!(
             store.log_usage_by_domain(1_000, -1),
@@ -1187,6 +1235,53 @@ mod tests {
         // The page is capped well below the table, the counts are not.
         assert_eq!(store.log_page(0, 2).len(), 2);
         assert_eq!(store.log_status_counts(), (2, 3));
+    }
+
+    /// The counters the home screen shows: they must count what was blocked,
+    /// tell ads from trackers, and still be there after a reopen — the whole
+    /// point is that they outlive the rows and the process.
+    #[test]
+    fn totals_outlive_both_the_rows_and_the_process() {
+        let (store, dir) = temp_store("totals");
+        // One ad (category 0) and one tracker (category 2).
+        store.log_enqueue(&block_event(
+            ACTION_BLOCK,
+            "ads.test",
+            "",
+            "||ads^",
+            "Ads",
+            0,
+            10,
+            1,
+            false,
+        ));
+        store.log_enqueue(&block_event(
+            ACTION_BLOCK,
+            "track.test",
+            "",
+            "||track^",
+            "Spyware",
+            2,
+            20,
+            1,
+            false,
+        ));
+        store.log_enqueue(&allow_event("ok.test", "", 30));
+        store.log_flush();
+
+        let (ads, trackers, requests, _bytes) = store.log_totals();
+        assert_eq!((ads, trackers, requests), (1, 1, 3));
+
+        // Emptying the log leaves the totals standing: they are a lifetime
+        // figure, not a view of the rows.
+        store.log_clear();
+        let (ads, trackers, requests, _bytes) = store.log_totals();
+        assert_eq!((ads, trackers, requests), (1, 1, 3));
+
+        drop(store);
+        let reopened = Store::open(&dir).expect("store reopens");
+        let (ads, trackers, requests, _bytes) = reopened.log_totals();
+        assert_eq!((ads, trackers, requests), (1, 1, 3), "totals survive a reopen");
     }
 
     #[test]

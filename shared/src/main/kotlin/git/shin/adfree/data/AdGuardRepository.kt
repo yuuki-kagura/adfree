@@ -383,7 +383,12 @@ class AdGuardRepository(
                 // replays its current value, so a visible UI ticks at once.
                 uiVisible.first { it }
                 val snapshot = engine.stats()
-                _stats.value = snapshot.toUiStats(engine.isBuilding())
+                // Ads, trackers and saved bytes are the store's running totals,
+                // not the engine's per-process counters: a restart used to open
+                // the home screen on zeros while the log still held the traffic,
+                // and the tracker figure was read off counters only an Android
+                // VPN can move. One indexed read of four rows, every tick.
+                _stats.value = snapshot.toUiStats(engine.isBuilding(), engine.logTotals())
                 // Native warnings are buffered natively so the packet threads
                 // never do I/O; drain them here or they are lost.
                 engine.flushNativeLogLines()
@@ -567,12 +572,15 @@ class AdGuardRepository(
         }
     }
 
-    private fun StatsSnapshot.toUiStats(building: Boolean): ProtectionStats {
+    private fun StatsSnapshot.toUiStats(
+        building: Boolean,
+        totals: git.shin.adfree.core.LogTotals,
+    ): ProtectionStats {
         val blocked = dnsBlocked + tcpReset
         return ProtectionStats(
-            adsBlocked = dnsBlocked,
-            trackersBlocked = (quicDropped + quicBlocked + udpDropped + tcpReset).toLong(),
-            dataSavedBytes = bytesSaved,
+            adsBlocked = totals.ads.toLong(),
+            trackersBlocked = totals.trackers.toLong(),
+            dataSavedBytes = totals.bytesSaved.toLong(),
             totalRequestsIntercepted = packetsTotal,
             activeRulesCount = activeRules.toInt(),
             engineLatencyNs = decisionNsEwma,

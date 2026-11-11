@@ -964,6 +964,31 @@ pub fn core_log_window_totals_since(since_ms: i64, transport: i32) -> WindowTota
     })
 }
 
+/// What this machine has blocked, counted once and kept.
+///
+/// The engine's own counters start at zero with the process, so the home screen
+/// used to open on zeros after every restart while the log still held the
+/// traffic — and its tracker figure was read off counters only an Android VPN
+/// moves. These come from the store, which counts each committed batch.
+#[derive(Debug, Clone, Copy, Default, uniffi::Record)]
+pub struct LogTotals {
+    pub ads: u64,
+    pub trackers: u64,
+    pub requests: u64,
+    pub bytes_saved: u64,
+}
+
+#[uniffi::export]
+pub fn core_log_totals() -> LogTotals {
+    guard(LogTotals::default(), || match crate::core().store() {
+        Some(store) => {
+            let (ads, trackers, requests, bytes_saved) = store.log_totals();
+            LogTotals { ads, trackers, requests, bytes_saved }
+        }
+        None => LogTotals::default(),
+    })
+}
+
 /// Empties the request log: the database and the live in-memory tail.
 #[uniffi::export]
 pub fn core_log_clear() -> bool {

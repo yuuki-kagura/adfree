@@ -325,7 +325,65 @@ fn write_batch(db: &Db, rows: &[LogRow], traffic: &[FlowTraffic]) -> rusqlite::R
             ])?;
         }
     }
+    // The running totals move with the rows, in the same transaction: a total
+    // that could drift from the log would be worse than no total at all.
+    let mut ads = 0i64;
+    let mut trackers = 0i64;
+    let mut bytes_saved = 0i64;
+    for r in rows {
+        if r.action != 0 {
+            match r.category {
+                0 => ads += 1,
+                1..=3 => trackers += 1,
+                _ => {}
+            }
+        }
+        bytes_saved += r.bytes_saved;
+    }
+    if !rows.is_empty() {
+        let mut stmt = tx.prepare_cached(UPSERT_TOTAL_SQL)?;
+        for (key, delta) in [
+            ("ads", ads),
+            ("trackers", trackers),
+            ("requests", rows.len() as i64),
+            ("bytes_saved", bytes_saved),
+        ] {
+            if delta != 0 {
+                stmt.execute(rusqlite::params![key, delta])?;
+            }
+        }
+    }
     tx.commit()
+}
+
+const UPSERT_TOTAL_SQL: &str =
+    "INSERT INTO totals(key, value) VALUES (?1, ?2) \
+     ON CONFLICT(key) DO UPDATE SET value = value + excluded.value";
+
+/// The running totals: ads, trackers, requests, bytes saved. Missing keys read
+/// as zero, which is what a store that has never written a row should say.
+pub(super) fn totals(db: &Db) -> rusqlite::Result<(u64, u64, u64, u64)> {
+    let conn = db.lock();
+    let mut stmt = conn.prepare_cached("SELECT key, value FROM totals")?;
+    let mut ads = 0u64;
+    let mut trackers = 0u64;
+    let mut requests = 0u64;
+    let mut bytes_saved = 0u64;
+    let rows = stmt.query_map([], |r| {
+        Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?))
+    })?;
+    for row in rows {
+        let (key, value) = row?;
+        let value = value.max(0) as u64;
+        match key.as_str() {
+            "ads" => ads = value,
+            "trackers" => trackers = value,
+            "requests" => requests = value,
+            "bytes_saved" => bytes_saved = value,
+            _ => {}
+        }
+    }
+    Ok((ads, trackers, requests, bytes_saved))
 }
 
 const COLUMNS: &str = "id, ts_ms, action, category, domain, ip, rule, list_name, \

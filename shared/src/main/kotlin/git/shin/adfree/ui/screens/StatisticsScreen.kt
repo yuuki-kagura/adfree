@@ -54,6 +54,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import git.shin.adfree.data.serviceSubtitle
 import git.shin.adfree.data.servicesKnownByCompany
+import git.shin.adfree.model.CountFormat
 import git.shin.adfree.model.AppFirewallRule
 import git.shin.adfree.model.AppUsageRange
 import git.shin.adfree.model.AppUsageTransport
@@ -441,7 +442,7 @@ private fun StatFigure(
 ) {
     Column(modifier = modifier, horizontalAlignment = Alignment.CenterHorizontally) {
         Text(
-            text = compactCount(value),
+            text = CountFormat.compact(value),
             fontSize = 22.sp,
             fontWeight = FontWeight.Bold,
             color = color,
@@ -592,9 +593,9 @@ private fun AppStatRow(app: AppFirewallRule, onClick: () -> Unit) {
         )
         Text(
             text = L10n.format(Strings.stats_app_counts,
-                compactCount(app.blockedAdsToday.toLong()),
-                compactCount(app.blockedTrackersToday.toLong()),
-                compactCount(app.requestsToday.toLong()),
+                CountFormat.compact(app.blockedAdsToday.toLong()),
+                CountFormat.compact(app.blockedTrackersToday.toLong()),
+                CountFormat.compact(app.requestsToday.toLong()),
             ),
             fontSize = 11.sp,
             fontFamily = FontFamily.Monospace,
@@ -654,8 +655,8 @@ private fun ServiceStatRow(row: ServiceUsage) {
         }
         Text(
             text = L10n.format(Strings.stats_service_counts,
-                compactCount(row.blocked.toLong()),
-                compactCount(row.requests.toLong()),
+                CountFormat.compact(row.blocked.toLong()),
+                CountFormat.compact(row.requests.toLong()),
             ),
             fontSize = 11.sp,
             fontFamily = FontFamily.Monospace,
@@ -663,21 +664,6 @@ private fun ServiceStatRow(row: ServiceUsage) {
             maxLines = 1,
         )
     }
-}
-
-/** AdGuard's compact header numbers: 999, 5,6K, 13,3K, 1,2M. */
-private fun compactCount(value: Long): String {
-    if (value < 1_000L) return value.toString()
-    val (unit, suffix) = if (value >= 1_000_000L) 1_000_000.0 to "M" else 1_000.0 to "K"
-    val scaled = value / unit
-    val text = if (scaled >= 100.0) {
-        scaled.toInt().toString()
-    } else {
-        String.format(Locale.getDefault(), "%.1f", scaled)
-            .trimEnd('0')
-            .trimEnd('.', ',')
-    }
-    return text + suffix
 }
 
 private fun formatBytes(bytes: Long): String {

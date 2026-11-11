@@ -633,6 +633,14 @@ class CoreEngine(
         runCatching { git.shin.adfree.core.coreDomainUsageSince(sinceMs, transport) }
             .getOrDefault(emptyList())
 
+    /**
+     * What this machine has blocked since it was installed, read from the
+     * store rather than from counters that start over with the process.
+     */
+    fun logTotals(): git.shin.adfree.core.LogTotals =
+        runCatching { git.shin.adfree.core.coreLogTotals() }
+            .getOrDefault(git.shin.adfree.core.LogTotals(0uL, 0uL, 0uL, 0uL))
+
     /** Whole-window totals for the Statistics header. */
     fun logWindowTotalsSince(
         sinceMs: Long,

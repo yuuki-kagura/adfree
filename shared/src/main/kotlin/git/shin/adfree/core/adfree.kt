@@ -791,6 +791,8 @@ internal object IntegrityCheckingUniffiLib {
     ): Int
     external fun uniffi_adfree_core_checksum_func_core_log_status_counts(
     ): Int
+    external fun uniffi_adfree_core_checksum_func_core_log_totals(
+    ): Int
     external fun uniffi_adfree_core_checksum_func_core_log_window_totals_since(
     ): Int
     external fun uniffi_adfree_core_checksum_func_core_mitm_status(
@@ -1008,6 +1010,8 @@ internal object UniffiLib {
     external fun uniffi_adfree_core_fn_func_core_log_page_before(`beforeId`: Long,`limit`: Int,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
     external fun uniffi_adfree_core_fn_func_core_log_status_counts(uniffi_out_err: UniffiRustCallStatus, 
+    ): RustBuffer.ByValue
+    external fun uniffi_adfree_core_fn_func_core_log_totals(uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
     external fun uniffi_adfree_core_fn_func_core_log_window_totals_since(`sinceMs`: Long,`transport`: Int,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
@@ -1338,6 +1342,9 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if ((lib.uniffi_adfree_core_checksum_func_core_log_status_counts() and 0xFFFF) != 4650) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if ((lib.uniffi_adfree_core_checksum_func_core_log_totals() and 0xFFFF) != 42961) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if ((lib.uniffi_adfree_core_checksum_func_core_log_window_totals_since() and 0xFFFF) != 7123) {
@@ -4129,6 +4136,62 @@ public object FfiConverterTypeLogStatusCounts: FfiConverterRustBuffer<LogStatusC
     override fun write(value: LogStatusCounts, buf: ByteBuffer) {
             FfiConverterLong.write(value.`blocked`, buf)
             FfiConverterLong.write(value.`allowed`, buf)
+    }
+}
+
+
+
+/**
+ * What this machine has blocked, counted once and kept.
+ *
+ * The engine's own counters start at zero with the process, so the home screen
+ * used to open on zeros after every restart while the log still held the
+ * traffic — and its tracker figure was read off counters only an Android VPN
+ * moves. These come from the store, which counts each committed batch.
+ */
+data class LogTotals (
+    var `ads`: kotlin.ULong
+    , 
+    var `trackers`: kotlin.ULong
+    , 
+    var `requests`: kotlin.ULong
+    , 
+    var `bytesSaved`: kotlin.ULong
+    
+){
+    
+
+    
+
+    
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeLogTotals: FfiConverterRustBuffer<LogTotals> {
+    override fun read(buf: ByteBuffer): LogTotals {
+        return LogTotals(
+            FfiConverterULong.read(buf),
+            FfiConverterULong.read(buf),
+            FfiConverterULong.read(buf),
+            FfiConverterULong.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: LogTotals) = (
+            FfiConverterULong.allocationSize(value.`ads`) +
+            FfiConverterULong.allocationSize(value.`trackers`) +
+            FfiConverterULong.allocationSize(value.`requests`) +
+            FfiConverterULong.allocationSize(value.`bytesSaved`)
+    )
+
+    override fun write(value: LogTotals, buf: ByteBuffer) {
+            FfiConverterULong.write(value.`ads`, buf)
+            FfiConverterULong.write(value.`trackers`, buf)
+            FfiConverterULong.write(value.`requests`, buf)
+            FfiConverterULong.write(value.`bytesSaved`, buf)
     }
 }
 
@@ -7088,6 +7151,16 @@ public object FfiConverterSequenceTypeUidApps: FfiConverterRustBuffer<List<UidAp
             return FfiConverterTypeLogStatusCounts.lift(
     uniffiRustCall() { _status ->
     UniffiLib.uniffi_adfree_core_fn_func_core_log_status_counts(
+    
+        _status)
+}
+    )
+    }
+    
+ fun `coreLogTotals`(): LogTotals {
+            return FfiConverterTypeLogTotals.lift(
+    uniffiRustCall() { _status ->
+    UniffiLib.uniffi_adfree_core_fn_func_core_log_totals(
     
         _status)
 }

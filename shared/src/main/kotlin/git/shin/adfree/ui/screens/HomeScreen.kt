@@ -65,6 +65,7 @@ import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import git.shin.adfree.model.CountFormat
 import git.shin.adfree.model.ProtectionStats
 import git.shin.adfree.ui.AdGuardIntent
 import git.shin.adfree.ui.AdGuardTab
@@ -633,7 +634,6 @@ private fun StatsGrid(
     stats: ProtectionStats,
     onCardClick: () -> Unit = {}
 ) {
-    val dataMb = stats.dataSavedBytes / (1024 * 1024)
 
     Column(modifier = Modifier.fillMaxWidth()) {
         Row(
@@ -642,7 +642,7 @@ private fun StatsGrid(
         ) {
             StatCard(
                 title = L10n.get(Strings.home_stat_ads),
-                value = stats.adsBlocked.toString(),
+                value = CountFormat.compact(stats.adsBlocked),
                 icon = Icons.Default.Block,
                 accentColor = AdGuardGreenPrimary,
                 onClick = onCardClick,
@@ -650,7 +650,7 @@ private fun StatsGrid(
             )
             StatCard(
                 title = L10n.get(Strings.home_stat_trackers),
-                value = stats.trackersBlocked.toString(),
+                value = CountFormat.compact(stats.trackersBlocked),
                 icon = Icons.Default.TrackChanges,
                 accentColor = AdGuardOrangeWarning,
                 onClick = onCardClick,
@@ -666,7 +666,7 @@ private fun StatsGrid(
         ) {
             StatCard(
                 title = L10n.get(Strings.home_stat_data),
-                value = L10n.format(Strings.home_stat_data_value, dataMb),
+                value = L10n.format(Strings.home_stat_data_value, CountFormat.data(stats.dataSavedBytes)),
                 icon = Icons.Default.CloudDownload,
                 accentColor = AdGuardBlueDns,
                 onClick = onCardClick,
@@ -845,11 +845,10 @@ private fun ProtectionSwitch(isActive: Boolean, onToggle: () -> Unit) {
 /** Four counters on one line, the way the reference client lists numbers. */
 @Composable
 private fun DesktopStatStrip(stats: ProtectionStats, onClick: () -> Unit) {
-    val dataMb = stats.dataSavedBytes / (1024 * 1024)
     val cells = listOf(
-        stats.adsBlocked.toString() to L10n.get(Strings.home_stat_ads),
-        stats.trackersBlocked.toString() to L10n.get(Strings.home_stat_trackers),
-        L10n.format(Strings.home_stat_data_value, dataMb) to
+        CountFormat.compact(stats.adsBlocked) to L10n.get(Strings.home_stat_ads),
+        CountFormat.compact(stats.trackersBlocked) to L10n.get(Strings.home_stat_trackers),
+        L10n.format(Strings.home_stat_data_value, CountFormat.data(stats.dataSavedBytes)) to
             L10n.get(Strings.home_stat_data),
         L10n.format(Strings.home_stat_battery_value, stats.estimatedBatterySavedPercent) to
             L10n.get(Strings.home_stat_battery),
