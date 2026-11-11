@@ -62,6 +62,10 @@ const MAX_CONNECTIONS: usize = 512;
 
 static LIVE: AtomicUsize = AtomicUsize::new(0);
 
+/// Said once per start, when the slot table is full: a refusal is silent on the
+/// wire, and silence is what made a wrapped counter look like a broken network.
+static CAP_ANNOUNCED: AtomicBool = AtomicBool::new(false);
+
 /// AdGuard for Windows' "Filter localhost", read per flow: with it off a
 /// conversation this machine is having with itself is relayed untouched —
 /// never intercepted, never judged by the lists. Written by [start], which
@@ -112,6 +116,7 @@ static OWN: Mutex<Option<(std::time::Instant, Vec<std::net::IpAddr>)>> = Mutex::
 /// addresses is filtered or merely carried.
 pub fn start(tcp_port: u16, dns_port: u16, filter_localhost: bool) -> ProxyStatus {
     FILTER_LOCALHOST.store(filter_localhost, Ordering::Relaxed);
+    CAP_ANNOUNCED.store(false, Ordering::Relaxed);
     let mut guard = match RUN.lock() {
         Ok(guard) => guard,
         // The record of which listener is live is exactly what could not be
@@ -239,7 +244,14 @@ pub fn stop() {
     for worker in run.loops {
         let _ = worker.join();
     }
-    LIVE.store(0, Ordering::Relaxed);
+    // `LIVE` is the number of slots threads are *holding*, and a stop does not
+    // take them back: a flow that is finishing what it was sending keeps its
+    // slot until its thread ends (see `tcp::DRAIN`). Zeroing it here made every
+    // one of those threads subtract from zero on its way out, and an unsigned
+    // count that goes below zero reads as nearly the cap — so the next
+    // connection was refused instantly, silently, and every connection after it
+    // until the process restarted. Turning protection off and on again was
+    // enough to do it.
     crate::logbuf::push("proxy: stopped");
 }
 
@@ -306,6 +318,15 @@ impl Slot {
         let previous = LIVE.fetch_add(1, Ordering::Relaxed);
         if previous >= MAX_CONNECTIONS {
             LIVE.fetch_sub(1, Ordering::Relaxed);
+            // Refusing here is a bare reset on the wire, so it has to say so
+            // once per start: this is what "protection is on and everything
+            // resets" looked like, with nothing in the log to explain it.
+            if !CAP_ANNOUNCED.swap(true, Ordering::Relaxed) {
+                crate::logbuf::push(&format!(
+                    "proxy: {} connections are open; refusing new ones",
+                    MAX_CONNECTIONS
+                ));
+            }
             return None;
         }
         Some(Slot)
