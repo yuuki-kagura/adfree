@@ -173,6 +173,25 @@ from the first connection of the next launch rather than having to fail once
 per start. Installing the system CA clears both, so a client that comes to
 trust it is decrypted again.
 
+## Install on the desktop
+
+Every release carries a package for each of the three ways Linux installs
+software, built from the same tag the Android build is cut from:
+
+| Distribution | Package | Install |
+| --- | --- | --- |
+| Ubuntu / Debian | `adfree_<version>_amd64.deb` | `sudo apt install ./adfree_<version>_amd64.deb` |
+| Fedora / openSUSE | `adfree-<version>-1.x86_64.rpm` | `sudo dnf install ./adfree-<version>-1.x86_64.rpm` |
+| Arch / CachyOS | `adfree-<version>-1-x86_64.pkg.tar.zst` | `sudo pacman -U adfree-<version>-1-x86_64.pkg.tar.zst` |
+
+They install to `/opt/adfree` with their own runtime and a launcher on `PATH`.
+The Arch package is also a plain `PKGBUILD` (`packaging/arch/PKGBUILD`), so it
+can be built rather than installed from the attached file.
+
+None of them asks for the privilege the redirect needs at install time: the
+shield asks the first time it is switched on, which is the one moment the
+machine is being changed and the user is looking at the switch.
+
 ## Desktop protection on Linux
 
 A desktop has no per-app tunnel to open, so Linux filters traffic the way
