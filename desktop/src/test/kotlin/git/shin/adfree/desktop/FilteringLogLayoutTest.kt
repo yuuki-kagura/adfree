@@ -45,12 +45,9 @@ class FilteringLogLayoutTest {
     }
 
     /**
-     * The tab's shape: cards, not a table. A window wide enough for the table
-     * still gets cards, because the tab is not the AdGuard-shaped surface.
-     *
-     * The filters are not part of that shape. They answer a question about the
-     * list, so a phone needs them too — it puts them on their own line instead
-     * of floating them beside the title.
+     * The tab's shape: no toolbar switches, no table header. A window wide
+     * enough for the table still gets cards, because the tab is not the
+     * AdGuard-shaped surface.
      */
     @Test
     fun theActivityTabKeepsItsCardList() {
@@ -74,11 +71,9 @@ class FilteringLogLayoutTest {
                 }
             }
             onNodeWithTag("log_table_header").assertDoesNotExist()
-            // Same filters as the window: a card list with no way to ask for
-            // "only blocked" is a longer scroll, not a design.
-            onNodeWithTag("log_type_row").assertExists()
+            onNodeWithTag("log_type_row").assertDoesNotExist()
             for (tag in listOf("all", "blocked", "allowed")) {
-                onNodeWithTag("log_filter_switch_$tag").assertExists()
+                onNodeWithTag("log_filter_switch_$tag").assertDoesNotExist()
             }
         }
     }
@@ -119,37 +114,6 @@ class FilteringLogLayoutTest {
             onNodeWithTag("log_type_tab_html").assertExists()
             // Three switches, one per status: the chip rows they replaced were
             // two full-width bands above the table.
-            for (tag in listOf("all", "blocked", "allowed")) {
-                onNodeWithTag("log_filter_switch_$tag").assertExists()
-            }
-        }
-    }
-
-    /**
-     * A phone: the card list it has always had, and now the filters too, on a
-     * line of their own because there is no right edge to float them against.
-     */
-    @Test
-    fun aPhoneKeepsTheCardsAndGainsTheFilters() {
-        val container = container()
-        runComposeUiTest {
-            setContent {
-                CompositionLocalProvider(
-                    LocalPlatformHost provides container.platformHost,
-                    LocalFileHost provides container.fileHost,
-                    LocalAppInventory provides container.inventory,
-                    LocalResumeTick provides MutableStateFlow(0L),
-                    LocalBackRegistry provides BackRegistry(),
-                ) {
-                    MyApplicationTheme {
-                        Box(modifier = Modifier.width(360.dp)) {
-                            FilteringLogScreen(viewModel = container.viewModel)
-                        }
-                    }
-                }
-            }
-            onNodeWithTag("log_table_header").assertDoesNotExist()
-            onNodeWithTag("log_type_row").assertExists()
             for (tag in listOf("all", "blocked", "allowed")) {
                 onNodeWithTag("log_filter_switch_$tag").assertExists()
             }
