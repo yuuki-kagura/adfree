@@ -106,6 +106,7 @@ import git.shin.adfree.model.RuleDraftKind
 import git.shin.adfree.model.appScopeSupported
 import git.shin.adfree.platform.currentPlatformHost
 import git.shin.adfree.ui.AdGuardIntent
+import git.shin.adfree.ui.AdGuardUiState
 import git.shin.adfree.ui.AdGuardTab
 import git.shin.adfree.ui.AdGuardViewModel
 import git.shin.adfree.ui.rememberAppIcon
@@ -408,46 +409,38 @@ fun FilteringLogScreen(
                 // The status filter, floated right as three switches rather
                 // than a chip row: the same three answers in the space of one
                 // line, which is what AdGuard's own log does with its toolbar.
-                LogFilterSwitch(
-                    tag = "log_filter_switch_all",
-                    label = L10n.format(Strings.log_filter_all, state.logTotal),
-                    checked = state.statusFilter == null,
-                    tint = AdGuardGreenPrimary,
-                    onCheckedChange = {
-                        viewModel.onIntent(AdGuardIntent.FilterStatusChanged(null))
-                    },
-                )
-                LogFilterSwitch(
-                    tag = "log_filter_switch_blocked",
-                    label = L10n.format(Strings.log_filter_blocked, state.logBlockedTotal),
-                    checked = state.statusFilter == FilterStatus.BLOCKED,
-                    tint = AdGuardRedBlocked,
-                    onCheckedChange = { checked ->
-                        viewModel.onIntent(
-                            AdGuardIntent.FilterStatusChanged(if (checked) FilterStatus.BLOCKED else null),
-                        )
-                    },
-                )
-                LogFilterSwitch(
-                    tag = "log_filter_switch_allowed",
-                    label = L10n.format(Strings.log_filter_allowed, state.logAllowedTotal),
-                    checked = state.statusFilter == FilterStatus.ALLOWED,
-                    tint = AdGuardGreenLight,
-                    onCheckedChange = { checked ->
-                        viewModel.onIntent(
-                            AdGuardIntent.FilterStatusChanged(if (checked) FilterStatus.ALLOWED else null),
-                        )
-                    },
-                )
+                LogStatusSwitches(state) { status ->
+                    viewModel.onIntent(AdGuardIntent.FilterStatusChanged(status))
+                }
             }
         }
 
-        if (adGuardLayout) {
-            LogTypeRow(
-                selected = state.logTypeFilter,
-                onSelect = { viewModel.onIntent(AdGuardIntent.FilterLogTypeChanged(it)) },
-            )
+        if (!adGuardLayout) {
+            // A phone has no room to float the three beside the title, but it
+            // has the same question to ask of the same list: "what was
+            // blocked". They take a line of their own and scroll, so a narrow
+            // screen gets the filters instead of a longer scroll.
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .horizontalScroll(rememberScrollState()),
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                LogStatusSwitches(state) { status ->
+                    viewModel.onIntent(AdGuardIntent.FilterStatusChanged(status))
+                }
+            }
+            Spacer(modifier = Modifier.height(6.dp))
         }
+
+        // The type row is a filter, not a tablet affordance: it scrolls, so a
+        // phone reads the same eleven types the window does. Only the table and
+        // the docked pane are shapes a phone cannot hold.
+        LogTypeRow(
+            selected = state.logTypeFilter,
+            onSelect = { viewModel.onIntent(AdGuardIntent.FilterLogTypeChanged(it)) },
+        )
 
         if (importedName != null) {
             // Says plainly that what follows is a file, not this machine's
@@ -815,6 +808,36 @@ private fun LogTypeRow(selected: LogTypeTab, onSelect: (LogTypeTab) -> Unit) {
             )
         }
     }
+}
+
+/**
+ * The three status filters as one sequence, so the window can float them at its
+ * right edge and the phone can put them on a line of their own without either
+ * surface owning a copy of what they mean.
+ */
+@Composable
+private fun LogStatusSwitches(state: AdGuardUiState, onFilter: (FilterStatus?) -> Unit) {
+    LogFilterSwitch(
+        tag = "log_filter_switch_all",
+        label = L10n.format(Strings.log_filter_all, state.logTotal),
+        checked = state.statusFilter == null,
+        tint = AdGuardGreenPrimary,
+        onCheckedChange = { onFilter(null) },
+    )
+    LogFilterSwitch(
+        tag = "log_filter_switch_blocked",
+        label = L10n.format(Strings.log_filter_blocked, state.logBlockedTotal),
+        checked = state.statusFilter == FilterStatus.BLOCKED,
+        tint = AdGuardRedBlocked,
+        onCheckedChange = { checked -> onFilter(if (checked) FilterStatus.BLOCKED else null) },
+    )
+    LogFilterSwitch(
+        tag = "log_filter_switch_allowed",
+        label = L10n.format(Strings.log_filter_allowed, state.logAllowedTotal),
+        checked = state.statusFilter == FilterStatus.ALLOWED,
+        tint = AdGuardGreenLight,
+        onCheckedChange = { checked -> onFilter(if (checked) FilterStatus.ALLOWED else null) },
+    )
 }
 
 /**
