@@ -53,12 +53,16 @@ import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.FilterChip
+import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Switch
 import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.rememberModalBottomSheetState
@@ -272,181 +276,396 @@ fun FilteringLogScreen(
                 vertical = if (adGuardLayout) 8.dp else 12.dp,
             )
     ) {
-        // One toolbar, the way AdGuard for Windows has one: the search field
-        // and the row's own actions on the left, the filters floated to the
-        // right. The title, the retention note and the three chip rows this
-        // screen used to stack are gone — a window that exists to be read has
-        // no room for a paragraph above the list, and every row of chrome that
-        // is not a control costs a row of requests.
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(bottom = 8.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(6.dp)
-        ) {
-            // A plain text field, not an OutlinedTextField: the Material one
-            // is 56dp tall before it holds a single character, which next to
-            // 20dp switches reads as a search box from a different program.
-            BasicTextField(
-                value = state.searchQuery,
-                onValueChange = { viewModel.onIntent(AdGuardIntent.SearchQueryChanged(it)) },
-                singleLine = true,
-                textStyle = TextStyle(fontSize = 12.sp, color = AdGuardTextPrimary),
-                cursorBrush = SolidColor(AdGuardGreenPrimary),
+        if (adGuardLayout) {
+            // One toolbar, the way AdGuard for Windows has one: the search field
+            // and the row's own actions on the left, the filters floated to the
+            // right. The title, the retention note and the three chip rows this
+            // screen used to stack are gone — a window that exists to be read has
+            // no room for a paragraph above the list, and every row of chrome that
+            // is not a control costs a row of requests.
+            Row(
                 modifier = Modifier
-                    .weight(1f)
-                    .testTag("log_search_input"),
-                decorationBox = { inner ->
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        modifier = Modifier
-                            .clip(RoundedCornerShape(8.dp))
-                            .background(AdGuardDarkSurface)
-                            .border(1.dp, AdGuardDarkOutline, RoundedCornerShape(8.dp))
-                            .padding(horizontal = 8.dp, vertical = 5.dp),
-                    ) {
-                        Icon(
-                            Icons.Default.Search,
-                            contentDescription = null,
-                            tint = AdGuardTextMuted,
-                            modifier = Modifier.size(15.dp)
-                        )
-                        Spacer(modifier = Modifier.width(6.dp))
-                        Box(modifier = Modifier.weight(1f)) {
-                            if (state.searchQuery.isEmpty()) {
-                                Text(
-                                    text = L10n.get(Strings.log_search_hint),
-                                    fontSize = 12.sp,
-                                    color = AdGuardTextMuted,
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis,
+                    .fillMaxWidth()
+                    .padding(bottom = 8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
+                // A plain text field, not an OutlinedTextField: the Material one
+                // is 56dp tall before it holds a single character, which next to
+                // 20dp switches reads as a search box from a different program.
+                BasicTextField(
+                    value = state.searchQuery,
+                    onValueChange = { viewModel.onIntent(AdGuardIntent.SearchQueryChanged(it)) },
+                    singleLine = true,
+                    textStyle = TextStyle(fontSize = 12.sp, color = AdGuardTextPrimary),
+                    cursorBrush = SolidColor(AdGuardGreenPrimary),
+                    modifier = Modifier
+                        .weight(1f)
+                        .testTag("log_search_input"),
+                    decorationBox = { inner ->
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(8.dp))
+                                .background(AdGuardDarkSurface)
+                                .border(1.dp, AdGuardDarkOutline, RoundedCornerShape(8.dp))
+                                .padding(horizontal = 8.dp, vertical = 5.dp),
+                        ) {
+                            Icon(
+                                Icons.Default.Search,
+                                contentDescription = null,
+                                tint = AdGuardTextMuted,
+                                modifier = Modifier.size(15.dp)
+                            )
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Box(modifier = Modifier.weight(1f)) {
+                                if (state.searchQuery.isEmpty()) {
+                                    Text(
+                                        text = L10n.get(Strings.log_search_hint),
+                                        fontSize = 12.sp,
+                                        color = AdGuardTextMuted,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis,
+                                    )
+                                }
+                                inner()
+                            }
+                            if (state.searchQuery.isNotEmpty()) {
+                                Icon(
+                                    imageVector = Icons.Default.Clear,
+                                    contentDescription = L10n.get(Strings.common_clear_search),
+                                    tint = AdGuardTextMuted,
+                                    modifier = Modifier
+                                        .size(15.dp)
+                                        .clip(RoundedCornerShape(4.dp))
+                                        .clickable {
+                                            viewModel.onIntent(AdGuardIntent.SearchQueryChanged(""))
+                                        },
                                 )
                             }
-                            inner()
                         }
-                        if (state.searchQuery.isNotEmpty()) {
-                            Icon(
-                                imageVector = Icons.Default.Clear,
-                                contentDescription = L10n.get(Strings.common_clear_search),
-                                tint = AdGuardTextMuted,
-                                modifier = Modifier
-                                    .size(15.dp)
-                                    .clip(RoundedCornerShape(4.dp))
-                                    .clickable {
-                                        viewModel.onIntent(AdGuardIntent.SearchQueryChanged(""))
-                                    },
-                            )
-                        }
+                    },
+                )
+
+                if (importedName != null) {
+                    // Reading somebody else's file: the only action that means
+                    // anything here is going back.
+                    IconButton(
+                        onClick = { viewModel.onIntent(AdGuardIntent.CloseImportedLogs) },
+                        modifier = Modifier.size(34.dp).testTag("close_imported_logs_button")
+                    ) {
+                        Icon(
+                            Icons.Default.Close,
+                            contentDescription = L10n.get(Strings.log_import_close),
+                            tint = AdGuardTextSecondary,
+                            modifier = Modifier.size(18.dp)
+                        )
                     }
-                },
-            )
-
-            if (importedName != null) {
-                // Reading somebody else's file: the only action that means
-                // anything here is going back.
-                IconButton(
-                    onClick = { viewModel.onIntent(AdGuardIntent.CloseImportedLogs) },
-                    modifier = Modifier.size(34.dp).testTag("close_imported_logs_button")
-                ) {
-                    Icon(
-                        Icons.Default.Close,
-                        contentDescription = L10n.get(Strings.log_import_close),
-                        tint = AdGuardTextSecondary,
-                        modifier = Modifier.size(18.dp)
-                    )
-                }
-            } else {
-                IconButton(
-                    onClick = {
-                        exportScope.launch {
-                            files.openText()?.let { viewModel.onIntent(AdGuardIntent.ImportLogs(it)) }
-                        }
-                    },
-                    modifier = Modifier.size(34.dp).testTag("import_logs_button")
-                ) {
-                    Icon(
-                        Icons.Default.FileUpload,
-                        contentDescription = L10n.get(Strings.log_import_action),
-                        tint = AdGuardTextSecondary,
-                        modifier = Modifier.size(18.dp)
-                    )
-                }
-
-                IconButton(
-                    onClick = {
-                        exportScope.launch {
-                            files.createDocument("adfree-activity.csv", "text/csv")?.let {
-                                viewModel.onIntent(AdGuardIntent.ExportLogs(it))
+                } else {
+                    IconButton(
+                        onClick = {
+                            exportScope.launch {
+                                files.openText()?.let { viewModel.onIntent(AdGuardIntent.ImportLogs(it)) }
                             }
-                        }
-                    },
-                    modifier = Modifier.size(34.dp).testTag("export_logs_button")
-                ) {
-                    Icon(
-                        Icons.Default.FileDownload,
-                        contentDescription = L10n.get(Strings.log_export_action),
-                        tint = AdGuardTextSecondary,
-                        modifier = Modifier.size(18.dp)
-                    )
+                        },
+                        modifier = Modifier.size(34.dp).testTag("import_logs_button")
+                    ) {
+                        Icon(
+                            Icons.Default.FileUpload,
+                            contentDescription = L10n.get(Strings.log_import_action),
+                            tint = AdGuardTextSecondary,
+                            modifier = Modifier.size(18.dp)
+                        )
+                    }
+
+                    IconButton(
+                        onClick = {
+                            exportScope.launch {
+                                files.createDocument("adfree-activity.csv", "text/csv")?.let {
+                                    viewModel.onIntent(AdGuardIntent.ExportLogs(it))
+                                }
+                            }
+                        },
+                        modifier = Modifier.size(34.dp).testTag("export_logs_button")
+                    ) {
+                        Icon(
+                            Icons.Default.FileDownload,
+                            contentDescription = L10n.get(Strings.log_export_action),
+                            tint = AdGuardTextSecondary,
+                            modifier = Modifier.size(18.dp)
+                        )
+                    }
+
+                    IconButton(
+                        onClick = { showClearConfirm = true },
+                        modifier = Modifier.size(34.dp).testTag("clear_logs_button")
+                    ) {
+                        Icon(
+                            Icons.Default.DeleteSweep,
+                            contentDescription = L10n.get(Strings.log_clear_action),
+                            tint = AdGuardTextSecondary,
+                            modifier = Modifier.size(18.dp)
+                        )
+                    }
                 }
 
-                IconButton(
-                    onClick = { showClearConfirm = true },
-                    modifier = Modifier.size(34.dp).testTag("clear_logs_button")
-                ) {
-                    Icon(
-                        Icons.Default.DeleteSweep,
-                        contentDescription = L10n.get(Strings.log_clear_action),
-                        tint = AdGuardTextSecondary,
-                        modifier = Modifier.size(18.dp)
+                if (adGuardLayout) {
+                    // The status filter, floated right as three switches rather
+                    // than a chip row: the same three answers in the space of one
+                    // line, which is what AdGuard's own log does with its toolbar.
+                    LogFilterSwitch(
+                        tag = "log_filter_switch_all",
+                        label = L10n.format(Strings.log_filter_all, state.logTotal),
+                        checked = state.statusFilter == null,
+                        tint = AdGuardGreenPrimary,
+                        onCheckedChange = {
+                            viewModel.onIntent(AdGuardIntent.FilterStatusChanged(null))
+                        },
+                    )
+                    LogFilterSwitch(
+                        tag = "log_filter_switch_blocked",
+                        label = L10n.format(Strings.log_filter_blocked, state.logBlockedTotal),
+                        checked = state.statusFilter == FilterStatus.BLOCKED,
+                        tint = AdGuardRedBlocked,
+                        onCheckedChange = { checked ->
+                            viewModel.onIntent(
+                                AdGuardIntent.FilterStatusChanged(if (checked) FilterStatus.BLOCKED else null),
+                            )
+                        },
+                    )
+                    LogFilterSwitch(
+                        tag = "log_filter_switch_allowed",
+                        label = L10n.format(Strings.log_filter_allowed, state.logAllowedTotal),
+                        checked = state.statusFilter == FilterStatus.ALLOWED,
+                        tint = AdGuardGreenLight,
+                        onCheckedChange = { checked ->
+                            viewModel.onIntent(
+                                AdGuardIntent.FilterStatusChanged(if (checked) FilterStatus.ALLOWED else null),
+                            )
+                        },
                     )
                 }
             }
 
             if (adGuardLayout) {
-                // The status filter, floated right as three switches rather
-                // than a chip row: the same three answers in the space of one
-                // line, which is what AdGuard's own log does with its toolbar.
-                LogFilterSwitch(
-                    tag = "log_filter_switch_all",
-                    label = L10n.format(Strings.log_filter_all, state.logTotal),
-                    checked = state.statusFilter == null,
-                    tint = AdGuardGreenPrimary,
-                    onCheckedChange = {
-                        viewModel.onIntent(AdGuardIntent.FilterStatusChanged(null))
-                    },
-                )
-                LogFilterSwitch(
-                    tag = "log_filter_switch_blocked",
-                    label = L10n.format(Strings.log_filter_blocked, state.logBlockedTotal),
-                    checked = state.statusFilter == FilterStatus.BLOCKED,
-                    tint = AdGuardRedBlocked,
-                    onCheckedChange = { checked ->
-                        viewModel.onIntent(
-                            AdGuardIntent.FilterStatusChanged(if (checked) FilterStatus.BLOCKED else null),
-                        )
-                    },
-                )
-                LogFilterSwitch(
-                    tag = "log_filter_switch_allowed",
-                    label = L10n.format(Strings.log_filter_allowed, state.logAllowedTotal),
-                    checked = state.statusFilter == FilterStatus.ALLOWED,
-                    tint = AdGuardGreenLight,
-                    onCheckedChange = { checked ->
-                        viewModel.onIntent(
-                            AdGuardIntent.FilterStatusChanged(if (checked) FilterStatus.ALLOWED else null),
-                        )
-                    },
+                LogTypeRow(
+                    selected = state.logTypeFilter,
+                    onSelect = { viewModel.onIntent(AdGuardIntent.FilterLogTypeChanged(it)) },
                 )
             }
-        }
+        } else {
+            // The tab is the app's own screen, and it keeps the shape it had
+            // before there was a window to compare it with: a title, a search
+            // field, the three status chips, then cards. Only the separate
+            // Filtering log window is the AdGuard-shaped surface.
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = L10n.get(Strings.log_title),
+                        fontSize = 19.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = AdGuardTextPrimary
+                    )
+                    Text(
+                        text = L10n.get(Strings.log_subtitle),
+                        fontSize = 12.sp,
+                        color = AdGuardTextMuted
+                    )
+                    // The screen mirrors a window of the database, so say which
+                    // window the store keeps: a shorter history than there is
+                    // reads as a lost log.
+                    Text(
+                        text = L10n.format(
+                            Strings.log_retention_note,
+                            AdGuardRepository.LOG_DB_MAX_ROWS,
+                            AdGuardRepository.LOG_DB_KEEP_DAYS,
+                        ),
+                        fontSize = 11.sp,
+                        color = AdGuardTextMuted,
+                        modifier = Modifier
+                            .padding(top = 2.dp)
+                            .testTag("log_retention_note")
+                    )
+                }
 
-        if (adGuardLayout) {
-            LogTypeRow(
-                selected = state.logTypeFilter,
-                onSelect = { viewModel.onIntent(AdGuardIntent.FilterLogTypeChanged(it)) },
+                // The row's actions sit at the right edge. Reading a log file
+                // somebody else sent is the one control this header gained, and
+                // it stays: the shape is the old one, the features are not.
+                Row {
+                    if (importedName != null) {
+                        // Reading somebody else's file: the only action that
+                        // means anything here is going back.
+                        IconButton(
+                            onClick = { viewModel.onIntent(AdGuardIntent.CloseImportedLogs) },
+                            modifier = Modifier.testTag("close_imported_logs_button")
+                        ) {
+                            Icon(
+                                Icons.Default.Close,
+                                contentDescription = L10n.get(Strings.log_import_close),
+                                tint = AdGuardTextSecondary
+                            )
+                        }
+                    } else {
+                    IconButton(
+                        onClick = {
+                            exportScope.launch {
+                                files.openText()?.let { viewModel.onIntent(AdGuardIntent.ImportLogs(it)) }
+                            }
+                        },
+                        modifier = Modifier.testTag("import_logs_button")
+                    ) {
+                        Icon(
+                            Icons.Default.FileUpload,
+                            contentDescription = L10n.get(Strings.log_import_action),
+                            tint = AdGuardTextSecondary
+                        )
+                    }
+
+                    IconButton(
+                        onClick = {
+                            exportScope.launch {
+                                files.createDocument("adfree-activity.csv", "text/csv")?.let {
+                                    viewModel.onIntent(AdGuardIntent.ExportLogs(it))
+                                }
+                            }
+                        },
+                        modifier = Modifier.testTag("export_logs_button")
+                    ) {
+                        Icon(
+                            Icons.Default.FileDownload,
+                            contentDescription = L10n.get(Strings.log_export_action),
+                            tint = AdGuardTextSecondary
+                        )
+                    }
+
+                    IconButton(
+                        onClick = { showClearConfirm = true },
+                        modifier = Modifier.testTag("clear_logs_button")
+                    ) {
+                        Icon(
+                            Icons.Default.DeleteSweep,
+                            contentDescription = L10n.get(Strings.log_clear_action),
+                            tint = AdGuardTextSecondary
+                        )
+                    }
+                    }
+                }
+            }
+
+            Spacer(modifier = Modifier.height(12.dp))
+
+            OutlinedTextField(
+                value = state.searchQuery,
+                onValueChange = { viewModel.onIntent(AdGuardIntent.SearchQueryChanged(it)) },
+                placeholder = {
+                    Text(
+                        L10n.get(Strings.log_search_hint),
+                        color = AdGuardTextMuted,
+                        fontSize = 13.sp
+                    )
+                },
+                leadingIcon = {
+                    Icon(Icons.Default.Search, contentDescription = null, tint = AdGuardTextMuted)
+                },
+                trailingIcon = {
+                    if (state.searchQuery.isNotEmpty()) {
+                        IconButton(
+                            onClick = { viewModel.onIntent(AdGuardIntent.SearchQueryChanged("")) }
+                        ) {
+                            Icon(
+                                Icons.Default.Clear,
+                                contentDescription = L10n.get(Strings.common_clear_search),
+                                tint = AdGuardTextMuted
+                            )
+                        }
+                    }
+                },
+                singleLine = true,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .testTag("log_search_input"),
+                shape = RoundedCornerShape(12.dp),
+                colors = OutlinedTextFieldDefaults.colors(
+                    focusedContainerColor = AdGuardDarkSurface,
+                    unfocusedContainerColor = AdGuardDarkSurface,
+                    focusedBorderColor = AdGuardGreenPrimary,
+                    unfocusedBorderColor = AdGuardDarkOutline,
+                    focusedTextColor = AdGuardTextPrimary,
+                    unfocusedTextColor = AdGuardTextPrimary
+                )
             )
+
+            Spacer(modifier = Modifier.height(10.dp))
+
+            // The three answers, as chips: the tab predates the window and the
+            // chips are what its thumb-sized rows expect.
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .horizontalScroll(rememberScrollState()),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                FilterChip(
+                    selected = state.statusFilter == null,
+                    onClick = { viewModel.onIntent(AdGuardIntent.FilterStatusChanged(null)) },
+                    label = {
+                        Text(L10n.format(Strings.log_filter_all, state.logTotal), fontSize = 12.sp)
+                    },
+                    modifier = Modifier.testTag("log_filter_chip_all"),
+                    colors = FilterChipDefaults.filterChipColors(
+                        selectedContainerColor = AdGuardGreenPrimary,
+                        selectedLabelColor = AdGuardOnAccent,
+                        containerColor = AdGuardDarkSurface,
+                        labelColor = AdGuardTextSecondary
+                    )
+                )
+
+                FilterChip(
+                    selected = state.statusFilter == FilterStatus.BLOCKED,
+                    onClick = {
+                        viewModel.onIntent(AdGuardIntent.FilterStatusChanged(FilterStatus.BLOCKED))
+                    },
+                    label = {
+                        Text(
+                            L10n.format(Strings.log_filter_blocked, state.logBlockedTotal),
+                            fontSize = 12.sp
+                        )
+                    },
+                    modifier = Modifier.testTag("log_filter_chip_blocked"),
+                    colors = FilterChipDefaults.filterChipColors(
+                        selectedContainerColor = AdGuardRedBlocked,
+                        selectedLabelColor = Color.White,
+                        containerColor = AdGuardDarkSurface,
+                        labelColor = AdGuardTextSecondary
+                    )
+                )
+
+                FilterChip(
+                    selected = state.statusFilter == FilterStatus.ALLOWED,
+                    onClick = {
+                        viewModel.onIntent(AdGuardIntent.FilterStatusChanged(FilterStatus.ALLOWED))
+                    },
+                    label = {
+                        Text(
+                            L10n.format(Strings.log_filter_allowed, state.logAllowedTotal),
+                            fontSize = 12.sp
+                        )
+                    },
+                    modifier = Modifier.testTag("log_filter_chip_allowed"),
+                    colors = FilterChipDefaults.filterChipColors(
+                        selectedContainerColor = AdGuardGreenLight,
+                        selectedLabelColor = AdGuardOnAccent,
+                        containerColor = AdGuardDarkSurface,
+                        labelColor = AdGuardTextSecondary
+                    )
+                )
+            }
+
+            Spacer(modifier = Modifier.height(10.dp))
         }
 
         if (importedName != null) {

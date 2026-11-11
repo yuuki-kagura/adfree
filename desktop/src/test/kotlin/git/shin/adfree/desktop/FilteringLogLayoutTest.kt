@@ -75,6 +75,13 @@ class FilteringLogLayoutTest {
             for (tag in listOf("all", "blocked", "allowed")) {
                 onNodeWithTag("log_filter_switch_$tag").assertDoesNotExist()
             }
+            // The shape it had before the window existed: a title, a search
+            // field and the three status chips above the cards.
+            onNodeWithTag("log_retention_note").assertExists()
+            onNodeWithTag("log_search_input").assertExists()
+            for (tag in listOf("all", "blocked", "allowed")) {
+                onNodeWithTag("log_filter_chip_$tag").assertExists()
+            }
         }
     }
 

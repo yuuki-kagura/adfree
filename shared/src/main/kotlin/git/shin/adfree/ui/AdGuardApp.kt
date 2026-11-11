@@ -542,6 +542,13 @@ fun AdGuardApp(
                             when (tab) {
                                 AdGuardTab.HOME -> HomeScreen(viewModel = viewModel)
                                 AdGuardTab.PROTECTION -> ProtectionScreen(viewModel = viewModel)
+                                // The tab follows the same split as the rest of
+                                // the shell: a desktop window gets the
+                                // AdGuard-shaped log, because that is the shape
+                                // a mouse and a wide pane are for, while a phone
+                                // or a tablet keeps the cards, the search field
+                                // and the chips. `supportsWindowHeader()` is what
+                                // keeps a tablet on the compact side.
                                 AdGuardTab.ACTIVITY -> FilteringLogScreen(
                                     viewModel = viewModel,
                                     adGuardLayout = uiLayout == UiLayout.Desktop,
