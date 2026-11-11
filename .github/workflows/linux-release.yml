@@ -60,10 +60,13 @@ jobs:
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@stable
 
-      - name: Cache Rust
-        uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: rust
+      # No Rust cache here, deliberately. A restored `target/` carries the
+      # fingerprints but not always the build-script output that holds the link
+      # flags, so cargo considers `libsqlite3-sys` fresh and skips it — and a
+      # cdylib links happily with the sqlite symbols undefined. v1.3.0 shipped
+      # exactly that: a 100 MB package whose core could not be opened at all,
+      # with the build green. Four minutes of compiling is the cheaper end of
+      # that trade.
 
       # jpackage shells out to the distribution's own tooling: `dpkg-deb` for
       # the deb, `rpmbuild` for the rpm. A runner without them builds neither.
@@ -71,8 +74,27 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y --no-install-recommends fakeroot rpm
 
       - name: Build the filtering core
-        run: cargo build --release --lib
+        run: cargo build --release --lib --locked
         working-directory: rust
+
+      # The packaging step below never looks inside the library, and neither
+      # does jpackage: a core that loads on the runner because the runner has a
+      # system sqlite would be dead on a user's machine. This is the check that
+      # turns "the app opens a stack trace" into a red build.
+      - name: Verify the core is complete
+        working-directory: rust
+        run: |
+          core=target/release/libadfree_core.so
+          nm "$core" | grep -q ' t sqlite3_open$' || {
+            echo "::error::the core has no sqlite inside it: the bundled copy was not linked in"
+            exit 1
+          }
+          if ldd -r "$core" 2>&1 | grep -q 'undefined symbol'; then
+            ldd -r "$core" 2>&1 | grep 'undefined symbol' | head -10
+            echo "::error::the core was built against symbols nothing provides"
+            exit 1
+          fi
+          echo "core is self-contained: bundled sqlite, no undefined symbols"
 
       - name: Build deb and rpm
         run: ./gradlew --no-daemon :desktop:packageDeb :desktop:packageRpm
