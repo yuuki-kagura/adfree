@@ -1,3 +1,103 @@
+# [1.2.0](https://github.com/yuuki-kagura/adfree/compare/v1.1.1...v1.2.0) (2026-11-11)
+
+
+### Bug Fixes
+
+* **apps:** attribute connections on Android 10+ ([27314bc](https://github.com/yuuki-kagura/adfree/commit/27314bc918d2f01f2beb91ab0e1dd088bb2f8b6d))
+* **apps:** show real per-app blocking stats and log icons ([aad5b95](https://github.com/yuuki-kagura/adfree/commit/aad5b95b8c90af9d77107c0ce15a56e424fd2989))
+* **deps:** fetch the patched adblock fork from an account that exists ([87a91df](https://github.com/yuuki-kagura/adfree/commit/87a91df8ef55bd96db84e156a88e45e0d78e06b2))
+* **desktop:** keep the browser extension's panel out of its loading state ([7b99b7f](https://github.com/yuuki-kagura/adfree/commit/7b99b7ff442dcaad835a5b43cda48ae3f53cea7d))
+* **desktop:** keep the extension popup's state honest and never let it hang ([2843b54](https://github.com/yuuki-kagura/adfree/commit/2843b54dcd28e47c5043f6f517710907213a368c))
+* **desktop:** survive a new login, and hand the engine over cleanly ([e6b0417](https://github.com/yuuki-kagura/adfree/commit/e6b0417b7480d69385ba224613843d8920444ba3))
+* **dns:** an excepted page is resolved by the machine's own resolver ([2196805](https://github.com/yuuki-kagura/adfree/commit/2196805d3dfb5512449ca3aca0be2884f2e72063))
+* **dns:** honor Android Private DNS and bound ECH exemptions ([74c6f66](https://github.com/yuuki-kagura/adfree/commit/74c6f66314af6cbe79e5f08f689d39902b5dc145))
+* **filter:** an exception holds from the moment it exists, and only then ([a6366e2](https://github.com/yuuki-kagura/adfree/commit/a6366e23cc3aee5e838f4cfd6c20be97420c1b19))
+* **filtering:** keep secure-DNS clients online and count TLS refusals ([8b82c38](https://github.com/yuuki-kagura/adfree/commit/8b82c3859c11d98377c968599d43a25f1e6962b8))
+* **filter:** keep a page the user excepted excepted at the resolver ([a76bf32](https://github.com/yuuki-kagura/adfree/commit/a76bf32e2658153fa64daeb016f9832e44d94de1))
+* **filter:** tie the exemption to the rules that granted it ([cfa8a13](https://github.com/yuuki-kagura/adfree/commit/cfa8a1325d04dafe7d15df7fc5d886093aa335c5))
+* **lint:** make the tree pass `clippy --all-targets -D warnings` ([defd409](https://github.com/yuuki-kagura/adfree/commit/defd4098f81fef11d7caf89a80890168cab9a3b4))
+* **log:** quieter type row, a readable destination, buttons that fit ([42cfad1](https://github.com/yuuki-kagura/adfree/commit/42cfad133fe22db6f68bbd353f35a6549afeb4be))
+* **log:** the detail pane stops writing labels on top of values ([a7ecca7](https://github.com/yuuki-kagura/adfree/commit/a7ecca73b20e4d4d206a0b8acc50536bb2639f18))
+* **mitm:** keep a blocked element blocked after a reload ([0f56802](https://github.com/yuuki-kagura/adfree/commit/0f568022509effee830d1a1304eb582ec043927b))
+* **mitm:** splice apps whose TLS client rejects the certificate ([76cd14b](https://github.com/yuuki-kagura/adfree/commit/76cd14bff017376f2af99cd825a57bcefea05c2f))
+* **mitm:** stop the browser from keeping an unfiltered copy of a page ([27adfcb](https://github.com/yuuki-kagura/adfree/commit/27adfcbddf525a2ae43c951694595f22d9640b02))
+* **native-host:** match the answer by id instead of taking the first frame ([458e880](https://github.com/yuuki-kagura/adfree/commit/458e880459fdeb5049cc2f6efc73ed321ae40e90))
+* **privileges:** leave a unit that is already filtering alone ([0303cac](https://github.com/yuuki-kagura/adfree/commit/0303cac17f0f8b0475d4c4b6dd597f1c969a8774))
+* **privileges:** never build the unit from a command that cannot start itself ([2b8f5da](https://github.com/yuuki-kagura/adfree/commit/2b8f5da82311e4d89d263eb1e8a33dfc58a06865))
+* **proxy:** close the flows an exception opened, once it ends ([c9421cc](https://github.com/yuuki-kagura/adfree/commit/c9421ccf6fae4ce6c867adc1b8cf7670ff20e4f4))
+* **proxy:** keep writing to a peer past the first poll slice ([1fa2b91](https://github.com/yuuki-kagura/adfree/commit/1fa2b91aee37ed2f913da97489653a5d2cd45e35))
+* **quic:** harden HTTP/3 routing for IPv6, MTU and bursts ([84d50b3](https://github.com/yuuki-kagura/adfree/commit/84d50b315a9ff142f38f7a15aa089d47befaf687))
+* **scripts:** stop injecting a userscript tag when nothing is served ([474f730](https://github.com/yuuki-kagura/adfree/commit/474f7307898952f0a1cf0462950df16badd6d694))
+* **settings:** usable light theme, independent DoT switch, config warnings ([21bb946](https://github.com/yuuki-kagura/adfree/commit/21bb946f7df4fa00ade27f5d79812526449ac121))
+* **shell:** export NODE_USE_SYSTEM_CA with the extra CA ([061571b](https://github.com/yuuki-kagura/adfree/commit/061571b8d5c76c51e8159faf4f746c0ffe04dc90))
+* **tray:** the mark follows filtering, not only the pause button ([1cf842b](https://github.com/yuuki-kagura/adfree/commit/1cf842b49ff830bbcf943eb6563240770e0e7328))
+* **ui:** enlarge text and animate tab navigation ([25b8222](https://github.com/yuuki-kagura/adfree/commit/25b8222eeb927522abe3c69c447fa7575608c248))
+* **ui:** make typed domains real rules and lift small text ([1056d36](https://github.com/yuuki-kagura/adfree/commit/1056d36242977d211207594678789d31441bfaf3))
+* **vpn:** ask `isAlwaysOn` on the release that has it ([c911933](https://github.com/yuuki-kagura/adfree/commit/c9119330037b20d98cafdc20be579f0e8fbc02de))
+* **vpn:** re-post the status notification and read MIUI's battery list ([4939384](https://github.com/yuuki-kagura/adfree/commit/4939384094744e240f9634495497f947d0de8cc0))
+
+
+### Features
+
+* **background:** refresh filters in the background and add the tile ([b691982](https://github.com/yuuki-kagura/adfree/commit/b6919827484612da7a290a8ba20eaf355211ccb4))
+* **core:** a host for the AdGuard Assistant on the page ([1338ce0](https://github.com/yuuki-kagura/adfree/commit/1338ce020b8d2efa501245b3a0b1050f6a4d141f))
+* **core:** a native-messaging host for AdGuard's browser extension ([a295c3f](https://github.com/yuuki-kagura/adfree/commit/a295c3f8ed06e980b18f51e42aad96eb7794a01e))
+* **desktop:** a desktop body for the screens that looked like a phone ([e14c0e3](https://github.com/yuuki-kagura/adfree/commit/e14c0e3db0cb1035b505bd648d6e204a8260f440))
+* **desktop:** answer AdGuard's browser extension from the window that filters ([e0145f9](https://github.com/yuuki-kagura/adfree/commit/e0145f9012bb8681d48aa5244082b8038d1356f8))
+* **desktop:** install the assistant, and keep what it builds ([b672d27](https://github.com/yuuki-kagura/adfree/commit/b672d276864ccd4929e44ec66faf521c069da0fa))
+* **desktop:** wire the tray into the window and the protection record ([c1eaefa](https://github.com/yuuki-kagura/adfree/commit/c1eaefac49aa94df950bae30ae2198d029aed189))
+* **dns:** add a fallback resolver that defaults to system DNS ([7988bb0](https://github.com/yuuki-kagura/adfree/commit/7988bb0354373b473f550325238e553cd7ce74c7))
+* **dns:** add encrypted upstreams and the DNS settings UI ([3146ac0](https://github.com/yuuki-kagura/adfree/commit/3146ac0b7c5ad63dceda8cbdbfbcdcfe4deeb5f4))
+* **dns:** answer rewrites and SafeSearch in the resolver ([d0b9bcc](https://github.com/yuuki-kagura/adfree/commit/d0b9bcc199e377313c19c9004f8320a3e7edab7c))
+* **dns:** block ECH by default off and log AdGuard-style endpoints ([02029b8](https://github.com/yuuki-kagura/adfree/commit/02029b84ad2c1b673bd32234c830b36c4d1f12ef))
+* **extensions:** install the AdGuard Assistant switched off ([3b46b30](https://github.com/yuuki-kagura/adfree/commit/3b46b309fb682c63aa0bee78267d9a4af415b078))
+* **http3:** expose Filter HTTP/3 in Android state, stats and settings ([964c4a6](https://github.com/yuuki-kagura/adfree/commit/964c4a64133d9c932bbeecdd3a31b5b20673454a))
+* **i18n:** add in-app language selector ([3583aa3](https://github.com/yuuki-kagura/adfree/commit/3583aa3c9e35de1a1cbd4b4f17592153e4257a08))
+* **i18n:** extract activity log strings ([14868cc](https://github.com/yuuki-kagura/adfree/commit/14868ccda1113727646bb7c78026c9b8f16b16bf))
+* **i18n:** extract app firewall strings and stable category codes ([74197e6](https://github.com/yuuki-kagura/adfree/commit/74197e6f9a48e56d375a94b4530c8d6652cdcb15))
+* **i18n:** extract filter, extension and rule-editor strings ([ece5586](https://github.com/yuuki-kagura/adfree/commit/ece5586385a809c15e3a6d1befa48babf5fb8f15))
+* **i18n:** extract home, network, lab and hub strings ([273ee73](https://github.com/yuuki-kagura/adfree/commit/273ee7312ebdcbb5c30f8a3840f084cbbbca317a))
+* **i18n:** extract settings, HTTPS and DNS strings ([25ba990](https://github.com/yuuki-kagura/adfree/commit/25ba990004349f3915ee7ab8b9774c657e3c0677))
+* **i18n:** localize diagnostics through resource-backed UiText ([9c11799](https://github.com/yuuki-kagura/adfree/commit/9c11799131a9edc203981c0973400846c593c7a6))
+* **i18n:** localize filter and userscript catalogues ([cc452c0](https://github.com/yuuki-kagura/adfree/commit/cc452c087c88bfbdd02f2f1c846fd8bf17b51f0f))
+* **i18n:** localize security lab, notifications and DNS labels ([44e12e6](https://github.com/yuuki-kagura/adfree/commit/44e12e66000fb1dc35f034a5b1e38cc39955b7de))
+* **log:** one toolbar, the way AdGuard's own log has one ([a5eb59e](https://github.com/yuuki-kagura/adfree/commit/a5eb59ec7688ba0a5913af9ffe6350742454d8f8))
+* **log:** the desktop records the requests it allows ([b6b3a0b](https://github.com/yuuki-kagura/adfree/commit/b6b3a0b1baa0892f68ff294d5caee420267c161e))
+* **log:** the log tab in the window opens the table, not the card stack ([40ceba9](https://github.com/yuuki-kagura/adfree/commit/40ceba9e06357701816d23dbc0b78cb586dce297))
+* **page:** count what a page had blocked and badge it ([90e276d](https://github.com/yuuki-kagura/adfree/commit/90e276dc73f8c8d5e47d0337a93d92887a3ca658))
+* **privileges:** ask the system once, not on every switch ([c698071](https://github.com/yuuki-kagura/adfree/commit/c698071e08771ae925f4fe63e55c16c54d4a2c3f))
+* **privileges:** switching filtering on is how the privilege is asked for ([e74efcf](https://github.com/yuuki-kagura/adfree/commit/e74efcf5d48d41c4699e3161de642cafa5fdd32b))
+* **proxy/scripts:** SOCKS5 UDP ASSOCIATE, auto routing, GM storage and menu ([613fae9](https://github.com/yuuki-kagura/adfree/commit/613fae97d5357021ef326473c774330d96ec9ce0))
+* **quic:** add in-memory UDP transport for HTTP/3 termination ([d98a67e](https://github.com/yuuki-kagura/adfree/commit/d98a67e0dac8b8ee7b9c0dbbc654634d19530fdf))
+* **quic:** apply content and header edits to HTTP/3 responses ([d0ca924](https://github.com/yuuki-kagura/adfree/commit/d0ca924251cafb7f016cf497bbc4973a7e3756b8))
+* **quic:** route UDP/443 through an HTTP/3 filtering bridge ([7566324](https://github.com/yuuki-kagura/adfree/commit/756632461ee14d5a04a8fe80b1dbaa1f4004a236))
+* **quic:** terminate and filter HTTP/3 requests in the MITM hub ([637c128](https://github.com/yuuki-kagura/adfree/commit/637c128c6bae3dd7f2a644138021d0e9d7c03e6e))
+* **rules:** a rule builder, the way AdGuard for Windows has one ([1d84716](https://github.com/yuuki-kagura/adfree/commit/1d8471696b48168e160c01b90db5e793a7cffe15))
+* **rules:** read a rule the way the builder needs to ([60611a2](https://github.com/yuuki-kagura/adfree/commit/60611a29329dd8c2eb8ee8ac793cd35ffd1db2b3))
+* **settings:** add theme selection and a cosmetic filtering switch ([4348995](https://github.com/yuuki-kagura/adfree/commit/434899554702afe3eb7dfd381dd41d9a16b1e9c4))
+* **state:** move persisted state into the Rust core ([fa54389](https://github.com/yuuki-kagura/adfree/commit/fa54389d6a317bec1cf2c805e22d1ed1430e96f1))
+* **stealth:** wire stealth mode end to end ([6aed39b](https://github.com/yuuki-kagura/adfree/commit/6aed39bf67a7c527ae198981870288b47e6508ff))
+* switch on the language filter that matches the device locale ([376948a](https://github.com/yuuki-kagura/adfree/commit/376948a0bbb1e2319df74ae840e80b3880d76cbe))
+* **tray:** a real status icon and menu on KDE Wayland ([e602032](https://github.com/yuuki-kagura/adfree/commit/e602032541544f41e026c89f1ab5ba03263f3815))
+* **trust:** install the MITM CA into the system store with root ([4d1870d](https://github.com/yuuki-kagura/adfree/commit/4d1870d32df04f0cdbff21e93b5f8a62af51cb57))
+* **ui:** mirror AdGuard's Home dashboard and Protection module flow ([574054c](https://github.com/yuuki-kagura/adfree/commit/574054c9ef770a3c36544158d3ef40b485a0d513))
+* **ui:** surface notification, battery and HTTPS health on Home ([5c54e70](https://github.com/yuuki-kagura/adfree/commit/5c54e7072c196c707657e625ecb1adcda40617a8))
+* **ui:** unify row tiles and group the Settings tab ([9a6d1a7](https://github.com/yuuki-kagura/adfree/commit/9a6d1a79fa8216498fdde0d104fd7a2b3be81833))
+* **vpn:** transient pause, WebRTC guard and hardened DNS transports ([95e9f0f](https://github.com/yuuki-kagura/adfree/commit/95e9f0fdca5be6e5afc25b253a1f8b70d1271f0e))
+
+
+### Performance Improvements
+
+* answer repeated DNS lookups from a bounded cache ([e4dc75c](https://github.com/yuuki-kagura/adfree/commit/e4dc75cf7cc12e2e50da312a630e116aac4457fa))
+* bring the tunnel's DNS and idle cost to AdGuard's level ([6400fa2](https://github.com/yuuki-kagura/adfree/commit/6400fa231fd22aabd3638a5cedf1e06f02fa301a))
+* build a flow's upstream half off the packet reader ([9210a10](https://github.com/yuuki-kagura/adfree/commit/9210a10fa37e4eb8a297804e4849274e95e3be0f))
+* **ui:** stop the home hero from animating forever ([03345e8](https://github.com/yuuki-kagura/adfree/commit/03345e8645d117211aa785b9ee577d506042feb7))
+
+
+### Reverts
+
+* **page:** drop the per-page blocked badge ([673644f](https://github.com/yuuki-kagura/adfree/commit/673644fd78781d19be30eb2ebff2e40b5c72462e))
+
 ## [1.1.1](https://github.com/tachibana-shin/adfree/compare/v1.1.0...v1.1.1) (2026-10-26)
 
 
