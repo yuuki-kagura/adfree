@@ -191,6 +191,7 @@ What that took, in the order it happened:
 | `a615155` | the CA is trusted on Windows through the machine's `Root` store (`certutil`), SHA-1 for thumbprints included |
 | `06044d5` | the desktop answers the privilege questions for Windows: no mark, no `nft`, no `pkexec`, no systemd — protection is starting the redirect; autostart becomes a logon task with `HIGHEST` |
 | `2b20b81` | the core is found as `adfree_core.dll`, the signed WinDivert pair travels in the jar and is unpacked for the loader, the MSI is declared |
+| `9a8cda9`, `336bb78` | the MSI packages on a real Windows runner: WiX's version shape reduced from the release name, and the package built with `packageMsi` (no ProGuard) the way the Linux packages are |
 | *this one* | the facilities that have no Winsock equivalent — `eventfd` and `socketpair` as a self-connected loopback datagram socket, a `poll`-backed `WaitSet`, the packet-info types as compile-only shells |
 
 Two things changed shape rather than gained a shim, and they are the ones worth
@@ -292,3 +293,31 @@ scripts/windows-check.sh        # prints the error count and the first failures
 
 It exists so the port has a red/green line from the first commit, instead of
 "should work on Windows" being untested prose.
+
+## Where the port stands, verified
+
+The core compiles for `x86_64-pc-windows-gnu` (`scripts/windows-check.sh`, no
+errors, no warnings) and for MSVC, and an **MSI now builds and uploads on a real
+`windows-latest` runner** — 106 MB, artifact `adfree-msi`, run `43174550259`. That
+run is the first end-to-end proof of the parts that only exist on Windows: the
+C build of wepoll, `cargo build --release --lib` for `adfree_core.dll`, the
+`uniffi_…core_redirect_start` symbol surviving into the DLL, and jpackage's WiX
+toolchain.
+
+What is still open, in the order it would bite a user:
+
+1. **The tray.** `TraySni` is KDE's D-Bus SNI. On Windows there is no tray icon
+   yet: the app runs from its window, and closing the window with the app
+   filtering is a window nobody can bring back. Compose's `Tray` is the answer,
+   and the pause/state logic it would drive is already written.
+2. **Nothing has run on a Windows desktop.** The redirect, the driver, the
+   certificate store and the logon task are all reasoned and unit-tested, but the
+   first real machine is still ahead. The order to try it in: install the MSI as
+   Administrator, confirm `WinDivert.dll` and `WinDivert64.sys` were unpacked
+   next to the cache core, start the app, expect `certutil` to add the CA, then
+   `curl -x 127.0.0.1:3129 https://example.com` and a blocked domain.
+3. **MSI signing.** Unsigned, so SmartScreen warns; the WinDivert pair's own
+   signature is what the kernel checks.
+4. **The native-messaging host** for the browser extension is a Unix socket (the
+   socket *is* the authorization). Windows needs a named pipe with an ACL.
+
