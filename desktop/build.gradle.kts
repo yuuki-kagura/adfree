@@ -118,6 +118,20 @@ compose.desktop {
             if (isWindowsHost) {
                 targetFormats(TargetFormat.Msi)
                 windows {
+                    // WiX takes MAJOR.MINOR.BUILD with hard ranges (255, 255,
+                    // 65535) and refuses anything else, so the release name is
+                    // reduced to exactly that instead of being passed through:
+                    // "1.4.0-beta" and "2" are both real version names, and only
+                    // one of them is a legal MSI version.
+                    val parts = releaseVersion
+                        .substringBefore("-")
+                        .split(".")
+                        .map { it.toIntOrNull() ?: 0 }
+                    msiPackageVersion = listOf(
+                        parts.getOrElse(0) { 1 }.coerceIn(0, 255),
+                        parts.getOrElse(1) { 0 }.coerceIn(0, 255),
+                        parts.getOrElse(2) { 0 }.coerceIn(0, 65535),
+                    ).joinToString(".")
                     // Stable across releases: MSI upgrades match on this, and a
                     // new one turns an upgrade into a second installed copy.
                     upgradeUuid = "8f2b1c74-4a5e-4c1b-9f39-2d0a7b6c1e55"

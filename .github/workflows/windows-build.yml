@@ -58,7 +58,7 @@ jobs:
           test "$found" -ge 1 || { echo "redirect entry point missing"; exit 1; }
 
       - name: Build the MSI
-        run: ./gradlew --no-daemon :desktop:packageReleaseMsi -PversionName=${{ github.run_number }}.0.0
+        run: ./gradlew --no-daemon :desktop:packageReleaseMsi "-PversionName=1.0.${{ github.run_number }}"
 
       - name: Where it landed
         shell: bash
