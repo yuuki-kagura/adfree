@@ -525,6 +525,14 @@ data class CatalogUserScript(
      * writes it into the store); such an entry is on by default and has no URL.
      */
     val builtin: Boolean = false,
+    /**
+     * On before the user asks. Built-ins are (their body is already here); a
+     * downloaded entry is when it is what the app is expected to run out of the
+     * box — AdGuard Extra is exactly that, and AdGuard's own apps ship it
+     * pre-installed. A body that has never been fetched is fetched once, on the
+     * first start that finds it missing.
+     */
+    val defaultEnabled: Boolean = builtin,
 )
 
 object UserScriptCatalog {
@@ -548,6 +556,10 @@ object UserScriptCatalog {
             name = "AdGuard Extra",
             descriptionKey = Strings.script_catalog_adguard_extra,
             url = "https://userscripts.adtidy.org/release/adguard-extra/1.0/adguard-extra.user.js",
+            // Downloaded, never vendored (GPL-3.0), and on by default because
+            // AdGuard's own apps ship it pre-installed: it is the module that
+            // handles the ads rule lists cannot reach.
+            defaultEnabled = true,
         ),
         CatalogUserScript(
             id = "disable-amp",

@@ -42,8 +42,12 @@ AdFree had **no equivalent running**:
 
 - `adfree-extra` (built in, on by default) is a different thing: it keeps
   BlockAdBlock/FuckAdBlock from noticing that ads are hidden.
-- `adguard-extra` is in the Extensions catalogue as a *download*, off by
-  default, and was off on this machine.
+- `adguard-extra` is in the Extensions catalogue as a *download* (GPL-3.0, so
+  fetched from AdGuard's own endpoint rather than vendored) and was off by
+  default. It is **on by default now**, like AdGuard's own apps: the download
+  happens on the first start that finds it missing, and it is only that
+  bootstrap that ignores a saved "off" — a switch that is off with no body
+  behind it is the old default, not a decision the user made.
 
 So the gap for this screenshot was not a filter list — it was the data-level
 module.
@@ -60,7 +64,7 @@ module.
 | AdGuard URL Tracking filter | ⛔ off by default (`ag-url-tracking`, available) |
 | AdGuard DNS filter | ✅ `ag-dns` |
 | language filter picked from the system locale | ✅ (`cat_abpvn` for `vi`) |
-| **AdGuard Extra (userscript)** | ⛔ missing entirely |
+| **AdGuard Extra (userscript)** | ✅ downloaded on first start, on by default |
 | uBlock Origin Quick fixes (daily YouTube/DOM repairs) | ⛔ not in the catalogue |
 
 The modules (`is_ad_blocking_enabled`, `is_annoyances_enabled`, …) are all on;
@@ -83,11 +87,14 @@ run them.
    - a stylesheet hides what still slips through (new renderer shapes).
    Scoped by `@match` to `*://*.youtube.com/*` and `*://youtube.com/*`; it is on
    by default like `adfree-extra`.
-2. **`uBlock Origin – Quick fixes`** in the Ads group (off by default). This is
+2. **`AdGuard Extra` is now on out of the box** (`defaultEnabled`), fetched once
+   and kept in the store; `adfree-youtube` stays the offline, Apache-2.0 half so
+   a machine without network still gets the data-level scrub.
+3. **`uBlock Origin – Quick fixes`** in the Ads group (off by default). This is
    where uBlock Origin ships its YouTube repairs within days of a DOM change;
    AdGuard Base lags there, and it is the list most likely to be needed next
    time YouTube shuffles its markup.
-3. Parity documented in `docs/plans/windows-support.md`'s table.
+4. Parity documented in `docs/plans/windows-support.md`'s table.
 
 ## How to check it worked
 

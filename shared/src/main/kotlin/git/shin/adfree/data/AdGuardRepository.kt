@@ -2362,9 +2362,17 @@ class AdGuardRepository(
                     nameKey = entry.nameKey,
                     descriptionKey = entry.descriptionKey,
                     url = entry.url,
-                    // Built-in scripts run unless the user turned them off;
-                    // catalogue downloads wait to be asked for.
-                    isEnabled = state?.enabled ?: entry.builtin,
+                    // A saved choice wins — except for a downloaded entry that
+                    // has no body on disk: a switch that is off with nothing
+                    // behind it is the old default, not a decision. Without
+                    // this, a script the app starts shipping as default-on
+                    // would stay off forever for everyone who ran an older
+                    // build, which is exactly the case for AdGuard Extra.
+                    isEnabled = if (state == null || (state.enabled.not() && asset == null)) {
+                        entry.defaultEnabled
+                    } else {
+                        state.enabled
+                    },
                     sizeBytes = asset?.sizeBytes ?: 0,
                     lastUpdatedText = asset?.let { engine.dateText(it.modifiedMs) }
                         ?: L10n.get(Strings.filter_not_loaded),
@@ -2389,6 +2397,21 @@ class AdGuardRepository(
             }
             _userscripts.value = scripts
             _scriptsMasterEnabled.value = saved.master
+            // A default-on entry that is downloaded rather than shipped has no
+            // body until it is fetched, and an enabled script with no body is
+            // dropped on the way to the core — so the switch would say "on"
+            // while nothing ran. Fetch it once, here; a failure leaves the row
+            // enabled and empty, and the next start tries again rather than
+            // pretending the script is filtering.
+            var chose = false
+            for (pending in scripts.filter {
+                it.isEnabled && !it.isBuiltin && it.sizeBytes == 0L && it.url.isNotBlank()
+            }) {
+                val fetched = withContext(Dispatchers.IO) { downloadScriptBody(pending) }
+                if (!fetched.ok) break
+                chose = true
+            }
+            if (chose) saveScripts()
             pushScriptsToCore()
         }
     }
