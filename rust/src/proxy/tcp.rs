@@ -526,37 +526,11 @@ fn read_nb(fd: RawFd, buf: &mut [u8]) -> Read {
 }
 
 /// The original destination the redirect rules recorded, if any.
+///
+/// Linux reads it from conntrack (`SO_ORIGINAL_DST`); Windows has no such
+/// question, which is why the call lives in `sys` and answers `None` there.
 fn original_dst(client_fd: RawFd) -> Option<SocketAddr> {
-    let mut sa: libc::sockaddr_storage = unsafe { std::mem::zeroed() };
-    let mut len = std::mem::size_of::<libc::sockaddr_storage>() as libc::socklen_t;
-    let rc = unsafe {
-        libc::getsockopt(
-            client_fd,
-            libc::SOL_IP,
-            libc::SO_ORIGINAL_DST,
-            &mut sa as *mut libc::sockaddr_storage as *mut libc::c_void,
-            &mut len,
-        )
-    };
-    if rc == 0 {
-        return parse_sockaddr(&sa);
-    }
-    // v6 redirect: the same option under SOL_IPV6.
-    let mut len = std::mem::size_of::<libc::sockaddr_storage>() as libc::socklen_t;
-    let rc = unsafe {
-        libc::getsockopt(
-            client_fd,
-            libc::SOL_IPV6,
-            libc::IP6T_SO_ORIGINAL_DST,
-            &mut sa as *mut libc::sockaddr_storage as *mut libc::c_void,
-            &mut len,
-        )
-    };
-    if rc == 0 {
-        parse_sockaddr(&sa)
-    } else {
-        None
-    }
+    crate::sys::original_destination(client_fd)
 }
 
 /// This socket's own local address — the port the listener is bound to.

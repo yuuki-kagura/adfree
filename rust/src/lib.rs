@@ -16,6 +16,7 @@
 // must live in the crate root for the generated code to find `UniFfiTag`.
 uniffi::setup_scaffolding!("adfree");
 
+pub mod sys;
 pub mod api;
 mod appmask;
 pub mod assets;

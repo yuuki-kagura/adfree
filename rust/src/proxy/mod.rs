@@ -467,17 +467,11 @@ pub(crate) fn reset_on_close(fd: RawFd) {
 
 /// Best effort `SO_MARK` (needs `CAP_NET_ADMIN`; without it the redirect
 /// layout is not in play either, and nothing is marked out of anything).
+///
+/// The call itself lives in `sys`: it is one of the two things the proxy asks of
+/// the kernel that Windows does not have.
 pub(crate) fn try_mark(fd: RawFd) {
-    let mark = FWMARK;
-    unsafe {
-        libc::setsockopt(
-            fd,
-            libc::SOL_SOCKET,
-            libc::SO_MARK,
-            &mark as *const u32 as *const libc::c_void,
-            std::mem::size_of::<u32>() as libc::socklen_t,
-        );
-    }
+    crate::sys::mark_own_traffic(fd, FWMARK);
 }
 
 /// Dials `addr` with the proxy's own mark applied before the first packet, so
