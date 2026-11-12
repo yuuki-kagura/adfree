@@ -1,3 +1,26 @@
+# [1.5.0](https://github.com/yuuki-kagura/adfree/compare/v1.4.0...v1.5.0) (2026-11-12)
+
+
+### Bug Fixes
+
+* **core:** clear the lints a newer toolchain raises, both targets ([bd81e78](https://github.com/yuuki-kagura/adfree/commit/bd81e78834f0467e7b900d7cee6ef468d1f7ff80))
+* **core:** enable the IP helper feature the process lookup needs ([7561bc3](https://github.com/yuuki-kagura/adfree/commit/7561bc35937f76b48b4593cb14a8ee5edabd9b38))
+* **desktop:** an MSI version, which WiX has strict ideas about ([9a8cda9](https://github.com/yuuki-kagura/adfree/commit/9a8cda9cb4b3a1ab7cc9011c0259be1752a9a0f1))
+
+
+### Features
+
+* **core:** decide what the Windows redirector does, and test it on Linux ([8935655](https://github.com/yuuki-kagura/adfree/commit/89356554d6cb2164fca23df508e375fd8e1eb092))
+* **core:** let the app start the redirect, on every platform ([40c70c2](https://github.com/yuuki-kagura/adfree/commit/40c70c22ba6fa78af74a7ea9a46a4407919e6257))
+* **core:** the filtering core builds for Windows ([f993156](https://github.com/yuuki-kagura/adfree/commit/f993156633b5dfe470bb207640e164cc7afa6cf6))
+* **core:** the wait set is epoll on Windows too, over IOCP ([9e796de](https://github.com/yuuki-kagura/adfree/commit/9e796de66fb220b378d63e7731929b8b1dbea7ed))
+* **core:** the Windows redirect, wired to WinDivert ([5303b9b](https://github.com/yuuki-kagura/adfree/commit/5303b9bda2618b6397eb9a53bf92dc6c18a6e4ec))
+* **core:** trust the local CA on Windows through the machine's store ([a615155](https://github.com/yuuki-kagura/adfree/commit/a615155c1ed4ff52eb43629563a3ad2591541150))
+* **desktop:** answer the privilege questions for a Windows machine ([06044d5](https://github.com/yuuki-kagura/adfree/commit/06044d51a9b513b2c4ecd55df9bc2361f04dc074))
+* **desktop:** find the core and the driver on Windows ([2b20b81](https://github.com/yuuki-kagura/adfree/commit/2b20b811a269f572e86c7a9ddbcc6c05d9c9f09a))
+* **desktop:** register the extension's host on Windows, where Chrome reads a registry ([9978697](https://github.com/yuuki-kagura/adfree/commit/9978697f087a0073c5146025aa04ccc587bb62b9))
+* the tray's state, the log's process names, and the arm builds ([ff8b0f3](https://github.com/yuuki-kagura/adfree/commit/ff8b0f32d86cc15ebf8f42438338db9d58d7e998))
+
 # [1.4.0](https://github.com/yuuki-kagura/adfree/compare/v1.3.3...v1.4.0) (2026-11-11)
 
 
