@@ -48,11 +48,12 @@ use crate::util::{now_ms, now_ns};
 use crate::waitset::{WaitEntry, WaitSet};
 use std::collections::HashSet;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr, SocketAddrV4};
-use std::os::unix::io::RawFd;
+use crate::sys::fd::RawFd;
 use std::sync::atomic::{
-    AtomicBool, AtomicI32, AtomicU16, AtomicU32, AtomicU64, AtomicU8, AtomicUsize, Ordering,
+    AtomicBool, AtomicU16, AtomicU32, AtomicU64, AtomicU8, AtomicUsize, Ordering,
 };
 use std::sync::{Arc, Mutex, OnceLock, RwLock};
+use crate::sys::libc;
 
 /// Read size for the TUN descriptor.
 const TUN_BUF_BYTES: usize = 64 * 1024;
@@ -832,7 +833,7 @@ pub struct Core {
     /// choice, which a pause must not overwrite.
     paused: AtomicBool,
     running: AtomicBool,
-    tun_fd: AtomicI32,
+    tun_fd: crate::sys::fd::AtomicFd,
     tx_counter: AtomicU64,
     /// Monotonic id attached to every logged decision; the UI shows it as the
     /// connection id and the store keeps it stable across ring and database.
@@ -1124,7 +1125,7 @@ impl Core {
             screen_off: AtomicBool::new(false),
             paused: AtomicBool::new(false),
             running: AtomicBool::new(false),
-            tun_fd: AtomicI32::new(-1),
+            tun_fd: crate::sys::fd::AtomicFd::new(crate::sys::fd::NO_FD),
             tx_counter: AtomicU64::new(0),
             next_flow_id: AtomicU32::new(0),
             started_at: now_ms(),
@@ -2042,7 +2043,7 @@ impl Core {
 
     pub fn stop(&self) {
         self.running.store(false, Ordering::SeqCst);
-        self.tun_fd.store(-1, Ordering::SeqCst);
+        self.tun_fd.store(crate::sys::fd::NO_FD, Ordering::SeqCst);
         // QUIC flows own their transport and never touch the tun, so ending
         // them here releases the sockets even if the forwarder's last pass is
         // already gone.
@@ -2672,7 +2673,7 @@ impl Core {
     /// so the socket is bound explicitly instead of relying on the implicit
     /// bind the first `sendto` would do.
     pub(crate) fn open_upstream_quic_socket(&self, ipv6: bool) -> Option<std::net::UdpSocket> {
-        use std::os::unix::io::FromRawFd;
+        use crate::sys::fd::FromRawFd;
         let family = if ipv6 { libc::AF_INET6 } else { libc::AF_INET };
         let fd = unsafe {
             libc::socket(
@@ -3079,7 +3080,7 @@ impl Core {
         flow.up_bytes = 1;
         let mss = self.relay_mss(pkt);
         let mut relay =
-            crate::mitm::relay::Relay::new_plain(flow, -1, pkt.raw.to_vec(), mss, true);
+            crate::mitm::relay::Relay::new_plain(flow, crate::sys::fd::NO_FD, pkt.raw.to_vec(), mss, true);
         relay.setup_pending = true;
         // The relay reports what crossed it when it retires; nothing else knows
         // both byte totals of one connection.
@@ -6047,7 +6048,6 @@ fn write_atomic(
     private: bool,
 ) -> bool {
     use std::io::Write as _;
-    use std::os::unix::fs::OpenOptionsExt as _;
 
     if std::fs::create_dir_all(dir).is_err() {
         return false;
@@ -6056,7 +6056,13 @@ fn write_atomic(
     let mut options = std::fs::OpenOptions::new();
     options.write(true).create(true).truncate(true);
     if private {
-        options.mode(0o600);
+        // Unix file modes have no Windows equivalent; the directory's ACL is
+        // what protects the file there, so nothing to set.
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt as _;
+            options.mode(0o600);
+        }
     }
     let Ok(mut file) = options.open(&tmp) else {
         return false;
@@ -8022,7 +8028,7 @@ mod tests {
     /// no `$app=` rule asked for attribution.
     #[test]
     fn a_firewall_reset_names_the_app_in_the_log() {
-        use std::os::unix::io::IntoRawFd;
+        use crate::sys::fd::IntoRawFd;
 
         let core = Core::new();
         core.set_socket_protector(Arc::new(AllowAll));
@@ -8054,7 +8060,7 @@ mod tests {
     /// answer IS a decision, so it keeps counting and keeps its row.
     #[test]
     fn a_reset_of_a_learned_blocked_ip_counts_as_a_block() {
-        use std::os::unix::io::IntoRawFd;
+        use crate::sys::fd::IntoRawFd;
 
         let core = Core::new();
         core.set_socket_protector(Arc::new(AllowAll));
@@ -8090,7 +8096,7 @@ mod tests {
     /// totals nor in the log.
     #[test]
     fn a_refused_reused_port_is_not_counted_as_a_block() {
-        use std::os::unix::io::IntoRawFd;
+        use crate::sys::fd::IntoRawFd;
 
         let core = Core::new();
         core.set_socket_protector(Arc::new(AllowAll));

@@ -20,9 +20,10 @@ use super::{parse_sockaddr, poll_readable, sockaddr_for, try_mark, POLL_SLICE_MS
 use crate::dns;
 use crate::engine::core;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, UdpSocket};
-use std::os::unix::io::{AsRawFd, RawFd};
+use crate::sys::fd::{AsRawFd, RawFd};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use crate::sys::libc;
 
 /// Bytes credited to a refused lookup, matching the tun path's accounting.
 const BYTES_PER_BLOCKED_REQUEST: u64 = 48 * 1024;
@@ -122,7 +123,7 @@ fn bind_one(addr: IpAddr, port: u16, v6: bool) -> std::io::Result<Listener> {
     }
 
     // `FromRawFd` takes ownership, so the fd must not be closed after this.
-    use std::os::unix::io::FromRawFd;
+    use crate::sys::fd::FromRawFd;
     let socket = unsafe { UdpSocket::from_raw_fd(fd) };
     socket.set_nonblocking(true)?;
     Ok(Listener { socket, v6 })

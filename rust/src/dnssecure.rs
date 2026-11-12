@@ -16,7 +16,7 @@
 use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr, TcpStream, UdpSocket};
-use std::os::unix::io::{AsRawFd, FromRawFd, RawFd};
+use crate::sys::fd::{AsRawFd, FromRawFd, RawFd};
 use std::sync::mpsc::{Receiver, Sender};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
@@ -27,6 +27,7 @@ use rustls::{ClientConfig, ClientConnection, StreamOwned};
 use crate::api::SocketProtector;
 use crate::dns;
 use crate::state::model::{DnsProbeError, DnsProtocol};
+use crate::sys::libc;
 
 /// Where a hostname is bootstrapped from when the provider is named. The
 /// default resolver is reachable without DoH/DoT, which is exactly what a

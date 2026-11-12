@@ -67,6 +67,7 @@ const LINUX_STORES: [LinuxStore; 3] = [
 
 /// `su` may show a consent dialog, so the first probe can take a while.
 #[cfg(target_os = "android")]
+use crate::sys::libc;
 const PROBE_TIMEOUT: Duration = Duration::from_secs(20);
 /// Cheap lookups (`command -v`, `[ -d ... ]`).
 const SHORT_TIMEOUT: Duration = Duration::from_secs(3);

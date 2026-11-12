@@ -26,10 +26,11 @@ pub mod egress;
 pub mod peer;
 pub mod tcp;
 
-use std::os::unix::io::RawFd;
+use crate::sys::fd::RawFd;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
+use crate::sys::libc;
 
 /// Firewall mark on every socket the proxy itself dials out. The redirect
 /// rules (`tools/adfree-linux.nft`) skip marked traffic, which is what keeps
@@ -379,7 +380,7 @@ pub(crate) fn poll2(client_fd: RawFd, peer_fd: Option<RawFd>, mut timeout_ms: i3
             revents: 0,
         },
         libc::pollfd {
-            fd: peer_fd.unwrap_or(-1),
+            fd: peer_fd.unwrap_or(crate::sys::fd::NO_FD),
             events: libc::POLLIN,
             revents: 0,
         },
@@ -492,7 +493,7 @@ pub(crate) fn dial_marked(addr: std::net::SocketAddr) -> Option<std::net::TcpStr
     match dial_fd(addr) {
         Ok(fd) => {
             egress::note_dial(addr, None);
-            use std::os::unix::io::FromRawFd;
+            use crate::sys::fd::FromRawFd;
             // The fd is verified connected by `dial_fd`; std takes ownership
             // from here.
             Some(unsafe { std::net::TcpStream::from_raw_fd(fd) })

@@ -15,7 +15,8 @@
 
 use std::collections::HashMap;
 use std::net::SocketAddr;
-use std::os::unix::io::RawFd;
+use crate::sys::fd::RawFd;
+use crate::sys::libc;
 
 /// Number of parallel upstream sockets.
 pub const SOCKET_POOL_PUB: usize = 4;
@@ -96,7 +97,7 @@ impl Upstream {
     /// Replaces the socket pool with descriptors that Java has protected.
     pub fn set_socket_fds(&mut self, fds: &[RawFd]) {
         for (i, fd) in self.fds.iter_mut().enumerate() {
-            *fd = fds.get(i).copied().unwrap_or(-1);
+            *fd = fds.get(i).copied().unwrap_or(crate::sys::fd::NO_FD);
         }
     }
 

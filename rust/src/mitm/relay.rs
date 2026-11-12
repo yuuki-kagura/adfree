@@ -13,9 +13,10 @@ use crate::mitm::tcp::{Flow, FlowState};
 use crate::socks5::{ProxyEndpoint, Socks5Handshake};
 use crate::util::now_ms;
 use std::collections::VecDeque;
-use std::os::unix::io::RawFd;
+use crate::sys::fd::RawFd;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
+use crate::sys::libc;
 
 /// Port we intercept for TLS termination. Everything else keeps flowing.
 pub const MITM_PORT: u16 = 443;

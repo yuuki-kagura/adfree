@@ -13,7 +13,8 @@
 use crate::mitm::relay::TrafficSink;
 use crate::packet::IpKey;
 use std::collections::HashMap;
-use std::os::unix::io::RawFd;
+use crate::sys::fd::RawFd;
+use crate::sys::libc;
 
 /// How long a mapping may stay silent before it is dropped. Long enough for
 /// keepalives (games, VoIP), short enough that one-shot lookups do not pin

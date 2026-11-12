@@ -14,9 +14,10 @@ use super::{
 use crate::engine::core;
 use crate::mitm::proxy::ProxySession;
 use std::net::{SocketAddr, TcpListener, TcpStream, ToSocketAddrs};
-use std::os::unix::io::{AsRawFd, RawFd};
+use crate::sys::fd::{AsRawFd, RawFd};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use crate::sys::libc;
 
 /// How long a flow that is already open may keep going after the switch is
 /// turned off. A stop is a decision about new traffic, not a reason to cut the
@@ -263,7 +264,7 @@ fn handle(client: TcpStream, stop: &AtomicBool) {
         }
     };
 
-    let mut peer_fd = peer.as_ref().map(TcpStream::as_raw_fd).unwrap_or(-1);
+    let mut peer_fd = peer.as_ref().map(TcpStream::as_raw_fd).unwrap_or(crate::sys::fd::NO_FD);
 
     // A connection this proxy only relays is still something the log should
     // name: AdGuard's Connection tab lists what passed untouched, and without
@@ -282,7 +283,7 @@ fn handle(client: TcpStream, stop: &AtomicBool) {
     let begun_excepted = core.filter_engine().excepted_page_open();
     let mut buf = vec![0u8; 16 * 1024];
     let mut last_activity = std::time::Instant::now();
-    let mut peer_open = peer_fd >= 0;
+    let mut peer_open = crate::sys::fd::fd_ok(peer_fd);
 
     // The pumps watch this one instead of the listener's flag, so a stop that
     // lands while a response is half written finishes it rather than resetting
@@ -481,8 +482,8 @@ fn apply_outcome(
         // one (the ECH fallback, see `mitm::proxy::Outcome`).
         drop(peer.take());
         *peer = dial_marked(redial);
-        *peer_fd = peer.as_ref().map(TcpStream::as_raw_fd).unwrap_or(-1);
-        *peer_open = *peer_fd >= 0;
+        *peer_fd = peer.as_ref().map(TcpStream::as_raw_fd).unwrap_or(crate::sys::fd::NO_FD);
+        *peer_open = crate::sys::fd::fd_ok(*peer_fd);
         if !*peer_open {
             return Step::Done;
         }

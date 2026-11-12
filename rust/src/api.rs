@@ -394,6 +394,10 @@ pub fn core_proxy_running() -> bool {
 /// forwards every non-blocked DNS query through them.
 #[uniffi::export]
 pub fn core_protect_sockets(fds: Vec<i32>) {
+    let fds: Vec<crate::sys::fd::RawFd> = fds
+        .into_iter()
+        .map(|fd| fd as crate::sys::fd::RawFd)
+        .collect();
     guard((), || crate::core().set_socket_fds(&fds))
 }
 

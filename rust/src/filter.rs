@@ -36,7 +36,7 @@ use std::collections::hash_map::DefaultHasher;
 use std::collections::{BTreeSet, HashMap, HashSet, VecDeque};
 use std::hash::Hasher;
 use std::io::{Read, Write};
-use std::os::unix::fs::FileExt;
+
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicU8, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, OnceLock, RwLock};
@@ -961,9 +961,7 @@ impl ListLines {
         let mut buf = vec![0u8; len];
         let mut read = 0;
         while read < len {
-            match self
-                .file
-                .read_at(&mut buf[read..], u64::from(start) + read as u64)
+            match crate::sys::read_at(&self.file, &mut buf[read..], u64::from(start) + read as u64)
             {
                 Ok(0) => break,
                 Ok(n) => read += n,

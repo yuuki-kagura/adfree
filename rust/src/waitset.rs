@@ -14,10 +14,11 @@
 //! tables.
 
 use std::collections::HashMap;
-use std::os::fd::RawFd;
+use crate::sys::fd::RawFd;
 
 use crate::mitm::relay::RelayPoll;
 use crate::udpnat::UdpPoll;
+use crate::sys::libc;
 
 /// Cap on how many descriptors one wait reports. Level-triggered, so whatever
 /// is left over makes the next `epoll_wait` return at once; nothing is lost by

@@ -16,6 +16,17 @@ crate-type = ["cdylib", "rlib"]
 name = "adfree-native-host"
 path = "src/bin/adfree_native_host.rs"
 
+[target.'cfg(windows)'.dependencies]
+# The proxy speaks BSD sockets; Winsock is the same vocabulary with different
+# names, and these are the names. Feature list kept to what `sys::winlibc`
+# calls: sockets, errors, and the process primitives the QUIC workers touch.
+windows-sys = { version = "0.59", features = [
+  "Win32_Foundation",
+  "Win32_Networking_WinSock",
+  "Win32_System_IO",
+  "Win32_System_Threading",
+] }
+
 [dependencies]
 # The real AdGuard / Brave filtering engine: every AdGuard, EasyList, uBO and
 # hosts-list rule is parsed and matched by the code these projects use.
