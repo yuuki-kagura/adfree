@@ -40,6 +40,14 @@ pub struct Peer {
 /// than that walk goes unnamed rather than paying for a second one.
 #[cfg(unix)]
 const WALK_MISS_GAP_MS: u64 = 200;
+/// Shortest gap between two *complete* scans of the process table. A walk stops
+/// at the process it is looking for, so the map it builds knows only the
+/// sockets of the processes it happened to pass — and a UDP socket is almost
+/// always in a process the last walk never reached. A scan that ignores the
+/// target fills the map for everything alive, which is what makes a DNS row
+/// nameable at all.
+#[cfg(unix)]
+const SCAN_GAP_MS: u64 = 250;
 /// Longest a walk is trusted. Inode numbers are recycled, so an entry that has
 /// aged out is confirmed by a fresh look instead of believed.
 #[cfg(unix)]
@@ -68,6 +76,11 @@ pub struct Table {
     /// When the whole table was last walked, and whether that walk finished.
     #[cfg(unix)]
     walked: Option<Instant>,
+    /// When every process was last scanned, target or not. Separate from
+    /// `walked` because the two answer different questions: a walk says "this
+    /// inode is not in the map", a scan says "the map is complete".
+    #[cfg(unix)]
+    scanned: Option<Instant>,
 }
 
 impl Default for Table {
@@ -86,6 +99,8 @@ impl Table {
             recent: Vec::new(),
             #[cfg(unix)]
             walked: None,
+            #[cfg(unix)]
+            scanned: None,
         }
     }
 
@@ -130,12 +145,23 @@ impl Table {
         }
         #[cfg(unix)]
         {
-            let inode = udp_socket_of(port)?;
-            let pid = self.pid_of(inode)?;
-            Some(Peer {
-                pid,
-                name: self.name_of(pid)?,
-            })
+            let (inode, uid) = udp_socket_of(port)?;
+            match self.pid_by_scan(inode) {
+                Some(pid) => Some(Peer {
+                    pid,
+                    name: self.name_of(pid)?,
+                }),
+                // The socket is in the kernel table and its owner is not a
+                // process this one may read, which on a Linux desktop is
+                // almost always the machine's own resolver. A blank cell reads
+                // as "the log could not tell"; the resolver's name is the true
+                // answer, and it is what tells the user why a DNS row can never
+                // name their browser.
+                None => Some(Peer {
+                    pid: 0,
+                    name: user_name(uid)?,
+                }),
+            }
         }
     }
 
@@ -181,6 +207,9 @@ impl Table {
             }
         }
         if self.trusted(&now, WALK_MISS_GAP_MS) {
+            if let Some(pid) = self.pid_by_scan(inode) {
+                return Some(pid);
+            }
             return None;
         }
         self.walked = Some(now);
@@ -189,6 +218,40 @@ impl Table {
             self.remember_pid(pid);
         }
         pid
+    }
+
+    /// The pid holding `inode`, answered from a map of *every* process rather
+    /// than from the walk above.
+    ///
+    /// The two are not interchangeable. A walk stops at the first process it
+    /// can attribute, so everything after that process is missing from the map
+    /// — and a UDP socket belongs to whichever process sent the datagram, which
+    /// is usually one the last walk never reached. Giving up on a trusted miss
+    /// therefore answered "no process" for 99.75% of DNS rows: 305 of 122,278
+    /// named on this machine. A scan ignores its target and fills the map for
+    /// everything alive, which is one `readlink` per descriptor and is
+    /// rate-limited to keep a burst of queries from paying for it repeatedly.
+    #[cfg(unix)]
+    fn pid_by_scan(&mut self, inode: u64) -> Option<u32> {
+        let now = Instant::now();
+        let cached = self
+            .trusted(&now, WALK_GAP_MS)
+            .then(|| self.holders.get(&inode).copied())
+            .flatten();
+        if let Some(pid) = cached {
+            self.remember_pid(pid);
+            return Some(pid);
+        }
+        if self
+            .scanned
+            .is_none_or(|at| now.duration_since(at).as_millis() >= SCAN_GAP_MS as u128)
+        {
+            self.scanned = Some(now);
+            scan(&mut self.holders);
+        }
+        let pid = self.holders.get(&inode).copied()?;
+        self.remember_pid(pid);
+        Some(pid)
     }
 
     /// Puts a pid at the front of the recently-answered list.
@@ -240,6 +303,25 @@ fn search_pid(pid: u32, inode: u64, holders: &mut FxHashMap<u64, u32>) -> bool {
         }
     }
     found
+}
+
+/// One pass over the process table that answers for every process it can read,
+/// instead of stopping at the first match. Used when the cache is missing an
+/// inode rather than when the inode is known to belong to someone: the walk
+/// above can answer "not in the map" for a process it never reached.
+#[cfg(unix)]
+fn scan(holders: &mut FxHashMap<u64, u32>) {
+    let Ok(entries) = std::fs::read_dir("/proc") else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let Ok(pid) = entry.file_name().to_string_lossy().parse::<u32>() else {
+            continue;
+        };
+        // An inode no socket can have: the search never matches, but every
+        // socket of the process is noted in the map on the way past.
+        search_pid(pid, u64::MAX, holders);
+    }
 }
 
 /// One pass over the process table, stopping at the process that owns the
@@ -417,7 +499,7 @@ fn socket_of(client: SocketAddr, our: SocketAddr) -> Option<u64> {
 /// `port`, looked for in both address families (a resolver client may bind
 /// either, and the listener sees only its address).
 #[cfg(unix)]
-fn udp_socket_of(port: u16) -> Option<u64> {
+fn udp_socket_of(port: u16) -> Option<(u64, u32)> {
     for path in ["/proc/net/udp", "/proc/net/udp6"] {
         let Ok(text) = std::fs::read_to_string(path) else {
             continue;
@@ -431,9 +513,33 @@ fn udp_socket_of(port: u16) -> Option<u64> {
             let Some(inode) = cols.get(9).and_then(|i| i.parse::<u64>().ok()) else {
                 continue;
             };
-            if inode != 0 {
-                return Some(inode);
+            if inode == 0 {
+                continue;
             }
+            // Column 7 is the socket's uid. It is readable for every socket,
+            // including the ones whose descriptors are not.
+            let uid = cols.get(7).and_then(|u| u.parse::<u32>().ok()).unwrap_or(0);
+            return Some((inode, uid));
+        }
+    }
+    None
+}
+
+/// The account behind a uid, from the machine's own user table.
+///
+/// `/etc/passwd` and not a lookup through libc: this runs on the proxy's hot
+/// path and touches the file once per uid, and the file is already in the page
+/// cache on any machine that has one.
+#[cfg(unix)]
+fn user_name(uid: u32) -> Option<String> {
+    let table = std::fs::read_to_string("/etc/passwd").ok()?;
+    for line in table.lines() {
+        let mut fields = line.split(':');
+        let Some(name) = fields.next() else { continue };
+        let _password = fields.next();
+        let Some(id) = fields.next() else { continue };
+        if id.parse::<u32>().ok() == Some(uid) && !name.is_empty() {
+            return Some(name.to_string());
         }
     }
     None
@@ -447,6 +553,39 @@ fn port_of(field: &str) -> Option<u16> {
 
 #[cfg(all(test, unix))]
 mod tests {
+    /// A DNS row whose socket belongs to a process we may not read still gets
+    /// a name: the resolver's, which is what the kernel table says it is.
+    #[test]
+    #[cfg(unix)]
+    fn the_owner_of_an_unreadable_socket_is_named_after_its_account() {
+        assert_eq!(user_name(0).as_deref(), Some("root"));
+        assert!(user_name(u32::MAX - 1).is_none());
+    }
+
+    /// A DNS row is the one a user sees most and the one that used to have no
+    /// name: every query is a brand-new UDP socket in a process the last walk
+    /// never reached, so the trust window answered "unknown" from a map that had
+    /// never looked. A live UDP socket must be nameable even right after a walk
+    /// that answered something else.
+    #[test]
+    #[cfg(target_os = "linux")]
+    fn a_udp_socket_is_named_right_after_another_answer() {
+        let udp = std::net::UdpSocket::bind("127.0.0.1:0").unwrap();
+        let port = udp.local_addr().unwrap().port();
+        let mut table = Table::new();
+        // An unrelated TCP answer first: this is what leaves the walk window
+        // fresh and the map trusted-but-incomplete.
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let our = listener.local_addr().unwrap();
+        let _client = TcpStream::connect(our).unwrap();
+        let (accepted, from) = listener.accept().unwrap();
+        let _ = table.owner(from, our);
+        let peer = table.owner_udp(port).expect("a live UDP socket has an owner");
+        assert_eq!(peer.pid, std::process::id());
+        assert!(!peer.name.is_empty());
+        drop((udp, accepted));
+    }
+
     /// The row a user reads should name the tool, not the runtime it happens to
     /// be written in. `free-pi-cli` is `node /home/shin/.bun/bin/free-pi-cli`.
     #[test]
