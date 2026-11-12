@@ -19,7 +19,7 @@
 //! `Send + Sync`.
 
 use crate::appmask::{parse_app_entries, AppEntry, AppMask};
-use crate::fxhash::hash_str;
+use crate::fxhash::{hash_str, FxHashSet};
 use crate::jsonprune::{JsonPrune, JsonpruneRule};
 use crate::pathmask;
 use adblock::cosmetic_filter_cache::ProceduralOrActionFilter;
@@ -992,6 +992,51 @@ impl SourceMapEntry {
     }
 }
 
+/// Rule lines this build has already been given, dropped by blanking them
+/// instead of deleting them.
+///
+/// The lists overlap: across the six lists loaded on a stock desktop, 15% of
+/// 918,959 rule lines are an exact repeat of a line an earlier list already
+/// carried (139,616 of them, `cat_ag_tracking.txt` alone repeating 117,789
+/// lines from the builtins). The engine pays for every one of them — a pattern,
+/// its options and its source index — so the repeats are pure resident cost for
+/// no extra blocking.
+///
+/// The line keeps its place: the engine reports the line number of a match and
+/// the log reads that line back out of the list file, so a dropped rule has to
+/// become an empty line rather than a shorter file. What the log then shows for
+/// a repeated rule is the earliest list that carried it, which is the trade this
+/// is: the block is identical, only the credit moves.
+///
+/// The set is transient and hashed to a `u64` per rule: keeping the text would
+/// cost about as much as the engine saves. A collision would drop a rule that
+/// the hash matched but nobody wrote twice, and with 900k rules the odds are
+/// about one in 45 million builds — small enough to state and not worth paying
+/// a string per rule for.
+fn dedupe_rule_lines(text: String, seen: &mut FxHashSet<u64>) -> (String, u32) {
+    let mut out = String::with_capacity(text.len());
+    let mut dropped = 0u32;
+    for line in text.split_inclusive('\n') {
+        let rule = line.trim_end_matches(['\r', '\n']).trim();
+        // Comments, blanks and the `[Adblock Plus 2.0]` header are metadata, not
+        // rules: two lists sharing a header is not a duplicate rule.
+        if rule.is_empty() || rule.starts_with('!') || rule.starts_with('[') {
+            out.push_str(line);
+            continue;
+        }
+        if seen.insert(crate::fxhash::hash_str(rule)) {
+            out.push_str(line);
+        } else {
+            dropped += 1;
+            // The newline stays so every later line keeps its number.
+            if line.ends_with('\n') {
+                out.push('\n');
+            }
+        }
+    }
+    (out, dropped)
+}
+
 /// Byte offset of every line start in `text`.
 fn line_starts(text: &str) -> Vec<u32> {
     let mut starts = Vec::with_capacity(text.len() / 32 + 1);
@@ -1002,7 +1047,9 @@ fn line_starts(text: &str) -> Vec<u32> {
 
 /// Version of the cache file's own header. Bump it when the header layout or
 /// the key inputs change; a list update is covered by the key itself.
-const ENGINE_CACHE_VERSION: u32 = 1;
+// 2: the build now drops rule lines an earlier list already carried, so the
+// same inputs compile to a smaller engine — a version-1 cache is not it.
+const ENGINE_CACHE_VERSION: u32 = 2;
 const ENGINE_CACHE_MAGIC: [u8; 4] = *b"AFEC";
 const ENGINE_CACHE_HEADER: usize = 16;
 const ENGINE_CACHE_FILE: &str = "engine.dat";
@@ -1470,6 +1517,11 @@ impl FilterEngine {
         // Lists whose module is off: cosmetics carry no category of their own,
         // so leaving the whole list out is what makes hiding stop with it.
         let mut module_skipped = 0u32;
+        // Rule lines already given to `set` / `dns_set` by an earlier list (see
+        // [`dedupe_rule_lines`]). One set per engine: the two are compiled apart.
+        let mut seen_url: FxHashSet<u64> = FxHashSet::default();
+        let mut seen_dns: FxHashSet<u64> = FxHashSet::default();
+        let mut deduped = 0u32;
 
         for list in lists.iter().filter(|l| l.enabled) {
             if !category_enabled_by(build_flags, list.category) {
@@ -1500,6 +1552,8 @@ impl FilterEngine {
                                 ListFormat::Standard => convert_dnsmasq_rules(text),
                                 ListFormat::Hosts => text,
                             };
+                            let (text, repeats) = dedupe_rule_lines(text, &mut seen_dns);
+                            deduped += repeats;
                             let counted = count_rules(&text);
                             text_bytes += text.len();
                             rule_count += counted;
@@ -1570,6 +1624,8 @@ impl FilterEngine {
                             }
                             ListFormat::Hosts => text,
                         };
+                        let (text, repeats) = dedupe_rule_lines(text, &mut seen_url);
+                        deduped += repeats;
                         let counted = count_rules(&text);
                         text_bytes += text.len();
                         let record = set.add_filter_list(
@@ -6854,6 +6910,28 @@ fn categorise(rule: Option<&str>, host: &str) -> u8 {
 
 #[cfg(test)]
 mod tests {
+    /// The lists overlap, and a repeated line costs the engine a pattern it
+    /// already has. What must not change is the line's place: the engine reports
+    /// a match's line number and the log reads that line back out of the file.
+    #[test]
+    fn a_repeated_rule_is_blanked_in_place_not_deleted() {
+        let first = "! Title: A\n||ads.example^\n||kept.example^\n";
+        let second = "! Title: B\n||ads.example^\n||only-here.example^\n";
+        let mut seen = FxHashSet::default();
+        let (one, dropped_one) = dedupe_rule_lines(first.to_string(), &mut seen);
+        let (two, dropped_two) = dedupe_rule_lines(second.to_string(), &mut seen);
+        assert_eq!(dropped_one, 0);
+        assert_eq!(dropped_two, 1);
+        assert_eq!(one, first, "the first list is untouched");
+        // Same number of lines, so line 2 of B still means line 2 of B.
+        assert_eq!(two.lines().count(), second.lines().count());
+        let kept: Vec<&str> = two.lines().collect();
+        assert_eq!(kept[1], "", "the repeat became an empty line");
+        assert_eq!(kept[2], "||only-here.example^");
+        // A header is metadata, not a rule: two lists sharing one is normal.
+        assert_eq!(kept[0], "! Title: B");
+    }
+
     use super::*;
 
     fn temp_list(name: &str, body: &str, format: ListFormat, id: u16) -> FilterListInfo {

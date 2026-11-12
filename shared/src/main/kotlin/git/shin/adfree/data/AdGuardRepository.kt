@@ -1114,7 +1114,20 @@ class AdGuardRepository(
                 _servicesState.value = withContext(Dispatchers.IO) { engine.servicesState() }
             }
             val servicesDue = servicesTableDue(now, hours)
-            if (stale.isEmpty() && !servicesDue) return 0
+            // User scripts age exactly like a list does: AdGuard Extra is
+            // downloaded code whose author ships fixes for what the lists cannot
+            // reach, and a body that never refreshes keeps serving last month's
+            // answer. They refresh on the same pass and the same interval, so a
+            // machine that keeps its lists current keeps its scripts current
+            // too. A body that was never downloaded is not stale but absent: the
+            // bootstrap in `loadScriptsState` owns that case.
+            val staleScripts = mutableListOf<UserScriptInfo>()
+            for (script in _userscripts.value) {
+                if (!script.isEnabled || script.isBuiltin || script.url.isBlank()) continue
+                val asset = withContext(Dispatchers.IO) { engine.scriptState(script.id) } ?: continue
+                if (filterUpdateDue(asset.modifiedMs, now, hours)) staleScripts += script
+            }
+            if (stale.isEmpty() && !servicesDue && staleScripts.isEmpty()) return 0
 
             if (reportToUi && stale.isNotEmpty()) {
                 _loadingMessage.value =
@@ -1131,6 +1144,16 @@ class AdGuardRepository(
                 }
             }
             if (updated > 0) pushListsToEngine()
+            if (staleScripts.isNotEmpty()) {
+                var refreshed = 0
+                for (script in staleScripts) {
+                    if (downloadScriptBody(script).ok) refreshed++
+                }
+                if (refreshed > 0) {
+                    saveScripts()
+                    pushScriptsToCore()
+                }
+            }
             if (servicesDue) {
                 val result = downloadServicesTable()
                 if (reportToUi && result != null && !result.ok) {

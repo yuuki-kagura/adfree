@@ -56,6 +56,10 @@ pub type FxBuildHasher = BuildHasherDefault<FxHasher>;
 
 pub type FxHashMap<K, V> = std::collections::HashMap<K, V, FxBuildHasher>;
 
+/// The set half of the same hasher: a dedupe pass over a million rule lines
+/// cannot afford the default SipHash.
+pub type FxHashSet<K> = std::collections::HashSet<K, FxBuildHasher>;
+
 /// Stable 64 bit hash of a lower-cased domain / label sequence.
 #[inline]
 pub fn hash_str(s: &str) -> u64 {

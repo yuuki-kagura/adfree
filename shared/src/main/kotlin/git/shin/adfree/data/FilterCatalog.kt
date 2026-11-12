@@ -119,6 +119,13 @@ object FilterCatalog {
             group = FilterGroup.ADS,
             url = "https://raw.githubusercontent.com/uBlockOrigin/uAssets/master/filters/quick-fixes.txt",
             homepage = "https://github.com/uBlockOrigin/uAssets",
+            // On out of the box: uBO ships a repair within days of a DOM change
+            // that AdGuard Base lags by weeks on, and a machine that never turns
+            // it on is exactly the machine that sees a broken site for a month.
+            // An empty body is downloaded on the first auto-update pass; until
+            // then the row is on and harmless, because the engine ignores a list
+            // with no file behind it.
+            defaultEnabled = true,
         ),
         CatalogFilter(
             id = "easylist",
