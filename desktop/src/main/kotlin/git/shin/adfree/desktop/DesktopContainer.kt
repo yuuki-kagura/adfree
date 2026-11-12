@@ -8,6 +8,7 @@ import git.shin.adfree.data.AdGuardRepository
 import git.shin.adfree.l10n.L10n
 import git.shin.adfree.platform.LogSink
 import git.shin.adfree.platform.NoopReminders
+import git.shin.adfree.platform.AssistantBridge
 import git.shin.adfree.platform.TunnelControl
 import git.shin.adfree.security.ThreatAnalyzer
 import git.shin.adfree.ui.AdGuardViewModel
@@ -201,6 +202,9 @@ class DesktopContainer(
             locale = { L10n.locale() },
             raiseWindow = { platformHost.raiseWindow() },
             log = { System.err.println("[bridge] $it") },
+            // The core publishes its endpoint here and the helper looks for it
+            // here, so both sides name the same directory the store lives in.
+            dataDir = dataRoot.absolutePath,
         )
     }
 

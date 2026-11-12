@@ -8,73 +8,115 @@
 //! This is the Linux half.
 //!
 //! The host is deliberately dumb. Chrome starts it with a pair of pipes and a
-//! 4-byte little-endian length in front of every JSON message; the running
-//! AdFree window owns the state and the tunnel. So this process is a pipe:
-//! a message from Chrome goes to the app over a Unix socket and the answer
-//! goes back, frame for frame. Nothing here decides anything, which is why the
-//! protocol lives in `AssistantBridge.kt` beside the state it reports.
+//! 4-byte little-endian length in front of every JSON message; the filtering
+//! core inside AdFree owns the state and the tunnel, and the core is the side
+//! that listens (see `src/assistant.rs`). So this process is a pipe: a message
+//! from Chrome goes to the core over the endpoint the core publishes, and the
+//! answer goes back, frame for frame. Nothing here decides anything.
+//!
+//! The endpoint is a Unix socket on Linux — the directory it lives in is the
+//! authorization, because only this user may open it — and loopback plus a
+//! token on Windows, which has no Unix socket to give. Both are found through
+//! the same published address, so the rest of this file does not branch.
 //!
 //! Chrome also passes the calling extension's origin as `argv[1]`; it is not
-//! used, because the socket is the authorization: only a process that can read
-//! this user's runtime directory can connect to it.
+//! used: the endpoint already answers only its owner.
 
 
-/// The host itself. Unix only: it reaches the app over a Unix socket, which is
-/// the authorization as much as the transport, and Windows will need a named
-/// pipe with its own ACL when that build lands.
-#[cfg(unix)]
+/// The host itself: the same code on every platform, because the endpoint
+/// already hides the difference.
 mod host {
 use std::io::{self, Read, Write};
-use std::os::unix::net::UnixStream;
-use std::path::PathBuf;
 use std::time::Duration;
 
-/// Where the app listens. `$XDG_RUNTIME_DIR` is per-user and private, which is
-/// what makes the socket safe to trust; the fallback is for a login without
-/// one (a bare tty, some containers).
-const SOCKET_NAME: &str = "adfree-assistant.sock";
+use adfree_core::assistant::{read_frame, write_frame};
 
-fn socket_candidates() -> Vec<PathBuf> {
+/// Where the app listens: its data directory, the same one the window and the
+/// privileged unit share.
+fn socket_candidates() -> Vec<std::path::PathBuf> {
+    use std::path::PathBuf;
     let mut paths = Vec::new();
+    #[cfg(unix)]
     if let Some(dir) = std::env::var_os("XDG_RUNTIME_DIR") {
         let dir = PathBuf::from(dir);
-        // The app creates the directory it listens in.
-        paths.push(dir.join("adfree").join(SOCKET_NAME));
-        paths.push(dir.join(SOCKET_NAME));
+        // An older window listens in the runtime directory; a socket that is
+        // there is still the app, and refusing it would answer "not running"
+        // to a popup on a machine that is filtering just fine.
+        paths.push(dir.join("adfree").join(adfree_core::assistant::SOCKET_NAME));
+        paths.push(dir.join(adfree_core::assistant::SOCKET_NAME));
+    }
+    if let Some(dir) = std::env::var_os("ADFREE_DATA_DIR") {
+        paths.push(PathBuf::from(dir).join(adfree_core::assistant::SOCKET_NAME));
+    }
+    #[cfg(windows)]
+    if let Some(dir) = std::env::var_os("LOCALAPPDATA") {
+        paths.push(
+            std::path::Path::new(&dir)
+                .join("adfree")
+                .join(adfree_core::assistant::ENDPOINT_FILE),
+        );
     }
     if let Some(home) = std::env::var_os("HOME") {
-        paths.push(PathBuf::from(home).join(".local/share/adfree").join(SOCKET_NAME));
+        paths.push(
+            std::path::Path::new(&home)
+                .join(".local/share/adfree")
+                .join(adfree_core::assistant::SOCKET_NAME),
+        );
+    }
+    #[cfg(windows)]
+    if let Some(profile) = std::env::var_os("USERPROFILE") {
+        paths.push(
+            std::path::Path::new(&profile)
+                .join(".local/share/adfree")
+                .join(adfree_core::assistant::ENDPOINT_FILE),
+        );
     }
     paths
 }
 
-/// Reads one length-prefixed message; `None` at a clean end of input.
-fn read_frame(input: &mut impl Read) -> io::Result<Option<Vec<u8>>> {
-    let mut header = [0u8; 4];
-    let mut filled = 0;
-    while filled < header.len() {
-        match input.read(&mut header[filled..]) {
-            Ok(0) if filled == 0 => return Ok(None),
-            Ok(0) => {
-                return Err(io::Error::new(
-                    io::ErrorKind::UnexpectedEof,
-                    "truncated message length",
-                ))
-            }
-            Ok(n) => filled += n,
-            Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
-            Err(error) => return Err(error),
+/// A live connection to the core, however that platform reaches it.
+trait Wire: Read + Write + Send {}
+impl<T: Read + Write + Send> Wire for T {}
+
+/// Connects, or `None` when nothing is listening.
+#[cfg(unix)]
+fn connect() -> Option<Box<dyn Wire>> {
+    use std::os::unix::net::UnixStream;
+    socket_candidates()
+        .into_iter()
+        .find_map(|path| UnixStream::connect(path).ok())
+        .map(|stream| {
+            // A socket whose peer is alive but busy — rebuilding a filter
+            // engine, starting listeners — must not hold a message for
+            // minutes. The timeout turns a stall into an answer the popup can
+            // show and the user can retry.
+            let _ = stream.set_read_timeout(Some(ANSWER_TIMEOUT));
+            Box::new(stream) as Box<dyn Wire>
+        })
+}
+
+/// Windows reaches the same core over loopback, with the token the core wrote
+/// beside its port: the file's permissions are the first lock, this is the
+/// second.
+#[cfg(windows)]
+fn connect() -> Option<Box<dyn Wire>> {
+    use std::net::TcpStream;
+    for path in socket_candidates() {
+        let Ok(text) = std::fs::read_to_string(&path) else { continue };
+        let mut lines = text.lines();
+        let (Some(address), Some(token)) = (lines.next(), lines.next()) else { continue };
+        let Ok(stream) = address.parse::<std::net::SocketAddr>() else { continue };
+        let Ok(mut stream) = TcpStream::connect_timeout(&stream, Duration::from_secs(2)) else {
+            continue;
+        };
+        let _ = stream.set_read_timeout(Some(ANSWER_TIMEOUT));
+        let hello = serde_json::json!({ "token": token }).to_string();
+        if write_frame(&mut stream, hello.as_bytes()).is_err() {
+            continue;
         }
+        return Some(Box::new(stream));
     }
-    let len = u32::from_le_bytes(header) as usize;
-    // Chrome caps a message from the extension at 64 MiB; anything larger is
-    // not this protocol.
-    if len > 64 * 1024 * 1024 {
-        return Err(io::Error::new(io::ErrorKind::InvalidData, "message too long"));
-    }
-    let mut message = vec![0u8; len];
-    input.read_exact(&mut message)?;
-    Ok(Some(message))
+    None
 }
 
 /// The `id` a request carries, so its answer can be told apart from a push.
@@ -106,7 +148,7 @@ fn response_id(message: &[u8]) -> String {
 /// exactly how a popup ends up waiting forever on a reply that had already
 /// been sent.
 fn forward_until_answer(
-    stream: &mut UnixStream,
+    stream: &mut impl Read,
     output: &mut impl Write,
     request: &[u8],
 ) -> io::Result<()> {
@@ -128,12 +170,6 @@ fn forward_until_answer(
         }
     }
     Err(io::Error::other("the app did not answer"))
-}
-
-fn write_frame(output: &mut impl Write, message: &[u8]) -> io::Result<()> {
-    output.write_all(&(message.len() as u32).to_le_bytes())?;
-    output.write_all(message)?;
-    output.flush()
 }
 
 /// How long the app may take before the extension is told it did not answer.
@@ -181,22 +217,13 @@ fn unavailable(request: &[u8]) -> Vec<u8> {
     let stdout = io::stdout();
     let mut output = stdout.lock();
 
-    let mut connection: Option<UnixStream> = None;
+    let mut connection: Option<Box<dyn Wire>> = None;
     loop {
         let Some(message) = read_frame(&mut input).unwrap_or(None) else {
             return;
         };
         if connection.is_none() {
-            connection = socket_candidates()
-                .into_iter()
-                .find_map(|path| UnixStream::connect(path).ok());
-            // A socket whose peer is alive but busy — rebuilding a filter
-            // engine, starting listeners — must not hold this message for
-            // minutes. The timeout turns a stall into an answer the popup can
-            // show and the user can retry.
-            if let Some(stream) = connection.as_ref() {
-                let _ = stream.set_read_timeout(Some(ANSWER_TIMEOUT));
-            }
+            connection = connect();
         }
         let outcome = match connection.as_mut() {
             Some(stream) => write_frame(stream, &message)
@@ -246,6 +273,7 @@ mod tests {
     /// A push that arrives while a request is in flight must not be taken for
     /// the answer: the answer is the frame that carries the id asked about,
     /// and everything before it is forwarded as it comes.
+    #[cfg(unix)]
     #[test]
     fn a_push_is_forwarded_and_the_answer_is_matched_by_id() {
         use std::os::unix::net::UnixStream;
@@ -288,15 +316,6 @@ mod tests {
 
 }
 
-#[cfg(unix)]
 fn main() {
     host::main()
-}
-
-#[cfg(not(unix))]
-fn main() {
-    // Chrome would have to be told a host exists before it can call one, so a
-    // build without the host is a build that never gets here.
-    eprintln!("adfree-native-host: not implemented on this platform");
-    std::process::exit(1);
 }

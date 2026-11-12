@@ -5,6 +5,12 @@
 //! packet the client can use. This is the path that was dead on device: the
 //! query was forwarded and the resolver answered, but no packet ever came back.
 
+// These tests drive the tun-side engine — epoll, raw descriptors, the
+// `std::os::fd` types — so they are Unix tests by construction. Windows reaches
+// the same filtering through the WinDivert redirect (`src/winnat.rs`), which has
+// its own tests and never sees these packets.
+#![cfg(unix)]
+
 use adfree_core::dns;
 use adfree_core::engine::{core, Config};
 use adfree_core::packet::{self, Packet};

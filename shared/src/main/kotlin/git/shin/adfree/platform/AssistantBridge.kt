@@ -1,23 +1,15 @@
-package git.shin.adfree.desktop
+package git.shin.adfree.platform
 
 import git.shin.adfree.core.CoreEngine
 import git.shin.adfree.data.AdGuardRepository
-import git.shin.adfree.platform.TunnelControl
 import git.shin.adfree.ui.AdGuardIntent
 import git.shin.adfree.ui.AdGuardTab
 import git.shin.adfree.ui.AdGuardViewModel
-import java.io.File
-import java.net.StandardProtocolFamily
-import java.net.UnixDomainSocketAddress
-import java.nio.ByteBuffer
-import java.nio.channels.ServerSocketChannel
-import java.nio.channels.SocketChannel
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.sync.Mutex
-import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.buildJsonObject
@@ -50,6 +42,20 @@ import kotlinx.serialization.json.put
  * `appState` travels on almost every answer — the extension feeds it straight
  * into its own state and throws if the three required flags are missing.
  */
+/**
+ * What the extension's helper process is told.
+ *
+ * The *wire* is the core's (`rust/src/assistant.rs`): one implementation of
+ * Chrome's framing, a Unix socket on Linux and loopback plus a token on
+ * Windows, owned by the process that owns the filtering engine. What stays here
+ * is the other half — the answers, because they come from the window: which tab
+ * is open, whether protection is on, what the user's rules say. Those facts do
+ * not exist in the core, and pushing them into it would mean teaching the engine
+ * about screens.
+ *
+ * So this class is a callback: the core unwraps a frame and asks, and the answer
+ * goes back down the same wire.
+ */
 class AssistantBridge(
     private val engine: CoreEngine,
     private val repository: AdGuardRepository,
@@ -64,32 +70,13 @@ class AssistantBridge(
      */
     private val raiseWindow: () -> Unit = {},
     private val log: (String) -> Unit = {},
-) {
+    /** Where the core publishes its endpoint; the helper finds it there too. */
+    private val dataDir: String,
+) : git.shin.adfree.core.AssistantHost {
 
     private val json = Json { ignoreUnknownKeys = true }
 
-    /** Guards [clients] and each client's write; Chrome may read slowly. */
-    private val clients = mutableListOf<Client>()
-    private val clientsLock = Mutex()
-
-    private var server: ServerSocketChannel? = null
     private var running = false
-
-    private class Client(val channel: SocketChannel) {
-        val writeLock = Mutex()
-    }
-
-    /** Where the socket lives: next to the tray's other per-user runtime files. */
-    fun socketFile(): File {
-        val runtime = System.getenv("XDG_RUNTIME_DIR")
-        val dir = if (runtime.isNullOrBlank()) {
-            File(System.getProperty("user.home"), ".local/share/adfree")
-        } else {
-            File(runtime, "adfree")
-        }
-        dir.mkdirs()
-        return File(dir, SOCKET_NAME)
-    }
 
     /**
      * Starts listening, and keeps the extension's idea of the app current.
@@ -100,15 +87,14 @@ class AssistantBridge(
     fun start(scope: CoroutineScope) {
         if (running) return
         running = true
-        val path = socketFile().toPath()
-        runCatching { listen(path) }.onFailure {
-            log("assistant bridge: cannot listen on $path: ${it.message}")
+        val refused = git.shin.adfree.core.coreAssistantStart(dataDir, this)
+        if (refused != null) {
             running = false
+            log("assistant bridge: not listening: $refused")
             return
         }
-        scope.launch(Dispatchers.IO) { acceptLoop() }
         scope.launch(Dispatchers.IO) { stateTicker() }
-        log("assistant bridge: listening on $path")
+        log("assistant bridge: listening on ${git.shin.adfree.core.coreAssistantAddress()}")
     }
 
     /**
@@ -147,76 +133,27 @@ class AssistantBridge(
         while (!until() && System.currentTimeMillis() < deadline) delay(50)
     }
 
-    /**
-     * Binds the socket, reclaiming it from a previous run.
-     *
-     * A Unix socket is a *file*: when the app is killed the file stays behind
-     * and the next start cannot take the name. Deleting it blindly would be
-     * wrong in the one case that matters — a second instance of the window —
-     * so the file is probed first: a live listener accepts, a corpse refuses,
-     * and only a corpse is removed.
-     */
-    private fun listen(path: java.nio.file.Path) {
-        if (java.nio.file.Files.exists(path)) {
-            val alive = runCatching {
-                SocketChannel.open(UnixDomainSocketAddress.of(path)).use { }
-                true
-            }.getOrDefault(false)
-            if (alive) {
-                throw IllegalStateException("another AdFree window owns the socket")
-            }
-            java.nio.file.Files.deleteIfExists(path)
-        }
-        server = ServerSocketChannel.open(StandardProtocolFamily.UNIX).apply {
-            bind(UnixDomainSocketAddress.of(path))
-        }
-    }
-
     fun stop() {
         running = false
-        // Only a process that is bound owns the path. Deleting unconditionally
-        // would let a window that failed to bind remove the socket of the
-        // instance that did — during the hand-over the unit and the window
-        // share this path for as long as both are alive.
-        val owned = server != null
-        runCatching { server?.close() }
-        server = null
-        if (owned) runCatching { socketFile().delete() }
-        log("assistant bridge: released (owned=$owned)")
+        // The core owns the endpoint, so it decides whether this process is the
+        // one that should remove it: a window that failed to bind must not
+        // delete the address of the instance that did.
+        runCatching { git.shin.adfree.core.coreAssistantStop() }
+        log("assistant bridge: released")
     }
 
-    private suspend fun acceptLoop() {
-        val channel = server ?: return
-        while (running) {
-            val accepted = runCatching { channel.accept() }.getOrNull() ?: continue
-            val client = Client(accepted)
-            clientsLock.withLock { clients.add(client) }
-            CoroutineScope(Dispatchers.IO).launch { serve(client) }
-        }
-    }
-
-    private suspend fun serve(client: Client) {
-        try {
-            while (running) {
-                val request = readFrame(client.channel) ?: return
-                val response = respond(request)
-                client.writeLock.withLock {
-                    writeFrame(client.channel, response.toByteArray())
-                }
-            }
-        } catch (error: Exception) {
-            // A popup that closes mid-answer is normal and not a fault: Chrome
-            // drops the connection when the panel is dismissed.
-            val message = error.message.orEmpty()
-            val wentAway = message.contains("Ống dẫn bị hỏng") ||
-                message.contains("Broken pipe") ||
-                message.contains("Connection reset") ||
-                error is java.io.IOException && message.isBlank()
-            if (!wentAway) log("assistant bridge: connection ended: $message")
-        } finally {
-            clientsLock.withLock { clients.remove(client) }
-            runCatching { client.channel.close() }
-        }
+    /**
+     * One request, answered. Called from the core's listener thread.
+     *
+     * Blocking on purpose: the caller is a thread whose whole job is this
+     * request, and the [settle] wait below is the longest thing that can happen
+     * here. `null` means hang up — a request that is not JSON at all is not a
+     * question worth an answer.
+     */
+    override fun respond(request: kotlin.ByteArray): kotlin.ByteArray? {
+        val text = runCatching { String(request, Charsets.UTF_8) }.getOrNull() ?: return null
+        if (text.isBlank()) return null
+        return runBlocking { answer(text.toByteArray()) }.toByteArray()
     }
 
     /** Writes the extension's own state shape to every connected popup. */
@@ -229,14 +166,12 @@ class AssistantBridge(
             put("requestId", PUSH_REQUEST_ID)
             put("appState", appState())
         }.toString().toByteArray()
-        clientsLock.withLock { clients.toList() }.forEach { client ->
-            runCatching { client.writeLock.withLock { writeFrame(client.channel, message) } }
-        }
+        runCatching { git.shin.adfree.core.coreAssistantPush(message) }
     }
 
     // ------------------------------------------------------------ protocol
 
-    private suspend fun respond(raw: ByteArray): String {
+    private suspend fun answer(raw: ByteArray): String {
         val request = runCatching { json.parseToJsonElement(String(raw)).jsonObject }.getOrNull()
             ?: return error("", "malformed request")
         val id = request["id"]?.jsonPrimitive?.contentOrNull.orEmpty()
@@ -455,8 +390,6 @@ class AssistantBridge(
     }.toString()
 
     companion object {
-        const val SOCKET_NAME: String = "adfree-assistant.sock"
-
         /**
          * What an unsolicited push is labelled with.
          *
@@ -526,33 +459,5 @@ class AssistantBridge(
         /** The API version the published extension speaks. */
         const val API_VERSION: String = "1"
 
-        /**
-         * Chrome's native-messaging framing: a 4-byte **little-endian** length,
-         * then that many bytes of JSON. Byte order is the point — a length read
-         * the other way round is a nonsense size, and dropping the connection
-         * over it would look exactly like the app not running.
-         */
-        internal fun readFrame(channel: SocketChannel): ByteArray? {
-            val header = ByteBuffer.allocate(4)
-            while (header.hasRemaining()) {
-                if (channel.read(header) < 0) return null
-            }
-            header.flip()
-            val length = java.lang.Integer.reverseBytes(header.int)
-            if (length <= 0 || length > 64 * 1024 * 1024) return null
-            val body = ByteBuffer.allocate(length)
-            while (body.hasRemaining()) {
-                if (channel.read(body) < 0) return null
-            }
-            return body.array()
-        }
-
-        internal fun writeFrame(channel: SocketChannel, payload: ByteArray) {
-            val buffer = ByteBuffer.allocate(4 + payload.size)
-            buffer.putInt(java.lang.Integer.reverseBytes(payload.size))
-            buffer.put(payload)
-            buffer.flip()
-            while (buffer.hasRemaining()) channel.write(buffer)
-        }
     }
 }

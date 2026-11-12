@@ -1,8 +1,8 @@
-package git.shin.adfree.desktop
+package git.shin.adfree.platform
 
-import git.shin.adfree.desktop.AssistantBridge.Companion.API_VERSION
-import git.shin.adfree.desktop.AssistantBridge.Companion.filteringPayload
-import git.shin.adfree.desktop.AssistantBridge.Companion.initPayload
+import git.shin.adfree.platform.AssistantBridge.Companion.API_VERSION
+import git.shin.adfree.platform.AssistantBridge.Companion.filteringPayload
+import git.shin.adfree.platform.AssistantBridge.Companion.initPayload
 import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonPrimitive

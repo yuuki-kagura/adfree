@@ -2005,3 +2005,45 @@ pub fn core_set_windivert_dir(path: String) {
     #[cfg(not(windows))]
     let _ = path;
 }
+
+// ---------------------------------------------------------------- assistant
+
+/// Answers one browser-extension request.
+///
+/// The extension's helper process forwards Chrome's frames to this core, which
+/// unwraps them and hands the JSON to the app. The app is the only side that
+/// knows about tabs, the window and the user's own rules, so the decisions stay
+/// there — this trait is the seam, and the wire below is the mechanism.
+#[uniffi::export(with_foreign)]
+pub trait AssistantHost: Send + Sync {
+    /// One request frame's bytes in, one response frame's bytes out. `None`
+    /// means "hang up": nothing is written and the connection closes.
+    fn respond(&self, request: Vec<u8>) -> Option<Vec<u8>>;
+}
+
+/// Starts the assistant's listener and returns the address the helper connects
+/// to — a Unix socket path, or `host:port` on Windows. `Some(reason)` when it
+/// could not start.
+#[uniffi::export]
+pub fn core_assistant_start(data_dir: String, host: Arc<dyn AssistantHost>) -> Option<String> {
+    crate::assistant::start(&data_dir, host).err()
+}
+
+/// Stops the listener and removes its endpoint.
+#[uniffi::export]
+pub fn core_assistant_stop() {
+    crate::assistant::stop();
+}
+
+/// Sends one frame to every open popup — the extension's own state shape,
+/// built by the app. A connection that is gone is forgotten.
+#[uniffi::export]
+pub fn core_assistant_push(message: Vec<u8>) {
+    crate::assistant::push(&message);
+}
+
+/// Where the helper should connect, or `None` while nothing is listening.
+#[uniffi::export]
+pub fn core_assistant_address() -> Option<String> {
+    crate::assistant::address()
+}

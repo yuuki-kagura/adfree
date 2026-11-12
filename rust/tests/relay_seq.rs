@@ -6,6 +6,12 @@
 //! sequence numbers the client sees must advance by exactly what we sent, because
 //! getting that wrong silently stalls the connection.
 
+// The relay's raw descriptor is the Unix one (`-1` means "no socket"), so this
+// file is a Unix test by construction: it exercises the tun-side engine that
+// Android and Linux both use, not the Windows redirect (which never sees these
+// packets).
+#![cfg(unix)]
+
 use adfree_core::mitm::ca::CertificateAuthority;
 use adfree_core::mitm::proxy::ProxySession;
 use adfree_core::mitm::relay::Relay;

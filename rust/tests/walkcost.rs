@@ -16,6 +16,12 @@
 //!
 //! `cargo test --release --test walkcost -- --ignored --nocapture`
 
+// These tests drive the tun-side engine — epoll, raw descriptors, the
+// `std::os::fd` types — so they are Unix tests by construction. Windows reaches
+// the same filtering through the WinDivert redirect (`src/winnat.rs`), which has
+// its own tests and never sees these packets.
+#![cfg(unix)]
+
 use std::os::fd::RawFd;
 use std::time::Instant;
 

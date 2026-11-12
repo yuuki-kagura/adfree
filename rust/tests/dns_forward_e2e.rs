@@ -6,6 +6,12 @@
 //! garbage; if `handle_reply` then tries to parse the reply as if it were the
 //! original packet, nothing is ever answered and every lookup fails.
 
+// These tests drive the tun-side engine — epoll, raw descriptors, the
+// `std::os::fd` types — so they are Unix tests by construction. Windows reaches
+// the same filtering through the WinDivert redirect (`src/winnat.rs`), which has
+// its own tests and never sees these packets.
+#![cfg(unix)]
+
 use adfree_core::dns::{self, BlockMode};
 use adfree_core::engine::{core, Core};
 use adfree_core::packet::{self, Packet, PROTO_UDP};

@@ -6,6 +6,12 @@
 //! where handing over a bare DNS message instead of the IP packet made the reply
 //! impossible to rewrite.
 
+// These tests drive the tun-side engine — epoll, raw descriptors, the
+// `std::os::fd` types — so they are Unix tests by construction. Windows reaches
+// the same filtering through the WinDivert redirect (`src/winnat.rs`), which has
+// its own tests and never sees these packets.
+#![cfg(unix)]
+
 use adfree_core::packet;
 use adfree_core::upstream::Upstream;
 use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};

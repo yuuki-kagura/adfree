@@ -25,6 +25,9 @@ pub mod winnat;
 /// shows. A no-op with a sentence elsewhere.
 pub mod wredirect;
 pub mod api;
+/// The browser extension's wire: Chrome's framing, the endpoint, and the
+/// callback that answers it.
+pub mod assistant;
 mod appmask;
 pub mod assets;
 pub mod conntrack;

@@ -33,7 +33,7 @@ fi
 log=$(mktemp)
 trap 'rm -f "$log"' EXIT
 
-if cargo check --manifest-path rust/Cargo.toml --target "$TARGET" --lib >"$log" 2>&1; then
+if cargo check --manifest-path rust/Cargo.toml --target "$TARGET" --all-targets >"$log" 2>&1; then
     echo "core compiles for $TARGET"
     exit 0
 fi
