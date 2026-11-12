@@ -92,6 +92,46 @@ Sources:
 - <https://github.com/AdguardTeam/AdGuardForWindows/releases> (v8.0.0, v8.0.4, v8.0.0-beta-5)
 - <https://github.com/basil00/WinDivert> (driver, license)
 
+## Is there a whole-system path that does not cost a signing certificate?
+
+AdGuard pays the EV-certificate + Dev Portal price; the question worth asking is
+whether we have to. Four options, with what was actually verified:
+
+**1. Bundle WinDivert and use its already-signed driver — no certificate needed.**
+WinDivert's own documentation (§2.1 *Driver Signing*): "If you built your own
+`WinDivert32.sys` / `WinDivert64.sys` drivers, they must be digitally signed…
+Note that the **pre-built drivers from the official WinDivert distribution are
+already digitally signed**." Checked on `WinDivert64.sys` from release v2.2.2-A
+(94 144 bytes): one signer,
+`C=CN, O=成都密思听科技有限公司`, chained to `Sectigo Public Code Signing CA EV R36`,
+carrying an RFC 3161 timestamp (Sectigo time-stamping signer #3). The signature
+is therefore in place and timestamped; no EV certificate of our own is involved.
+Costs: the driver installs and runs only for an Administrator process, it is
+LGPLv3 (redistribute the `.dll`/`.sys` unmodified with the licence, which is
+allowed), the trust prompt names WinDivert rather than AdFree, and security
+software does flag it — open issues #401 and #411 in the WinDivert tracker are
+exactly that ("blocked from loading by some security software", "Defender
+quarantines official WinDivert 2.2.2-A ZIP"). Not verified here: whether a given
+Secure Boot machine loads it, since that can only be answered on Windows.
+
+**2. No driver at all: system proxy + own DNS + hosts file + QUIC firewall rule.**
+Free, ships as an MSI, and covers every browser and every app that resolves
+through the system resolver. Misses apps with their own DoH/proxy stack.
+
+**3. User-mode Winsock injection (the Proxifier approach).** A DLL hooked into
+each process redirecting `connect`/`WSASocket`. No kernel driver, so only
+ordinary code signing applies (SignPath Foundation issues free certificates to
+open-source projects). Fragile by nature: AV flags injection, protected and
+64-bit-only processes are missed, and anything not using Winsock bypasses it.
+
+**4. Test-signing mode.** Free and useless for distribution: the user has to
+disable driver signature enforcement, which on modern Windows means disabling
+Secure Boot.
+
+Recommended order stays: (2) first, because it is days of work and covers the
+browsers; then (1) if whole-system coverage is wanted, since it is the only
+free path to it, with the AV-false-positive risk accepted and documented.
+
 ## Decision 2 — where the portable socket layer lives
 
 Introduce `rust/src/sys/` with two implementations behind `cfg`:
