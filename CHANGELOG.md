@@ -1,3 +1,10 @@
+## [1.7.2](https://github.com/yuuki-kagura/adfree/compare/v1.7.1...v1.7.2) (2026-11-12)
+
+
+### Bug Fixes
+
+* **core:** name the process behind a DNS row, or the resolver that holds it ([ab2e7ed](https://github.com/yuuki-kagura/adfree/commit/ab2e7edf10efd11a49c06b2c6f0a1507fd72f7c6))
+
 ## [1.7.1](https://github.com/yuuki-kagura/adfree/compare/v1.7.0...v1.7.1) (2026-11-12)
 
 
