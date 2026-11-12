@@ -2059,7 +2059,7 @@ impl Core {
     /// One 8-byte counter write on the eventfd. Ignored when creation failed:
     /// the loop's timeout cadence still services everything, just later.
     pub(crate) fn wake(&self) {
-        if self.wake_fd < 0 {
+        if !crate::sys::fd::fd_ok(self.wake_fd) {
             return;
         }
         let one: u64 = 1;
@@ -2074,7 +2074,7 @@ impl Core {
 
     /// Asks the setup worker to take the queued flows now.
     fn poke_setup(&self) {
-        if self.setup_fd < 0 {
+        if !crate::sys::fd::fd_ok(self.setup_fd) {
             return;
         }
         let one: u64 = 1;
@@ -2088,7 +2088,7 @@ impl Core {
     }
 
     fn drain_setup_wake(&self) {
-        if self.setup_fd < 0 {
+        if !crate::sys::fd::fd_ok(self.setup_fd) {
             return;
         }
         let mut buf = [0u8; 8];
@@ -2106,7 +2106,7 @@ impl Core {
     /// An eventfd stays readable while its counter is positive: without this
     /// every later poll would return immediately.
     fn drain_wake(&self) {
-        if self.wake_fd < 0 {
+        if !crate::sys::fd::fd_ok(self.wake_fd) {
             return;
         }
         let mut buf = [0u8; 8];
@@ -2682,7 +2682,7 @@ impl Core {
                 0,
             )
         };
-        if fd < 0 {
+        if !crate::sys::fd::fd_ok(fd) {
             crate::logbuf::push_error("quic: upstream socket() failed");
             return None;
         }
@@ -3016,7 +3016,7 @@ impl Core {
             // yet; the install closes its write side once the socket exists.
             relay.peer_fd
         };
-        if fd < 0 {
+        if !crate::sys::fd::fd_ok(fd) {
             return;
         }
         unsafe {
@@ -3325,14 +3325,14 @@ impl Core {
                 // The flow was retired (client reset, idle expiry) while its
                 // half was being built: the descriptor is ours to close.
                 drop(guard);
-                if peer_fd >= 0 {
+                if crate::sys::fd::fd_ok(peer_fd) {
                     unsafe { libc::close(peer_fd) };
                 }
                 return;
             };
             if relay.closed || relay.flow.my_seq != my_seq {
                 drop(guard);
-                if peer_fd >= 0 {
+                if crate::sys::fd::fd_ok(peer_fd) {
                     unsafe { libc::close(peer_fd) };
                 }
                 return;
@@ -3451,7 +3451,7 @@ impl Core {
         };
         let fd =
             unsafe { libc::socket(family, kind | libc::SOCK_NONBLOCK | libc::SOCK_CLOEXEC, 0) };
-        if fd < 0 {
+        if !crate::sys::fd::fd_ok(fd) {
             crate::logbuf::push_error("relay: socket() failed");
             return None;
         }
@@ -7719,7 +7719,7 @@ mod tests {
                 .lock()
                 .unwrap()
                 .get(40000)
-                .is_some_and(|r| r.closed && r.peer_fd < 0),
+                .is_some_and(|r| r.closed && !crate::sys::fd::fd_ok(r.peer_fd)),
             "no peer socket may be opened"
         );
         let reset = other.take_outbox();
@@ -7748,7 +7748,7 @@ mod tests {
                 .lock()
                 .unwrap()
                 .get(40000)
-                .is_some_and(|r| r.closed && r.peer_fd < 0),
+                .is_some_and(|r| r.closed && !crate::sys::fd::fd_ok(r.peer_fd)),
             "the inherited default must cut the flow"
         );
     }
@@ -7818,7 +7818,7 @@ mod tests {
                 .lock()
                 .unwrap()
                 .get(40000)
-                .is_some_and(|r| r.closed && r.peer_fd < 0),
+                .is_some_and(|r| r.closed && !crate::sys::fd::fd_ok(r.peer_fd)),
             "roaming must cut the flow"
         );
     }

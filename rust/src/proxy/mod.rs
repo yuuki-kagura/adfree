@@ -510,7 +510,7 @@ pub(crate) fn dial_marked(addr: std::net::SocketAddr) -> Option<std::net::TcpStr
 fn dial_fd(addr: std::net::SocketAddr) -> Result<RawFd, egress::Failure> {
     let domain = if addr.is_ipv4() { libc::AF_INET } else { libc::AF_INET6 };
     let fd = unsafe { libc::socket(domain, libc::SOCK_STREAM | libc::SOCK_NONBLOCK | libc::SOCK_CLOEXEC, 0) };
-    if fd < 0 {
+    if !crate::sys::fd::fd_ok(fd) {
         // No such family on this machine at all.
         return Err(egress::Failure::from_errno(last_errno()));
     }

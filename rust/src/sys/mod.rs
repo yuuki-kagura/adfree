@@ -17,6 +17,10 @@ mod unix;
 #[cfg(windows)]
 mod windows;
 
+/// The Windows redirect: WinDivert loaded at run time, driven by `winnat`.
+#[cfg(windows)]
+pub mod windivert;
+
 /// The `libc` the proxy sees: the real one on Unix, and a Winsock-backed
 /// namesake on Windows (`sys::winlibc`). Modules say `use crate::sys::libc;`
 /// once instead of `extern crate libc`, so both platforms compile the same

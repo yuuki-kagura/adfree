@@ -227,7 +227,7 @@ impl WaitSet {
     ) {
         self.stamp += 1;
         self.stamped = 0;
-        if wake_fd >= 0 {
+        if crate::sys::fd::fd_ok(wake_fd) {
             self.reconcile(wake_fd, WaitEntry::Wake);
         }
         for fd in dns {
@@ -647,7 +647,7 @@ mod tests {
             .map(|_| unsafe { libc::eventfd(0, libc::EFD_CLOEXEC) })
             .collect();
         assert!(
-            fds.iter().all(|fd| *fd >= 0),
+            fds.iter().all(|fd| crate::sys::fd::fd_ok(*fd)),
             "eventfd ran out of descriptors: {}",
             std::io::Error::last_os_error()
         );

@@ -10,10 +10,21 @@
 //! Every path written here is fixed. The only variable interpolated into a
 //! shell command is the certificate's subject hash (eight hex digits) and the
 //! PEM itself, which travels through a quoted heredoc.
+//!
+//! A Windows build keeps these helpers compiled — the Android and Linux stores
+//! are still part of the crate — but reaches none of them, which is why the
+//! dead-code lint is silenced for that target alone.
 
+#![cfg_attr(windows, allow(dead_code))]
+
+#[cfg(unix)]
 use std::fs;
+#[cfg(unix)]
+#[cfg(unix)]
 use std::path::Path;
+#[cfg(unix)]
 use std::process::{Command, Stdio};
+#[cfg(unix)]
 use std::time::{Duration, Instant};
 
 /// Where Android stores system CAs before the Conscrypt APEX.
@@ -30,7 +41,7 @@ const ANDROID_STAGE: &str = "/data/local/tmp/adfree_ca";
 const MAGISK_MODULE_DIR: &str = "/data/adb/modules/adfree_ca";
 /// File name the certificate keeps in whichever distro anchor directory this
 /// machine has; the directory itself is a `LinuxStore`.
-#[cfg(any(target_os = "linux", test))]
+#[cfg(all(unix, any(target_os = "linux", test)))]
 const LINUX_CA_NAME: &str = "adfree-ca.crt";
 
 /// One distro's answer: the directory an admin anchor belongs in, and the
@@ -38,7 +49,7 @@ const LINUX_CA_NAME: &str = "adfree-ca.crt";
 /// these, so guessing the Debian layout — as this file used to — means both
 /// writing somewhere that does not exist and never seeing a CA that is
 /// installed correctly.
-#[cfg(any(target_os = "linux", test))]
+#[cfg(all(unix, any(target_os = "linux", test)))]
 struct LinuxStore {
     anchors: &'static str,
     /// Where the refresh command may live, in the order distros ship it.
@@ -46,7 +57,7 @@ struct LinuxStore {
     refresh_args: &'static [&'static str],
 }
 
-#[cfg(any(target_os = "linux", test))]
+#[cfg(all(unix, any(target_os = "linux", test)))]
 const LINUX_STORES: [LinuxStore; 3] = [
     LinuxStore {
         anchors: "/usr/local/share/ca-certificates",
@@ -68,10 +79,15 @@ const LINUX_STORES: [LinuxStore; 3] = [
 /// `su` may show a consent dialog, so the first probe can take a while.
 #[cfg(target_os = "android")]
 use crate::sys::libc;
+/// How long `su` gets to prove it grants root on Android. Used only there: the
+/// desktop probes `sudo` through the platform layer instead.
+#[cfg(target_os = "android")]
 const PROBE_TIMEOUT: Duration = Duration::from_secs(20);
 /// Cheap lookups (`command -v`, `[ -d ... ]`).
+#[cfg(unix)]
 const SHORT_TIMEOUT: Duration = Duration::from_secs(3);
 /// Writing the module or the live overlay over `su`.
+#[cfg(unix)]
 const ROOT_TIMEOUT: Duration = Duration::from_secs(60);
 
 /// Why the root-trust status is what it is. The UI owns the wording; this
@@ -270,6 +286,7 @@ fn der_tlv(input: &[u8]) -> Option<(u8, usize, &[u8])> {
     Some((tag, header, value))
 }
 
+#[cfg(unix)]
 fn pem_from_der(der: &[u8]) -> String {
     use base64::Engine as _;
     let body = base64::engine::general_purpose::STANDARD.encode(der);
@@ -284,6 +301,7 @@ fn pem_from_der(der: &[u8]) -> String {
 }
 
 /// True when `pem` holds exactly `der`.
+#[cfg(unix)]
 fn cert_matches_file(pem: &[u8], der: &[u8]) -> bool {
     use base64::Engine as _;
     let text = String::from_utf8_lossy(pem);
@@ -312,6 +330,7 @@ fn cert_installed(der: &[u8]) -> bool {
 
 /// Runs a command with a deadline. `su` may wait on a consent dialog, and a
 /// denied probe must not wedge the caller's IO thread forever.
+#[cfg(unix)]
 fn run_with_timeout(
     program: &str,
     args: &[&str],
@@ -660,13 +679,13 @@ fn shell_single_quote(value: &str) -> String {
 
 /// `path` joined under `root` with its leading slash dropped, so one set of
 /// absolute paths serves both the real system and a test's fake tree.
-#[cfg(any(target_os = "linux", test))]
+#[cfg(all(unix, any(target_os = "linux", test)))]
 fn under(root: &Path, path: &str) -> std::path::PathBuf {
     root.join(path.strip_prefix('/').unwrap_or(path))
 }
 
 /// The distro store this machine has, searched for under `root`.
-#[cfg(any(target_os = "linux", test))]
+#[cfg(all(unix, any(target_os = "linux", test)))]
 fn linux_store_under(root: &Path) -> Option<&'static LinuxStore> {
     LINUX_STORES.iter().find(|store| {
         under(root, store.anchors).is_dir()
@@ -682,14 +701,14 @@ fn linux_store() -> Option<&'static LinuxStore> {
 /// Where the certificate is written for this store. Detection reads the same
 /// function, which is the whole point: an install that lands somewhere the
 /// check does not look is a switch that can never come on.
-#[cfg(any(target_os = "linux", test))]
+#[cfg(all(unix, any(target_os = "linux", test)))]
 fn anchor_target(store: &LinuxStore, root: &Path) -> std::path::PathBuf {
     under(root, store.anchors).join(LINUX_CA_NAME)
 }
 
 /// Every anchor path the certificate could be living at, so a CA placed by
 /// hand in another family's directory is still recognised.
-#[cfg(any(target_os = "linux", test))]
+#[cfg(all(unix, any(target_os = "linux", test)))]
 fn anchor_targets(root: &Path) -> Vec<std::path::PathBuf> {
     LINUX_STORES
         .iter()
@@ -868,7 +887,7 @@ fn linux_remove(der: &[u8]) -> RootTrust {
 
 // ---------------------------------------------------------------------- tests
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 mod tests {
     use super::*;
     use base64::Engine as _;

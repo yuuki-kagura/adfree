@@ -237,7 +237,7 @@ pub fn worker_loop(rx: Receiver<SecureJob>, replies: Sender<SecureReply>, wake_f
         {
             return;
         }
-        if wake_fd >= 0 {
+        if crate::sys::fd::fd_ok(wake_fd) {
             let one: u64 = 1;
             unsafe {
                 libc::write(
@@ -497,7 +497,7 @@ fn connect(
 ) -> Result<TcpStream, SecureError> {
     let (family, storage, length) = sockaddr(address);
     let fd = unsafe { libc::socket(family, libc::SOCK_STREAM | libc::SOCK_CLOEXEC, 0) };
-    if fd < 0 {
+    if !crate::sys::fd::fd_ok(fd) {
         return Err(SecureError::Connect(
             std::io::Error::last_os_error().to_string(),
         ));

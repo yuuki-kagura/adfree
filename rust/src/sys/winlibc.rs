@@ -21,7 +21,7 @@
 //! Everything here is a thin wrapper. Nothing is emulated on top of something
 //! else, except `poll`, which is a real `WSAPoll`.
 
-#![allow(non_camel_case_types, dead_code)]
+#![allow(non_camel_case_types, non_snake_case, dead_code)]
 
 use std::io;
 
@@ -293,7 +293,7 @@ pub fn last_error() -> io::Error {
     io::Error::from_raw_os_error(unsafe { ws::WSAGetLastError() })
 }
 
-pub fn socket(af: c_int, ty: c_int, proto: c_int) -> RawFd {
+pub unsafe fn socket(af: c_int, ty: c_int, proto: c_int) -> RawFd {
     startup();
     let nonblock = ty & SOCK_NONBLOCK != 0;
     let ty = ty & !(SOCK_NONBLOCK | SOCK_CLOEXEC);
@@ -309,46 +309,48 @@ pub fn socket(af: c_int, ty: c_int, proto: c_int) -> RawFd {
     };
     let fd = fd as RawFd;
     if !fd_invalid(fd) && nonblock {
-        fcntl(fd, F_SETFL, O_NONBLOCK);
+        unsafe {
+            fcntl(fd, F_SETFL, O_NONBLOCK);
+        }
     }
     fd
 }
 
-pub fn bind(fd: RawFd, addr: *const sockaddr, len: socklen_t) -> c_int {
+pub unsafe fn bind(fd: RawFd, addr: *const sockaddr, len: socklen_t) -> c_int {
     unsafe { ws::bind(fd as usize, addr as *const ws::SOCKADDR, len) }
 }
 
-pub fn listen(fd: RawFd, backlog: c_int) -> c_int {
+pub unsafe fn listen(fd: RawFd, backlog: c_int) -> c_int {
     unsafe { ws::listen(fd as usize, backlog) }
 }
 
-pub fn accept(fd: RawFd, addr: *mut sockaddr, len: *mut socklen_t) -> RawFd {
+pub unsafe fn accept(fd: RawFd, addr: *mut sockaddr, len: *mut socklen_t) -> RawFd {
     unsafe { ws::accept(fd as usize, addr as *mut ws::SOCKADDR, len) as RawFd }
 }
 
-pub fn connect(fd: RawFd, addr: *const sockaddr, len: socklen_t) -> c_int {
+pub unsafe fn connect(fd: RawFd, addr: *const sockaddr, len: socklen_t) -> c_int {
     unsafe { ws::connect(fd as usize, addr as *const ws::SOCKADDR, len) }
 }
 
 /// Closes a socket. Named `close` because that is what the proxy calls: on
 /// Windows there is one kind of descriptor here, and it is always a socket.
-pub fn close(fd: RawFd) -> c_int {
+pub unsafe fn close(fd: RawFd) -> c_int {
     unsafe { ws::closesocket(fd as usize) }
 }
 
-pub fn shutdown(fd: RawFd, how: c_int) -> c_int {
+pub unsafe fn shutdown(fd: RawFd, how: c_int) -> c_int {
     unsafe { ws::shutdown(fd as usize, how) }
 }
 
-pub fn recv(fd: RawFd, buf: *mut c_void, len: size_t, flags: c_int) -> ssize_t {
+pub unsafe fn recv(fd: RawFd, buf: *mut c_void, len: size_t, flags: c_int) -> ssize_t {
     unsafe { ws::recv(fd as usize, buf as *mut u8, len as c_int, flags) as ssize_t }
 }
 
-pub fn send(fd: RawFd, buf: *const c_void, len: size_t, flags: c_int) -> ssize_t {
+pub unsafe fn send(fd: RawFd, buf: *const c_void, len: size_t, flags: c_int) -> ssize_t {
     unsafe { ws::send(fd as usize, buf as *const u8, len as c_int, flags) as ssize_t }
 }
 
-pub fn recvfrom(
+pub unsafe fn recvfrom(
     fd: RawFd,
     buf: *mut c_void,
     len: size_t,
@@ -367,7 +369,7 @@ pub fn recvfrom(
     }
 }
 
-pub fn sendto(
+pub unsafe fn sendto(
     fd: RawFd,
     buf: *const c_void,
     len: size_t,
@@ -386,15 +388,15 @@ pub fn sendto(
     }
 }
 
-pub fn getsockname(fd: RawFd, addr: *mut sockaddr, len: *mut socklen_t) -> c_int {
+pub unsafe fn getsockname(fd: RawFd, addr: *mut sockaddr, len: *mut socklen_t) -> c_int {
     unsafe { ws::getsockname(fd as usize, addr as *mut ws::SOCKADDR, len) }
 }
 
-pub fn getpeername(fd: RawFd, addr: *mut sockaddr, len: *mut socklen_t) -> c_int {
+pub unsafe fn getpeername(fd: RawFd, addr: *mut sockaddr, len: *mut socklen_t) -> c_int {
     unsafe { ws::getpeername(fd as usize, addr as *mut ws::SOCKADDR, len) }
 }
 
-pub fn setsockopt(
+pub unsafe fn setsockopt(
     fd: RawFd,
     level: c_int,
     name: c_int,
@@ -404,7 +406,7 @@ pub fn setsockopt(
     unsafe { ws::setsockopt(fd as usize, level, name, val as *const u8, len) }
 }
 
-pub fn getsockopt(
+pub unsafe fn getsockopt(
     fd: RawFd,
     level: c_int,
     name: c_int,
@@ -420,7 +422,7 @@ pub fn getsockopt(
 /// `POLLIN`/`POLLOUT` bits in libc's numbering, while Winsock wants
 /// `POLLRDNORM`/`POLLWRNORM` and reports `POLLHUP` only as a closed socket
 /// (`POLLNVAL`-ish), so hang-ups are folded out of errors and end-of-stream.
-pub fn poll(fds: *mut pollfd, nfds: nfds_t, timeout_ms: c_int) -> c_int {
+pub unsafe fn poll(fds: *mut pollfd, nfds: nfds_t, timeout_ms: c_int) -> c_int {
     if nfds == 0 {
         std::thread::sleep(std::time::Duration::from_millis(timeout_ms.max(0) as u64));
         return 0;
@@ -484,7 +486,7 @@ pub fn poll(fds: *mut pollfd, nfds: nfds_t, timeout_ms: c_int) -> c_int {
 }
 
 /// `ioctl(FIONBIO)`, which is what `O_NONBLOCK` means here.
-pub fn fcntl(fd: RawFd, cmd: c_int, arg: c_int) -> c_int {
+pub unsafe fn fcntl(fd: RawFd, cmd: c_int, arg: c_int) -> c_int {
     if cmd != F_SETFL {
         return 0;
     }
@@ -492,11 +494,11 @@ pub fn fcntl(fd: RawFd, cmd: c_int, arg: c_int) -> c_int {
     unsafe { ws::ioctlsocket(fd as usize, ws::FIONBIO, &mut mode) }
 }
 
-pub fn read(fd: RawFd, buf: *mut c_void, len: size_t) -> ssize_t {
+pub unsafe fn read(fd: RawFd, buf: *mut c_void, len: size_t) -> ssize_t {
     recv(fd, buf, len, 0)
 }
 
-pub fn write(fd: RawFd, buf: *const c_void, len: size_t) -> ssize_t {
+pub unsafe fn write(fd: RawFd, buf: *const c_void, len: size_t) -> ssize_t {
     send(fd, buf, len, 0)
 }
 
@@ -565,19 +567,19 @@ pub unsafe fn CMSG_DATA(cmsg: *const cmsghdr) -> *mut u8 {
     (cmsg as *mut u8).add(std::mem::size_of::<cmsghdr>())
 }
 
-pub const fn CMSG_LEN(len: u32) -> u32 {
+pub unsafe fn CMSG_LEN(len: u32) -> u32 {
     (std::mem::size_of::<cmsghdr>() as u32).wrapping_add(len)
 }
 
-pub const fn CMSG_SPACE(len: u32) -> u32 {
+pub unsafe fn CMSG_SPACE(len: u32) -> u32 {
     CMSG_LEN(len)
 }
 
-pub fn recvmsg(_fd: RawFd, _msg: *mut msghdr, _flags: c_int) -> ssize_t {
+pub unsafe fn recvmsg(_fd: RawFd, _msg: *mut msghdr, _flags: c_int) -> ssize_t {
     -1
 }
 
-pub fn sendmsg(_fd: RawFd, _msg: *const msghdr, _flags: c_int) -> ssize_t {
+pub unsafe fn sendmsg(_fd: RawFd, _msg: *const msghdr, _flags: c_int) -> ssize_t {
     -1
 }
 
@@ -595,11 +597,11 @@ pub struct ifaddrs {
     pub ifa_data: *mut c_void,
 }
 
-pub fn getifaddrs(_out: *mut *mut ifaddrs) -> c_int {
+pub unsafe fn getifaddrs(_out: *mut *mut ifaddrs) -> c_int {
     -1
 }
 
-pub fn freeifaddrs(_list: *mut ifaddrs) {}
+pub unsafe fn freeifaddrs(_list: *mut ifaddrs) {}
 
 /// Who is asking. The proxy uses the answer to decide whether it may set up the
 /// redirect layout; on Windows that decision is made by the elevation check, and
@@ -608,7 +610,7 @@ pub fn geteuid() -> u32 {
     0
 }
 
-pub fn clock_gettime(_clock: c_int, _ts: *mut timespec) -> c_int {
+pub unsafe fn clock_gettime(_clock: c_int, _ts: *mut timespec) -> c_int {
     0
 }
 
@@ -622,7 +624,7 @@ pub fn clock_gettime(_clock: c_int, _ts: *mut timespec) -> c_int {
 // the other — which is exactly what the wake channels ask for.
 
 fn loopback_self() -> RawFd {
-    let fd = socket(AF_INET, SOCK_DGRAM, 0);
+    let fd = unsafe { socket(AF_INET, SOCK_DGRAM, 0) };
     if fd_invalid(fd) {
         return fd;
     }
@@ -633,14 +635,18 @@ fn loopback_self() -> RawFd {
         sin_zero: [0; 8],
     };
     let len = std::mem::size_of::<sockaddr_in>() as socklen_t;
-    if bind(fd, &addr as *const _ as *const sockaddr, len) != 0 {
-        close(fd);
+    if unsafe { bind(fd, &addr as *const _ as *const sockaddr, len) } != 0 {
+        unsafe {
+            close(fd);
+        }
         return INVALID_SOCKET;
     }
     let mut got: sockaddr_storage = unsafe { std::mem::zeroed() };
     let mut got_len = std::mem::size_of::<sockaddr_storage>() as socklen_t;
-    if getsockname(fd, &mut got as *mut _ as *mut sockaddr, &mut got_len) != 0 {
-        close(fd);
+    if unsafe { getsockname(fd, &mut got as *mut _ as *mut sockaddr, &mut got_len) } != 0 {
+        unsafe {
+            close(fd);
+        }
         return INVALID_SOCKET;
     }
     // Loopback plus an ephemeral port, so it can be connected to itself.
@@ -657,11 +663,15 @@ fn loopback_self() -> RawFd {
     };
     target.sin_family = AF_INET as sa_family_t;
     target.sin_addr = in_addr { s_addr: 0x0100_007f };
-    if connect(fd, &target as *const _ as *const sockaddr, len) != 0 {
-        close(fd);
+    if unsafe { connect(fd, &target as *const _ as *const sockaddr, len) } != 0 {
+        unsafe {
+            close(fd);
+        }
         return INVALID_SOCKET;
     }
-    fcntl(fd, F_SETFL, O_NONBLOCK);
+    unsafe {
+        fcntl(fd, F_SETFL, O_NONBLOCK);
+    }
     fd
 }
 
@@ -687,16 +697,18 @@ fn duplicate(fd: RawFd) -> RawFd {
     dup as RawFd
 }
 
-pub fn eventfd(initval: u32, _flags: c_int) -> RawFd {
+pub unsafe fn eventfd(initval: u32, _flags: c_int) -> RawFd {
     let fd = loopback_self();
     if !fd_invalid(fd) && initval != 0 {
         let bytes = initval.to_ne_bytes();
-        send(fd, bytes.as_ptr() as *const c_void, 8, 0);
+        unsafe {
+            send(fd, bytes.as_ptr() as *const c_void, 8, 0);
+        }
     }
     fd
 }
 
-pub fn socketpair(
+pub unsafe fn socketpair(
     _domain: c_int,
     _ty: c_int,
     _proto: c_int,
@@ -708,7 +720,9 @@ pub fn socketpair(
     }
     let b = duplicate(a);
     if fd_invalid(b) {
-        close(a);
+        unsafe {
+            close(a);
+        }
         return -1;
     }
     unsafe {
@@ -718,6 +732,6 @@ pub fn socketpair(
     0
 }
 
-pub fn pipe(out: *mut RawFd) -> c_int {
+pub unsafe fn pipe(out: *mut RawFd) -> c_int {
     socketpair(AF_UNIX, SOCK_SEQPACKET, 0, out)
 }

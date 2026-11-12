@@ -322,7 +322,7 @@ fn port_of(field: &str) -> Option<u16> {
     u16::from_str_radix(field.rsplit(':').next()?, 16).ok()
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 mod tests {
     use super::*;
     use std::net::TcpListener;

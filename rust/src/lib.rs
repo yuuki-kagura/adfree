@@ -21,6 +21,9 @@ pub mod sys;
 /// packet surgery is the same bytes on either platform, only the driver that
 /// delivers them differs.
 pub mod winnat;
+/// The Windows redirect's lifecycle: start, stop, and the counters the tray
+/// shows. A no-op with a sentence elsewhere.
+pub mod wredirect;
 pub mod api;
 mod appmask;
 pub mod assets;

@@ -87,7 +87,7 @@ impl Drop for UdpFlow {
         }
         // The engine created this descriptor (and had the app protect it), so
         // retiring the mapping must close it. -1 is a test sentinel.
-        if self.fd >= 0 {
+        if crate::sys::fd::fd_ok(self.fd) {
             unsafe {
                 libc::close(self.fd);
             }
@@ -189,7 +189,7 @@ impl UdpNat {
     pub fn poll_snapshot(&self) -> Vec<UdpPoll> {
         self.flows
             .values()
-            .filter(|f| !f.retire && f.fd >= 0)
+            .filter(|f| !f.retire && crate::sys::fd::fd_ok(f.fd))
             .map(|f| UdpPoll {
                 id: f.id,
                 key: f.key,

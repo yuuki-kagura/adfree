@@ -70,7 +70,7 @@ fn peer_socket(
         IpKey::V6(_) => libc::AF_INET6,
     };
     let fd = unsafe { libc::socket(family, kind | libc::SOCK_NONBLOCK | libc::SOCK_CLOEXEC, 0) };
-    if fd < 0 {
+    if !crate::sys::fd::fd_ok(fd) {
         return None;
     }
     if !protector.protect(fd as i32) {
@@ -406,7 +406,7 @@ struct OwnedFd(RawFd);
 
 impl Drop for OwnedFd {
     fn drop(&mut self) {
-        if self.0 >= 0 {
+        if crate::sys::fd::fd_ok(self.0) {
             unsafe { libc::close(self.0) };
         }
     }

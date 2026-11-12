@@ -609,7 +609,7 @@ impl Drop for Relay {
         }
         // The engine created this descriptor for us (and had the app protect
         // it), so retiring the relay must close it. -1 is the test sentinel.
-        if self.peer_fd >= 0 {
+        if crate::sys::fd::fd_ok(self.peer_fd) {
             unsafe {
                 libc::close(self.peer_fd);
             }
@@ -697,7 +697,7 @@ impl RelayTable {
     pub fn poll_snapshot(&self) -> Vec<RelayPoll> {
         self.relays
             .values()
-            .filter(|r| !r.closed && r.peer_fd >= 0)
+            .filter(|r| !r.closed && crate::sys::fd::fd_ok(r.peer_fd))
             .map(|r| {
                 // During SOCKS5 negotiation only handshake output deserves a
                 // writable wake: asking for POLLOUT because app bytes are
@@ -872,7 +872,7 @@ mod tests {
         // A relay with no peer socket is not in the snapshot at all, so this
         // test needs a real descriptor to talk about.
         let peer = unsafe { libc::socket(libc::AF_INET, libc::SOCK_STREAM, 0) };
-        assert!(peer >= 0, "socket: {}", std::io::Error::last_os_error());
+        assert!(crate::sys::fd::fd_ok(peer), "socket: {}", std::io::Error::last_os_error());
         r.attach_peer(peer);
         r.queue_to_client(&vec![0u8; MAX_PENDING_TO_CLIENT - 1]);
         assert!(!r.client_paused(), "the cap itself has not been reached");

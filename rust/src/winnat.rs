@@ -322,7 +322,7 @@ fn write_endpoint(raw: &mut [u8], shape: Shape, ep: Endpoint, side: Side) -> boo
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::net::{Ipv6Addr, SocketAddr};
+    use std::net::Ipv6Addr;
 
     /// A TCP segment as the client would send it: IPv4, one SYN.
     fn tcp_v4(src: [u8; 4], sport: u16, dst: [u8; 4], dport: u16, flags: u8) -> Vec<u8> {

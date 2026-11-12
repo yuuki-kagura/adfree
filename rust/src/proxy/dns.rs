@@ -86,7 +86,7 @@ fn bind_one(addr: IpAddr, port: u16, v6: bool) -> std::io::Result<Listener> {
             0,
         )
     };
-    if fd < 0 {
+    if !crate::sys::fd::fd_ok(fd) {
         return Err(std::io::Error::last_os_error());
     }
     // Every early return past this point owns the fd and has to close it.
