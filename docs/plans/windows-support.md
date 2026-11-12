@@ -321,3 +321,45 @@ What is still open, in the order it would bite a user:
 4. **The native-messaging host** for the browser extension is a Unix socket (the
    socket *is* the authorization). Windows needs a named pipe with an ACL.
 
+## What Windows now has, and where it still differs
+
+Parity is the point of the port, so here is the same list read from the user's
+side rather than the code's.
+
+**Present on both:**
+
+| Thing | Linux | Windows |
+| --- | --- | --- |
+| whole-machine filtering | `nft` redirect + `SO_MARK` | WinDivert redirect (`winnat`) |
+| the application runs elevated | `CAP_NET_ADMIN` by unit or by hand | Administrator, always |
+| start with the session | XDG autostart entry | Scheduled Task, `ONLOGON` + `HIGHEST` |
+| CA trusted by the system | distro bundle / Magisk module | `certutil -addstore Root` |
+| the log's Process column | `/proc` inode → pid → `comm` | IP helper owner tables → pid → image name |
+| per-app rules (`$app=`) | same source as above | same source as above |
+| the filtering log window | Compose `Window` | Compose `Window` — identical, the pane docks right |
+| the tray | StatusNotifierItem (KDE), AWT popup | Compose `Tray`, native menu, state in the icon and tooltip |
+| pause 30 s / 1 h / resume | tray and in-app | same six rows, same commands |
+| counters, `totals`, home screen | `totals` table | same table, same formatter |
+
+**Verified by a build, not by reasoning:** `adfree_1.4.0_arm64.deb` (98 MB),
+`adfree-1.4.0-1.aarch64.rpm` (110 MB), `adfree-msi-x64` (106 MB),
+`adfree-msi-arm64` (103 MB) — Linux arm64 on `ubuntu-24.04-arm`, Windows on
+`windows-latest` and `windows-11-arm`.
+
+**Still Windows-only gaps, in order:**
+
+1. **Nothing has run on a Windows desktop yet.** Every piece has been compiled,
+   cross-checked and unit-tested; the first machine is next. The order to try it:
+   install the MSI as Administrator, check that `WinDivert.dll` and
+   `WinDivert64.sys` were unpacked under `%LOCALAPPDATA%\adfree\windivert\x64`,
+   start the app, let `certutil` add the CA, then
+   `curl -x 127.0.0.1:3129 https://example.com` and a blocked domain.
+2. **The browser extension's bridge** is a Unix socket on Linux — the socket is
+   the authorization as well as the transport. Windows needs a named pipe with an
+   ACL; until then the extension has no assistant on that platform.
+3. **MSI signing.** Unsigned, so SmartScreen warns; the WinDivert pair's own
+   signature is what the kernel checks.
+4. **The tray's own menu styling.** Compose's `Tray` draws a native menu, so the
+   Breeze-matched `TrayMenuPopup` is Linux-only by construction — the same rows,
+   a platform menu rather than ours.
+
