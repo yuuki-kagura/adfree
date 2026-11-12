@@ -1,3 +1,10 @@
+# [1.6.0](https://github.com/yuuki-kagura/adfree/compare/v1.5.0...v1.6.0) (2026-11-12)
+
+
+### Features
+
+* **filters:** a YouTube module that works on the data, not on the markup ([7dadc62](https://github.com/yuuki-kagura/adfree/commit/7dadc6231e02ba736ed754f6e8a5a10a1852d92b)), closes [#contents](https://github.com/yuuki-kagura/adfree/issues/contents)
+
 # [1.5.0](https://github.com/yuuki-kagura/adfree/compare/v1.4.0...v1.5.0) (2026-11-12)
 
 
