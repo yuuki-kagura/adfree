@@ -218,6 +218,15 @@ class DesktopContainer(
         // jar, and both have to be on disk before the driver is asked for. The
         // call is a no-op on Linux and Android.
         WinDivertFiles.install()
+        // On Windows this is the difference between an app that filters and an
+        // app that looks like it does: say it once, in the log, before the
+        // driver refuses to open and the reason has to be reconstructed.
+        if (isWindowsHost() && !privileges.isElevated()) {
+            System.err.println(
+                "[desktop] not elevated: WinDivert will refuse to load. Start AdFree as Administrator, " +
+                    "or let the logon task (schtasks /RL HIGHEST) start it.",
+            )
+        }
         repository.hydrateState()
         scope.launch {
             repository.settings.map { it.isProtectionActive }.collect { protectionWanted.value = it }

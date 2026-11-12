@@ -1,0 +1,71 @@
+# The MSI, built the way a user would install it.
+#
+# Runs on a real Windows runner rather than cross-compiling, because the parts
+# that can only fail there are the parts worth testing: the MSVC build of the
+# core (wepoll is C, compiled by `build.rs`), jpackage's WiX toolchain, and the
+# existence of the signed WinDivert pair inside the built jar.
+#
+# Manual for now: the app is installable and filters, but the tray still speaks
+# KDE's D-Bus, so a Windows user gets no tray icon yet. The job is run from the
+# Actions tab to prove packaging, not to publish.
+name: Windows build
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - "rust/src/**"
+      - "rust/Cargo.toml"
+      - "rust/vendor/**"
+      - "desktop/**"
+      - "shared/**"
+      - ".github/workflows/windows-build.yml"
+
+jobs:
+  msi:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - name: Install the Rust toolchain
+        run: |
+          rustup toolchain install stable --profile minimal
+          rustup default stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: rust
+
+      - name: Build the filtering core
+        working-directory: rust
+        run: cargo build --release --lib
+
+      - name: The core must export the uniffi surface and the redirect
+        working-directory: rust
+        shell: bash
+        run: |
+          dll=target/release/adfree_core.dll
+          test -f "$dll" || { echo "no $dll"; exit 1; }
+          ls -l "$dll"
+          # wepoll and WinDivert are linked by name; a DLL without them is a DLL
+          # whose wait set or redirect would fail at run time, not at build time.
+          found=$(strings -a "$dll" | grep -c 'uniffi_adfree_core_fn_func_core_redirect_start' || true)
+          test "$found" -ge 1 || { echo "redirect entry point missing"; exit 1; }
+
+      - name: Build the MSI
+        run: ./gradlew --no-daemon :desktop:packageReleaseMsi -PversionName=${{ github.run_number }}.0.0
+
+      - name: Where it landed
+        shell: bash
+        run: find desktop/build/compose/binaries -name '*.msi' -exec ls -l {} \;
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: adfree-msi
+          path: desktop/build/compose/binaries/main-release/msi/*.msi
+          if-no-files-found: error

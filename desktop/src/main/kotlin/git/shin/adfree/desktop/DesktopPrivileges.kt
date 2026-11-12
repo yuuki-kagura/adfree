@@ -100,6 +100,20 @@ class DesktopPrivileges(
     }
 
     /**
+     * Whether this process already holds the authority the platform's filtering
+     * needs. Linux asks about the socket mark, Windows asks the shell whether the
+     * token is elevated.
+     *
+     * The whole Windows design rests on this being true: the driver will not
+     * load otherwise, and an app that installs and then cannot filter is the
+     * failure this question exists to name before the user meets it as silence.
+     */
+    fun isElevated(): Boolean {
+        if (!isWindows) return canSetFirewallMark()
+        return runCatching { Shell32.INSTANCE.IsUserAnAdmin() != 0 }.getOrDefault(false)
+    }
+
+    /**
      * The uid of this process, or 1000 when `/proc` cannot say: the rules only
      * capture the account that runs the app.
      */
@@ -808,6 +822,15 @@ sealed interface PrivilegeOutcome {
 }
 
 /** The four libc calls the desktop host makes for itself; the core does the rest. */
+/** `shell32!IsUserAnAdmin`, the only honest answer on Windows. */
+private interface Shell32 : Library {
+    fun IsUserAnAdmin(): Int
+
+    companion object {
+        val INSTANCE: Shell32 = Native.load("shell32", Shell32::class.java)
+    }
+}
+
 private interface CLib : Library {
     fun socket(domain: Int, type: Int, protocol: Int): Int
     fun setsockopt(fd: Int, level: Int, optname: Int, optval: IntByReference, optlen: Int): Int

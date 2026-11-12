@@ -189,6 +189,8 @@ What that took, in the order it happened:
 | `5303b9b` | `sys::windivert`: the driver loop — `WinDivert.dll` loaded at run time, two filters, `winnat` applied to each packet; `wredirect` is the start/stop/counters the app holds |
 | `40c70c2` | the four redirect calls exist on every platform (`core_redirect_start/stop/running/packets_seen/live_flows`), so the switch is one switch |
 | `a615155` | the CA is trusted on Windows through the machine's `Root` store (`certutil`), SHA-1 for thumbprints included |
+| `06044d5` | the desktop answers the privilege questions for Windows: no mark, no `nft`, no `pkexec`, no systemd — protection is starting the redirect; autostart becomes a logon task with `HIGHEST` |
+| `2b20b81` | the core is found as `adfree_core.dll`, the signed WinDivert pair travels in the jar and is unpacked for the loader, the MSI is declared |
 | *this one* | the facilities that have no Winsock equivalent — `eventfd` and `socketpair` as a self-connected loopback datagram socket, a `poll`-backed `WaitSet`, the packet-info types as compile-only shells |
 
 Two things changed shape rather than gained a shim, and they are the ones worth
@@ -262,10 +264,13 @@ keeps the existing measured behaviour on Linux.
    `adfree_core.dll`, and the tray needs a Windows implementation (Compose
    `Tray`, not SNI/DBus) — still open. Native-messaging manifests go to the
    registry instead of a `~/.config` JSON file.
-5. **Packaging.** `TargetFormat.Msi` (jpackage) with a per-user install, a
-   `windows-latest` CI job that builds the core with MSVC and the MSI, and the
-   same "verify the core is complete" step the Linux packages have
-   (`dumpbin /exports adfree_core.dll`).
+5. **Packaging.** `TargetFormat.Msi` (jpackage), a machine-wide install (the
+   driver and the certificate store need the administrator token, which a
+   per-user MSI cannot grant), a fixed `upgradeUuid`, and a `windows-latest`
+   workflow that builds the core with MSVC and the MSI and refuses to publish a
+   core without the redirect's entry points. Still open: signing the MSI, and
+   the tray, which still speaks KDE's D-Bus — on Windows the app currently runs
+   from the window alone.
 
 ## What must not regress on Linux
 
