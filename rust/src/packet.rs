@@ -23,8 +23,11 @@ pub struct Packet<'a> {
     pub raw: &'a [u8],
     pub version: u8,
     pub proto: u8,
-    /// Length of the IP header (4 for IPv6).
+    /// Length of the IP header (40 for IPv6, before any extension headers).
     pub ip_hdr_len: usize,
+    /// Where the L4 header starts, counted from the first byte: equal to
+    /// `ip_hdr_len` unless IPv6 extension headers intervene.
+    pub l4_offset: usize,
     pub total_len: usize,
     pub src_port: u16,
     pub dst_port: u16,
@@ -292,6 +295,7 @@ impl<'a> Packet<'a> {
             version,
             proto,
             ip_hdr_len,
+            l4_offset,
             total_len,
             src_port,
             dst_port,
@@ -765,6 +769,68 @@ pub fn tcp_checksum_v6(ip_hdr: &[u8], tcp: &[u8]) -> u16 {
 pub fn udp_checksum_v6(ip_hdr: &[u8], udp_hdr: &[u8], payload: &[u8]) -> u16 {
     let len = (udp_hdr.len() + payload.len()) as u32;
     internet_checksum(&v6_pseudo(ip_hdr, len, PROTO_UDP), udp_hdr, payload)
+}
+
+/// UDP over IPv4: the same pseudo-header as TCP, with the UDP header and its
+/// payload as the message.
+pub fn udp_checksum_v4(ip_hdr: &[u8], udp_hdr: &[u8], payload: &[u8]) -> u16 {
+    let len = (udp_hdr.len() + payload.len()) as u32;
+    internet_checksum(&v4_pseudo(ip_hdr, len, PROTO_UDP), udp_hdr, payload)
+}
+
+/// Recomputes the L4 checksum of a packet whose addresses or ports were edited.
+///
+/// The segment is checksummed over the L4 header and everything after it, which
+/// is why the pseudo-header takes the IP header: the addresses are part of the
+/// sum even though they live outside the segment.
+pub fn fix_l4_checksum(raw: &mut [u8], pkt: &Packet<'_>) {
+    fix_l4_checksum_raw(raw, pkt.version, pkt.ip_hdr_len, pkt.l4_offset, pkt.proto);
+}
+
+/// The same, from the copied-out facts, for callers editing a buffer the parser
+/// has stopped borrowing.
+pub fn fix_l4_checksum_raw(
+    raw: &mut [u8],
+    version: u8,
+    ip_hdr_len: usize,
+    l4: usize,
+    proto: u8,
+) {
+    if l4 > raw.len() {
+        return;
+    }
+    match proto {
+        PROTO_TCP => {
+            if l4 + 20 > raw.len() {
+                return;
+            }
+            let csum = if version == 4 {
+                tcp_checksum_v4(&raw[..ip_hdr_len], &raw[l4..])
+            } else {
+                tcp_checksum_v6(&raw[..ip_hdr_len], &raw[l4..])
+            };
+            raw[l4 + 16..l4 + 18].copy_from_slice(&csum.to_be_bytes());
+        }
+        PROTO_UDP => {
+            if l4 + 8 > raw.len() {
+                return;
+            }
+            // Optional over IPv4: zero means "not computed", and stays that way.
+            let had = u16::from_be_bytes([raw[l4 + 6], raw[l4 + 7]]);
+            if version == 4 && had == 0 {
+                return;
+            }
+            let csum = if version == 4 {
+                udp_checksum_v4(&raw[..ip_hdr_len], &raw[l4..l4 + 8], &raw[l4 + 8..])
+            } else {
+                udp_checksum_v6(&raw[..ip_hdr_len], &raw[l4..l4 + 8], &raw[l4 + 8..])
+            };
+            // A computed zero is transmitted as all ones, per RFC 768.
+            let csum = if csum == 0 { 0xffff } else { csum };
+            raw[l4 + 6..l4 + 8].copy_from_slice(&csum.to_be_bytes());
+        }
+        _ => {}
+    }
 }
 
 /// Standard RFC 1071 internet checksum.

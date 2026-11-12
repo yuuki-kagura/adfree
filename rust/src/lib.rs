@@ -17,6 +17,10 @@
 uniffi::setup_scaffolding!("adfree");
 
 pub mod sys;
+/// The Windows redirector's tables and rewrites. Portable and tested: the
+/// packet surgery is the same bytes on either platform, only the driver that
+/// delivers them differs.
+pub mod winnat;
 pub mod api;
 mod appmask;
 pub mod assets;
