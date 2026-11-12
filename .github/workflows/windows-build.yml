@@ -23,7 +23,18 @@ on:
 
 jobs:
   msi:
-    runs-on: windows-latest
+    # Two Windows architectures, because they are two products: an x64 machine
+    # and an ARM64 one run the same app over the same driver, and both need a
+    # package that matches the JRE inside it.
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: windows-latest
+            arch: x64
+          - runner: windows-11-arm
+            arch: arm64
+    runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v4
 
@@ -71,6 +82,6 @@ jobs:
 
       - uses: actions/upload-artifact@v4
         with:
-          name: adfree-msi
+          name: adfree-msi-${{ matrix.arch }}
           path: desktop/build/compose/binaries/main/msi/*.msi
           if-no-files-found: error

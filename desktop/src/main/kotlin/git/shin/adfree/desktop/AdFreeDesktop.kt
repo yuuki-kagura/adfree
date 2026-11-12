@@ -299,10 +299,14 @@ fun main() {
         }
 
         if (hasTray && sni == null) {
+            // The same six rows the D-Bus menu carries, drawn by the platform
+            // instead of by `TrayMenuPopup`: on Windows this is the tray, and a
+            // menu that offered less there than the Linux one would be a port
+            // that stops at the window.
             Tray(
-                icon = rememberTrayIcon(),
+                icon = rememberTrayIcon(notFilteringState.value),
                 state = trayState,
-                tooltip = "AdFree",
+                tooltip = trayTooltip(notFilteringState.value),
                 onAction = { if (visible) Unit else showWindow() },
                 menu = {
                     for (entry in trayMenuEntries(notFilteringState.value)) {
@@ -449,6 +453,7 @@ private object DesktopAppIconResource
 
 /** The dark/green palette, for the painted fallback below. */
 private val TrayGreen = Color(0xFF00D06C)
+private val TrayAmber = Color(0xFFFFB020)
 private val TrayBg = Color(0xFF0A0E13)
 
 /**
@@ -456,9 +461,43 @@ private val TrayBg = Color(0xFF0A0E13)
  * mark when it is not, so a run without resources still has a visible icon.
  */
 @Composable
-private fun rememberTrayIcon(): Painter {
-    val bitmap = remember { loadAppIcon() ?: paintedTrayGlyph() }
+private fun rememberTrayIcon(paused: Boolean): Painter {
+    // The glyph carries the state, because the platform tray shows a picture and
+    // a tooltip and nothing else: an icon that stayed green while filtering was
+    // off would be the tray lying about the one thing it exists to say.
+    val bitmap = remember(paused) { pausedTrayGlyph(paused) }
     return BitmapPainter(bitmap)
+}
+
+/**
+ * The tray tooltip: the app's name, and what it is doing.
+ *
+ * Windows shows this on hover and nowhere else, so it is the only place the
+ * state is readable without opening the menu.
+ */
+internal fun trayTooltip(paused: Boolean): String =
+    if (paused) "AdFree — ${L10n.get(Strings.tray_resume)}" else "AdFree — ${L10n.get(Strings.tray_pause_30s).substringBefore(" ")}"
+
+/**
+ * The icon with the pause mark painted on it: the app's own mark when the
+ * classpath has one, the painted fallback otherwise, and in both cases a dark
+ * corner with an amber dot while filtering is off.
+ */
+internal fun pausedTrayGlyph(paused: Boolean): ImageBitmap {
+    val base = loadAppIcon() ?: paintedTrayGlyph()
+    if (!paused) return base
+    // A copy rather than a tint: the mark has to survive being 32 pixels wide in
+    // a tray, and a corner dot reads at any size while a hue shift does not.
+    val surface = ImageBitmap(base.width, base.height)
+    Canvas(surface).apply {
+        drawImage(base, Offset.Zero, Paint())
+        val side = base.width.coerceAtMost(base.height).toFloat()
+        val dot = side * 0.34f
+        val centre = Offset(base.width - dot * 0.9f, base.height - dot * 0.9f)
+        drawCircle(centre, dot * 0.72f, Paint().apply { color = TrayBg })
+        drawCircle(centre, dot * 0.5f, Paint().apply { color = TrayAmber })
+    }
+    return surface
 }
 
 @Composable

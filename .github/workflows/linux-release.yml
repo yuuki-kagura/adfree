@@ -29,7 +29,18 @@ jobs:
     # A failed Android release publishes nothing, so there is nothing to attach
     # a package to.
     if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
-    runs-on: ubuntu-latest
+    # One package per architecture, built on that architecture: jpackage cannot
+    # cross-build (it bundles the JRE it is running on), so an arm64 deb has to
+    # come from an arm64 machine — which is what `ubuntu-24.04-arm` is.
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-latest
+            arch: x64
+          - runner: ubuntu-24.04-arm
+            arch: arm64
+    runs-on: ${{ matrix.runner }}
     env:
       # On the release run the tag is not in the event: it is whatever the
       # release that run just published is called.
@@ -95,6 +106,11 @@ jobs:
 
       - name: Build deb and rpm
         run: ./gradlew --no-daemon :desktop:packageDeb :desktop:packageRpm
+
+      - name: What was built
+        run: |
+          uname -m
+          find desktop/build/compose/binaries/main -name '*.deb' -o -name '*.rpm' | xargs -r ls -l
 
       - name: Attach packages to the release
         env:

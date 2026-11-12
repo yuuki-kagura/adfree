@@ -22,7 +22,9 @@
 
 use crate::fxhash::FxHashMap;
 use std::net::SocketAddr;
+#[cfg(unix)]
 use std::path::Path;
+#[cfg(unix)]
 use std::time::Instant;
 
 /// The connection's far end: who to show in the log's Process column.
@@ -36,13 +38,16 @@ pub struct Peer {
 /// Shortest gap between two full walks of the process table. A page load opens
 /// dozens of connections; one walk answers the whole burst, and a socket newer
 /// than that walk goes unnamed rather than paying for a second one.
+#[cfg(unix)]
 const WALK_MISS_GAP_MS: u64 = 200;
 /// Longest a walk is trusted. Inode numbers are recycled, so an entry that has
 /// aged out is confirmed by a fresh look instead of believed.
+#[cfg(unix)]
 const WALK_GAP_MS: u64 = 5_000;
 /// How many of the recently answered processes are searched before the whole
 /// table is. A browser, a mail client, a game: whatever is talking now keeps
 /// talking, so its descriptors are the first place to look.
+#[cfg(unix)]
 const RECENT_PIDS: usize = 4;
 /// Both caches are bounded: a desktop has a few thousand processes and a few
 /// thousand sockets, and this is the guard against a table that never stops
@@ -52,13 +57,16 @@ const MAX_ENTRIES: usize = 4096;
 /// The answers of the last searches, kept by the core for every proxy thread.
 pub struct Table {
     /// Socket inode to the process holding it.
+    #[cfg(unix)]
     holders: FxHashMap<u64, u32>,
     /// Process id to its name; kept across searches because it does not
     /// change.
     names: FxHashMap<u32, String>,
     /// The processes the last answers came from, newest first.
+    #[cfg(unix)]
     recent: Vec<u32>,
     /// When the whole table was last walked, and whether that walk finished.
+    #[cfg(unix)]
     walked: Option<Instant>,
 }
 
@@ -71,9 +79,12 @@ impl Default for Table {
 impl Table {
     pub fn new() -> Self {
         Table {
+            #[cfg(unix)]
             holders: FxHashMap::default(),
             names: FxHashMap::default(),
+            #[cfg(unix)]
             recent: Vec::new(),
+            #[cfg(unix)]
             walked: None,
         }
     }
@@ -87,12 +98,19 @@ impl Table {
     /// then logs the row without a process, which is what AdGuard's own log
     /// does for a flow it cannot name.
     pub fn owner(&mut self, client: SocketAddr, our: SocketAddr) -> Option<Peer> {
-        let inode = socket_of(client, our)?;
-        let pid = self.pid_of(inode)?;
-        Some(Peer {
-            pid,
-            name: self.name_of(pid)?,
-        })
+        #[cfg(windows)]
+        {
+            return self.owner_windows(client, our, false);
+        }
+        #[cfg(unix)]
+        {
+            let inode = socket_of(client, our)?;
+            let pid = self.pid_of(inode)?;
+            Some(Peer {
+                pid,
+                name: self.name_of(pid)?,
+            })
+        }
     }
 
     /// The process behind a *UDP* socket, by its local port: the DNS listener
@@ -100,14 +118,47 @@ impl Table {
     /// desktop that is the only thing that can say which program asked (the
     /// platform's uid→package table is an Android answer and is empty here).
     pub fn owner_udp(&mut self, port: u16) -> Option<Peer> {
-        let inode = udp_socket_of(port)?;
-        let pid = self.pid_of(inode)?;
+        #[cfg(windows)]
+        {
+            let local = SocketAddr::from(([127, 0, 0, 1], port));
+            return self.owner_windows(local, local, true);
+        }
+        #[cfg(unix)]
+        {
+            let inode = udp_socket_of(port)?;
+            let pid = self.pid_of(inode)?;
+            Some(Peer {
+                pid,
+                name: self.name_of(pid)?,
+            })
+        }
+    }
+
+    /// The Windows answer to the same question.
+    ///
+    /// There is no inode to walk: the IP helper tables map a socket straight to
+    /// the process that holds it, so the walk-and-cache machinery above has
+    /// nothing to cache beyond the names. A port can be reported by both
+    /// families — a resolver bound to `::` takes IPv6 rows — so the family the
+    /// client actually used is tried first and the other one after it.
+    #[cfg(windows)]
+    fn owner_windows(&mut self, client: SocketAddr, _our: SocketAddr, udp: bool) -> Option<Peer> {
+        use crate::sys::winproc;
+        let v6 = client.is_ipv6();
+        let pid = if udp {
+            winproc::udp_owner_of_port(client.port(), v6)
+                .or_else(|| winproc::udp_owner_of_port(client.port(), !v6))
+        } else {
+            winproc::tcp_owner_of_port(client.port(), v6)
+                .or_else(|| winproc::tcp_owner_of_port(client.port(), !v6))
+        }?;
         Some(Peer {
             pid,
             name: self.name_of(pid)?,
         })
     }
 
+    #[cfg(unix)]
     fn pid_of(&mut self, inode: u64) -> Option<u32> {
         let now = Instant::now();
         if self.trusted(&now, WALK_GAP_MS) {
@@ -136,6 +187,7 @@ impl Table {
     }
 
     /// Puts a pid at the front of the recently-answered list.
+    #[cfg(unix)]
     fn remember_pid(&mut self, pid: u32) {
         self.recent.retain(|other| *other != pid);
         self.recent.insert(0, pid);
@@ -143,6 +195,7 @@ impl Table {
     }
 
     /// Whether the last walk is younger than `gap_ms`.
+    #[cfg(unix)]
     fn trusted(&self, now: &Instant, gap_ms: u64) -> bool {
         self.walked
             .is_some_and(|at| now.duration_since(at).as_millis() < gap_ms as u128)
@@ -166,6 +219,7 @@ impl Table {
 
 /// Whether this process holds the socket, searching its descriptors and
 /// recording every socket it turns out to hold.
+#[cfg(unix)]
 fn search_pid(pid: u32, inode: u64, holders: &mut FxHashMap<u64, u32>) -> bool {
     let fds = match std::fs::read_dir(format!("/proc/{pid}/fd")) {
         Ok(fds) => fds,
@@ -185,6 +239,7 @@ fn search_pid(pid: u32, inode: u64, holders: &mut FxHashMap<u64, u32>) -> bool {
 
 /// One pass over the process table, stopping at the process that owns the
 /// socket and remembering the sockets of every process it looked in.
+#[cfg(unix)]
 fn walk(inode: u64, holders: &mut FxHashMap<u64, u32>) -> Option<u32> {
     let entries = std::fs::read_dir("/proc").ok()?;
     for entry in entries.flatten() {
@@ -200,6 +255,7 @@ fn walk(inode: u64, holders: &mut FxHashMap<u64, u32>) -> Option<u32> {
 }
 
 /// The socket inode a descriptor points at, if it points at one.
+#[cfg(unix)]
 fn socket_inode(path: &Path) -> Option<u64> {
     let target = std::fs::read_link(path).ok()?;
     let name = target.file_name()?.to_string_lossy();
@@ -209,6 +265,7 @@ fn socket_inode(path: &Path) -> Option<u64> {
     inner.parse::<u64>().ok()
 }
 
+#[cfg(unix)]
 fn note(holders: &mut FxHashMap<u64, u32>, inode: u64, pid: u32) {
     if holders.len() >= MAX_ENTRIES {
         holders.clear();
@@ -216,6 +273,12 @@ fn note(holders: &mut FxHashMap<u64, u32>, inode: u64, pid: u32) {
     holders.insert(inode, pid);
 }
 
+#[cfg(windows)]
+fn name_of_process(pid: u32) -> Option<String> {
+    crate::sys::winproc::process_name(pid)
+}
+
+#[cfg(unix)]
 fn name_of_process(pid: u32) -> Option<String> {
     let comm = std::fs::read_to_string(format!("/proc/{pid}/comm"))
         .ok()
@@ -240,6 +303,7 @@ fn name_of_process(pid: u32) -> Option<String> {
 /// speaks from and whose *remote* port is our own listener. The table is read
 /// fresh every time: it is one file, only two port columns are compared, and a
 /// connection that is not in it is a connection that is not ours to name.
+#[cfg(unix)]
 fn socket_of(client: SocketAddr, our: SocketAddr) -> Option<u64> {
     // The listener is dual-stack, so a loopback client arrives here as an
     // IPv4-mapped IPv6 address while its own socket to the real host sits in
@@ -295,6 +359,7 @@ fn socket_of(client: SocketAddr, our: SocketAddr) -> Option<u64> {
 /// The inode of the unconnected-or-connected UDP socket whose local port is
 /// `port`, looked for in both address families (a resolver client may bind
 /// either, and the listener sees only its address).
+#[cfg(unix)]
 fn udp_socket_of(port: u16) -> Option<u64> {
     for path in ["/proc/net/udp", "/proc/net/udp6"] {
         let Ok(text) = std::fs::read_to_string(path) else {
@@ -318,6 +383,7 @@ fn udp_socket_of(port: u16) -> Option<u64> {
 }
 
 /// The hex `port` half of an `ADDRESS:PORT` column.
+#[cfg(unix)]
 fn port_of(field: &str) -> Option<u16> {
     u16::from_str_radix(field.rsplit(':').next()?, 16).ok()
 }

@@ -21,6 +21,11 @@ mod windows;
 #[cfg(windows)]
 pub mod windivert;
 
+/// Who owns a socket on Windows: the IP helper owner tables, and the process
+/// API for the name.
+#[cfg(windows)]
+pub mod winproc;
+
 /// The `libc` the proxy sees: the real one on Unix, and a Winsock-backed
 /// namesake on Windows (`sys::winlibc`). Modules say `use crate::sys::libc;`
 /// once instead of `extern crate libc`, so both platforms compile the same
