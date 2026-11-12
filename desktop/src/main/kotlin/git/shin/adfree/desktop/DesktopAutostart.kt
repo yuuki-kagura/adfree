@@ -18,6 +18,18 @@ import java.io.File
  */
 class DesktopAutostart(
     private val entry: File = defaultEntry(),
+    /**
+     * How this machine starts things at logon.
+     *
+     * XDG on Linux: one file, no privilege, and it may point at the unit. On
+     * Windows the app must also start *elevated*, and a `Run` key cannot do
+     * that — the token is only granted by the secure desktop's prompt, which
+     * means a UAC dialog at every logon. A Scheduled Task with `ONLOGON` and
+     * `HIGHEST` starts in the user's session without that prompt, which is why
+     * it, and not the registry, is what this writes.
+     */
+    private val isWindows: Boolean = isWindowsHost(),
+    private val run: (List<String>) -> Boolean = ::runQuietly,
 ) {
 
     /** Writes or removes the entry, whichever the setting asks for. */
@@ -27,6 +39,17 @@ class DesktopAutostart(
         appArgv: List<String>,
         workingDirectory: String? = null,
     ): Result<Unit> = runCatching {
+        if (isWindows) {
+            if (!enabled) {
+                run(schtasksDelete())
+                return@runCatching
+            }
+            val argv = appArgv.ifEmpty { return@runCatching }
+            if (!run(schtasksCreate(argv))) {
+                error("schtasks refused to create the logon task")
+            }
+            return@runCatching
+        }
         if (!enabled) {
             entry.delete()
             return@runCatching
@@ -45,7 +68,8 @@ class DesktopAutostart(
         )
     }
 
-    fun installed(): Boolean = entry.isFile
+    fun installed(): Boolean =
+        if (isWindows) run(schtasksQuery()) else entry.isFile
 
     /**
      * The entry's text. `Exec` is the one field with syntax in it: words are
@@ -69,8 +93,36 @@ class DesktopAutostart(
         }
     }
 
-    private companion object {
+    /** The task's name in Task Scheduler. Fixed, so `install` replaces itself. */
+    internal companion object {
+        const val TASK_NAME = "adfree-desktop"
+
         val unitStart = listOf("systemctl", "--no-block", "restart", "adfree-desktop")
+
+        /**
+         * `schtasks /Create` for a logon task that runs with the highest
+         * available token. `/F` overwrites, because the app's own path changes
+         * when it is updated and an old action would point at nothing.
+         */
+        internal fun schtasksCreate(appArgv: List<String>): List<String> = listOf(
+            "schtasks",
+            "/Create",
+            "/TN",
+            TASK_NAME,
+            "/TR",
+            windowsCommandLine(appArgv),
+            "/SC",
+            "ONLOGON",
+            "/RL",
+            "HIGHEST",
+            "/F",
+        )
+
+        internal fun schtasksDelete(): List<String> =
+            listOf("schtasks", "/Delete", "/TN", TASK_NAME, "/F")
+
+        internal fun schtasksQuery(): List<String> =
+            listOf("schtasks", "/Query", "/TN", TASK_NAME)
 
         fun defaultEntry(): File = File(
             System.getenv("XDG_CONFIG_HOME")
@@ -79,6 +131,19 @@ class DesktopAutostart(
         )
     }
 }
+
+/**
+ * One command line as Task Scheduler's `/TR` reads it: words joined by spaces,
+ * quoted only when they need it, because the value is one argv element of
+ * `schtasks` rather than an argv of its own.
+ */
+internal fun windowsCommandLine(argv: List<String>): String =
+    argv.joinToString(" ") { word -> if (word.any { it.isWhitespace() }) "\"$word\"" else word }
+
+/** Runs a command and answers whether it succeeded, with nothing on the console. */
+internal fun runQuietly(argv: List<String>): Boolean = runCatching {
+    ProcessBuilder(argv).redirectErrorStream(true).start().waitFor() == 0
+}.getOrDefault(false)
 
 /**
  * One `Exec` word as the desktop-entry spec reads it. Reserved characters are

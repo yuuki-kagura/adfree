@@ -186,6 +186,9 @@ What that took, in the order it happened:
 | `1a05349` | `sys::libc` — the Winsock namesake: constants, `sockaddr_*`, `poll` over `WSAPoll`, WSA errno numbers; `sys::fd` for the descriptor vocabulary (460 → 187) |
 | `9e796de` | the wait set becomes `epoll` over IOCP on Windows (wepoll), one implementation for all three platforms |
 | `8935655` | `winnat`: the redirect decisions as pure functions, tested on Linux |
+| `5303b9b` | `sys::windivert`: the driver loop — `WinDivert.dll` loaded at run time, two filters, `winnat` applied to each packet; `wredirect` is the start/stop/counters the app holds |
+| `40c70c2` | the four redirect calls exist on every platform (`core_redirect_start/stop/running/packets_seen/live_flows`), so the switch is one switch |
+| `a615155` | the CA is trusted on Windows through the machine's `Root` store (`certutil`), SHA-1 for thumbprints included |
 | *this one* | the facilities that have no Winsock equivalent — `eventfd` and `socketpair` as a self-connected loopback datagram socket, a `poll`-backed `WaitSet`, the packet-info types as compile-only shells |
 
 Two things changed shape rather than gained a shim, and they are the ones worth
@@ -227,8 +230,10 @@ impl Socket {
 pub fn wait(readable: &[&Socket], timeout: Duration) -> Vec<usize>;
 ```
 
-`wait` is `poll(2)` on Unix and `WSAPoll` on Windows; `set_mark` and
-`original_dst` disappear on Windows because the system-proxy path needs neither.
+`wait` is `epoll` on Unix and `epoll`-over-IOCP on Windows (see Decision 1:
+`WSAPoll` is not equivalent for a failed connect, which is what the tree needs);
+`set_mark` and `original_dst` disappear on Windows because the redirect names the
+destination itself.
 Everything above `sys` — the engine, the rule matcher, the MITM — keeps calling
 the same API it calls today.
 
@@ -248,11 +253,15 @@ keeps the existing measured behaviour on Linux.
    absolute-form URLs, so `original_dst` is never needed; DNS listener on `:53`.
    Verify on a Windows VM: `curl -x 127.0.0.1:3129 https://example.com/` → 200,
    `dig @127.0.0.1 example.com` → answer, a blocked domain → refused.
-4. **Desktop shell.** `DesktopOs` seam with a Windows implementation of:
-   autostart (`HKCU\…\Run`), native-messaging manifests (registry), the core
-   library name (`adfree_core.dll`), elevation (UAC: one `Start-Process -Verb
-   RunAs` for the netsh/registry commands instead of sudo/polkit), and the tray
-   (Compose `Tray`, not SNI/DBus).
+4. **Desktop shell.** One class per platform difference, chosen inside the
+   existing classes rather than forked beside them (the same seam `sys` is in
+   Rust): autostart becomes a Scheduled Task with `/RL HIGHEST` + `ONLOGON`
+   (done — a `Run` key re-prompts UAC at every logon), the "privilege" answers
+   become the token the app already holds (done — `nft`/`polkit`/`systemctl`
+   are skipped, and protection means starting the redirect), the core library is
+   `adfree_core.dll`, and the tray needs a Windows implementation (Compose
+   `Tray`, not SNI/DBus) — still open. Native-messaging manifests go to the
+   registry instead of a `~/.config` JSON file.
 5. **Packaging.** `TargetFormat.Msi` (jpackage) with a per-user install, a
    `windows-latest` CI job that builds the core with MSVC and the MSI, and the
    same "verify the core is complete" step the Linux packages have

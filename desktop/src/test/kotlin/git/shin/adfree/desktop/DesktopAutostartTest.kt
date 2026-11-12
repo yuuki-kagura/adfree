@@ -75,4 +75,68 @@ class DesktopAutostartTest {
         )
         assertEquals(" ", " ")
     }
+
+    /**
+     * Windows has to start the app *elevated*, and only a task with the highest
+     * run level does that without a UAC prompt at every logon. What `schtasks`
+     * receives is therefore the contract, and it is checked as data.
+     */
+    @Test
+    fun windowsGetsALogonTaskThatRunsElevated() {
+        val argv = DesktopAutostart.schtasksCreate(listOf("C:\\Program Files\\AdFree\\AdFree.exe"))
+        assertEquals("schtasks", argv.first())
+        assertTrue("created, not modified", argv.contains("/Create"))
+        assertEquals("adfree-desktop", argv[argv.indexOf("/TN") + 1])
+        assertEquals(
+            "\"C:\\Program Files\\AdFree\\AdFree.exe\"",
+            argv[argv.indexOf("/TR") + 1],
+        )
+        assertEquals("at logon, not at boot", "ONLOGON", argv[argv.indexOf("/SC") + 1])
+        assertEquals("with the administrator token", "HIGHEST", argv[argv.indexOf("/RL") + 1])
+        assertTrue("repeatable", argv.contains("/F"))
+    }
+
+    @Test
+    fun aWindowsPathWithoutSpacesIsNotQuoted() {
+        assertEquals(
+            "C:\\AdFree\\AdFree.exe --tray",
+            windowsCommandLine(listOf("C:\\AdFree\\AdFree.exe", "--tray")),
+        )
+    }
+
+    @Test
+    fun theWindowsSwitchDrivesTheTaskRatherThanAFile() {
+        val calls = mutableListOf<List<String>>()
+        val autostart = DesktopAutostart(
+            entry = File("/nonexistent/adfree/should-not-be-written.desktop"),
+            isWindows = true,
+            run = { argv ->
+                calls += argv
+                true
+            },
+        )
+        autostart.sync(enabled = true, unitInstalled = true, appArgv = listOf("C:\\AdFree\\AdFree.exe"))
+            .getOrThrow()
+        assertEquals("one task command", 1, calls.size)
+        assertTrue("and it creates the task", calls.single().contains("/Create"))
+        autostart.sync(enabled = false, unitInstalled = true, appArgv = listOf("C:\\AdFree\\AdFree.exe"))
+            .getOrThrow()
+        assertTrue("switching off deletes it", calls.last().contains("/Delete"))
+        assertFalse("no XDG file is left behind", File("/nonexistent/adfree").exists())
+    }
+
+    /** A refused task creation must not be reported as "autostart is on". */
+    @Test
+    fun aRefusedTaskIsAFailure() {
+        val autostart = DesktopAutostart(
+            entry = File("/nonexistent/adfree/should-not-be-written.desktop"),
+            isWindows = true,
+            run = { false },
+        )
+        assertTrue(
+            "the failure reaches the caller",
+            autostart.sync(enabled = true, unitInstalled = true, appArgv = listOf("C:\\AdFree\\AdFree.exe"))
+                .isFailure,
+        )
+    }
 }

@@ -70,10 +70,26 @@ class DesktopPrivileges(
     /** How long a start waits for the unit to be both active and answering. */
     private val unitStartChecks: Int = UNIT_START_CHECKS,
     private val unitStartPollMs: Long = UNIT_START_POLL_MS,
+    /**
+     * Which conversation this machine has with the kernel.
+     *
+     * On Linux it is a rule table: `nft` moves the traffic, `SO_MARK` keeps the
+     * proxy's own dials out of it, and systemd keeps an elevated instance
+     * alive. On Windows there is no table and no mark — the app already runs as
+     * Administrator, and a driver is told what to do from inside the process
+     * (`rust/src/sys/windivert.rs`), so the same questions get different
+     * answers rather than a different class: every caller keeps asking "are the
+     * rules in" and "start the protection".
+     */
+    private val isWindows: Boolean = isWindowsHost(),
 ) {
 
     /** True when this process may mark its own sockets, i.e. holds `CAP_NET_ADMIN`. */
     fun canSetFirewallMark(): Boolean {
+        // Nothing is marked on Windows: the redirect's filter excludes the
+        // proxy's own port range by number instead, so a socket needs no
+        // privilege to be left alone.
+        if (isWindows) return true
         val fd = CLib.INSTANCE.socket(AF_INET, SOCK_DGRAM, 0)
         if (fd < 0) return false
         return try {
@@ -102,7 +118,10 @@ class DesktopPrivileges(
      * question about whether a file exists must not cost a password.
      */
     fun privilegedServiceInstalled(): Boolean =
-        File(servicePath).isFile && installStamp() == SETUP_VERSION
+        // Nothing is installed ahead of time on Windows: the driver is written
+        // by the driver's own loader on first use, and the app is already
+        // elevated, so there is no one-time step that could be missing.
+        isWindows || (File(servicePath).isFile && installStamp() == SETUP_VERSION)
 
     /** What the last successful install wrote, or 0 when nothing did. */
     private fun installStamp(): Int =
@@ -210,6 +229,9 @@ class DesktopPrivileges(
         environment: Map<String, String>,
         startAtBoot: Boolean = false,
     ): PrivilegeOutcome {
+        // Windows: the "install" is the redirect itself, and the app has the
+        // token it needs. Start filtering and report that as the outcome.
+        if (isWindows) return startRedirect() ?: PrivilegeOutcome.Ok
         val self = selfArgv()
             ?: return PrivilegeOutcome.Failed("cannot read this process's own command line")
         // A unit pins one command line forever, so it must be a line that can
@@ -248,6 +270,10 @@ class DesktopPrivileges(
 
     /** Takes the unit and the rule back out. Also one dialog, once. */
     fun removePrivilegedService(): PrivilegeOutcome {
+        if (isWindows) {
+            runCatching { git.shin.adfree.core.coreRedirectStop() }
+            return PrivilegeOutcome.Ok
+        }
         val command = selfArgv()?.first()
             ?: return PrivilegeOutcome.Failed("cannot read this process's own command line")
         val argv = removeSetupArgv(command, System.getProperty("java.class.path"))
@@ -265,6 +291,15 @@ class DesktopPrivileges(
      * starts an inactive unit for `restart` exactly as for `start`.
      */
     fun startInstalledService(proxyPort: Int = DEFAULT_PROXY_PORT): PrivilegeOutcome {
+        if (isWindows) {
+            val outcome = startRedirect(proxyPort)
+            if (outcome != null) return outcome
+            return if (listenerAnswers(proxyPort)) {
+                PrivilegeOutcome.Ok
+            } else {
+                PrivilegeOutcome.Failed("the redirect is on but nothing answers on $proxyPort")
+            }
+        }
         val outcome = run(systemctl, "restart", UNIT_NAME)
         if (outcome !is PrivilegeOutcome.Ok) return outcome
         return awaitUnitRunning(proxyPort)
@@ -378,6 +413,11 @@ class DesktopPrivileges(
      * would leave two redirects on every port.
      */
     fun installRules(tcpPort: Int, dnsPort: Int, filterLocalhost: Boolean = true): PrivilegeOutcome {
+        if (isWindows) {
+            // The redirect has no file to stage and no table to replace: it is
+            // a driver loop that reads its two ports once, at start.
+            return startRedirect(tcpPort, dnsPort) ?: PrivilegeOutcome.Ok
+        }
         if (!canSetFirewallMark()) {
             return PrivilegeOutcome.Denied(
                 "this process cannot mark its own sockets, so the redirect would loop its traffic",
@@ -393,11 +433,19 @@ class DesktopPrivileges(
         }
     }
 
-    fun removeRules(): PrivilegeOutcome = run(nftBinary, "delete", "table", "inet", "adfree")
+    fun removeRules(): PrivilegeOutcome {
+        if (isWindows) {
+            runCatching { git.shin.adfree.core.coreRedirectStop() }
+            return PrivilegeOutcome.Ok
+        }
+        return run(nftBinary, "delete", "table", "inet", "adfree")
+    }
 
     /** Whether the rules are live right now — read-only, so it needs no privilege. */
     fun rulesInstalled(): Boolean =
-        runCatching {
+        if (isWindows) {
+            runCatching { git.shin.adfree.core.coreRedirectRunning() }.getOrDefault(false)
+        } else runCatching {
             ProcessBuilder(nftBinary, "list", "table", "inet", "adfree")
                 .redirectErrorStream(true)
                 .start()
@@ -543,6 +591,20 @@ class DesktopPrivileges(
     fun requestRootCaInstall(pemPath: String, coreLibPath: String): PrivilegeOutcome {
         val command = selfArgv()?.first()
             ?: return PrivilegeOutcome.Failed("cannot read this process's own command line")
+        // Already Administrator, so the helper runs as a child of this process
+        // instead of through `pkexec`: the same helper, the same exit code, one
+        // fewer dialog — and on Windows there is no dialog to gain.
+        if (isWindows) {
+            return run(
+                command,
+                "--enable-native-access=ALL-UNNAMED",
+                "-cp",
+                System.getProperty("java.class.path"),
+                CA_INSTALL_MAIN,
+                pemPath,
+                coreLibPath,
+            )
+        }
         val argv = caInstallArgv(command, System.getProperty("java.class.path"), pemPath, coreLibPath)
         return run(*argv.toTypedArray(), deniedExit = PKEXEC_DENIED)
     }
@@ -558,6 +620,17 @@ class DesktopPrivileges(
     fun requestRootCaRemove(coreLibPath: String): PrivilegeOutcome {
         val command = selfArgv()?.first()
             ?: return PrivilegeOutcome.Failed("cannot read this process's own command line")
+        if (isWindows) {
+            return run(
+                command,
+                "--enable-native-access=ALL-UNNAMED",
+                "-cp",
+                System.getProperty("java.class.path"),
+                CA_INSTALL_MAIN,
+                CA_REMOVE_MODE,
+                coreLibPath,
+            )
+        }
         val argv = caRemoveArgv(command, System.getProperty("java.class.path"), coreLibPath)
         return run(*argv.toTypedArray(), deniedExit = PKEXEC_DENIED)
     }
@@ -639,6 +712,22 @@ class DesktopPrivileges(
         PrivilegeOutcome.Failed(failure.message ?: failure.javaClass.simpleName)
     }
 
+    /**
+     * Turns the Windows redirect on. `null` means it is running; an outcome is
+     * the reason it is not, phrased as the reason the caller must show.
+     *
+     * The two ports are the same two the Linux ruleset redirects to, because
+     * they are the listeners' own ports, not a platform choice.
+     */
+    private fun startRedirect(
+        tcpPort: Int = DEFAULT_PROXY_PORT,
+        dnsPort: Int = DEFAULT_DNS_PORT,
+    ): PrivilegeOutcome? {
+        val error = runCatching { git.shin.adfree.core.coreRedirectStart(tcpPort.toUShort(), dnsPort.toUShort()) }
+            .getOrElse { it.message ?: "the redirect could not be started" }
+        return if (error.isNullOrBlank()) null else PrivilegeOutcome.Failed(error)
+    }
+
     internal companion object {
         // Linux numbers, and the mark `rust/src/proxy` puts on its sockets.
         const val AF_INET = 2
@@ -665,11 +754,17 @@ class DesktopPrivileges(
         const val UNIT_START_POLL_MS = 250L
         /** The port the desktop proxy listens on when the settings say nothing. */
         const val DEFAULT_PROXY_PORT = 3129
+        /** The port the local resolver listens on; the redirect sends DNS here. */
+        const val DEFAULT_DNS_PORT = 5300
         /** How long a probe waits for the local proxy to accept a connection. */
         const val LISTENER_PROBE_MS = 400
         const val CA_INSTALL_MAIN = "git.shin.adfree.desktop.CaInstallKt"
     }
 }
+
+/** Whether this JVM is running on Windows, asked once per process. */
+internal fun isWindowsHost(): Boolean =
+    System.getProperty("os.name").orEmpty().lowercase().startsWith("windows")
 
 /**
  * True when a connection to `port` on loopback is accepted.
