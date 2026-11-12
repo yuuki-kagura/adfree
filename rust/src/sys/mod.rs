@@ -51,6 +51,29 @@ pub mod fd {
     }
     /// A descriptor in an atomic cell (the engine's TUN handle).
     pub type AtomicFd = std::sync::atomic::AtomicI32;
+
+    /// The wait set's kernel handle: here, an `epoll` descriptor.
+    pub type Epoll = RawFd;
+    pub const NO_EPOLL: Epoll = -1;
+    pub fn epoll_ok(ep: Epoll) -> bool {
+        ep >= 0
+    }
+    pub fn epoll_create1(flags: i32) -> Epoll {
+        unsafe { ::libc::epoll_create1(flags) }
+    }
+    pub fn epoll_ctl(ep: Epoll, op: i32, fd: RawFd, ev: &mut ::libc::epoll_event) -> i32 {
+        unsafe { ::libc::epoll_ctl(ep, op, fd, ev) }
+    }
+    pub fn epoll_wait(ep: Epoll, evs: &mut [::libc::epoll_event], timeout: i32) -> i32 {
+        unsafe {
+            ::libc::epoll_wait(ep, evs.as_mut_ptr(), evs.len() as i32, timeout)
+        }
+    }
+    pub fn epoll_close(ep: Epoll) {
+        unsafe {
+            ::libc::close(ep);
+        }
+    }
 }
 
 #[cfg(windows)]
@@ -71,6 +94,30 @@ pub mod fd {
     }
     /// A descriptor in an atomic cell (the engine's TUN handle).
     pub type AtomicFd = std::sync::atomic::AtomicU64;
+
+    /// The wait set's kernel handle. Windows has no `epoll`, so this is a wepoll
+    /// instance — an IOCP port dressed in epoll's clothes — and the four calls
+    /// below are the same four the Unix branch makes. One wait set, one set of
+    /// semantics, no second implementation to keep in step.
+    pub type Epoll = isize;
+    pub const NO_EPOLL: Epoll = 0;
+    pub fn epoll_ok(ep: Epoll) -> bool {
+        ep != NO_EPOLL
+    }
+    pub fn epoll_create1(flags: i32) -> Epoll {
+        unsafe { crate::sys::winlibc::wepoll_create1(flags) }
+    }
+    pub fn epoll_ctl(ep: Epoll, op: i32, fd: RawFd, ev: &mut crate::sys::winlibc::epoll_event) -> i32 {
+        unsafe { crate::sys::winlibc::wepoll_ctl(ep, op, fd, ev) }
+    }
+    pub fn epoll_wait(ep: Epoll, evs: &mut [crate::sys::winlibc::epoll_event], timeout: i32) -> i32 {
+        unsafe { crate::sys::winlibc::wepoll_wait(ep, evs, timeout) }
+    }
+    pub fn epoll_close(ep: Epoll) {
+        unsafe {
+            crate::sys::winlibc::wepoll_close(ep);
+        }
+    }
 
     pub trait AsRawFd {
         fn as_raw_fd(&self) -> RawFd;

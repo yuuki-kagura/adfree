@@ -186,19 +186,65 @@ pub const POLLRDHUP: c_short = 0x2000;
 const POLLRDNORM: c_short = 0x0100;
 const POLLWRNORM: c_short = 0x0010;
 
-// The wait-set vocabulary: the engine's `WaitEntry::bits` is written in
-// `EPOLL*` names, and on Windows those names describe the same mask this
-// module's `poll` speaks, so they are aliased rather than renumbered.
+// The wait-set vocabulary. wepoll uses Linux's own numbering, so these need no
+// translation at all — `EPOLLIN` is bit 0 on both, and `poll_revents` in
+// `waitset` reads them exactly as it does on Unix.
 pub const EPOLLIN: c_int = POLLIN as c_int;
 pub const EPOLLPRI: c_int = POLLPRI as c_int;
 pub const EPOLLOUT: c_int = POLLOUT as c_int;
 pub const EPOLLERR: c_int = POLLERR as c_int;
 pub const EPOLLHUP: c_int = POLLHUP as c_int;
 pub const EPOLLRDHUP: c_int = POLLRDHUP as c_int;
-// No epoll here; `waitset` calls these through a `ctl` that does nothing.
 pub const EPOLL_CTL_ADD: c_int = 1;
-pub const EPOLL_CTL_DEL: c_int = 2;
-pub const EPOLL_CTL_MOD: c_int = 3;
+pub const EPOLL_CTL_MOD: c_int = 2;
+pub const EPOLL_CTL_DEL: c_int = 3;
+pub const EPOLL_CLOEXEC: c_int = 0;
+
+/// wepoll's `struct epoll_event`: `uint32_t events` then an 8-byte union, so 16
+/// bytes with the padding the C struct has (Linux's is packed into 12).
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct epoll_event {
+    pub events: u32,
+    pub u64: u64,
+}
+
+extern "C" {
+    fn epoll_create1(flags: c_int) -> *mut c_void;
+    fn epoll_ctl(ephnd: *mut c_void, op: c_int, sock: usize, event: *mut epoll_event) -> c_int;
+    fn epoll_wait(
+        ephnd: *mut c_void,
+        events: *mut epoll_event,
+        maxevents: c_int,
+        timeout: c_int,
+    ) -> c_int;
+    fn epoll_close(ephnd: *mut c_void) -> c_int;
+}
+
+pub unsafe fn wepoll_create1(flags: c_int) -> isize {
+    unsafe { epoll_create1(flags) as isize }
+}
+
+pub unsafe fn wepoll_ctl(ep: isize, op: c_int, fd: RawFd, ev: &mut epoll_event) -> c_int {
+    unsafe { epoll_ctl(ep as *mut c_void, op, fd as usize, ev) }
+}
+
+pub unsafe fn wepoll_wait(ep: isize, evs: &mut [epoll_event], timeout: c_int) -> c_int {
+    unsafe {
+        epoll_wait(
+            ep as *mut c_void,
+            evs.as_mut_ptr(),
+            evs.len() as c_int,
+            timeout,
+        )
+    }
+}
+
+pub unsafe fn wepoll_close(ep: isize) {
+    unsafe {
+        epoll_close(ep as *mut c_void);
+    }
+}
 
 // `fcntl` stand-ins: only `O_NONBLOCK` exists here, and it is not a flag bit.
 pub const F_GETFL: c_int = 0;

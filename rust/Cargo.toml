@@ -16,6 +16,12 @@ crate-type = ["cdylib", "rlib"]
 name = "adfree-native-host"
 path = "src/bin/adfree_native_host.rs"
 
+[build-dependencies]
+# Compiles the vendored wepoll (`vendor/wepoll`) for Windows targets: `epoll`
+# over IOCP, so the wait set is the same code on every platform instead of two
+# implementations that have to be kept in step.
+cc = "1"
+
 [target.'cfg(windows)'.dependencies]
 # The proxy speaks BSD sockets; Winsock is the same vocabulary with different
 # names, and these are the names. Feature list kept to what `sys::winlibc`

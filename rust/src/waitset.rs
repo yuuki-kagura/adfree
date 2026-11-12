@@ -136,10 +136,10 @@ impl std::hash::Hasher for FdHasher {
 type FdTable<S> = HashMap<RawFd, S, std::hash::BuildHasherDefault<FdHasher>>;
 
 pub struct WaitSet {
-    /// The `epoll` instance. Unix only: Windows has no `epoll`, and the set
-    /// there is the `poll` array rebuilt in [`WaitSet::wait`] instead.
-    #[cfg(unix)]
-    ep: RawFd,
+    /// The `epoll` instance: a real one on Unix, a wepoll (IOCP) one on
+    /// Windows. Both are reached through `sys::fd`, so this file is the same
+    /// code on either platform.
+    ep: crate::sys::fd::Epoll,
     interest: FdTable<Slot>,
     /// Incremented per `sync`; a slot carrying the current stamp survived it.
     stamp: u32,
@@ -151,12 +151,7 @@ pub struct WaitSet {
     /// the reason the set is cheaper than `poll()`; growth says the traffic is
     /// churning its relays, and then the saving is smaller.
     ops: u64,
-    #[cfg(unix)]
     events: Vec<libc::epoll_event>,
-    /// The `poll` array for the next wait; rebuilt on every pass, because the
-    /// interest table is the only thing that has to be maintained.
-    #[cfg(windows)]
-    fds: Vec<libc::pollfd>,
     ready: Vec<Ready>,
 }
 
@@ -189,15 +184,11 @@ impl Default for WaitSet {
 impl WaitSet {
     pub fn new() -> Self {
         Self {
-            #[cfg(unix)]
-            ep: unsafe { libc::epoll_create1(libc::EPOLL_CLOEXEC) },
-            #[cfg(windows)]
-            fds: Vec::new(),
+            ep: crate::sys::fd::epoll_create1(libc::EPOLL_CLOEXEC),
             interest: FdTable::default(),
             stamp: 0,
             stamped: 0,
             ops: 0,
-            #[cfg(unix)]
             events: vec![
                 libc::epoll_event { events: 0, u64: 0 };
                 MAX_READY
@@ -259,17 +250,7 @@ impl WaitSet {
     /// before syncing again.
     pub fn wait(&mut self, timeout_ms: libc::c_int) -> &[Ready] {
         self.ready.clear();
-        #[cfg(unix)]
-        self.wait_epoll(timeout_ms);
-        #[cfg(windows)]
-        self.wait_poll(timeout_ms);
-        &self.ready
-    }
-
-    /// Unix: whatever `epoll_wait` says is ready, translated to `POLL*` bits.
-    #[cfg(unix)]
-    fn wait_epoll(&mut self, timeout_ms: libc::c_int) {
-        if self.ep < 0 {
+        if !crate::sys::fd::epoll_ok(self.ep) {
             // `epoll_create1` failed once, at startup (descriptor exhaustion is
             // the only error it can return here, and an engine that cannot
             // create an epoll fd cannot create flow sockets either). Nothing
@@ -278,22 +259,16 @@ impl WaitSet {
             if timeout_ms > 0 {
                 std::thread::sleep(std::time::Duration::from_millis(timeout_ms as u64));
             }
-            return;
+            return &self.ready;
         }
-        let n = unsafe {
-            libc::epoll_wait(
-                self.ep,
-                self.events.as_mut_ptr(),
-                MAX_READY as libc::c_int,
-                timeout_ms,
-            )
-        };
+        let n = crate::sys::fd::epoll_wait(self.ep, &mut self.events, timeout_ms);
         if n <= 0 {
-            return;
+            return &self.ready;
         }
         for ev in &self.events[..n as usize] {
-            // `epoll_event` is `repr(packed)` on x86_64: copy the fields out
-            // rather than borrowing them.
+            // `epoll_event` is `repr(packed)` on x86_64 Linux: copy the fields
+            // out rather than borrowing them. (`sys::fd` keeps the Windows
+            // shape in step with wepoll's C struct.)
             let (bits, data) = (ev.events, ev.u64);
             let Some(slot) = self.interest.get(&(data as RawFd)) else {
                 continue;
@@ -303,59 +278,7 @@ impl WaitSet {
                 revents: poll_revents(bits),
             });
         }
-    }
-
-    /// Windows: `WSAPoll` over the interest table.
-    ///
-    /// There is no registration to keep in sync kernel-side, so the array is
-    /// built here from the same table `sync` just refreshed. `WSAPoll` reports
-    /// `POLLRDNORM`/`POLLWRNORM`, which `sys::winlibc::poll` has already folded
-    /// back into the `POLL*` bits the dispatchers read, so nothing needs
-    /// translating a second time.
-    #[cfg(windows)]
-    fn wait_poll(&mut self, timeout_ms: libc::c_int) {
-        self.fds.clear();
-        self.fds.extend(self.interest.iter().filter_map(|(fd, slot)| {
-            if slot.bits == 0 {
-                return None;
-            }
-            Some(libc::pollfd {
-                fd: *fd,
-                events: slot.bits as libc::c_short,
-                revents: 0,
-            })
-        }));
-        if self.fds.is_empty() {
-            if timeout_ms > 0 {
-                std::thread::sleep(std::time::Duration::from_millis(timeout_ms as u64));
-            }
-            return;
-        }
-        let n = unsafe {
-            libc::poll(
-                self.fds.as_mut_ptr(),
-                self.fds.len() as libc::nfds_t,
-                timeout_ms,
-            )
-        };
-        if n <= 0 {
-            return;
-        }
-        for p in &self.fds {
-            if p.revents == 0 {
-                continue;
-            }
-            let Some(slot) = self.interest.get(&p.fd) else {
-                continue;
-            };
-            self.ready.push(Ready {
-                entry: slot.entry,
-                revents: p.revents,
-            });
-            if self.ready.len() >= MAX_READY {
-                break;
-            }
-        }
+        &self.ready
     }
 
     /// Brings one descriptor's registration in line with what the engine wants
@@ -365,7 +288,7 @@ impl WaitSet {
     /// which is what lets [`WaitSet::sync`] skip the reap when nothing went
     /// missing: two snapshot rows on one descriptor must not read as two.
     fn reconcile(&mut self, fd: RawFd, entry: WaitEntry) {
-        let (ep, stamp) = (self.epoll_fd(), self.stamp);
+        let (ep, stamp) = (self.ep, self.stamp);
         let bits = entry.bits();
         if bits == 0 {
             // Left out of the set; `drop_gone` unregisters it if it was in.
@@ -433,7 +356,7 @@ impl WaitSet {
     /// the walk would delete nothing. A failed `epoll_ctl` can drop a slot it had
     /// already counted, which lands on the safe side of the test — the walk runs.
     fn drop_gone(&mut self) {
-        let (ep, stamp) = (self.epoll_fd(), self.stamp);
+        let (ep, stamp) = (self.ep, self.stamp);
         let mut gone = 0u64;
         self.interest.retain(|fd, slot| {
             if slot.stamp == stamp {
@@ -446,52 +369,30 @@ impl WaitSet {
     }
 }
 
-impl WaitSet {
-    /// The `epoll` instance on Unix; a value `ctl` ignores on Windows, where
-    /// the interest table *is* the registration.
-    fn epoll_fd(&self) -> RawFd {
-        #[cfg(unix)]
-        {
-            self.ep
-        }
-        #[cfg(windows)]
-        {
-            libc::INVALID_SOCKET
-        }
-    }
-}
-
 /// One `epoll_ctl`, counted: a pass that issues none is a pass whose relays
 /// kept the interest they already had.
-fn ctl(ep: RawFd, op: libc::c_int, fd: RawFd, bits: u32, ops: &mut u64) -> libc::c_int {
-    #[cfg(windows)]
-    {
-        // Nothing to register: `wait_poll` reads the table directly. The op is
-        // not counted either, so `ops()` keeps its meaning of "kernel calls".
-        let _ = (ep, op, fd, bits, ops);
-        return 0;
-    }
-    #[cfg(unix)]
-    {
+fn ctl(
+    ep: crate::sys::fd::Epoll,
+    op: libc::c_int,
+    fd: RawFd,
+    bits: u32,
+    ops: &mut u64,
+) -> libc::c_int {
     *ops += 1;
-    if ep < 0 {
+    if !crate::sys::fd::epoll_ok(ep) {
         return -1;
     }
     let mut ev = libc::epoll_event {
         events: bits,
         u64: fd as u64,
     };
-    unsafe { libc::epoll_ctl(ep, op, fd, &mut ev) }
-    }
+    crate::sys::fd::epoll_ctl(ep, op, fd, &mut ev)
 }
 
 impl Drop for WaitSet {
     fn drop(&mut self) {
-        #[cfg(unix)]
-        if self.ep >= 0 {
-            unsafe {
-                libc::close(self.ep);
-            }
+        if crate::sys::fd::epoll_ok(self.ep) {
+            crate::sys::fd::epoll_close(self.ep);
         }
     }
 }

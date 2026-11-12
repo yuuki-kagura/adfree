@@ -45,6 +45,7 @@ dependencies = [
  "aho-corasick",
  "base64",
  "bytes",
+ "cc",
  "flate2",
  "h3",
  "h3-quinn",
