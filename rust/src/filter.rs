@@ -1758,6 +1758,11 @@ impl FilterEngine {
                 "filter: {module_skipped} lists left out (their protection module is off)"
             ));
         }
+        if deduped > 0 {
+            crate::logbuf::push(&format!(
+                "filter: {deduped} rule lines repeated an earlier list and were left out"
+            ));
+        }
         let js_rules = build_js_rules(js_scan);
         if let Some(rules) = js_rules.as_ref() {
             crate::logbuf::push(&format!(
