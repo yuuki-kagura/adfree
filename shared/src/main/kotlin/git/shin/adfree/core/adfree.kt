@@ -807,6 +807,16 @@ internal object IntegrityCheckingUniffiLib {
     ): Int
     external fun uniffi_adfree_core_checksum_func_core_proxy_status(
     ): Int
+    external fun uniffi_adfree_core_checksum_func_core_redirect_live_flows(
+    ): Int
+    external fun uniffi_adfree_core_checksum_func_core_redirect_packets_seen(
+    ): Int
+    external fun uniffi_adfree_core_checksum_func_core_redirect_running(
+    ): Int
+    external fun uniffi_adfree_core_checksum_func_core_redirect_start(
+    ): Int
+    external fun uniffi_adfree_core_checksum_func_core_redirect_stop(
+    ): Int
     external fun uniffi_adfree_core_checksum_func_core_relay_count(
     ): Int
     external fun uniffi_adfree_core_checksum_func_core_remove_node_ca(
@@ -1027,6 +1037,16 @@ internal object UniffiLib {
     ): Byte
     external fun uniffi_adfree_core_fn_func_core_proxy_status(uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
+    external fun uniffi_adfree_core_fn_func_core_redirect_live_flows(uniffi_out_err: UniffiRustCallStatus, 
+    ): Long
+    external fun uniffi_adfree_core_fn_func_core_redirect_packets_seen(uniffi_out_err: UniffiRustCallStatus, 
+    ): Long
+    external fun uniffi_adfree_core_fn_func_core_redirect_running(uniffi_out_err: UniffiRustCallStatus, 
+    ): Byte
+    external fun uniffi_adfree_core_fn_func_core_redirect_start(`proxyPort`: Short,`dnsPort`: Short,uniffi_out_err: UniffiRustCallStatus, 
+    ): RustBuffer.ByValue
+    external fun uniffi_adfree_core_fn_func_core_redirect_stop(uniffi_out_err: UniffiRustCallStatus, 
+    ): Unit
     external fun uniffi_adfree_core_fn_func_core_relay_count(uniffi_out_err: UniffiRustCallStatus, 
     ): Int
     external fun uniffi_adfree_core_fn_func_core_remove_node_ca(uniffi_out_err: UniffiRustCallStatus, 
@@ -1366,6 +1386,21 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if ((lib.uniffi_adfree_core_checksum_func_core_proxy_status() and 0xFFFF) != 33741) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if ((lib.uniffi_adfree_core_checksum_func_core_redirect_live_flows() and 0xFFFF) != 3568) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if ((lib.uniffi_adfree_core_checksum_func_core_redirect_packets_seen() and 0xFFFF) != 13714) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if ((lib.uniffi_adfree_core_checksum_func_core_redirect_running() and 0xFFFF) != 12519) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if ((lib.uniffi_adfree_core_checksum_func_core_redirect_start() and 0xFFFF) != 31737) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if ((lib.uniffi_adfree_core_checksum_func_core_redirect_stop() and 0xFFFF) != 27122) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if ((lib.uniffi_adfree_core_checksum_func_core_relay_count() and 0xFFFF) != 38928) {
@@ -7260,6 +7295,76 @@ public object FfiConverterSequenceTypeUidApps: FfiConverterRustBuffer<List<UidAp
 }
     )
     }
+    
+
+        /**
+         * Connections the redirect is holding a mapping for.
+         */ fun `coreRedirectLiveFlows`(): kotlin.Long {
+            return FfiConverterLong.lift(
+    uniffiRustCall() { _status ->
+    UniffiLib.uniffi_adfree_core_fn_func_core_redirect_live_flows(
+    
+        _status)
+}
+    )
+    }
+    
+
+        /**
+         * Packets the redirect has looked at. `i64` rather than `u64`: the Kotlin side
+         * shows this number and nothing else, and `ULong` in Kotlin is an opt-in type
+         * that would spread through the UI for no gain.
+         */ fun `coreRedirectPacketsSeen`(): kotlin.Long {
+            return FfiConverterLong.lift(
+    uniffiRustCall() { _status ->
+    UniffiLib.uniffi_adfree_core_fn_func_core_redirect_packets_seen(
+    
+        _status)
+}
+    )
+    }
+    
+
+        /**
+         * Whether the driver loop is running.
+         */ fun `coreRedirectRunning`(): kotlin.Boolean {
+            return FfiConverterBoolean.lift(
+    uniffiRustCall() { _status ->
+    UniffiLib.uniffi_adfree_core_fn_func_core_redirect_running(
+    
+        _status)
+}
+    )
+    }
+    
+
+        /**
+         * Starts the Windows redirect towards the local proxy and resolver. Returns
+         * the reason when it could not start, so the caller can show it instead of
+         * pretending protection came on.
+         */ fun `coreRedirectStart`(`proxyPort`: kotlin.UShort, `dnsPort`: kotlin.UShort): kotlin.String? {
+            return FfiConverterOptionalString.lift(
+    uniffiRustCall() { _status ->
+    UniffiLib.uniffi_adfree_core_fn_func_core_redirect_start(
+    
+        
+        FfiConverterUShort.lower(`proxyPort`),
+        FfiConverterUShort.lower(`dnsPort`),_status)
+}
+    )
+    }
+    
+
+        /**
+         * Ends the redirect and waits for its thread.
+         */ fun `coreRedirectStop`()
+        = 
+    uniffiRustCall() { _status ->
+    UniffiLib.uniffi_adfree_core_fn_func_core_redirect_stop(
+    
+        _status)
+}
+    
     
 
         /**

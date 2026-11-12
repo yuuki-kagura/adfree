@@ -1949,3 +1949,45 @@ mod mitm_api_tests {
         assert!(!core_restore_ca("not a cert".into(), "not a key".into()));
     }
 }
+
+// ---------------------------------------------------------------- redirect
+//
+// On Windows the machine's traffic has to be steered at the proxy by a driver,
+// because there is no rule table to install. These four calls are that steering
+// as the app sees it: same names, same shapes, on every platform, so the Kotlin
+// side needs no `if (windows)` around them — on Linux and Android they answer
+// "there is no driver here" and do nothing.
+
+/// Starts the Windows redirect towards the local proxy and resolver. Returns
+/// the reason when it could not start, so the caller can show it instead of
+/// pretending protection came on.
+#[uniffi::export]
+pub fn core_redirect_start(proxy_port: u16, dns_port: u16) -> Option<String> {
+    crate::wredirect::start(proxy_port, dns_port).err()
+}
+
+/// Ends the redirect and waits for its thread.
+#[uniffi::export]
+pub fn core_redirect_stop() {
+    crate::wredirect::stop();
+}
+
+/// Whether the driver loop is running.
+#[uniffi::export]
+pub fn core_redirect_running() -> bool {
+    crate::wredirect::status().running
+}
+
+/// Packets the redirect has looked at. `i64` rather than `u64`: the Kotlin side
+/// shows this number and nothing else, and `ULong` in Kotlin is an opt-in type
+/// that would spread through the UI for no gain.
+#[uniffi::export]
+pub fn core_redirect_packets_seen() -> i64 {
+    crate::wredirect::status().packets_seen as i64
+}
+
+/// Connections the redirect is holding a mapping for.
+#[uniffi::export]
+pub fn core_redirect_live_flows() -> i64 {
+    crate::wredirect::status().live_flows as i64
+}

@@ -637,6 +637,32 @@ class CoreEngine(
      * What this machine has blocked since it was installed, read from the
      * store rather than from counters that start over with the process.
      */
+    /**
+     * The Windows driver redirect.
+     *
+     * On Windows the machine's traffic is steered at the proxy by WinDivert,
+     * because there is no rule table to install the way `nft` does it on Linux.
+     * These four calls are that steering; elsewhere they answer "no driver here"
+     * and change nothing, so a caller does not need to ask which platform it is
+     * on.
+     */
+    fun startRedirect(proxyPort: Int, dnsPort: Int): String? =
+        runCatching { git.shin.adfree.core.coreRedirectStart(proxyPort.toUShort(), dnsPort.toUShort()) }
+            .getOrElse { it.message }
+
+    fun stopRedirect() {
+        runCatching { git.shin.adfree.core.coreRedirectStop() }
+    }
+
+    fun redirectRunning(): Boolean =
+        runCatching { git.shin.adfree.core.coreRedirectRunning() }.getOrDefault(false)
+
+    fun redirectPacketsSeen(): Long =
+        runCatching { git.shin.adfree.core.coreRedirectPacketsSeen() }.getOrDefault(0L)
+
+    fun redirectLiveFlows(): Long =
+        runCatching { git.shin.adfree.core.coreRedirectLiveFlows() }.getOrDefault(0L)
+
     fun logTotals(): git.shin.adfree.core.LogTotals =
         runCatching { git.shin.adfree.core.coreLogTotals() }
             .getOrDefault(git.shin.adfree.core.LogTotals(0uL, 0uL, 0uL, 0uL))
