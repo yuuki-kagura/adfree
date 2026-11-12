@@ -1,3 +1,15 @@
+# [1.8.0](https://github.com/yuuki-kagura/adfree/compare/v1.7.2...v1.8.0) (2026-11-12)
+
+
+### Features
+
+* **scripts:** refresh the shipped modules from the release assets ([8522927](https://github.com/yuuki-kagura/adfree/commit/8522927201fcea98391382e9a1f52d7afc0bc60e))
+
+
+### Performance Improvements
+
+* **core:** drop rule lines an earlier list already carries ([0a27d70](https://github.com/yuuki-kagura/adfree/commit/0a27d70098031e1dabc2871d61032afd407f0b76))
+
 ## [1.7.2](https://github.com/yuuki-kagura/adfree/compare/v1.7.1...v1.7.2) (2026-11-12)
 
 
