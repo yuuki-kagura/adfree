@@ -132,6 +132,45 @@ Recommended order stays: (2) first, because it is days of work and covers the
 browsers; then (1) if whole-system coverage is wanted, since it is the only
 free path to it, with the AV-false-positive risk accepted and documented.
 
+## Decision taken — WinDivert, and the app runs elevated
+
+The user chose the WinDivert route and stated the operating assumption we build
+on: **AdFree for Windows runs with Administrator rights, always.** That removes
+option (2) from the table above as the primary mechanism — a system proxy cannot
+see an app that ignores it — and it removes the "which app is talking" question
+from the redirector, because the filter can be told the whole machine.
+
+What that changes in the core, concretely:
+
+* the redirector is a userspace NAT: it rewrites the destination of outbound
+  SYN to `127.0.0.1:3129`, records `(client ip:port → original ip:port)` and
+  rewrites the replies back, which is exactly what `nft` + conntrack does for us
+  on Linux. WinDivert supplies the packet surgery and checksum fixing;
+* because the redirector is ours, `SO_ORIGINAL_DST` has no counterpart and
+  `sys::original_destination` correctly answers `None` on Windows (see `af8c2e3`);
+* DNS moves the same way: UDP 53 is redirected to the local resolver, and QUIC
+  (UDP 443) is dropped so TCP+TLS is the only path out;
+* the proxy's own sockets need no firewall mark: the filter excludes them by
+  process id and port.
+
+### Autostart without a UAC prompt
+
+A `requireAdministrator` manifest launched from a `Run` key prompts at **every**
+logon — the prompt is on the secure desktop and needs a click, so a `Run` entry
+is not an autostart, it is a reminder. Two mechanisms do start elevated silently,
+both installed once by the installer:
+
+| Mechanism | Prompt at logon | Notes |
+| --- | --- | --- |
+| Task Scheduler task, `/RL HIGHEST`, trigger `ONLOGON` | none | Runs in the user's session, so the tray icon and window work; the task must be created by an elevated installer |
+| Service as `LocalSystem` | none | Session 0, no UI: needs an unelevated UI talking over a pipe (the AdGuard model), and ownership of a named-pipe ACL |
+
+Chosen for the first port: the **scheduled task**, because the app is one
+process that draws the tray and holds the driver handle; a service split buys
+nothing until the app needs to keep filtering while nobody is logged in. The
+service split is the shape to move to if that requirement appears, and it is the
+only shape that survives a user logging out.
+
 ## Decision 2 — where the portable socket layer lives
 
 Introduce `rust/src/sys/` with two implementations behind `cfg`:
