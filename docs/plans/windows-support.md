@@ -171,6 +171,39 @@ nothing until the app needs to keep filtering while nobody is logged in. The
 service split is the shape to move to if that requirement appears, and it is the
 only shape that survives a user logging out.
 
+## Where the port stands
+
+The measurement this plan started with was 475 compile errors, all of them
+"something Unix". It is now **zero**: `cargo build --release --target
+x86_64-pc-windows-gnu --lib` produces `adfree_core.dll`, and `scripts/windows-check.sh`
+exits 0.
+
+What that took, in the order it happened:
+
+| Commit | What it did |
+| --- | --- |
+| `af8c2e3` | the two kernel questions (`SO_ORIGINAL_DST`, `SO_MARK`) move into `sys`, Windows answers them honestly (475 → 460) |
+| `1a05349` | `sys::libc` — the Winsock namesake: constants, `sockaddr_*`, `poll` over `WSAPoll`, WSA errno numbers; `sys::fd` for the descriptor vocabulary (460 → 187) |
+| *this one* | the facilities that have no Winsock equivalent — `eventfd` and `socketpair` as a self-connected loopback datagram socket, a `poll`-backed `WaitSet`, the packet-info types as compile-only shells |
+
+Two things changed shape rather than gained a shim, and they are the ones worth
+reviewing:
+
+* **`waitset`**: `epoll` is Unix-only, so the set now has two backends behind one
+  API — `epoll_wait` on Unix, and on Windows a `WSAPoll` array rebuilt from the
+  interest table on every pass. The table is the registration there; `ops()`
+  still means "kernel calls" and stays 0 on Windows.
+* **wake channels**: `eventfd` and `socketpair` are a UDP socket bound to
+  `127.0.0.1:0` and connected to itself, duplicated for the pair. A write is
+  immediately a readable event on the handle the loop polls, which is the whole
+  contract the loop relies on.
+
+Still Unix-only, deliberately, and named so they are not mistaken for ported:
+the TUN forwarder's tests, the assistant's native-messaging host (a Unix socket
+is the authorization as well as the transport — Windows needs a named pipe with
+an ACL), and every path that expects `IP_PKTINFO` to name a redirected
+destination, because on Windows the component that redirects will name it.
+
 ## Decision 2 — where the portable socket layer lives
 
 Introduce `rust/src/sys/` with two implementations behind `cfg`:

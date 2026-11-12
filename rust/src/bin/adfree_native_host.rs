@@ -18,6 +18,12 @@
 //! used, because the socket is the authorization: only a process that can read
 //! this user's runtime directory can connect to it.
 
+
+/// The host itself. Unix only: it reaches the app over a Unix socket, which is
+/// the authorization as much as the transport, and Windows will need a named
+/// pipe with its own ACL when that build lands.
+#[cfg(unix)]
+mod host {
 use std::io::{self, Read, Write};
 use std::os::unix::net::UnixStream;
 use std::path::PathBuf;
@@ -169,7 +175,7 @@ fn unavailable(request: &[u8]) -> Vec<u8> {
     unavailable_with(request, "AdFree is not running")
 }
 
-fn main() {
+    pub fn main() {
     let stdin = io::stdin();
     let mut input = stdin.lock();
     let stdout = io::stdout();
@@ -278,4 +284,19 @@ mod tests {
         assert_eq!(parsed["result"], "error");
         assert!(parsed["data"].as_str().unwrap_or_default().contains("not running"));
     }
+}
+
+}
+
+#[cfg(unix)]
+fn main() {
+    host::main()
+}
+
+#[cfg(not(unix))]
+fn main() {
+    // Chrome would have to be told a host exists before it can call one, so a
+    // build without the host is a build that never gets here.
+    eprintln!("adfree-native-host: not implemented on this platform");
+    std::process::exit(1);
 }

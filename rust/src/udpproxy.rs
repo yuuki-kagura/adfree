@@ -73,7 +73,7 @@ fn peer_socket(
     if fd < 0 {
         return None;
     }
-    if !protector.protect(fd) {
+    if !protector.protect(fd as i32) {
         unsafe { libc::close(fd) };
         return None;
     }
@@ -257,7 +257,7 @@ fn is_unspecified(address: IpKey) -> bool {
 }
 
 fn set_blocking(fd: RawFd) {
-    let flags = unsafe { libc::fcntl(fd, libc::F_GETFL) };
+    let flags = unsafe { libc::fcntl(fd, libc::F_GETFL, 0) };
     if flags >= 0 {
         unsafe { libc::fcntl(fd, libc::F_SETFL, flags & !libc::O_NONBLOCK) };
     }

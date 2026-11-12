@@ -507,7 +507,7 @@ fn connect(
         return Err(error);
     }
 
-    let flags = unsafe { libc::fcntl(fd, libc::F_GETFL) };
+    let flags = unsafe { libc::fcntl(fd, libc::F_GETFL, 0) };
     if flags >= 0 {
         unsafe { libc::fcntl(fd, libc::F_SETFL, flags | libc::O_NONBLOCK) };
     }
@@ -571,7 +571,7 @@ fn connect(
 
 fn protect(protector: Option<&dyn SocketProtector>, fd: RawFd) -> Result<(), SecureError> {
     match protector {
-        Some(protector) if !protector.protect(fd) => Err(SecureError::Protect),
+        Some(protector) if !protector.protect(fd as i32) => Err(SecureError::Protect),
         _ => Ok(()),
     }
 }

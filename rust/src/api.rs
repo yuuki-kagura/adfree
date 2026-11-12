@@ -345,7 +345,7 @@ pub fn core_version() -> String {
 #[uniffi::export]
 pub fn core_start(tun_fd: i32) {
     guard((), || {
-        crate::core().start(tun_fd as std::os::unix::io::RawFd);
+        crate::core().start(tun_fd as crate::sys::fd::RawFd);
     })
 }
 

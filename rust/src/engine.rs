@@ -3175,7 +3175,7 @@ impl Core {
             None => (dst, pkt.dst_port),
         };
         let (peer_fd, connecting) = if local {
-            (-1, false)
+            (crate::sys::fd::NO_FD, false)
         } else {
             let Some(peer_fd) = self.open_peer_socket(dial_addr, libc::SOCK_STREAM) else {
                 self.refuse_setup(&pkt, job.port, job.my_seq, None);
@@ -3528,7 +3528,7 @@ impl Core {
     fn protect_socket(&self, fd: RawFd) -> bool {
         let protector = self.socket_protector.lock().unwrap().clone();
         match protector {
-            Some(p) => p.protect(fd),
+            Some(p) => p.protect(fd as i32),
             None => false,
         }
     }
@@ -5334,7 +5334,7 @@ fn tun_loop(core: &'static Core, fd: RawFd) {
     // Make the descriptor non-blocking: we then always `poll` before `read`,
     // which is the only way to both avoid a busy loop and react to `stop()`.
     unsafe {
-        let flags = libc::fcntl(fd, libc::F_GETFL);
+        let flags = libc::fcntl(fd, libc::F_GETFL, 0);
         if flags >= 0 {
             libc::fcntl(fd, libc::F_SETFL, flags | libc::O_NONBLOCK);
         }
@@ -6074,7 +6074,7 @@ fn write_atomic(
     std::fs::rename(&tmp, dir.join(name)).is_ok()
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 mod tests {
     use super::*;
     use crate::dnsrewrite::DnsRewriteRule;

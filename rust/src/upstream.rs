@@ -85,7 +85,7 @@ pub struct Upstream {
 impl Upstream {
     pub fn new(resolver: SocketAddr) -> Self {
         Upstream {
-            fds: vec![-1; SOCKET_POOL],
+            fds: vec![crate::sys::fd::NO_FD; SOCKET_POOL],
             resolver,
             backup: None,
             pending: HashMap::new(),

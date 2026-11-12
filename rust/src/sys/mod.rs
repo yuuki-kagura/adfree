@@ -64,13 +64,13 @@ pub mod fd {
     pub type RawFd = RawSocket;
 
     /// "No descriptor": `INVALID_SOCKET`, which is *not* `-1` on Windows.
-    pub const NO_FD: RawFd = usize::MAX;
+    pub const NO_FD: RawFd = RawFd::MAX;
     /// Whether a stored descriptor names a live socket.
     pub fn fd_ok(fd: RawFd) -> bool {
         fd != NO_FD
     }
     /// A descriptor in an atomic cell (the engine's TUN handle).
-    pub type AtomicFd = std::sync::atomic::AtomicUsize;
+    pub type AtomicFd = std::sync::atomic::AtomicU64;
 
     pub trait AsRawFd {
         fn as_raw_fd(&self) -> RawFd;

@@ -769,7 +769,7 @@ mod tests {
         let proxy = ProxySession::new(session, "/adfree-user.js".into(), Arc::from(""));
         Relay::new_tls(
             crate::mitm::tcp::Flow::new(crate::packet::IpKey::V4(1), 40000, 443, 1000, 5000),
-            -1,
+            crate::sys::fd::NO_FD,
             proxy,
             Vec::new(),
             DEFAULT_MSS,
@@ -788,7 +788,7 @@ mod tests {
 
     fn plain_relay_with_syn() -> Relay {
         let flow = crate::mitm::tcp::Flow::new(crate::packet::IpKey::V4(1), 40000, 80, 1000, 5000);
-        let mut r = Relay::new_plain(flow, -1, syn_packet(), DEFAULT_MSS, false);
+        let mut r = Relay::new_plain(flow, crate::sys::fd::NO_FD, syn_packet(), DEFAULT_MSS, false);
         r.flow.up_bytes = 1;
         r
     }
@@ -804,7 +804,7 @@ mod tests {
     #[test]
     fn a_plain_relay_moves_bytes_untouched() {
         let flow = crate::mitm::tcp::Flow::new(crate::packet::IpKey::V4(1), 40000, 80, 1000, 5000);
-        let mut r = Relay::new_plain(flow, -1, syn_packet(), DEFAULT_MSS, false);
+        let mut r = Relay::new_plain(flow, crate::sys::fd::NO_FD, syn_packet(), DEFAULT_MSS, false);
         // No handshake to complete: bytes can flow immediately.
         assert!(r.is_established());
         let (to_peer, to_client) = r
@@ -1149,7 +1149,7 @@ mod tests {
         let proxy = ProxySession::new(session, String::new(), Arc::from(""));
         let mut relay = Relay::new_tls(
             crate::mitm::tcp::Flow::new(crate::packet::IpKey::V4(1), 40000, 443, 1000, 5000),
-            -1,
+            crate::sys::fd::NO_FD,
             proxy,
             Vec::new(),
             DEFAULT_MSS,

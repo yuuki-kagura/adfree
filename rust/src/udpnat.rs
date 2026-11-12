@@ -216,7 +216,7 @@ mod tests {
     fn flows_are_found_by_key() {
         let mut nat = UdpNat::new();
         nat.insert(UdpFlow {
-            fd: -1,
+            fd: crate::sys::fd::NO_FD,
             key: key(5000),
             template: Vec::new(),
             last_ms: 1000,
@@ -237,7 +237,7 @@ mod tests {
     fn silent_flows_are_expired() {
         let mut nat = UdpNat::new();
         nat.insert(UdpFlow {
-            fd: -1,
+            fd: crate::sys::fd::NO_FD,
             key: key(5000),
             template: Vec::new(),
             last_ms: 1000,
@@ -299,7 +299,7 @@ mod tests {
 
     fn counted_flow(port: u16, sent: u64, recv: u64) -> UdpFlow {
         UdpFlow {
-            fd: -1,
+            fd: crate::sys::fd::NO_FD,
             key: key(port),
             template: Vec::new(),
             last_ms: 1000,

@@ -560,7 +560,7 @@ fn last_errno() -> i32 {
 /// Sets the socket nonblocking (std's accepted sockets arrive blocking; every
 /// pump in this module polls first).
 pub(crate) fn set_nonblocking(fd: RawFd) {
-    let flags = unsafe { libc::fcntl(fd, libc::F_GETFL) };
+    let flags = unsafe { libc::fcntl(fd, libc::F_GETFL, 0) };
     if flags >= 0 {
         unsafe { libc::fcntl(fd, libc::F_SETFL, flags | libc::O_NONBLOCK) };
     }
