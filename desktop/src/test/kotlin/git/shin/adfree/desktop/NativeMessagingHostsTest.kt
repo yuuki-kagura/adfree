@@ -79,4 +79,31 @@ class NativeMessagingHostsTest {
 
         assertFalse(NativeMessagingHosts.installedAndUsable(configHome))
     }
+
+    /**
+     * The Windows half, tested where it can be: the registry itself only exists
+     * on Windows, but the two strings the value has to agree with a browser
+     * about are pure, and getting either wrong means an extension that never
+     * starts the host.
+     */
+    @Test
+    fun `the windows key is the one chrome reads`() {
+        assertEquals(
+            "HKCU\\Software\\Google\\Chrome\\NativeMessagingHosts\\${NativeMessagingHosts.HOST_NAME}",
+            NativeMessagingHosts.windowsKey("Google\\Chrome"),
+        )
+    }
+
+    @Test
+    fun `the windows manifest is one file in the app data directory`() {
+        val dataDir = File(root, "data")
+        val manifest = NativeMessagingHosts.windowsManifest(dataDir)
+        assertEquals(
+            File(dataDir, "native-messaging/${NativeMessagingHosts.HOST_NAME}.json").path,
+            manifest.path,
+        )
+        // Outside the browser's profile on purpose: Windows finds it by
+        // registry value, so it may live where the app already writes.
+        assertTrue(manifest.path.startsWith(dataDir.path))
+    }
 }

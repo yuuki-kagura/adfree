@@ -340,6 +340,14 @@ side rather than the code's.
 | the tray | StatusNotifierItem (KDE), AWT popup | Compose `Tray`, native menu, state in the icon and tooltip |
 | pause 30 s / 1 h / resume | tray and in-app | same six rows, same commands |
 | counters, `totals`, home screen | `totals` table | same table, same formatter |
+| the browser extension's bridge | Unix socket in the data dir, `0600` | loopback + token in `assistant.endpoint` |
+| the extension host's manifest | profile dir per browser | one manifest, `HKCU` value per browser |
+
+**The assistant bridge moved into the core** (`e0bfef3`): Chrome's framing is now
+one implementation, the endpoint belongs to the process that owns the engine
+rather than to a window, and the request table — tabs, settings, the user's rules
+— is in `shared` where the other platform code is. On Linux the socket keeps the
+`0600` mode its directory used to imply; on Windows it is loopback plus a token.
 
 **Verified by a build, not by reasoning:** `adfree_1.4.0_arm64.deb` (98 MB),
 `adfree-1.4.0-1.aarch64.rpm` (110 MB), `adfree-msi-x64` (106 MB),
@@ -354,9 +362,12 @@ side rather than the code's.
    `WinDivert64.sys` were unpacked under `%LOCALAPPDATA%\adfree\windivert\x64`,
    start the app, let `certutil` add the CA, then
    `curl -x 127.0.0.1:3129 https://example.com` and a blocked domain.
-2. **The browser extension's bridge** is a Unix socket on Linux — the socket is
-   the authorization as well as the transport. Windows needs a named pipe with an
-   ACL; until then the extension has no assistant on that platform.
+2. **The browser extension's bridge has never run on Windows.** It is implemented
+   (`rust/src/assistant.rs` serves both wires; `NativeMessagingHosts` writes the
+   `HKCU` value each browser reads), but "the wire is the core's" means the first
+   thing to check on a real machine is whether the helper finds
+   `%XDG_DATA_HOME%\adfree\assistant.endpoint` — the token handshake either
+   passes or the popup says the app is not running.
 3. **MSI signing.** Unsigned, so SmartScreen warns; the WinDivert pair's own
    signature is what the kernel checks.
 4. **The tray's own menu styling.** Compose's `Tray` draws a native menu, so the
