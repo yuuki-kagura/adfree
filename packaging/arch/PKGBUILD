@@ -2,14 +2,20 @@
 # Built from the release tag: the app image carries its own runtime, and the
 # filtering core is compiled here because it is a native library, not a script.
 pkgname=adfree
-pkgver=1.2.0
+pkgver=1.4.0
 pkgrel=1
 pkgdesc="System-wide ad blocking: a transparent proxy, a DNS server and a TLS bridge"
 arch=('x86_64' 'aarch64')
 url="https://github.com/yuuki-kagura/adfree"
 license=('Apache')
-depends=('gcc-libs')
-makedepends=('jdk21-openjdk' 'rust' 'cargo' 'git' 'unzip')
+depends=('gcc-libs' 'hicolor-icon-theme')
+makedepends=('jdk21-openjdk' 'rust' 'cargo' 'git' 'unzip' 'binutils')
+# Arch and CachyOS are the same package set: CachyOS is an Arch derivative with
+# its own kernels and repositories, so a `.pkg.tar.zst` built here installs
+# there unchanged. The x86-64-v3/v4 repositories CachyOS ships do not reach this
+# package: everything native in it — the core library — is compiled on the
+# machine that installs it (or by CI for plain x86_64), and the app image brings
+# its own runtime, so there is no v3-only code to mismatch.
 source=("$pkgname-$pkgver.tar.gz::https://github.com/yuuki-kagura/adfree/archive/refs/tags/v$pkgver.tar.gz")
 sha256sums=('SKIP')
 # CI replaces both lines with a tarball it made from the tag it is releasing, so
