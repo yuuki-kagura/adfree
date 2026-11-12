@@ -97,6 +97,10 @@ impl Table {
     /// newer than the last walk and the walk window says to wait. The caller
     /// then logs the row without a process, which is what AdGuard's own log
     /// does for a flow it cannot name.
+    // The two bodies are exclusive at compile time, so the Windows one is the
+    // function's tail expression and its `return` is redundant — but only when
+    // compiled for Windows, which is exactly when the lint looks.
+    #[allow(clippy::needless_return)]
     pub fn owner(&mut self, client: SocketAddr, our: SocketAddr) -> Option<Peer> {
         #[cfg(windows)]
         {
@@ -117,6 +121,7 @@ impl Table {
     /// receives a lookup from a socket the kernel names the same way, and on a
     /// desktop that is the only thing that can say which program asked (the
     /// platform's uid→package table is an Android answer and is empty here).
+    #[allow(clippy::needless_return)]
     pub fn owner_udp(&mut self, port: u16) -> Option<Peer> {
         #[cfg(windows)]
         {

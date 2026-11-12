@@ -54,6 +54,12 @@ pub mod fd {
 
     /// "No descriptor": the sentinel the proxy stores where Unix would say `-1`.
     pub const NO_FD: RawFd = -1;
+    /// The descriptor as the `i32` the app-side hooks speak (`VpnService.protect`).
+    /// On Unix this is the type already; on Windows a `SOCKET` is pointer-sized,
+    /// which is why the cast lives here instead of at each call site.
+    pub fn as_i32(fd: RawFd) -> i32 {
+        fd
+    }
     /// Whether a stored descriptor names a live socket.
     pub fn fd_ok(fd: RawFd) -> bool {
         fd >= 0
@@ -97,6 +103,12 @@ pub mod fd {
 
     /// "No descriptor": `INVALID_SOCKET`, which is *not* `-1` on Windows.
     pub const NO_FD: RawFd = RawFd::MAX;
+    /// The descriptor as the `i32` the app-side hooks speak. A `SOCKET` is
+    /// pointer-sized and its values fit in 32 bits on every Windows build the
+    /// app targets; the truncation is the API's, not ours.
+    pub fn as_i32(fd: RawFd) -> i32 {
+        fd as i32
+    }
     /// Whether a stored descriptor names a live socket.
     pub fn fd_ok(fd: RawFd) -> bool {
         fd != NO_FD

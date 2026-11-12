@@ -571,7 +571,7 @@ fn connect(
 
 fn protect(protector: Option<&dyn SocketProtector>, fd: RawFd) -> Result<(), SecureError> {
     match protector {
-        Some(protector) if !protector.protect(fd as i32) => Err(SecureError::Protect),
+        Some(protector) if !protector.protect(crate::sys::fd::as_i32(fd)) => Err(SecureError::Protect),
         _ => Ok(()),
     }
 }

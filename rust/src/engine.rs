@@ -3528,7 +3528,7 @@ impl Core {
     fn protect_socket(&self, fd: RawFd) -> bool {
         let protector = self.socket_protector.lock().unwrap().clone();
         match protector {
-            Some(p) => p.protect(fd as i32),
+            Some(p) => p.protect(crate::sys::fd::as_i32(fd)),
             None => false,
         }
     }
@@ -4703,7 +4703,9 @@ impl Core {
             self.outbox.lock().unwrap().push(bytes.to_vec());
         }
         let fd = self.tun_fd.load(Ordering::SeqCst);
-        if fd <= 0 {
+        // `NO_FD` is `-1` on Unix and `INVALID_SOCKET` on Windows; comparing
+        // against a number would be wrong on one of them.
+        if !crate::sys::fd::fd_ok(fd) {
             return false;
         }
         let mut off = 0usize;

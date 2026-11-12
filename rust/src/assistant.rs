@@ -80,12 +80,13 @@ type Sink = Arc<Mutex<Box<dyn Write + Send>>>;
 static SINKS: Mutex<Vec<(u64, Sink)>> = Mutex::new(Vec::new());
 static NEXT_SINK: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
 
-fn register(writer: Box<dyn Write + Send>) -> u64 {
+fn register(writer: Box<dyn Write + Send>) -> (u64, Sink) {
     let id = NEXT_SINK.fetch_add(1, Ordering::SeqCst);
+    let sink: Sink = Arc::new(Mutex::new(writer));
     if let Ok(mut sinks) = SINKS.lock() {
-        sinks.push((id, Arc::new(Mutex::new(writer))));
+        sinks.push((id, Arc::clone(&sink)));
     }
-    id
+    (id, sink)
 }
 
 fn unregister(id: u64) {
@@ -227,29 +228,17 @@ fn serve<R: Read, W: Write + Send + 'static>(
             return;
         }
     }
-    let id = register(Box::new(writer));
-    let sink = match SINKS.lock() {
-        Ok(sinks) => sinks.iter().find(|(other, _)| *other == id).map(|(_, sink)| Arc::clone(sink)),
-        Err(_) => None,
-    };
-    let Some(sink) = sink else {
-        unregister(id);
-        return;
-    };
-    loop {
-        match read_frame(&mut reader) {
-            Ok(Some(request)) => {
-                let Some(answer) = host.respond(request) else { break };
-                let sent = match sink.lock() {
-                    Ok(mut writer) => write_frame(&mut *writer, &answer).is_ok(),
-                    Err(_) => false,
-                };
-                if !sent {
-                    break;
-                }
-            }
-            // A popup that closes mid-answer is normal, not a fault.
-            Ok(None) | Err(_) => break,
+    let (id, sink) = register(Box::new(writer));
+    // A popup that closes mid-answer is a clean end of input, not a fault: the
+    // panel was dismissed, and the next frame would be written to nobody.
+    while let Ok(Some(request)) = read_frame(&mut reader) {
+        let Some(answer) = host.respond(request) else { break };
+        let sent = match sink.lock() {
+            Ok(mut writer) => write_frame(&mut *writer, &answer).is_ok(),
+            Err(_) => false,
+        };
+        if !sent {
+            break;
         }
     }
     unregister(id);

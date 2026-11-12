@@ -929,8 +929,13 @@ fn sha1(data: &[u8]) -> [u8; 20] {
     }
     msg.extend_from_slice(&bit_len.to_be_bytes());
 
+    // `as_chunks` reads better but is newer than the toolchain some release
+    // builds still use; the sizes here are fixed by the algorithm, so the lint
+    // has nothing to find either way.
+    #[allow(clippy::chunks_exact_to_as_chunks)]
     for block in msg.chunks_exact(64) {
         let mut w = [0u32; 80];
+        #[allow(clippy::chunks_exact_to_as_chunks)]
         for (i, word) in block.chunks_exact(4).enumerate() {
             w[i] = u32::from_be_bytes([word[0], word[1], word[2], word[3]]);
         }

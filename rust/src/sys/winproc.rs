@@ -43,12 +43,12 @@ fn fetch(tcp: bool, ipv6: bool) -> Option<Vec<u8>> {
     }
     let mut size = 0u32;
     let status = call(tcp, family, std::ptr::null_mut(), &mut size);
-    if status != ERROR_INSUFFICIENT_BUFFER as u32 || size == 0 {
+    if status != ERROR_INSUFFICIENT_BUFFER || size == 0 {
         return None;
     }
     let mut buffer = vec![0u8; size as usize];
     let status = call(tcp, family, buffer.as_mut_ptr(), &mut size);
-    if status != NO_ERROR as u32 {
+    if status != NO_ERROR {
         return None;
     }
     buffer.truncate(size as usize);

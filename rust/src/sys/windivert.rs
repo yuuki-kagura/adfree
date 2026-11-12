@@ -491,7 +491,7 @@ pub fn run(redirector: &Arc<Redirector>) {
         redirector.pump_outbound(&mut buf);
         redirector.pump_inbound(&mut buf);
         ticks += 1;
-        if ticks % 64 == 0 {
+        if ticks.is_multiple_of(64) {
             redirector.sweep();
         }
     }

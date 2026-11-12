@@ -384,7 +384,9 @@ fn ctl(
     }
     let mut ev = libc::epoll_event {
         events: bits,
-        u64: fd as u64,
+        // The payload is `u64` on both kernels: on Unix a descriptor is an
+        // `i32` and widens, on Windows a `SOCKET` already is one.
+        u64: fd as _,
     };
     crate::sys::fd::epoll_ctl(ep, op, fd, &mut ev)
 }

@@ -73,7 +73,7 @@ fn peer_socket(
     if !crate::sys::fd::fd_ok(fd) {
         return None;
     }
-    if !protector.protect(fd as i32) {
+    if !protector.protect(crate::sys::fd::as_i32(fd)) {
         unsafe { libc::close(fd) };
         return None;
     }
