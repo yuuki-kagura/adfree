@@ -121,19 +121,18 @@ unsafe impl Send for Api {}
 unsafe impl Sync for Api {}
 
 impl Api {
-    /// Resolves `WinDivert.dll`. The search order is the executable's own
-    /// directory first, which is where the installer puts it.
+    /// Resolves `WinDivert.dll`.
+    ///
+    /// Three places are tried, in this order, because the app is installed in
+    /// three shapes: the directory the application says (it unpacks the copy
+    /// from its own jar there — see [`set_dir`]), the launcher's own directory
+    /// (`LoadLibraryW` alone searches it), and the current directory, which is
+    /// what a developer running from the repository has.
     pub fn load() -> Result<Api, String> {
-        use windows_sys::Win32::System::LibraryLoader::{GetProcAddress, LoadLibraryW};
-
-        let name: Vec<u16> = "WinDivert.dll\0".encode_utf16().collect();
-        let dll = unsafe { LoadLibraryW(name.as_ptr()) };
-        if dll.is_null() {
-            return Err(
-                "WinDivert.dll is missing beside the application (the installer ships it)"
-                    .to_string(),
-            );
-        }
+        let dll = match load_from_known_places() {
+            Some(dll) => dll,
+            None => return Err(missing_dll()),
+        };
         unsafe fn sym<T>(dll: *mut c_void, name: &[u8]) -> Result<T, String> {
             use windows_sys::Win32::System::LibraryLoader::GetProcAddress;
             let p = unsafe { GetProcAddress(dll, name.as_ptr()) };
@@ -153,8 +152,81 @@ impl Api {
             calc: unsafe { sym(dll, b"WinDivertHelperCalcChecksums\0") }?,
             _dll: dll,
         };
-        let _ = GetProcAddress;
         Ok(api)
+    }
+}
+
+/// Where the application said the DLL is. Set once, from the files the app
+/// unpacked out of its own jar; unset in a test or a developer's checkout, where
+/// the fallbacks are what matter.
+static DIR: std::sync::Mutex<Option<std::path::PathBuf>> = std::sync::Mutex::new(None);
+
+/// Tells the loader where `WinDivert.dll` and `WinDivert64.sys` live. They are a
+/// pair: the driver is loaded from the same directory as the DLL, so pointing at
+/// one means pointing at both.
+pub fn set_dir(dir: &str) {
+    if let Ok(mut slot) = DIR.lock() {
+        *slot = Some(std::path::PathBuf::from(dir));
+    }
+}
+
+fn missing_dll() -> String {
+    "WinDivert.dll is missing: the application unpacks it on first run, and a      development checkout needs it in the current directory"
+        .to_string()
+}
+
+/// The full path of the running image's directory, so "beside the launcher" can
+/// be turned into an absolute path without walking the environment.
+fn exe_dirs() -> Vec<std::path::PathBuf> {
+    use windows_sys::Win32::System::LibraryLoader::GetModuleFileNameW;
+    let mut buf = vec![0u16; 1024];
+    let len = unsafe { GetModuleFileNameW(std::ptr::null_mut(), buf.as_mut_ptr(), buf.len() as u32) };
+    if len == 0 {
+        return Vec::new();
+    }
+    let path = std::path::PathBuf::from(String::from_utf16_lossy(&buf[..len as usize]));
+    let Some(dir) = path.parent() else {
+        return Vec::new();
+    };
+    // jpackage puts application resources in `lib/app/resources` below `bin/`.
+    vec![
+        dir.to_path_buf(),
+        dir.join("windivert"),
+        dir.join("lib/app/resources/windivert"),
+        dir.parent().map(|p| p.join("lib/app/resources/windivert")).unwrap_or_default(),
+    ]
+}
+
+fn load_from_known_places() -> Option<Handle> {
+    use windows_sys::Win32::System::LibraryLoader::LoadLibraryW;
+    let mut candidates: Vec<std::path::PathBuf> = Vec::new();
+    if let Ok(slot) = DIR.lock() {
+        if let Some(dir) = slot.as_ref() {
+            candidates.push(dir.join("WinDivert.dll"));
+        }
+    }
+    candidates.extend(exe_dirs().into_iter().map(|d| d.join("WinDivert.dll")));
+    for path in candidates {
+        if !path.is_file() {
+            continue;
+        }
+        let wide: Vec<u16> = path
+            .to_string_lossy()
+            .encode_utf16()
+            .chain(std::iter::once(0))
+            .collect();
+        let dll = unsafe { LoadLibraryW(wide.as_ptr()) };
+        if !dll.is_null() {
+            return Some(dll);
+        }
+    }
+    // Last: the plain name, which is the current directory and the system paths.
+    let name: Vec<u16> = "WinDivert.dll\0".encode_utf16().collect();
+    let dll = unsafe { LoadLibraryW(name.as_ptr()) };
+    if dll.is_null() {
+        None
+    } else {
+        Some(dll)
     }
 }
 

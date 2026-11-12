@@ -879,6 +879,8 @@ internal object IntegrityCheckingUniffiLib {
     ): Int
     external fun uniffi_adfree_core_checksum_func_core_set_uid_lookup(
     ): Int
+    external fun uniffi_adfree_core_checksum_func_core_set_windivert_dir(
+    ): Int
     external fun uniffi_adfree_core_checksum_func_core_start(
     ): Int
     external fun uniffi_adfree_core_checksum_func_core_start_proxy(
@@ -1108,6 +1110,8 @@ internal object UniffiLib {
     external fun uniffi_adfree_core_fn_func_core_set_uid_apps(`entries`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): Byte
     external fun uniffi_adfree_core_fn_func_core_set_uid_lookup(`lookup`: Long,uniffi_out_err: UniffiRustCallStatus, 
+    ): Unit
+    external fun uniffi_adfree_core_fn_func_core_set_windivert_dir(`path`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): Unit
     external fun uniffi_adfree_core_fn_func_core_start(`tunFd`: Int,uniffi_out_err: UniffiRustCallStatus, 
     ): Unit
@@ -1494,6 +1498,9 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if ((lib.uniffi_adfree_core_checksum_func_core_set_uid_lookup() and 0xFFFF) != 59477) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if ((lib.uniffi_adfree_core_checksum_func_core_set_windivert_dir() and 0xFFFF) != 5877) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if ((lib.uniffi_adfree_core_checksum_func_core_start() and 0xFFFF) != 51365) {
@@ -7814,6 +7821,24 @@ public object FfiConverterSequenceTypeUidApps: FfiConverterRustBuffer<List<UidAp
     
         
         FfiConverterTypeConnectionUidLookup.lower(`lookup`),_status)
+}
+    
+    
+
+        /**
+         * Tells the Windows redirect where its driver files live.
+         *
+         * The application unpacks `WinDivert.dll` and `WinDivert64.sys` out of its own
+         * jar on first run — they are a pair, and the driver is loaded from the DLL's
+         * directory — so the path is the app's to choose and the core's to remember.
+         * Elsewhere this is accepted and ignored.
+         */ fun `coreSetWindivertDir`(`path`: kotlin.String)
+        = 
+    uniffiRustCall() { _status ->
+    UniffiLib.uniffi_adfree_core_fn_func_core_set_windivert_dir(
+    
+        
+        FfiConverterString.lower(`path`),_status)
 }
     
     

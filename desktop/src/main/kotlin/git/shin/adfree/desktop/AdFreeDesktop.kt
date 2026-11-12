@@ -528,7 +528,7 @@ private fun MissingCoreScreen(dataRoot: String) {
             verticalArrangement = Arrangement.Center,
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
-            Text("libadfree_core.so not found", color = MaterialTheme.colorScheme.error)
+            Text("${coreLibraryName} not found", color = MaterialTheme.colorScheme.error)
             Text(
                 "Run `cargo build --release` in the rust/ directory or set " +
                     "ADFREE_CORE_LIB to the built library. Data root: $dataRoot",

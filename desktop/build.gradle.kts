@@ -72,13 +72,23 @@ val runApp by tasks.registering(JavaExec::class) {
 // jpackage's `--app-content` because that path is decided while the project is
 // configured and fails silently when a file is staged a moment too late: the
 // package built, shipped, and could not filter.
-val coreLibrary = rootProject.layout.projectDirectory.file("rust/target/release/libadfree_core.so")
+// The core is a shared object on Unix and a DLL on Windows; everything that
+// looks it up — this file, `findCoreLibrary`, the loader inside the core — has
+// to agree on which, so the name is derived once.
+val isWindowsHost = System.getProperty("os.name").orEmpty().lowercase().startsWith("windows")
+val coreLibraryName = if (isWindowsHost) "adfree_core.dll" else "libadfree_core.so"
+val coreLibrary: File = listOf(
+    "rust/target/release/$coreLibraryName",
+    // A GNU-targeted build on Windows lands here instead of `target/release`.
+    "rust/target/x86_64-pc-windows-gnu/release/$coreLibraryName",
+).map { rootProject.layout.projectDirectory.file(it).asFile }.firstOrNull { it.isFile }
+    ?: rootProject.layout.projectDirectory.file("rust/target/release/$coreLibraryName").asFile
 
 val stageCoreLibrary by tasks.registering(Copy::class) {
     description = "Puts the Rust core into the app jar, where every package carries it"
     from(coreLibrary)
     into(layout.buildDirectory.dir("coreResources"))
-    rename { "libadfree_core.so" }
+    rename { coreLibraryName }
 }
 
 sourceSets["main"].resources.srcDir(layout.buildDirectory.dir("coreResources"))
@@ -102,7 +112,29 @@ compose.desktop {
             description = "System-wide ad blocking: a transparent proxy, a DNS server and a TLS bridge."
             vendor = "Tachibana Shin"
             copyright = "© Tachibana Shin"
-            targetFormats(TargetFormat.Deb, TargetFormat.Rpm)
+            // One format per family: a deb/rpm for Linux distributions, an MSI
+            // for Windows. jpackage only builds for the host it runs on, so the
+            // list is chosen there rather than filtered afterwards.
+            if (isWindowsHost) {
+                targetFormats(TargetFormat.Msi)
+                windows {
+                    // Stable across releases: MSI upgrades match on this, and a
+                    // new one turns an upgrade into a second installed copy.
+                    upgradeUuid = "8f2b1c74-4a5e-4c1b-9f39-2d0a7b6c1e55"
+                    menuGroup = "AdFree"
+                    shortcut = true
+                    // Consoles: the app needs no window of its own, and a
+                    // package that asks for one opens a black box at logon.
+                    console = false
+                    // The driver and the certificate store are machine-wide and
+                    // need the administrator token, which a per-user MSI cannot
+                    // grant. Installing for all users matches what the app
+                    // itself must already be.
+                    perUserInstall = false
+                }
+            } else {
+                targetFormats(TargetFormat.Deb, TargetFormat.Rpm)
+            }
             linux {
                 iconFile.set(project.file("src/main/resources/icon/adfree.png"))
                 menuGroup = "Network"
@@ -127,13 +159,27 @@ tasks.matching {
         "packageReleaseDeb",
         "packageRpm",
         "packageReleaseRpm",
+        "packageMsi",
+        "packageReleaseMsi",
     )
 }.configureEach {
     doFirst {
-        if (!coreLibrary.asFile.isFile) {
+        if (!coreLibrary.isFile) {
             throw GradleException(
-                "no ${coreLibrary.asFile.path} to package; run `cargo build --release --lib` in rust/ first",
+                "no ${coreLibrary.path} to package; run `cargo build --release --lib` in rust/ first",
             )
+        }
+    }
+}
+
+// An MSI that cannot find WinDivert is an app that starts and cannot filter. The
+// files travel in the jar (``WinDivertFiles``), so the check is that the jar's
+// resources are there before packaging, not that they are staged beside it.
+tasks.matching { it.name.startsWith("package") && it.name.contains("Msi") }.configureEach {
+    doFirst {
+        val resource = project.file("src/main/resources/windivert/x64/WinDivert.dll")
+        if (isWindowsHost && !resource.isFile) {
+            throw GradleException("missing ${resource.path}; the MSI would ship without the driver")
         }
     }
 }

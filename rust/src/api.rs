@@ -1991,3 +1991,17 @@ pub fn core_redirect_packets_seen() -> i64 {
 pub fn core_redirect_live_flows() -> i64 {
     crate::wredirect::status().live_flows as i64
 }
+
+/// Tells the Windows redirect where its driver files live.
+///
+/// The application unpacks `WinDivert.dll` and `WinDivert64.sys` out of its own
+/// jar on first run — they are a pair, and the driver is loaded from the DLL's
+/// directory — so the path is the app's to choose and the core's to remember.
+/// Elsewhere this is accepted and ignored.
+#[uniffi::export]
+pub fn core_set_windivert_dir(path: String) {
+    #[cfg(windows)]
+    crate::sys::windivert::set_dir(&path);
+    #[cfg(not(windows))]
+    let _ = path;
+}

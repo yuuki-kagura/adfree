@@ -36,7 +36,7 @@ class DesktopContainer(
 
     val coreLibrary: File? = findCoreLibrary()
 
-    /** False when no libadfree_core.so was found: the window says so instead of crashing. */
+    /** False when no core library was found: the window says so instead of crashing. */
     val engineAvailable: Boolean = coreLibrary != null
 
     init {
@@ -214,6 +214,10 @@ class DesktopContainer(
         // never looked at. Android does this in its Application; the desktop
         // has the same hour, and hydration acts on the answer.
         coreEngine.ensureCa()
+        // The Windows redirect loads a DLL and a driver; both travel inside this
+        // jar, and both have to be on disk before the driver is asked for. The
+        // call is a no-op on Linux and Android.
+        WinDivertFiles.install()
         repository.hydrateState()
         scope.launch {
             repository.settings.map { it.isProtectionActive }.collect { protectionWanted.value = it }

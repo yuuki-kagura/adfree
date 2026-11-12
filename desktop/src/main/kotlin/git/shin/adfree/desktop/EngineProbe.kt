@@ -17,12 +17,12 @@ import java.io.File
  * and the stats snapshot — no Android in sight.
  *
  * The native library is located via ADFREE_CORE_LIB, then the usual
- * `rust/target/release/libadfree_core.so` next to the repo root.
+ * `rust/target/release/<core library>` next to the repo root.
  */
 fun runEngineProbe(): Boolean {
     val lib = findCoreLibrary()
     if (lib == null) {
-        System.err.println("engine probe: libadfree_core.so not found — run `cargo build --release` in rust/")
+        System.err.println("engine probe: ${coreLibraryName} not found — run `cargo build --release` in rust/")
         return false
     }
     System.setProperty("uniffi.component.adfree.libraryOverride", lib.absolutePath)

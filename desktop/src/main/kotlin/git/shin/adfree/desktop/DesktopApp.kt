@@ -225,7 +225,7 @@ private fun EngineStatusScreen() {
     Text("Engine status", style = MaterialTheme.typography.headlineSmall, color = EngineTextPrimary)
     if (failed) {
         Text(
-            "libadfree_core.so not found — run `cargo build --release` in rust/ or set ADFREE_CORE_LIB.",
+            "${coreLibraryName} not found — run `cargo build --release` in rust/ or set ADFREE_CORE_LIB.",
             color = EngineRed,
         )
         return
