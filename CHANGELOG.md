@@ -1,3 +1,10 @@
+## [1.7.1](https://github.com/yuuki-kagura/adfree/compare/v1.7.0...v1.7.1) (2026-11-12)
+
+
+### Bug Fixes
+
+* **desktop:** stop the frame watchdog from drawing sixty frames a second ([1493f7a](https://github.com/yuuki-kagura/adfree/commit/1493f7ace49da8bbaabbcf3805fb1a79f5a687c2))
+
 # [1.7.0](https://github.com/yuuki-kagura/adfree/compare/v1.6.0...v1.7.0) (2026-11-12)
 
 
