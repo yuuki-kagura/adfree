@@ -184,15 +184,21 @@ What that took, in the order it happened:
 | --- | --- |
 | `af8c2e3` | the two kernel questions (`SO_ORIGINAL_DST`, `SO_MARK`) move into `sys`, Windows answers them honestly (475 → 460) |
 | `1a05349` | `sys::libc` — the Winsock namesake: constants, `sockaddr_*`, `poll` over `WSAPoll`, WSA errno numbers; `sys::fd` for the descriptor vocabulary (460 → 187) |
+| `9e796de` | the wait set becomes `epoll` over IOCP on Windows (wepoll), one implementation for all three platforms |
+| `8935655` | `winnat`: the redirect decisions as pure functions, tested on Linux |
 | *this one* | the facilities that have no Winsock equivalent — `eventfd` and `socketpair` as a self-connected loopback datagram socket, a `poll`-backed `WaitSet`, the packet-info types as compile-only shells |
 
 Two things changed shape rather than gained a shim, and they are the ones worth
 reviewing:
 
-* **`waitset`**: `epoll` is Unix-only, so the set now has two backends behind one
-  API — `epoll_wait` on Unix, and on Windows a `WSAPoll` array rebuilt from the
-  interest table on every pass. The table is the registration there; `ops()`
-  still means "kernel calls" and stays 0 on Windows.
+* **`waitset`**: the Windows analogue of `epoll` is not `poll`. `WSAPoll` is a
+  userland loop over `select`, and before Windows 10 1809 it does not report a
+  failed connection — the one event a proxy's connect path is waiting for. The
+  real counterpart is **IOCP**, so the tree vendors **wepoll 1.5.8** (BSD-2,
+  IOCP + `\Device\Afd`, compiled by `build.rs`) and `sys::fd` names
+  `epoll_create1`/`epoll_ctl`/`epoll_wait`/`epoll_close` for both kernels. The
+  wait set stays one implementation with one set of semantics, and **Android and
+  Linux keep the real `epoll` untouched**, `ops()` instrumentation included.
 * **wake channels**: `eventfd` and `socketpair` are a UDP socket bound to
   `127.0.0.1:0` and connected to itself, duplicated for the pair. A write is
   immediately a readable event on the handle the loop polls, which is the whole
