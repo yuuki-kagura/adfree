@@ -11,13 +11,13 @@
 //! shell command is the certificate's subject hash (eight hex digits) and the
 //! PEM itself, which travels through a quoted heredoc.
 //!
-//! A Windows build keeps these helpers compiled — the Android and Linux stores
-//! are still part of the crate — but reaches none of them, which is why the
-//! dead-code lint is silenced for that target alone.
+//! A Windows build installs into the machine's `Root` store through `certutil`
+//! (see the windows section); the Android and Linux helpers stay compiled but
+//! unreached, which is why the dead-code lint is silenced for that target.
 
 #![cfg_attr(windows, allow(dead_code))]
 
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 use std::fs;
 #[cfg(unix)]
 #[cfg(unix)]
@@ -155,7 +155,11 @@ pub fn status(der: Option<&[u8]>) -> RootTrust {
     {
         linux_status(der)
     }
-    #[cfg(not(any(target_os = "android", target_os = "linux")))]
+    #[cfg(windows)]
+    {
+        windows_status(der)
+    }
+    #[cfg(not(any(target_os = "android", target_os = "linux", windows)))]
     {
         let _ = der;
         RootTrust {
@@ -175,7 +179,11 @@ pub fn install(der: &[u8]) -> RootTrust {
     {
         linux_install(der)
     }
-    #[cfg(not(any(target_os = "android", target_os = "linux")))]
+    #[cfg(windows)]
+    {
+        windows_install(der)
+    }
+    #[cfg(not(any(target_os = "android", target_os = "linux", windows)))]
     {
         let _ = der;
         RootTrust {
@@ -195,7 +203,11 @@ pub fn remove(der: &[u8]) -> RootTrust {
     {
         linux_remove(der)
     }
-    #[cfg(not(any(target_os = "android", target_os = "linux")))]
+    #[cfg(windows)]
+    {
+        windows_remove(der)
+    }
+    #[cfg(not(any(target_os = "android", target_os = "linux", windows)))]
     {
         let _ = der;
         RootTrust {
@@ -286,7 +298,7 @@ fn der_tlv(input: &[u8]) -> Option<(u8, usize, &[u8])> {
     Some((tag, header, value))
 }
 
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 fn pem_from_der(der: &[u8]) -> String {
     use base64::Engine as _;
     let body = base64::engine::general_purpose::STANDARD.encode(der);
@@ -885,6 +897,199 @@ fn linux_remove(der: &[u8]) -> RootTrust {
     }
 }
 
+// -------------------------------------------------------------------- windows
+
+// On Windows the store is the machine's `Root` certificate store, and
+// `certutil` is the one tool that is present on every install — no extra
+// dependency, and its exit code is a real answer. The application already runs
+// elevated (the redirect needs it), so `-addstore` never prompts.
+//
+// The two detail codes below are the ones the UI already has strings for, and
+// those strings say "system store", not "Linux": installing our CA into
+// Windows' `Root` store is exactly the case they were written to describe.
+
+/// `certutil -store Root` addresses a certificate by its thumbprint, which is
+/// the SHA-1 of the DER *with no spaces, upper case*.
+#[cfg(windows)]
+fn windows_thumbprint(der: &[u8]) -> String {
+    sha1(der).iter().map(|b| format!("{b:02X}")).collect()
+}
+
+/// SHA-1 (FIPS 180-1). Windows' `certutil` speaks thumbprints and nothing else,
+/// and `ring` deliberately does not implement SHA-1 — so it lives here, twenty
+/// lines long, with the published vectors in the tests.
+#[cfg(any(windows, test))]
+fn sha1(data: &[u8]) -> [u8; 20] {
+    let mut h: [u32; 5] = [0x6745_2301, 0xEFCD_AB89, 0x98BA_DCFE, 0x1032_5476, 0xC3D2_E1F0];
+    let bit_len = (data.len() as u64).wrapping_mul(8);
+    let mut msg = data.to_vec();
+    msg.push(0x80);
+    while msg.len() % 64 != 56 {
+        msg.push(0);
+    }
+    msg.extend_from_slice(&bit_len.to_be_bytes());
+
+    for block in msg.chunks_exact(64) {
+        let mut w = [0u32; 80];
+        for (i, word) in block.chunks_exact(4).enumerate() {
+            w[i] = u32::from_be_bytes([word[0], word[1], word[2], word[3]]);
+        }
+        for i in 16..80 {
+            w[i] = (w[i - 3] ^ w[i - 8] ^ w[i - 14] ^ w[i - 16]).rotate_left(1);
+        }
+        let (mut a, mut b, mut c, mut d, mut e) = (h[0], h[1], h[2], h[3], h[4]);
+        for (i, wi) in w.iter().enumerate() {
+            let (f, k) = match i {
+                0..=19 => ((b & c) | ((!b) & d), 0x5A82_7999u32),
+                20..=39 => (b ^ c ^ d, 0x6ED9_EBA1u32),
+                40..=59 => ((b & c) | (b & d) | (c & d), 0x8F1B_BCDCu32),
+                _ => (b ^ c ^ d, 0xCA62_C1D6u32),
+            };
+            let temp = a
+                .rotate_left(5)
+                .wrapping_add(f)
+                .wrapping_add(e)
+                .wrapping_add(k)
+                .wrapping_add(*wi);
+            e = d;
+            d = c;
+            c = b.rotate_left(30);
+            b = a;
+            a = temp;
+        }
+        h[0] = h[0].wrapping_add(a);
+        h[1] = h[1].wrapping_add(b);
+        h[2] = h[2].wrapping_add(c);
+        h[3] = h[3].wrapping_add(d);
+        h[4] = h[4].wrapping_add(e);
+    }
+
+    let mut out = [0u8; 20];
+    for (i, word) in h.iter().enumerate() {
+        out[i * 4..i * 4 + 4].copy_from_slice(&word.to_be_bytes());
+    }
+    out
+}
+
+/// Runs `certutil` without a console window. Returns `(ok, stderr)`.
+#[cfg(windows)]
+fn certutil(args: &[&std::ffi::OsStr]) -> (bool, String) {
+    use std::os::windows::process::CommandExt;
+    /// `CREATE_NO_WINDOW`: the app has no console, and a flash of one on every
+    /// start is the sort of thing users report as a bug.
+    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+    match std::process::Command::new("certutil")
+        .args(args)
+        .creation_flags(CREATE_NO_WINDOW)
+        .output()
+    {
+        Ok(out) => (
+            out.status.success(),
+            String::from_utf8_lossy(&out.stderr).trim().to_string(),
+        ),
+        Err(e) => (false, format!("cannot run certutil: {e}")),
+    }
+}
+
+/// The certificate's PEM text, written beside the user's temp files just long
+/// enough for `certutil -addstore` to read it.
+#[cfg(windows)]
+fn windows_pem_file(der: &[u8]) -> std::path::PathBuf {
+    use std::io::Write;
+    let path = std::env::temp_dir().join(format!("adfree-ca-{}.pem", std::process::id()));
+    if let Ok(mut file) = fs::File::create(&path) {
+        let _ = file.write_all(pem_from_der(der).as_bytes());
+    }
+    path
+}
+
+#[cfg(windows)]
+fn windows_installed(der: &[u8]) -> bool {
+    let thumbprint = windows_thumbprint(der);
+    let (ok, _) = certutil(&[
+        std::ffi::OsStr::new("-store"),
+        std::ffi::OsStr::new("Root"),
+        std::ffi::OsStr::new(&thumbprint),
+    ]);
+    ok
+}
+
+#[cfg(windows)]
+fn windows_status(der: Option<&[u8]>) -> RootTrust {
+    let installed = der.map(windows_installed).unwrap_or(false);
+    RootTrust {
+        // The application runs elevated by construction: the redirect cannot
+        // work otherwise, so there is no separate elevation step to report.
+        su_present: true,
+        root_granted: true,
+        installed,
+        needs_reboot: false,
+        detail_code: if installed {
+            TrustDetail::InstalledLinux
+        } else {
+            TrustDetail::RootGranted
+        },
+        detail: String::new(),
+    }
+}
+
+#[cfg(windows)]
+fn windows_install(der: &[u8]) -> RootTrust {
+    if windows_installed(der) {
+        return RootTrust {
+            su_present: true,
+            root_granted: true,
+            installed: true,
+            detail_code: TrustDetail::AlreadyInstalled,
+            ..RootTrust::default()
+        };
+    }
+    let path = windows_pem_file(der);
+    let ok = certutil(&[
+        std::ffi::OsStr::new("-addstore"),
+        std::ffi::OsStr::new("-f"),
+        std::ffi::OsStr::new("Root"),
+        path.as_os_str(),
+    ]);
+    let _ = fs::remove_file(&path);
+    let installed = windows_installed(der);
+    RootTrust {
+        su_present: true,
+        root_granted: ok.0,
+        installed,
+        needs_reboot: false,
+        detail_code: if installed {
+            TrustDetail::InstalledLinux
+        } else {
+            TrustDetail::LinuxInstallFailed
+        },
+        detail: if installed { String::new() } else { ok.1 },
+    }
+}
+
+#[cfg(windows)]
+fn windows_remove(der: &[u8]) -> RootTrust {
+    let thumbprint = windows_thumbprint(der);
+    let ok = certutil(&[
+        std::ffi::OsStr::new("-delstore"),
+        std::ffi::OsStr::new("Root"),
+        std::ffi::OsStr::new(&thumbprint),
+    ]);
+    let installed = windows_installed(der);
+    RootTrust {
+        su_present: true,
+        root_granted: ok.0,
+        installed,
+        needs_reboot: false,
+        detail_code: if installed {
+            TrustDetail::LinuxRemoveFailed
+        } else {
+            TrustDetail::RemovedLinux
+        },
+        detail: if ok.0 { String::new() } else { ok.1 },
+    }
+}
+
 // ---------------------------------------------------------------------- tests
 
 #[cfg(all(test, unix))]
@@ -1050,5 +1255,22 @@ iRjL+xZqkbnzAis6uQIhAJc+z9Z5CRp5OFQT110aMAqyuGpi5rouQa7kYzl2smXB
         assert_eq!(anchor_targets(&empty).len(), LINUX_STORES.len());
         let _ = std::fs::remove_dir_all(&root);
         let _ = std::fs::remove_dir_all(&empty);
+    }
+
+    /// The published vectors from FIPS 180-1; the reason the algorithm is here
+    /// at all is that `certutil` only speaks thumbprints.
+    #[test]
+    fn sha1_matches_the_published_vectors() {
+        let hex = |d: [u8; 20]| d.iter().map(|b| format!("{b:02x}")).collect::<String>();
+        assert_eq!(hex(sha1(b"")), "da39a3ee5e6b4b0d3255bfef95601890afd80709");
+        assert_eq!(hex(sha1(b"abc")), "a9993e364706816aba3e25717850c26c9cd0d89d");
+        assert_eq!(
+            hex(sha1(b"abcdbcdecdefdefgefghfghighijhijkijkljklmklmnlmnomnopnopq")),
+            "84983e441c3bd26ebaae4aa1f95129e5e54670f1"
+        );
+        assert_eq!(
+            hex(sha1(&vec![b'a'; 1_000_000])),
+            "34aa973cd4c4daa4f61eeb2bdbad27316534016f"
+        );
     }
 }
