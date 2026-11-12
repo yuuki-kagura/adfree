@@ -156,6 +156,7 @@
     <string name="script_created_now">Just created</string>
     <string name="script_edited_now">Just edited</string>
     <string name="script_loading">Downloading %1$s…</string>
+    <string name="script_catalog_adfree_youtube">Removes YouTube in-feed and in-player ads before the page renders them.</string>
     <string name="script_catalog_adfree_extra">Keeps anti-adblock detectors (BlockAdBlock, FuckAdBlock) from noticing that ads are hidden.</string>
     <string name="script_catalog_adguard_extra">Extra ad blocking on complex pages (experimental; may slow pages down).</string>
     <string name="script_catalog_disable_amp">Redirects Google AMP pages to the original page.</string>
@@ -201,6 +202,7 @@
     <string name="filter_desc_urlhaus">List of malicious URLs (URLhaus).</string>
     <string name="filter_desc_phishing">Blocks online phishing pages.</string>
     <string name="filter_desc_scamblock">Blocks scam and disguised gambling sites.</string>
+    <string name="filter_desc_ubo_quick_fixes">Emergency fixes for sites that broke in the last few days (YouTube, Twitch and similar), maintained by uBlock Origin.</string>
     <string name="filter_desc_badware">Warns about malicious software and download risks.</string>
     <string name="filter_desc_dandelion_malware">Blocks malware and scam domains (Dandelion Sprout).</string>
     <string name="filter_desc_ag_dns">Official AdGuard DNS filter: light and comprehensive.</string>

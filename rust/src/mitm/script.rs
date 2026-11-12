@@ -928,6 +928,22 @@ mod tests {
         assert!(!js.contains("let a = 1;"));
     }
 
+    /// The YouTube module ships with the core, so its `@match` lines are the
+    /// only thing deciding whether it runs: a host that ignored them would put
+    /// a YouTube module on every page, and one that misread them would leave
+    /// YouTube unfixed while the row in the app said "on".
+    #[test]
+    fn the_youtube_module_runs_on_youtube_only() {
+        let body = crate::filter::YOUTUBE_JS;
+        let parsed = meta(body);
+        assert!(parsed.restrict, "the module is not allowed to run everywhere");
+        assert!(parsed.matches("https://www.youtube.com/watch?v=1"));
+        assert!(parsed.matches("https://m.youtube.com/"));
+        assert!(!parsed.matches("https://example.com/"));
+        assert!(!parsed.matches("https://notyoutube.com/"));
+        assert_eq!(parsed.run_at, RunAt::Start);
+    }
+
     #[test]
     fn filters_empty_and_huge_scripts() {
         let mut set = ScriptSet::new();

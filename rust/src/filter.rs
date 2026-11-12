@@ -187,6 +187,10 @@ const SCORECARD_BEACON_JS: &str = include_str!("../assets/redirects/scorecardres
 /// FuckAdBlock, and shipped as the built-in "AdFree Extra" userscript.
 pub const EXTRA_JS: &str = include_str!("../assets/extra.js");
 
+/// The YouTube module: removes the ads YouTube sends as Innertube data rather
+/// than as markup (see the file's own comment for why a cosmetic rule cannot).
+pub const YOUTUBE_JS: &str = include_str!("../assets/youtube.js");
+
 /// Redirect resources the lists ask for by name (`$redirect=…`).
 ///
 /// A name that is missing is not an error: the rule degrades to the hard block

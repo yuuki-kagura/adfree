@@ -150,7 +150,10 @@ pub fn read_text(dir: &Path, id: &str, ext: &str) -> Option<String> {
 /// script list, its enable/disable state and the push path all work
 /// unchanged; [`install_builtin`] only keeps the file in step with the body
 /// this build ships.
-pub const BUILTIN_SCRIPTS: &[(&str, &str)] = &[("adfree-extra", crate::filter::EXTRA_JS)];
+pub const BUILTIN_SCRIPTS: &[(&str, &str)] = &[
+    ("adfree-extra", crate::filter::EXTRA_JS),
+    ("adfree-youtube", crate::filter::YOUTUBE_JS),
+];
 
 /// Writes the built-in scripts into `dir`, skipping the ones whose body is
 /// already the shipped one. Returns how many files were written.
@@ -317,6 +320,25 @@ mod tests {
         save(&dir, id, "js", "// stale").unwrap();
         assert_eq!(install_builtin(&dir), 1);
         assert_eq!(read_text(&dir, id, "js").as_deref(), Some(body));
+    }
+
+    /// The YouTube module only runs where YouTube runs, which is the one thing
+    /// about it the script host has to agree with: a `@match` the host does not
+    /// read means a module that never runs, and a module that runs everywhere
+    /// means a page-script on every site.
+    #[test]
+    fn the_youtube_module_is_shipped_and_scoped() {
+        let body = BUILTIN_SCRIPTS
+            .iter()
+            .find(|(id, _)| *id == "adfree-youtube")
+            .map(|(_, body)| *body)
+            .expect("shipped");
+        assert!(body.contains("@match        *://*.youtube.com/*"));
+        assert!(body.contains("@run-at       document-start"));
+        // The bandwidth of the module is the data, not the markup: no cosmetic
+        // selector can reach a card YouTube creates after the first paint.
+        assert!(body.contains("adSlotRenderer"));
+        assert!(body.contains("inFeedAdLayoutRenderer"));
     }
 
     #[test]

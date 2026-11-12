@@ -113,6 +113,14 @@ object FilterCatalog {
             defaultEnabled = true,
         ),
         CatalogFilter(
+            id = "ubo-quick-fixes",
+            name = "uBlock Origin – Quick fixes",
+            descriptionKey = Strings.filter_desc_ubo_quick_fixes,
+            group = FilterGroup.ADS,
+            url = "https://raw.githubusercontent.com/uBlockOrigin/uAssets/master/filters/quick-fixes.txt",
+            homepage = "https://github.com/uBlockOrigin/uAssets",
+        ),
+        CatalogFilter(
             id = "easylist",
             name = "EasyList",
             descriptionKey = Strings.filter_desc_easylist,
@@ -525,6 +533,13 @@ object UserScriptCatalog {
             id = "adfree-extra",
             name = "AdFree Extra",
             descriptionKey = Strings.script_catalog_adfree_extra,
+            url = "",
+            builtin = true,
+        ),
+        CatalogUserScript(
+            id = "adfree-youtube",
+            name = "AdFree YouTube",
+            descriptionKey = Strings.script_catalog_adfree_youtube,
             url = "",
             builtin = true,
         ),

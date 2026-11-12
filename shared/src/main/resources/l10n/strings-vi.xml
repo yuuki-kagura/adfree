@@ -155,6 +155,7 @@
     <string name="script_created_now">Vừa tạo</string>
     <string name="script_edited_now">Vừa sửa</string>
     <string name="script_loading">Đang tải %1$s…</string>
+    <string name="script_catalog_adfree_youtube">Xoá quảng cáo trong bảng tin và trình phát YouTube trước khi trang dựng chúng.</string>
     <string name="script_catalog_adfree_extra">Giữ các thư viện dò chặn quảng cáo (BlockAdBlock, FuckAdBlock) khỏi thấy dấu vết ẩn quảng cáo.</string>
     <string name="script_catalog_adguard_extra">Tăng cường chặn quảng cáo trên trang phức tạp (thử nghiệm, có thể làm chậm trang).</string>
     <string name="script_catalog_disable_amp">Chuyển trang AMP của Google về trang gốc.</string>
@@ -200,6 +201,7 @@
     <string name="filter_desc_urlhaus">Danh sách URL phát tán mã độc (URLhaus).</string>
     <string name="filter_desc_phishing">Chặn trang lừa đảo trực tuyến.</string>
     <string name="filter_desc_scamblock">Chặn trang lừa đảo và cờ bạc trá hình.</string>
+    <string name="filter_desc_ubo_quick_fixes">Bản vá gấp cho các trang vừa hỏng vài ngày gần đây (YouTube, Twitch…), do uBlock Origin duy trì.</string>
     <string name="filter_desc_badware">Cảnh báo phần mềm độc hại và rủi ro tải xuống.</string>
     <string name="filter_desc_dandelion_malware">Chặn tên miền phát tán mã độc và lừa đảo (Dandelion Sprout).</string>
     <string name="filter_desc_ag_dns">Bộ lọc DNS chính thức của AdGuard, nhẹ và toàn diện.</string>
