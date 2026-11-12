@@ -1,3 +1,10 @@
+# [1.7.0](https://github.com/yuuki-kagura/adfree/compare/v1.6.0...v1.7.0) (2026-11-12)
+
+
+### Features
+
+* **scripts:** run AdGuard Extra out of the box, the way AdGuard's own apps do ([73926ca](https://github.com/yuuki-kagura/adfree/commit/73926ca228d8c926551745e39182a859c10871f5))
+
 # [1.6.0](https://github.com/yuuki-kagura/adfree/compare/v1.5.0...v1.6.0) (2026-11-12)
 
 
