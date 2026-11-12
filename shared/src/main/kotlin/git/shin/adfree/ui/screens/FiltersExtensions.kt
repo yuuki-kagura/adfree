@@ -956,13 +956,18 @@ fun ScriptDetailSheet(
         }
 
         Spacer(modifier = Modifier.height(6.dp))
+        // A shipped script can carry a release URL now: the body is in the
+        // binary so the first start has it, and the same file is published with
+        // each release so a fix lands between app updates. Both facts belong on
+        // the sheet — where the body comes from, and where it refreshes from.
         if (script.isBuiltin) {
             Text(
                 text = L10n.get(Strings.ext_bundled),
                 fontSize = 11.sp,
                 color = AdGuardTextMuted,
             )
-        } else {
+        }
+        if (script.url.isNotBlank()) {
             Text(
                 text = script.url,
                 fontSize = 10.sp,
@@ -976,7 +981,7 @@ fun ScriptDetailSheet(
         Spacer(modifier = Modifier.height(16.dp))
 
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            if (!script.isBuiltin && script.url.isNotBlank()) {
+            if (script.url.isNotBlank()) {
                 OutlinedButton(onClick = onRefresh, shape = RoundedCornerShape(10.dp)) {
                     Icon(Icons.Default.Sync, contentDescription = null, tint = AdGuardGreenLight, modifier = Modifier.size(16.dp))
                     Spacer(modifier = Modifier.width(6.dp))

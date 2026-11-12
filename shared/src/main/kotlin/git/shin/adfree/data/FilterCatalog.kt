@@ -542,20 +542,36 @@ data class CatalogUserScript(
     val defaultEnabled: Boolean = builtin,
 )
 
+/**
+ * Where a released userscript body can be fetched from.
+ *
+ * `latest/download` follows the newest release, which is what a script wants:
+ * the body is the same file the app ships, so the only case where it differs
+ * is a release newer than the running build — exactly the fix a machine should
+ * have before its next app update. Uploaded by the release workflow; a build
+ * with no network falls back to the body inside the binary.
+ */
+private const val RELEASE_ASSETS =
+    "https://github.com/yuuki-kagura/adfree/releases/latest/download"
+
 object UserScriptCatalog {
     val scripts: List<CatalogUserScript> = listOf(
         CatalogUserScript(
             id = "adfree-extra",
             name = "AdFree Extra",
             descriptionKey = Strings.script_catalog_adfree_extra,
-            url = "",
+            // Shipped in the binary (so it is there before the first request)
+            // and published with every release (so a fix reaches a machine
+            // between app updates, on the same pass as the lists). The released
+            // body is the same file this build carries, built from the same tag.
+            url = "$RELEASE_ASSETS/adfree-extra.user.js",
             builtin = true,
         ),
         CatalogUserScript(
             id = "adfree-youtube",
             name = "AdFree YouTube",
             descriptionKey = Strings.script_catalog_adfree_youtube,
-            url = "",
+            url = "$RELEASE_ASSETS/adfree-youtube.user.js",
             builtin = true,
         ),
         CatalogUserScript(

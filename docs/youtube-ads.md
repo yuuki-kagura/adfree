@@ -90,10 +90,35 @@ run them.
 2. **`AdGuard Extra` is now on out of the box** (`defaultEnabled`), fetched once
    and kept in the store; `adfree-youtube` stays the offline, Apache-2.0 half so
    a machine without network still gets the data-level scrub.
-3. **`uBlock Origin – Quick fixes`** in the Ads group (off by default). This is
-   where uBlock Origin ships its YouTube repairs within days of a DOM change;
-   AdGuard Base lags there, and it is the list most likely to be needed next
-   time YouTube shuffles its markup.
+3. **`uBlock Origin – Quick fixes`** in the Ads group (on out of the box, and
+   `defaultEnabled` so "restore defaults" turns it back on). This is where
+   uBlock Origin ships its YouTube repairs within days of a DOM change; AdGuard
+   Base lags there, and it is the list most likely to be needed next time
+   YouTube shuffles its markup.
+
+## Keeping the modules current between releases
+
+Both shipped scripts carry a release URL
+(`https://github.com/yuuki-kagura/adfree/releases/latest/download/adfree-<id>.user.js`),
+uploaded by the `userscripts` job in `.github/workflows/linux-release.yml` from
+the same `rust/assets/*.js` files the build compiles in. The auto-update pass
+that refreshes the filter lists now refreshes these bodies on the same interval
+(`filterAutoUpdateHours`), so a fix to the YouTube module reaches a machine that
+did not update the app.
+
+Two details keep that from fighting itself:
+
+- the download leaves `scripts/<id>.js.downloaded`, a marker saying the body on
+  disk came off the network; `assets::install_builtin` stands down for a marked
+  script, so the older body inside the running build cannot roll the fix back on
+  the next start;
+- deleting the script clears the marker with the body, so the shipped copy can
+  come back.
+
+The release asset is the same file the app ships, so the only case where the two
+differ is a release newer than the running build — which is exactly the fix that
+should not wait for a package update. A failed fetch (404 on a release that has
+no asset yet, or offline) leaves the existing body untouched.
 4. Parity documented in `docs/plans/windows-support.md`'s table.
 
 ## How to check it worked

@@ -1123,7 +1123,11 @@ class AdGuardRepository(
             // bootstrap in `loadScriptsState` owns that case.
             val staleScripts = mutableListOf<UserScriptInfo>()
             for (script in _userscripts.value) {
-                if (!script.isEnabled || script.isBuiltin || script.url.isBlank()) continue
+                // A shipped script is refreshable too, now that it has a
+                // release URL: `adfree-youtube` is the module the lists cannot
+                // cover, and a fix for it should not wait for an app update. A
+                // blank URL still means "nothing to fetch".
+                if (!script.isEnabled || script.url.isBlank()) continue
                 val asset = withContext(Dispatchers.IO) { engine.scriptState(script.id) } ?: continue
                 if (filterUpdateDue(asset.modifiedMs, now, hours)) staleScripts += script
             }

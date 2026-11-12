@@ -26,9 +26,22 @@ class UserScriptCatalogTest {
             val script = entry(id)
             assertTrue("$id is shipped by the core", script.builtin)
             assertTrue("$id is on out of the box", script.defaultEnabled)
-            // A built-in has no URL: its body is compiled into the core, and a
-            // download would only overwrite it with something else.
-            assertEquals("", script.url)
+        }
+    }
+
+    @Test
+    fun `a shipped module also has a release URL so a fix does not wait`() {
+        for (id in listOf("adfree-extra", "adfree-youtube")) {
+            val script = entry(id)
+            // The same body is published with each release, so a machine on an
+            // older build refreshes it on the list pass. The name has to match
+            // what the release workflow uploads, or the URL is a 404 that the
+            // script list would report as a failed refresh forever.
+            assertTrue(
+                "${id}'s URL is a release asset: ${script.url}",
+                script.url.startsWith("https://github.com/yuuki-kagura/adfree/releases/"),
+            )
+            assertTrue("${id}'s URL names the asset", script.url.endsWith("$id.user.js"))
         }
     }
 

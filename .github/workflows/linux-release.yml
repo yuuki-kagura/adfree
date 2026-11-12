@@ -25,6 +25,45 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  # The two userscripts this app ships are published with the release as well as
+  # compiled in. A machine on an older build reads them from `latest/download`
+  # on its own auto-update pass, so a fix to the YouTube module reaches it
+  # without waiting for a new package. Cheap enough to run before anything is
+  # built: two files, no toolchain.
+  userscripts:
+    if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-latest
+    env:
+      TAG: ${{ inputs.tag || '' }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Resolve the release tag
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          if [ -z "$TAG" ]; then
+            TAG=$(gh release view --repo "$GITHUB_REPOSITORY" --json tagName --jq .tagName)
+            echo "TAG=$TAG" >> "$GITHUB_ENV"
+          fi
+          echo "releasing into $TAG"
+
+      # The names are the ones `UserScriptCatalog` asks for (`<id>.user.js`),
+      # and the bodies are the files this build compiles in — one source, so a
+      # release cannot publish a script the app does not ship.
+      - name: Attach the userscript bodies
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          mkdir -p out
+          cp rust/assets/extra.js out/adfree-extra.user.js
+          cp rust/assets/youtube.js out/adfree-youtube.user.js
+          ls -l out
+          gh release upload "$TAG" out/adfree-extra.user.js out/adfree-youtube.user.js --clobber
+
   deb-rpm:
     # A failed Android release publishes nothing, so there is nothing to attach
     # a package to.

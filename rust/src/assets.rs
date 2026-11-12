@@ -80,7 +80,32 @@ pub fn fetch(
 ) -> Result<Outcome, String> {
     let body = fetch_text(url, MAX_BODY_BYTES, Duration::from_secs(60))?;
     let path = save(dir, id, ext, &body)?;
+    if ext == "js" {
+        mark_downloaded(dir, id);
+    }
     Ok(state_of(&path, &body, with_meta))
+}
+
+/// Marker for a script body that came off the network rather than out of this
+/// build.
+///
+/// A shipped script has a copy of itself inside the binary, and
+/// [`install_builtin`] rewrites the file whenever the two differ. That is right
+/// for a body no download ever touched, and wrong once one did: the shipped
+/// body of the running build could be older than the release the store just
+/// fetched, and every start would roll the fix back. The marker says the file
+/// is the newer of the two and the shipped copy has to leave it alone.
+fn downloaded_marker(dir: &Path, id: &str) -> PathBuf {
+    dir.join(format!("{}.js.downloaded", sanitize_id(id)))
+}
+
+fn mark_downloaded(dir: &Path, id: &str) {
+    let _ = std::fs::write(downloaded_marker(dir, id), b"");
+}
+
+/// True when the body on disk was downloaded, not shipped.
+pub fn was_downloaded(dir: &Path, id: &str) -> bool {
+    downloaded_marker(dir, id).is_file()
 }
 
 /// Fetches a body with the same cap and timeout [`fetch`] uses, without
@@ -138,6 +163,11 @@ pub fn remove(dir: &Path, id: &str, ext: &str) -> bool {
     let path = asset_path(dir, id, ext);
     let removed = std::fs::remove_file(&path).is_ok();
     let _ = std::fs::remove_file(path.with_extension(format!("{ext}.tmp")));
+    if ext == "js" {
+        // The body is gone, so the marker would claim a download that is not
+        // there and block the shipped copy from coming back.
+        let _ = std::fs::remove_file(downloaded_marker(dir, id));
+    }
     removed
 }
 
@@ -160,7 +190,7 @@ pub const BUILTIN_SCRIPTS: &[(&str, &str)] = &[
 pub fn install_builtin(dir: &Path) -> usize {
     let mut written = 0;
     for &(id, body) in BUILTIN_SCRIPTS {
-        if read_text(dir, id, "js").as_deref() == Some(body) {
+        if read_text(dir, id, "js").as_deref() == Some(body) || was_downloaded(dir, id) {
             continue;
         }
         if save(dir, id, "js", body).is_ok() {
@@ -320,6 +350,33 @@ mod tests {
         save(&dir, id, "js", "// stale").unwrap();
         assert_eq!(install_builtin(&dir), 1);
         assert_eq!(read_text(&dir, id, "js").as_deref(), Some(body));
+    }
+
+    /// A built-in script now has a release URL, so the store can hold a body
+    /// newer than the one this build ships. Every start rewrites a body that
+    /// differs from the shipped copy, which would roll that newer body back to
+    /// whatever the running build happens to carry — the marker is what stops
+    /// that, and removing the script has to clear it or the shipped copy could
+    /// never come back.
+    #[test]
+    fn a_downloaded_builtin_body_survives_the_shipped_copy() {
+        let dir = temp_dir("builtin-download");
+        let (id, shipped) = BUILTIN_SCRIPTS[0];
+        assert_eq!(install_builtin(&dir), BUILTIN_SCRIPTS.len());
+        assert!(!was_downloaded(&dir, id));
+        // What `fetch` does for a script, without the network.
+        save(&dir, id, "js", "// newer, from the release").unwrap();
+        mark_downloaded(&dir, id);
+        assert_eq!(install_builtin(&dir), 0, "the shipped copy stands down");
+        assert_eq!(
+            read_text(&dir, id, "js").as_deref(),
+            Some("// newer, from the release")
+        );
+        // Deleting the script clears the claim with it.
+        assert!(remove(&dir, id, "js"));
+        assert!(!was_downloaded(&dir, id));
+        install_builtin(&dir);
+        assert_eq!(read_text(&dir, id, "js").as_deref(), Some(shipped));
     }
 
     /// The YouTube module only runs where YouTube runs, which is the one thing
