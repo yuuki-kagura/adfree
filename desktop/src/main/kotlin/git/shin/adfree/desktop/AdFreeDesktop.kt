@@ -1,6 +1,7 @@
 package git.shin.adfree.desktop
 
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
@@ -13,12 +14,14 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Canvas
@@ -353,7 +356,7 @@ fun main() {
             // from the outside that is indistinguishable from a hung app — while
             // every JVM thread sits idle, as a thread dump showed when this last
             // happened. The frame clock is the one signal that separates the two.
-            AdviseWhenFramesStop(visible)
+            val frameProbe = AdviseWhenFramesStop(visible)
 
             // A hidden-to-tray window comes back where it was left, which on
             // this desktop means behind whatever the user was working in and
@@ -368,10 +371,14 @@ fun main() {
                     window.requestFocus()
                 }
             }
-            if (!container.engineAvailable) {
-                MissingCoreScreen(container.dataRoot.absolutePath)
-            } else {
-                DesktopHosts(container, resumeTick, backRegistry)
+            // The probe is a modifier, not an overlay: it must stamp the frame
+            // the app already draws, and a sibling box would only add a layer.
+            Box(Modifier.fillMaxSize().then(frameProbe)) {
+                if (!container.engineAvailable) {
+                    MissingCoreScreen(container.dataRoot.absolutePath)
+                } else {
+                    DesktopHosts(container, resumeTick, backRegistry)
+                }
             }
         }
 
@@ -588,15 +595,28 @@ private fun MissingCoreScreen(dataRoot: String) {
  * no way to tell whether the hang was in the runtime, in the compositor, or in
  * this app.
  *
+ * The first version of this asked for a frame in a loop, `withFrameNanos`
+ * forever. That is a frame request that never completes, so Compose and Skiko
+ * drew back to back for as long as the window was up — a JFR recording put 96%
+ * of the AWT thread inside `LinuxOpenGLRedrawer.frameDispatcher`, 74% of it
+ * blocked in `glFinish`, for an app that was doing nothing. Idle now costs one
+ * frame a second: the returned modifier stamps each frame the app draws anyway,
+ * and the heartbeat only exists so an idle window still draws something to
+ * stamp. A window that has stopped being pumped draws neither.
+ *
  * An occluded or hidden window legitimately stops drawing, hence the `visible`
  * guard and the wording: this line is evidence, not an alarm.
  */
 @Composable
-private fun AdviseWhenFramesStop(visible: Boolean) {
+private fun AdviseWhenFramesStop(visible: Boolean): Modifier {
     val lastFrameAt = remember { longArrayOf(System.nanoTime()) }
+    // The heartbeat exists to give an idle window a reason to draw once a
+    // second, so "no frame" means "not pumped" rather than "nothing changed".
+    val beat = remember { mutableIntStateOf(0) }
     LaunchedEffect(Unit) {
         while (true) {
-            androidx.compose.runtime.withFrameNanos { lastFrameAt[0] = System.nanoTime() }
+            delay(1_000)
+            beat.intValue += 1
         }
     }
     LaunchedEffect(visible) {
@@ -613,5 +633,11 @@ private fun AdviseWhenFramesStop(visible: Boolean) {
                 )
             }
         }
+    }
+    return Modifier.drawBehind {
+        // Reading the beat here subscribes this draw to it, which is what makes
+        // one invalidation per second instead of sixty.
+        beat.intValue
+        lastFrameAt[0] = System.nanoTime()
     }
 }

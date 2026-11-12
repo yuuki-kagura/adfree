@@ -283,12 +283,64 @@ fn name_of_process(pid: u32) -> Option<String> {
     crate::sys::winproc::process_name(pid)
 }
 
+/// Runtimes whose own name is never the answer: a log row that says "node"
+/// tells the user nothing about which tool made the request. `free-pi-cli`
+/// runs as `node /home/shin/.bun/bin/free-pi-cli`, and what a person
+/// recognises in that command line is the script, not the interpreter.
+///
+/// Java is deliberately absent: its arguments are class paths and flags
+/// (`-cp … git.shin.adfree.desktop.AdFreeDesktopKt`), so the first non-flag
+/// word is not a script and would be a false name.
+#[cfg(unix)]
+const INTERPRETERS: &[&str] = &["node", "bun", "deno", "python", "python3", "ruby", "perl", "electron"];
+
+/// The script an interpreter was told to run, if that is a better answer than
+/// the interpreter's own name.
+#[cfg(unix)]
+fn script_of(comm: &str, cmdline: &[u8]) -> Option<String> {
+    // `node-MainThread`, `node-node`, …: the part before the dash is the
+    // runtime, the rest is what the runtime calls its thread.
+    let runtime = comm.split('-').next().unwrap_or(comm);
+    if !INTERPRETERS.contains(&runtime) {
+        return None;
+    }
+    let mut words = cmdline.split(|byte| *byte == 0).filter(|w| !w.is_empty());
+    words.next()?; // argv[0] is the interpreter itself
+    for word in words.take(4) {
+        let text = String::from_utf8_lossy(word);
+        // `node -e 'code'` has no script, and the code would become the name.
+        if matches!(text.as_ref(), "-e" | "--eval" | "-p" | "--print") {
+            return None;
+        }
+        if text.starts_with('-') {
+            continue;
+        }
+        let file = text.rsplit('/').next().unwrap_or("").trim();
+        let stem = [".js", ".mjs", ".cjs", ".ts", ".py", ".rb", ".pl"]
+            .iter()
+            .find_map(|ext| file.strip_suffix(ext))
+            .unwrap_or(file);
+        if stem.is_empty() {
+            continue;
+        }
+        return Some(stem.to_string());
+    }
+    None
+}
+
 #[cfg(unix)]
 fn name_of_process(pid: u32) -> Option<String> {
     let comm = std::fs::read_to_string(format!("/proc/{pid}/comm"))
         .ok()
         .map(|text| text.trim().to_string())
         .unwrap_or_default();
+    // The process table names the runtime; the command line names the tool.
+    if let Some(name) = std::fs::read(format!("/proc/{pid}/cmdline"))
+        .ok()
+        .and_then(|cmdline| script_of(&comm, &cmdline))
+    {
+        return Some(name);
+    }
     if !comm.is_empty() {
         return Some(comm);
     }
@@ -395,6 +447,49 @@ fn port_of(field: &str) -> Option<u16> {
 
 #[cfg(all(test, unix))]
 mod tests {
+    /// The row a user reads should name the tool, not the runtime it happens to
+    /// be written in. `free-pi-cli` is `node /home/shin/.bun/bin/free-pi-cli`.
+    #[test]
+    #[cfg(unix)]
+    fn an_interpreted_cli_is_named_after_its_script() {
+        let cmdline = b"node\0/home/shin/.bun/bin/free-pi-cli\0";
+        assert_eq!(
+            script_of("node-MainThread", cmdline).as_deref(),
+            Some("free-pi-cli")
+        );
+        assert_eq!(script_of("node", cmdline).as_deref(), Some("free-pi-cli"));
+        assert_eq!(
+            script_of("bun", b"bun\0/usr/local/bin/openchamber\0").as_deref(),
+            Some("openchamber")
+        );
+        assert_eq!(
+            script_of("python3", b"python3\0/srv/tool/job.py\0").as_deref(),
+            Some("job")
+        );
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn a_plain_program_keeps_its_own_name() {
+        assert_eq!(script_of("chrome", b"/opt/chrome/chrome\0--type=renderer\0"), None);
+        assert_eq!(script_of("java", b"java\0-cp\0/lib/a.jar\0Main\0"), None);
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn a_flag_is_not_a_script_and_neither_is_inline_code() {
+        // `node --inspect app.js`: the flag is skipped, the script is not.
+        assert_eq!(
+            script_of("node", b"node\0--inspect\0/app/server.mjs\0").as_deref(),
+            Some("server")
+        );
+        // `node -e 'code'` has no script at all; naming the code would be worse
+        // than naming the runtime.
+        assert_eq!(script_of("node", b"node\0-e\0console.log(1)\0"), None);
+        // Nothing after the interpreter: fall back to "node".
+        assert_eq!(script_of("node", b"node\0"), None);
+    }
+
     use super::*;
     use std::net::TcpListener;
     use std::net::TcpStream;
